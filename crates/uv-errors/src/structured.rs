@@ -6,8 +6,11 @@ use serde::Serialize;
 
 use crate::diagnostic::is_layout_control;
 use crate::report::{ResolvedError, resolve_error_chain};
-use crate::source::{SourcePosition, SourceViewKind, SourceWindowView, source_view};
-use crate::{Diagnostic, DiagnosticFn, HintOrdering, Hints, Info, SourceSnippet};
+use crate::source::{SourcePosition, SourceView, SourceViewKind, SourceWindowView, source_view};
+use crate::{
+    Diagnostic, DiagnosticFn, HintOrdering, Hints, Info, SourceSnippet, SourceSuggestion,
+    SuggestionApplicability,
+};
 
 /// An experimental, serializable presentation of an error and its actual source chain.
 ///
@@ -126,6 +129,8 @@ impl From<Info<'_>> for ReportInfo {
 struct ReportHint {
     message: String,
     ordering: ReportHintOrdering,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    suggestion: Option<ReportSuggestion>,
 }
 
 #[derive(Serialize)]
@@ -142,16 +147,68 @@ fn report_hints(hints: &Hints<'_>) -> Vec<ReportHint> {
         .flat_map(|ordering| {
             hints
                 .iter_for_ordering(ordering)
-                .map(move |message| ReportHint {
-                    message: plain_text(message),
+                .map(move |hint| ReportHint {
+                    message: plain_text(&hint.message),
                     ordering: match ordering {
                         HintOrdering::First => ReportHintOrdering::First,
                         HintOrdering::Any => ReportHintOrdering::Any,
                         HintOrdering::Last => ReportHintOrdering::Last,
                     },
+                    suggestion: hint.suggestion.as_ref().and_then(report_suggestion),
                 })
         })
         .collect()
+}
+
+#[derive(Serialize)]
+struct ReportSuggestion {
+    applicability: ReportSuggestionApplicability,
+    source: ReportSource,
+    edits: Vec<ReportEdit>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ReportSuggestionApplicability {
+    DisplayOnly,
+    Unsafe,
+    Safe,
+}
+
+#[derive(Serialize)]
+struct ReportEdit {
+    range: ReportRange,
+    replacement: String,
+}
+
+fn report_suggestion(suggestion: &SourceSuggestion) -> Option<ReportSuggestion> {
+    let snippet = suggestion.snippet();
+    let source = source_view(&snippet)?.into();
+    let positions = suggestion.source().position_index();
+    let edits = suggestion
+        .edits()
+        .iter()
+        .map(|edit| {
+            Some(ReportEdit {
+                range: ReportRange {
+                    start: positions.position(edit.range.start)?.into(),
+                    end: positions.position(edit.range.end)?.into(),
+                },
+                // Replacement contents are exact decoded text, just like retained source. The
+                // JSON transport escapes terminal controls without changing the edit itself.
+                replacement: edit.replacement.clone(),
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(ReportSuggestion {
+        applicability: match suggestion.applicability() {
+            SuggestionApplicability::DisplayOnly => ReportSuggestionApplicability::DisplayOnly,
+            SuggestionApplicability::Unsafe => ReportSuggestionApplicability::Unsafe,
+            SuggestionApplicability::Safe => ReportSuggestionApplicability::Safe,
+        },
+        source,
+        edits,
+    })
 }
 
 #[derive(Serialize)]
@@ -161,6 +218,23 @@ struct ReportSource {
     name: Option<String>,
     #[serde(flatten)]
     content: ReportSourceContent,
+}
+
+impl From<SourceView<'_>> for ReportSource {
+    fn from(view: SourceView<'_>) -> Self {
+        Self {
+            name: view.name,
+            content: match view.kind {
+                SourceViewKind::Origin => ReportSourceContent::Origin,
+                SourceViewKind::Location(position) => ReportSourceContent::Location {
+                    position: position.into(),
+                },
+                SourceViewKind::Windows(windows) => ReportSourceContent::Snippet {
+                    windows: windows.into_iter().map(ReportWindow::from).collect(),
+                },
+            },
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -248,18 +322,7 @@ fn report_sources(snippets: &[SourceSnippet<'_>]) -> Vec<ReportSource> {
     snippets
         .iter()
         .filter_map(source_view)
-        .map(|view| ReportSource {
-            name: view.name,
-            content: match view.kind {
-                SourceViewKind::Origin => ReportSourceContent::Origin,
-                SourceViewKind::Location(position) => ReportSourceContent::Location {
-                    position: position.into(),
-                },
-                SourceViewKind::Windows(windows) => ReportSourceContent::Snippet {
-                    windows: windows.into_iter().map(ReportWindow::from).collect(),
-                },
-            },
-        })
+        .map(ReportSource::from)
         .collect()
 }
 

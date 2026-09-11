@@ -5,7 +5,7 @@ use std::fmt::{self, Write};
 use owo_colors::OwoColorize;
 
 use crate::line_wrap::wrap_text;
-use crate::source::{SourceLevel, SourceSnippet, write_snippets};
+use crate::source::{SourceLevel, SourceSnippet, write_snippets, write_suggestion};
 use crate::{HintOrdering, HintPrefix, Hints};
 
 /// User-facing presentation data for one error in a source chain.
@@ -119,7 +119,13 @@ pub(crate) fn write_hints(
     width: Option<usize>,
 ) -> fmt::Result {
     for hint in hints.iter_for_ordering(ordering) {
-        let message = wrap_text(hint, width.map(|width| width.saturating_sub(8)), "", "", "");
+        let message = wrap_text(
+            &hint.message,
+            width.map(|width| width.saturating_sub(8)),
+            "",
+            "",
+            "",
+        );
         let mut lines = message.lines();
         writeln!(
             stream,
@@ -132,6 +138,9 @@ pub(crate) fn write_hints(
             } else {
                 writeln!(stream, "        {line}")?;
             }
+        }
+        if let Some(suggestion) = &hint.suggestion {
+            write_suggestion(stream, suggestion, width)?;
         }
     }
     Ok(())
