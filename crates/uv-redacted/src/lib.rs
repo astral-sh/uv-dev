@@ -2,10 +2,14 @@ use ref_cast::RefCast;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fmt::{Debug, Display};
-use std::ops::{Deref, DerefMut};
+use std::ops::{Deref, DerefMut, Range};
 use std::str::FromStr;
 use thiserror::Error;
 use url::Url;
+
+mod source;
+
+pub use source::url_redaction_ranges;
 
 const SENSITIVE_QUERY_PARAMETERS: &[&str] = &[
     "sig",
@@ -111,41 +115,14 @@ impl DisplaySafeUrl {
     /// To detect it, we use a heuristic: if the password component is missing but the path or
     /// fragment contain a `:` followed by a `@`, then we assume the URL is ambiguous.
     fn reject_ambiguous_credentials(input: &str, url: &Url) -> Result<(), DisplaySafeUrlError> {
-        // `git://`, `http://`, and `https://` URLs may carry credentials, while `file://` URLs
-        // on Windows may contain both sigils, but it's always safe, e.g.
-        // `file://C:/Users/ferris/project@home/workspace`. The same holds for VCS URLs that use a
-        // file transport, such as `git+file://C:/Users/ferris/repo.git@v1.0`, which likewise carry
-        // no network credentials but can pair a drive-letter `:` with an `@` revision.
-        let scheme = url.scheme();
-        if scheme == "file" || scheme.ends_with("+file") {
-            return Ok(());
-        }
-
-        if url.password().is_some() {
-            return Ok(());
-        }
-
-        // Check for the suspicious pattern.
-        if !has_credential_like_pattern(url.path())
-            && !url.fragment().is_some_and(has_credential_like_pattern)
-        {
-            return Ok(());
-        }
-
-        // If the previous check passed, we should always expect to find these in the given URL.
-        let (Some(col_pos), Some(at_pos)) = (input.find(':'), input.rfind('@')) else {
-            if cfg!(debug_assertions) {
-                unreachable!(
-                    "`:` or `@` sign missing in URL that was confirmed to contain them: {input}"
-                );
-            }
+        let Some(range) = ambiguous_credential_range(input, url) else {
             return Ok(());
         };
 
         // Our ambiguous URL probably has credentials in it, so we don't want to blast it out in
         // the error message. We somewhat aggressively replace everything between the scheme's
         // ':' and the lastmost `@` with `***`.
-        let redacted_path = format!("{}***{}", &input[0..=col_pos], &input[at_pos..]);
+        let redacted_path = format!("{}***{}", &input[..range.start], &input[range.end..]);
         Err(DisplaySafeUrlError::AmbiguousAuthority(redacted_path))
     }
 
@@ -315,9 +292,33 @@ impl FromStr for DisplaySafeUrl {
 }
 
 fn is_ssh_git_username(url: &Url) -> bool {
-    matches!(url.scheme(), "ssh" | "git+ssh" | "git+https")
-        && url.username() == "git"
-        && url.password().is_none()
+    is_generic_git_username(url.scheme(), url.username(), url.password().is_some())
+}
+
+fn is_generic_git_username(scheme: &str, username: &str, has_password: bool) -> bool {
+    ["ssh", "git+ssh", "git+https"]
+        .iter()
+        .any(|git_scheme| scheme.eq_ignore_ascii_case(git_scheme))
+        && username == "git"
+        && !has_password
+}
+
+/// Select the original bytes masked when a parsed URL has an ambiguous credential-like path.
+fn ambiguous_credential_range(input: &str, url: &Url) -> Option<Range<usize>> {
+    // File transports can pair a Windows drive-letter `:` with an `@` revision or path component
+    // without carrying network credentials.
+    let scheme = url.scheme();
+    if scheme == "file" || scheme.ends_with("+file") || url.password().is_some() {
+        return None;
+    }
+    if !has_credential_like_pattern(url.path())
+        && !url.fragment().is_some_and(has_credential_like_pattern)
+    {
+        return None;
+    }
+    let start = input.find(':')? + 1;
+    let end = input.rfind('@')?;
+    (start < end).then_some(start..end)
 }
 
 fn is_sensitive_query_parameter(key: &str) -> bool {
