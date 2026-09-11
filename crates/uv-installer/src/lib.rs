@@ -1,5 +1,5 @@
 pub use compile::{CompileError, compile_files, compile_tree};
-pub use installer::{Installer, Reporter as InstallReporter};
+pub use installer::{Error as InstallError, Installer, Reporter as InstallReporter};
 pub use plan::{IncompatibleWheelError, Plan, Planner};
 pub use preparer::{Error as PrepareError, Preparer, Reporter as PrepareReporter};
 pub use site_packages::{
