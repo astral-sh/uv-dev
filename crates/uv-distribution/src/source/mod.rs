@@ -36,7 +36,7 @@ use uv_distribution_types::{
     PathSourceUrl, RemoteSource, RequirementSource, RequiresPython, SourceDist, SourceUrl,
 };
 use uv_fs::{Simplified, rename_with_retry, write_atomic};
-use uv_git::{Fetch, GIT_LFS, GitError, GitHttpSettings, GitResolver};
+use uv_git::{Fetch, GIT_LFS, GitError, GitHttpSettings, GitResolver, GitResolverError};
 use uv_git_types::{GitHubRepository, GitOid, GitUrl};
 use uv_metadata::read_archive_metadata;
 use uv_normalize::PackageName;
@@ -2270,18 +2270,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             debug!("Attempting GitHub fast path for: {source}");
 
             // If this is GitHub URL, attempt to resolve to a precise commit using the GitHub API.
-            match self
-                .build_context
-                .git()
-                .github_fast_path(
-                    resource.git,
-                    client
-                        .unmanaged
-                        .uncached_client(resource.git.url())
-                        .raw_client(),
-                )
-                .await
-            {
+            match self.github_fast_path(resource.git, client).await {
                 Ok(Some(precise)) => {
                     // There's no need to check the cache, since we can't use cached metadata if there are
                     // sources, and we can't know if there are sources without fetching the
@@ -2551,6 +2540,24 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         ))
     }
 
+    /// Resolve a Git reference using the configured API base, retaining the legacy fallback for
+    /// clients that do not configure it.
+    async fn github_fast_path(
+        &self,
+        git: &GitUrl,
+        client: &ManagedClient<'_>,
+    ) -> Result<Option<GitOid>, GitResolverError> {
+        let resolver = self.build_context.git();
+        let raw_client = client.unmanaged.uncached_client(git.url()).raw_client();
+        if let Some(api_url) = client.unmanaged.configured_github_fast_path_url() {
+            resolver
+                .github_fast_path_with_api_url(git, raw_client, api_url)
+                .await
+        } else {
+            resolver.github_fast_path(git, raw_client).await
+        }
+    }
+
     /// Resolve a source to a specific revision.
     pub(crate) async fn resolve_revision(
         &self,
@@ -2574,15 +2581,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
 
         // If this is GitHub URL, attempt to resolve to a precise commit using the GitHub API.
-        if let Some(precise) = self
-            .build_context
-            .git()
-            .github_fast_path(
-                git,
-                client.unmanaged.uncached_client(git.url()).raw_client(),
-            )
-            .await?
-        {
+        if let Some(precise) = self.github_fast_path(git, client).await? {
             debug!("Resolved to precise commit via GitHub fast path: {source}");
             return Ok(Some(precise));
         }

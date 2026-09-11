@@ -19,6 +19,9 @@ use crate::{
     rate_limit::{GITHUB_RATE_LIMIT_STATUS, is_github_rate_limited},
 };
 
+/// The default API base for resolving GitHub repository references.
+pub const DEFAULT_GITHUB_FAST_PATH_URL: &str = "https://api.github.com/repos";
+
 #[derive(Debug, thiserror::Error)]
 pub enum GitResolverError {
     #[error(transparent)]
@@ -106,6 +109,19 @@ impl GitResolver {
         url: &GitUrl,
         client: &ClientWithMiddleware,
     ) -> Result<Option<GitOid>, GitResolverError> {
+        let github_api_base_url = std::env::var(EnvVars::UV_GITHUB_FAST_PATH_URL)
+            .unwrap_or_else(|_| DEFAULT_GITHUB_FAST_PATH_URL.to_owned());
+        self.github_fast_path_with_api_url(url, client, &github_api_base_url)
+            .await
+    }
+
+    /// Resolve a Git URL using an explicitly configured GitHub API base.
+    pub async fn github_fast_path_with_api_url(
+        &self,
+        url: &GitUrl,
+        client: &ClientWithMiddleware,
+        github_api_base_url: &str,
+    ) -> Result<Option<GitOid>, GitResolverError> {
         if std::env::var_os(EnvVars::UV_NO_GITHUB_FAST_PATH).is_some() {
             return Ok(None);
         }
@@ -130,8 +146,6 @@ impl GitResolver {
         // Determine the Git reference.
         let rev = url.reference().as_rev();
 
-        let github_api_base_url = std::env::var(EnvVars::UV_GITHUB_FAST_PATH_URL)
-            .unwrap_or("https://api.github.com/repos".to_owned());
         let github_api_url = format!("{github_api_base_url}/{owner}/{repo}/commits/{rev}");
 
         debug!("Querying GitHub for commit at: {github_api_url}");

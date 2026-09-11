@@ -1,5 +1,5 @@
 use std::env;
-use std::fmt::{Debug, Write};
+use std::fmt::{self, Debug, Write};
 use std::num::ParseIntError;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTimeError};
@@ -27,7 +27,7 @@ use uv_auth::{
 use uv_configuration::ProxyUrlKind;
 use uv_configuration::{Concurrency, KeyringProviderType, ProxyUrl, TrustedHost};
 use uv_distribution_types::IndexCredentialsError;
-use uv_git::GitHttpSettings;
+use uv_git::{DEFAULT_GITHUB_FAST_PATH_URL, GitHttpSettings};
 use uv_pep508::MarkerEnvironment;
 use uv_platform_tags::Platform;
 use uv_preview::Preview;
@@ -62,6 +62,37 @@ pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// reqwest does not support something like a read timeout for uploads, so we have to set a (large)
 /// timeout on the entire upload.
 pub const DEFAULT_READ_TIMEOUT_UPLOAD: Duration = Duration::from_mins(15);
+
+/// The raw API base used for GitHub commit resolution.
+///
+/// The value is not parsed or normalized, so empty and malformed overrides retain their existing
+/// request behavior. Debug output hides the entire value, which may contain credentials.
+#[derive(Clone)]
+pub struct GitHubFastPathUrl(String);
+
+impl GitHubFastPathUrl {
+    /// Retain a raw GitHub API base without parsing it.
+    pub fn new(url: String) -> Self {
+        Self(url)
+    }
+
+    /// Return the raw GitHub API base for an HTTP request.
+    fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl Default for GitHubFastPathUrl {
+    fn default() -> Self {
+        Self(DEFAULT_GITHUB_FAST_PATH_URL.to_owned())
+    }
+}
+
+impl Debug for GitHubFastPathUrl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("****")
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum ClientBuildError {
@@ -105,6 +136,8 @@ pub struct BaseClientBuilder<'a> {
     read_timeout: Duration,
     connect_timeout: Duration,
     metadata_range_request: MetadataRangeRequest,
+    /// An explicit GitHub API base; `None` retains uv-git's environment fallback.
+    github_fast_path_url: Option<GitHubFastPathUrl>,
     extra_middleware: Option<ExtraMiddleware>,
     proxies: Vec<Proxy>,
     http_proxy: Option<ProxyUrl>,
@@ -216,6 +249,7 @@ impl Default for BaseClientBuilder<'_> {
             read_timeout: DEFAULT_READ_TIMEOUT,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             metadata_range_request: MetadataRangeRequest::default(),
+            github_fast_path_url: None,
             extra_middleware: None,
             proxies: vec![],
             http_proxy: None,
@@ -305,6 +339,13 @@ impl<'a> BaseClientBuilder<'a> {
 
     pub(crate) fn configured_metadata_range_request(&self) -> MetadataRangeRequest {
         self.metadata_range_request
+    }
+
+    /// Configure the GitHub commit-resolution API base, or select its standard default.
+    #[must_use]
+    pub fn github_fast_path_url(mut self, url: Option<GitHubFastPathUrl>) -> Self {
+        self.github_fast_path_url = Some(url.unwrap_or_default());
+        self
     }
 
     /// Set the number of workers available for reading cached HTTP responses.
@@ -496,6 +537,7 @@ impl<'a> BaseClientBuilder<'a> {
             raw_dangerous_client,
             read_timeout: self.read_timeout,
             connect_timeout: self.connect_timeout,
+            github_fast_path_url: self.github_fast_path_url.clone(),
             credentials_cache: self.credentials_cache.clone(),
             certificate_source,
             cache_read_runtime: self.cache_read_runtime.clone(),
@@ -527,6 +569,7 @@ impl<'a> BaseClientBuilder<'a> {
             raw_dangerous_client: existing.raw_dangerous_client.clone(),
             read_timeout: existing.read_timeout,
             connect_timeout: existing.connect_timeout,
+            github_fast_path_url: self.github_fast_path_url.clone(),
             credentials_cache: existing.credentials_cache.clone(),
             certificate_source: existing.certificate_source,
             cache_read_runtime: self.cache_read_runtime.clone(),
@@ -735,6 +778,8 @@ pub struct BaseClient {
     read_timeout: Duration,
     /// Configured client connect timeout.
     connect_timeout: Duration,
+    /// An explicit GitHub API base; `None` retains uv-git's environment fallback.
+    github_fast_path_url: Option<GitHubFastPathUrl>,
     /// Hosts that are trusted to use the insecure client.
     allow_insecure_host: Vec<TrustedHost>,
     /// The number of retries to attempt on transient errors.
@@ -802,6 +847,12 @@ impl BaseClient {
         GitHttpSettings::default()
             .with_disabled_ssl(self.disable_ssl(url))
             .with_offline(self.connectivity().is_offline())
+    }
+
+    pub(crate) fn configured_github_fast_path_url(&self) -> Option<&str> {
+        self.github_fast_path_url
+            .as_ref()
+            .map(GitHubFastPathUrl::as_str)
     }
 
     /// The configured client read timeout.
@@ -1230,6 +1281,73 @@ mod tests {
     use reqwest::{Client, Method};
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn github_fast_path_url_debug_redacts_raw_values() {
+        for raw in [
+            "",
+            "not a URL",
+            "https://user:password@example.invalid/repos?token=secret",
+            "not a URL: user:password?token=secret",
+        ] {
+            let url = GitHubFastPathUrl::new(raw.to_owned());
+            assert_eq!(url.as_str(), raw);
+            assert_eq!(format!("{url:?}"), "****");
+            assert_eq!(format!("{url:#?}"), "****");
+        }
+    }
+
+    #[test]
+    fn github_fast_path_url_preserves_client_configuration() -> Result<()> {
+        let builder = BaseClientBuilder::default()
+            .custom_client(Client::builder().no_proxy().build()?)
+            .auth_integration(AuthIntegration::NoAuthMiddleware);
+        let legacy = builder.build()?;
+        assert_eq!(legacy.configured_github_fast_path_url(), None);
+
+        for (api_url, expected) in [
+            (None, DEFAULT_GITHUB_FAST_PATH_URL),
+            (Some(""), ""),
+            (Some("not a URL"), "not a URL"),
+            (
+                Some("https://example.invalid/repos/"),
+                "https://example.invalid/repos/",
+            ),
+            (
+                Some("https://user:password@example.invalid/repos?token=secret"),
+                "https://user:password@example.invalid/repos?token=secret",
+            ),
+        ] {
+            let configured = builder
+                .clone()
+                .github_fast_path_url(api_url.map(|url| GitHubFastPathUrl::new(url.to_owned())));
+            assert_eq!(
+                format!("{:?}", configured.github_fast_path_url),
+                "Some(****)"
+            );
+            let client = configured.clone().build()?;
+            assert_eq!(client.configured_github_fast_path_url(), Some(expected));
+            assert_eq!(format!("{:?}", client.github_fast_path_url), "Some(****)");
+            assert_eq!(
+                client.clone().configured_github_fast_path_url(),
+                Some(expected)
+            );
+            assert_eq!(
+                configured
+                    .wrap_existing(&legacy)
+                    .configured_github_fast_path_url(),
+                Some(expected)
+            );
+            assert_eq!(
+                builder
+                    .wrap_existing(&client)
+                    .configured_github_fast_path_url(),
+                None
+            );
+        }
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn cache_read_runtime_can_be_dropped_from_an_async_context() {

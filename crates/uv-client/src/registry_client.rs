@@ -278,6 +278,13 @@ impl RegistryClient {
         self.client.uncached().git_http_settings(url)
     }
 
+    /// The explicitly configured GitHub API base, if any.
+    ///
+    /// An unconfigured client retains uv-git's environment-variable behavior.
+    pub fn configured_github_fast_path_url(&self) -> Option<&str> {
+        self.client.uncached().configured_github_fast_path_url()
+    }
+
     /// Return the [`Connectivity`] mode used by this client.
     pub fn connectivity(&self) -> Connectivity {
         self.connectivity
