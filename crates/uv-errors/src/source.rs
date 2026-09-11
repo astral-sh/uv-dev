@@ -48,6 +48,27 @@ impl SourceFile {
     fn text(&self) -> &str {
         &self.text
     }
+
+    /// The complete source lines that a zero-context annotation would display for this byte span.
+    ///
+    /// This uses the renderer's LF-delimited line boundaries, including any CR bytes. Producers
+    /// can inspect the same text before deciding whether a source excerpt is safe to show. An
+    /// invalid UTF-8 range returns `None`.
+    #[cfg(test)]
+    fn lines_for_span(&self, span: Range<usize>) -> Option<&str> {
+        self.text().get(self.line_range_for_span(span)?)
+    }
+
+    /// The byte range of the complete lines returned by [`Self::lines_for_span`].
+    ///
+    /// Producers can compare this window with other retained semantic source spans before
+    /// deciding whether an excerpt would expose unrelated fields.
+    #[cfg(test)]
+    fn line_range_for_span(&self, span: Range<usize>) -> Option<Range<usize>> {
+        let lines = SourceLines::new(self.text());
+        let (first, last) = lines.annotation_lines(&span)?;
+        lines.range(first, last)
+    }
 }
 
 impl fmt::Debug for SourceFile {
@@ -267,15 +288,9 @@ fn source_elements<'a>(snippet: &'a SourceSnippet<'_>) -> Vec<Element<'a>> {
     for (index, annotation) in snippet.annotations.iter().enumerate() {
         // `annotate-snippets` assumes valid UTF-8 boundaries and panics on out-of-bounds ranges.
         // Reject a malformed location instead of moving the underline to unrelated source text.
-        if source.text().get(annotation.range.clone()).is_none() {
+        let Some((first, last)) = lines.annotation_lines(&annotation.range) else {
             continue;
-        }
-        let first = lines.line_at(annotation.range.start);
-        let last = lines.line_at(if annotation.range.is_empty() {
-            annotation.range.end
-        } else {
-            annotation.range.end - 1
-        });
+        };
         let trailing_eof = annotation.range.is_empty()
             && annotation.range.end == source.text().len()
             && source.text().ends_with('\n');
@@ -333,13 +348,10 @@ fn source_elements<'a>(snippet: &'a SourceSnippet<'_>) -> Vec<Element<'a>> {
             }
             annotations.push(rendered);
 
-            if snippet.context_lines > 0 && !window.trailing_eof {
-                let first = lines.line_at(annotation.range.start);
-                let last = lines.line_at(if annotation.range.is_empty() {
-                    annotation.range.end
-                } else {
-                    annotation.range.end - 1
-                });
+            if snippet.context_lines > 0
+                && !window.trailing_eof
+                && let Some((first, last)) = lines.annotation_lines(&annotation.range)
+            {
                 if first > window.first
                     && let Some(context) = lines.content_range(window.first, first - 1)
                 {
@@ -401,6 +413,17 @@ impl<'a> SourceLines<'a> {
         self.starts
             .partition_point(|start| *start <= offset)
             .saturating_sub(1)
+    }
+
+    fn annotation_lines(&self, range: &Range<usize>) -> Option<(usize, usize)> {
+        self.text.get(range.clone())?;
+        let first = self.line_at(range.start);
+        let last = self.line_at(if range.is_empty() {
+            range.end
+        } else {
+            range.end - 1
+        });
+        Some((first, last))
     }
 
     fn range(&self, first: usize, last: usize) -> Option<Range<usize>> {
@@ -541,6 +564,78 @@ mod tests {
         write_snippets(&mut output, snippets, width, SourceLevel::Error)
             .expect("writing to a String is infallible");
         anstream::adapter::strip_str(&output).to_string()
+    }
+
+    #[test]
+    fn source_windows_match_rendered_line_boundaries() {
+        let source = SourceFile::new("lines.txt", "é-secret\r\nok\rtail\n");
+        let crlf = source.text().find("\r\n").expect("CRLF in fixture");
+        let bare_cr = source.text().rfind('\r').expect("bare CR in fixture");
+        let end = source.text().len();
+        assert_debug_snapshot!(
+            [
+                source.lines_for_span(0..crlf),
+                source.lines_for_span(crlf..crlf),
+                source.lines_for_span(crlf + 1..crlf + 1),
+                source.lines_for_span(0..crlf + 2),
+                source.lines_for_span(crlf + 2..crlf + 2),
+                source.lines_for_span(bare_cr..bare_cr),
+                source.lines_for_span(end..end),
+                source.lines_for_span(1..2),
+                source.lines_for_span(Range { start: 2, end: 1 }),
+                source.lines_for_span(usize::MAX..usize::MAX),
+            ],
+            @r#"
+        [
+            Some(
+                "é-secret\r\n",
+            ),
+            Some(
+                "é-secret\r\n",
+            ),
+            Some(
+                "é-secret\r\n",
+            ),
+            Some(
+                "é-secret\r\n",
+            ),
+            Some(
+                "ok\rtail\n",
+            ),
+            Some(
+                "ok\rtail\n",
+            ),
+            Some(
+                "",
+            ),
+            None,
+            None,
+            None,
+        ]
+        "#
+        );
+        assert_debug_snapshot!(
+            [
+                source.line_range_for_span(crlf + 1..crlf + 1),
+                source.line_range_for_span(bare_cr..bare_cr),
+                source.line_range_for_span(end..end),
+                source.line_range_for_span(1..2),
+            ],
+            @"
+        [
+            Some(
+                0..11,
+            ),
+            Some(
+                11..19,
+            ),
+            Some(
+                19..19,
+            ),
+            None,
+        ]
+        "
+        );
     }
 
     #[test]
