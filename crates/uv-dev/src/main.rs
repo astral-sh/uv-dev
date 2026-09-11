@@ -16,6 +16,7 @@ use tracing_subscriber::{EnvFilter, Layer};
 
 use uv_dev::run;
 use uv_errors::{Diagnostic, ErrorOptions, Hinted, Hints, write_error_chain_with_options};
+use uv_lock::{LockError, PylockTomlError, PylockTomlErrorKind};
 use uv_resolver::ResolveError;
 use uv_static::EnvVars;
 
@@ -86,14 +87,25 @@ async fn main() -> ExitCode {
 
 /// Resolve metadata on resolver roots hidden by a transparent error variant.
 fn resolver_diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Option<Diagnostic<'a>> {
-    if let Some(diagnostic) = uv_resolver::diagnostic_for_error(error) {
+    if let Some(diagnostic) =
+        uv_resolver::diagnostic_for_error(error).or_else(|| uv_lock::diagnostic_for_error(error))
+    {
         return Some(diagnostic);
     }
 
+    let source = transparent_source::<ResolveError>(error)
+        .or_else(|| transparent_source::<LockError>(error))
+        .or_else(|| transparent_source::<PylockTomlError>(error))
+        .or_else(|| transparent_source::<PylockTomlErrorKind>(error))?;
+    resolver_diagnostic_for_error(source)
+}
+
+fn transparent_source<'a, E: Error + Hinted + 'static>(
+    error: &'a (dyn Error + 'static),
+) -> Option<&'a (dyn Error + 'static)> {
     error
-        .downcast_ref::<ResolveError>()
-        .or_else(|| error.downcast_ref::<Box<ResolveError>>().map(AsRef::as_ref))
-        .or_else(|| error.downcast_ref::<Arc<ResolveError>>().map(AsRef::as_ref))?
+        .downcast_ref::<E>()
+        .or_else(|| error.downcast_ref::<Box<E>>().map(AsRef::as_ref))
+        .or_else(|| error.downcast_ref::<Arc<E>>().map(AsRef::as_ref))?
         .transparent_source()
-        .and_then(resolver_diagnostic_for_error)
 }
