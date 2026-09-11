@@ -89,7 +89,7 @@ fn sync_lock_flags_override_environment() -> Result<()> {
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
     assert_eq!(context.read("uv.lock"), lock);
 
@@ -160,7 +160,7 @@ fn sync_no_lock_flags_override_environment() -> Result<()> {
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `UV_LOCKED=1` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
     assert_eq!(context.read("uv.lock"), lock);
 
@@ -437,7 +437,7 @@ fn locked() -> Result<()> {
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     // Quiet mode suppresses the resolution summary, but preserves the user-facing failure.
@@ -446,7 +446,7 @@ fn locked() -> Result<()> {
     ----- stderr -----
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     // Silent mode suppresses the final error too.
@@ -896,7 +896,7 @@ fn sync_json() -> Result<()> {
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     // Test that JSON output is shown even with --quiet flag
@@ -11870,7 +11870,7 @@ fn sync_dry_run_and_locked() -> Result<()> {
      + iniconfig==2.0.0
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     let updated = context.read("uv.lock");
@@ -12155,9 +12155,9 @@ fn sync_locked_script() -> Result<()> {
     ----- stderr -----
     Using script environment at: [CACHE_DIR]/environments-v2/script-[HASH]
     Resolved 4 packages in [TIME]
-    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+    error: The lockfile at `script.py.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/` and `--script` set to `[TEMP_DIR]/script.py`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     uv_snapshot!(context.filters(), context.sync().arg("--script").arg("script.py"), @"
@@ -12254,9 +12254,9 @@ fn sync_locked_script() -> Result<()> {
     Updating script environment at: [CACHE_DIR]/environments-v2/script-[HASH]
     warning: Resolving despite existing lockfile due to fork markers being disjoint with `requires-python`: `python_full_version >= '3.11'` vs `python_full_version >= '3.8' and python_full_version < '3.11'`
     Resolved 6 packages in [TIME]
-    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+    error: The lockfile at `script.py.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/` and `--script` set to `[TEMP_DIR]/script.py`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     uv_snapshot!(context.filters(), context.sync().arg("--script").arg("script.py"), @"
@@ -13065,7 +13065,7 @@ fn sync_build_constraints() -> Result<()> {
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     // Changing the build constraints should lead to a re-resolve.
