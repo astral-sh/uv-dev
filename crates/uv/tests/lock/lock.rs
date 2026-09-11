@@ -28985,6 +28985,9 @@ fn lock_multiple_sources_conflict() -> Result<()> {
     error: Failed to parse: `pyproject.toml`
       cause: Failed to parse `tool.uv.sources`
       cause: Source markers must be disjoint, but the following markers overlap: `python_full_version == '3.12.*' and sys_platform == 'win32'` and `sys_platform == 'win32'`.
+       --> pyproject.toml:11:163
+      info: The other source is declared here
+       --> pyproject.toml:10:173
       hint: replace `sys_platform == 'win32'` with `python_full_version != '3.12.*' and sys_platform == 'win32'`
     ");
 
@@ -29019,6 +29022,9 @@ fn lock_multiple_sources_no_marker() -> Result<()> {
     error: Failed to parse: `pyproject.toml`
       cause: Failed to parse `tool.uv.sources`
       cause: When multiple sources are provided, each source must include a platform marker (e.g., `marker = "sys_platform == 'linux'"`)
+       --> pyproject.toml:10:13
+      info: The other source is declared here
+       --> pyproject.toml:11:13
     "#);
 
     Ok(())

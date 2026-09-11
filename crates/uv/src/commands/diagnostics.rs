@@ -567,7 +567,7 @@ mod tests {
 
     #[test]
     fn formats_source_hints_through_pyproject_errors() {
-        let error = PyprojectTomlError::Source(SourceError::OverlappingMarkers(
+        let error = PyprojectTomlError::from(SourceError::OverlappingMarkers(
             "sys_platform == 'win32'".to_string(),
             "python_version == '3.12'".to_string(),
             "python_version != '3.12'".to_string(),
