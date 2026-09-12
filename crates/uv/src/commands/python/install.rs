@@ -1495,7 +1495,8 @@ fn is_valid_unmanaged_bin_link(path: &Path) -> bool {
     cfg!(windows)
         || path
             .read_link()
-            .and_then(|target| target.try_exists())
+            // Resolve relative targets from the executable's directory.
+            .and_then(|_| path.try_exists())
             .inspect_err(|err| {
                 debug!("Failed to inspect executable with error: {err}");
             })
