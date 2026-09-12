@@ -40,3 +40,14 @@ To check for conflicts or missing dependencies in the environment:
 ```console
 $ uv pip check
 ```
+
+Use `uv pip check --output-format json` to consume these diagnostics in another tool. A completed
+check writes one JSON object to stdout and exits with status `0` when the environment is compatible
+or `1` when it has incompatibilities. The default `text` output is unchanged.
+
+The report identifies the installed environment separately from the Python version and optional
+platform override used for the check. Diagnostics include the normalized package name, a `kind`, and
+the relevant requirement, installed version, or metadata paths. Requirements use credential-safe
+URLs, and diagnostics are sorted by package and kind. The format is experimental; pass
+`--preview-features json-output` to acknowledge that its schema may change without warning. The
+[JSON Schema](../reference/internals/pip-check.schema.json) is generated from the report types.

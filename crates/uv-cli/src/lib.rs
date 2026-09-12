@@ -69,6 +69,15 @@ pub enum ToolListFormat {
     Json,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum PipCheckFormat {
+    /// Display the result in a human-readable format.
+    #[default]
+    Text,
+    /// Display the result in JSON format.
+    Json,
+}
+
 #[derive(Debug, Default, Clone, Copy, clap::ValueEnum)]
 pub enum SyncFormat {
     /// Display the result in a human-readable format.
@@ -2819,6 +2828,10 @@ pub struct PipListArgs {
 
 #[derive(Args)]
 pub struct PipCheckArgs {
+    /// Select the output format.
+    #[arg(long, value_enum, default_value_t = PipCheckFormat::default())]
+    pub output_format: PipCheckFormat,
+
     /// The Python interpreter for which packages should be checked.
     ///
     /// By default, uv checks packages in a virtual environment but will check packages in a system

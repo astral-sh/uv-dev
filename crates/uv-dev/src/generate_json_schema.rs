@@ -45,6 +45,8 @@ pub(crate) enum Target {
     ToolList,
     /// The preview `uv sync` JSON output format.
     Sync,
+    /// The preview `uv pip check` JSON output format.
+    PipCheck,
 }
 
 impl Target {
@@ -54,6 +56,7 @@ impl Target {
             Self::WorkspaceMetadata => "docs/reference/internals/metadata.schema.json",
             Self::ToolList => "docs/reference/internals/tool-list.schema.json",
             Self::Sync => "docs/reference/internals/sync.schema.json",
+            Self::PipCheck => "docs/reference/internals/pip-check.schema.json",
         }
     }
 
@@ -63,6 +66,7 @@ impl Target {
             Self::WorkspaceMetadata => "cargo dev generate-json-schema --target workspace-metadata",
             Self::ToolList => "cargo dev generate-json-schema --target tool-list",
             Self::Sync => "cargo dev generate-json-schema --target sync",
+            Self::PipCheck => "cargo dev generate-json-schema --target pip-check",
         }
     }
 }
@@ -136,6 +140,7 @@ fn schema(target: Target) -> schemars::Schema {
             .into_root_schema_for::<uv_resolver::Metadata>(),
         Target::ToolList => uv::commands::tool_list_json_schema(),
         Target::Sync => uv::commands::sync_json_schema(),
+        Target::PipCheck => uv::commands::pip_check_json_schema(),
     }
 }
 
@@ -292,6 +297,75 @@ mod tests {
             "string"
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn pip_check_schema_describes_serialized_values() -> anyhow::Result<()> {
+        let schema = serde_json::to_value(schema(Target::PipCheck))?;
+        let definitions = &schema["definitions"];
+        let target = &definitions["CheckTargetReport"];
+        let diagnostic = &definitions["DiagnosticReport"];
+
+        assert_eq!(schema["title"], "uv pip check (preview)");
+        assert_eq!(definitions["SchemaVersion"]["oneOf"][0]["const"], "preview");
+        assert_eq!(schema["properties"]["packages_checked"]["type"], "integer");
+        assert_eq!(schema["properties"]["packages_checked"]["minimum"], 0);
+        assert_eq!(target["properties"]["python_version"]["type"], "string");
+        assert_eq!(
+            target["properties"]["python_platform"]["type"],
+            serde_json::json!(["string", "null"])
+        );
+        assert!(
+            target["required"]
+                .as_array()
+                .is_some_and(|fields| { fields.iter().any(|field| field == "python_platform") })
+        );
+        assert!(
+            diagnostic["required"]
+                .as_array()
+                .is_some_and(|fields| { fields.iter().any(|field| field == "package") })
+        );
+        let variants = diagnostic["oneOf"].as_array().expect("diagnostic variants");
+        assert_eq!(
+            variants
+                .iter()
+                .map(|variant| {
+                    variant["properties"]["kind"]["const"]
+                        .as_str()
+                        .expect("diagnostic kind")
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                "duplicate_package",
+                "incompatible_dependency",
+                "incompatible_platform",
+                "incompatible_python_version",
+                "metadata_unavailable",
+                "missing_dependency",
+                "tags_unavailable",
+            ]
+        );
+        for (kind, field) in [
+            ("incompatible_dependency", "requirement"),
+            ("incompatible_dependency", "installed_version"),
+            ("incompatible_python_version", "requires_python"),
+            ("incompatible_python_version", "installed_version"),
+            ("metadata_unavailable", "path"),
+            ("missing_dependency", "requirement"),
+            ("tags_unavailable", "path"),
+        ] {
+            let variant = variants
+                .iter()
+                .find(|variant| variant["properties"]["kind"]["const"] == kind)
+                .expect("named diagnostic variant");
+            assert_eq!(variant["properties"][field]["type"], "string");
+            assert!(
+                variant["required"]
+                    .as_array()
+                    .is_some_and(|fields| { fields.iter().any(|required| required == field) })
+            );
+        }
         Ok(())
     }
 

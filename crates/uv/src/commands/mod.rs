@@ -22,6 +22,8 @@ pub(crate) use cache_prune::cache_prune;
 pub(crate) use cache_size::cache_size;
 pub(crate) use help::help;
 pub(crate) use pip::check::pip_check;
+#[cfg(feature = "schemars")]
+pub use pip::check_report::json_schema as pip_check_json_schema;
 pub(crate) use pip::compile::pip_compile;
 pub(crate) use pip::freeze::pip_freeze;
 pub(crate) use pip::install::pip_install;

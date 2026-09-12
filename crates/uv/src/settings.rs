@@ -16,13 +16,13 @@ use uv_cli::comma::CommaSeparatedRequirements;
 use uv_cli::{
     AddArgs, AuditArgs, AuditCommonArgs, AuditOutputFormat, AuthLoginArgs, AuthLogoutArgs,
     AuthTokenArgs, ColorChoice, ExternalCommand, GlobalArgs, InitArgs, ListFormat, LockArgs, Maybe,
-    MetadataArgs, PipCheckArgs, PipCompileArgs, PipFreezeArgs, PipInstallArgs, PipListArgs,
-    PipShowArgs, PipSyncArgs, PipTreeArgs, PipUninstallArgs, ProjectDependencyGroupsArgs,
-    PythonFindArgs, PythonInstallArgs, PythonListArgs, PythonListFormat, PythonPinArgs,
-    PythonUninstallArgs, PythonUpgradeArgs, RemoveArgs, RunArgs, SyncArgs, SyncFormat,
-    ToolAuditArgs, ToolDirArgs, ToolInstallArgs, ToolListArgs, ToolListFormat, ToolRunArgs,
-    ToolUninstallArgs, TreeArgs, TreeFormat, UpgradeArgs, VenvArgs, VersionArgs, VersionBumpSpec,
-    VersionFormat,
+    MetadataArgs, PipCheckArgs, PipCheckFormat, PipCompileArgs, PipFreezeArgs, PipInstallArgs,
+    PipListArgs, PipShowArgs, PipSyncArgs, PipTreeArgs, PipUninstallArgs,
+    ProjectDependencyGroupsArgs, PythonFindArgs, PythonInstallArgs, PythonListArgs,
+    PythonListFormat, PythonPinArgs, PythonUninstallArgs, PythonUpgradeArgs, RemoveArgs, RunArgs,
+    SyncArgs, SyncFormat, ToolAuditArgs, ToolDirArgs, ToolInstallArgs, ToolListArgs,
+    ToolListFormat, ToolRunArgs, ToolUninstallArgs, TreeArgs, TreeFormat, UpgradeArgs, VenvArgs,
+    VersionArgs, VersionBumpSpec, VersionFormat,
 };
 use uv_cli::{
     AuthorFrom, BuildArgs, BuildOptionsArgs, CheckArgs, ExcludeNewerArgs, ExportArgs, FormatArgs,
@@ -4234,6 +4234,7 @@ impl PipTreeSettings {
 /// The resolved settings to use for a `pip check` invocation.
 #[derive(Debug, Clone)]
 pub(crate) struct PipCheckSettings {
+    pub(crate) output_format: PipCheckFormat,
     pub(crate) settings: PipSettings,
 }
 
@@ -4245,6 +4246,7 @@ impl PipCheckSettings {
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let PipCheckArgs {
+            output_format,
             python,
             system,
             no_system,
@@ -4253,6 +4255,7 @@ impl PipCheckSettings {
         } = args;
 
         Ok(Self {
+            output_format,
             settings: PipSettings::combine(
                 PipOptions {
                     python: python.and_then(Maybe::into_option),

@@ -3,6 +3,9 @@
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod pip_check;
 
+#[cfg(feature = "test-python")]
+mod pip_check_json;
+
 mod pip_compile_scenarios;
 
 mod pip_debug;
