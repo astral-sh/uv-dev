@@ -14272,7 +14272,7 @@ fn reserved_script_name() -> Result<()> {
     )?;
 
     uv_snapshot!(context.filters(), context.pip_install().arg("."), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
@@ -14304,7 +14304,7 @@ fn reject_symlinked_wheel_package_directory() -> Result<()> {
         .arg("--link-mode")
         .arg("copy")
         .arg(&wheel), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
@@ -14351,7 +14351,7 @@ fn reject_symlinked_wheel_nested_package_directory() -> Result<()> {
         .arg("--link-mode")
         .arg("copy")
         .arg(&wheel), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
@@ -14421,7 +14421,7 @@ fn reject_symlinked_wheel_data_package_directory() -> Result<()> {
             .arg("--link-mode")
             .arg("copy")
             .arg(&wheel), @"
-        exit_code: 2 (failure)
+        exit_code: 1 (failure)
         ----- stderr -----
         Resolved 1 package in [TIME]
         Prepared 1 package in [TIME]
@@ -14486,7 +14486,7 @@ fn reject_symlinked_wheel_headers_destination() -> Result<()> {
         .arg("--link-mode")
         .arg("copy")
         .arg(&wheel), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
@@ -14556,7 +14556,7 @@ fn reject_reserved_wheel_data_script_name() -> Result<()> {
             fs_err::write(&wheel, block_on(writer.close())?)?;
 
             uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
-        exit_code: 2 (failure)
+        exit_code: 1 (failure)
         ----- stderr -----
         Resolved 1 package in [TIME]
         Prepared 1 package in [TIME]
@@ -14625,6 +14625,38 @@ fn repacked_wheel_with_entrypoint(
 }
 
 #[test]
+fn reject_reserved_build_dependency_entrypoint() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = repacked_wheel_with_entrypoint(&context, "console_scripts", "python")?;
+    let parent = context.temp_dir.child("parent");
+    parent.create_dir_all()?;
+    parent.child("pyproject.toml").write_str(&formatdoc! {r#"
+        [project]
+        name = "parent"
+        version = "0.1.0"
+
+        [build-system]
+        requires = ["foo @ file://{wheel}"]
+        build-backend = "foo"
+        "#,
+        wheel = wheel.portable_display()
+    })?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg("./parent"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Failed to build `parent @ file://[TEMP_DIR]/parent`
+      cause: Failed to install requirements from `build-system.requires`
+      cause: Failed to install build dependencies
+      cause: Failed to install: foo-0.1.0-py3-none-any.whl (foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl))
+      cause: Scripts must not use the reserved name `python`, got: `python`
+    ");
+
+    Ok(())
+}
+
+#[test]
 fn reject_wheel_entrypoint_paths() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -14638,7 +14670,7 @@ fn reject_wheel_entrypoint_paths() -> Result<()> {
     )?;
 
     uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
@@ -14659,7 +14691,7 @@ fn reject_normalized_reserved_wheel_entrypoint_name() -> Result<()> {
         repacked_wheel_with_entrypoint(&context, "console_scripts", "nested/../python")?;
 
     uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
@@ -14677,7 +14709,7 @@ fn reject_case_variant_reserved_wheel_entrypoint_name() -> Result<()> {
     let repacked_wheel = repacked_wheel_with_entrypoint(&context, "console_scripts", "Python")?;
 
     uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
@@ -14689,7 +14721,7 @@ fn reject_case_variant_reserved_wheel_entrypoint_name() -> Result<()> {
     let repacked_wheel = repacked_wheel_with_entrypoint(&context, "console_scripts", "Python.PY")?;
 
     uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
@@ -14701,7 +14733,7 @@ fn reject_case_variant_reserved_wheel_entrypoint_name() -> Result<()> {
     let repacked_wheel = repacked_wheel_with_entrypoint(&context, "console_scripts", "python.Py")?;
 
     uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
@@ -14719,7 +14751,7 @@ fn reject_normalized_reserved_gui_wheel_entrypoint_name() -> Result<()> {
         repacked_wheel_with_entrypoint(&context, "gui_scripts", "nested/../python")?;
 
     uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
@@ -14738,7 +14770,7 @@ fn reject_free_threaded_python_wheel_entrypoint_name() -> Result<()> {
         repacked_wheel_with_entrypoint(&context, "console_scripts", "python3.13t")?;
 
     uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
@@ -14757,7 +14789,7 @@ fn reject_windowed_free_threaded_python_wheel_entrypoint_name() -> Result<()> {
         repacked_wheel_with_entrypoint(&context, "console_scripts", "pythonw3.13t")?;
 
     uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
@@ -14775,7 +14807,7 @@ fn reject_windows_rewritten_python_wheel_entrypoint_name() -> Result<()> {
     let repacked_wheel = repacked_wheel_with_entrypoint(&context, "console_scripts", "python.py")?;
 
     uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
@@ -14794,7 +14826,7 @@ fn reject_windows_rewritten_free_threaded_python_wheel_entrypoint_name() -> Resu
         repacked_wheel_with_entrypoint(&context, "console_scripts", "pythonw3.13t.py")?;
 
     uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
@@ -14812,7 +14844,7 @@ fn reject_pypy_major_wheel_entrypoint_name() -> Result<()> {
     let repacked_wheel = repacked_wheel_with_entrypoint(&context, "console_scripts", "pypy3")?;
 
     uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
@@ -14830,7 +14862,7 @@ fn reject_windows_rewritten_pypy_wheel_entrypoint_name() -> Result<()> {
     let repacked_wheel = repacked_wheel_with_entrypoint(&context, "console_scripts", "pypy.py")?;
 
     uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
