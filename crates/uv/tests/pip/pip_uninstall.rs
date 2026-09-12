@@ -10,7 +10,8 @@ use uv_test::uv_snapshot;
 
 #[test]
 fn no_arguments() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     uv_snapshot!(context.filters(), context.pip_uninstall(), @"
     exit_code: 2 (failure)
@@ -27,22 +28,24 @@ fn no_arguments() {
 
 #[test]
 fn invalid_requirement() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     uv_snapshot!(context.filters(), context.pip_uninstall()
-        .arg("flask==1.0.x"), @"
+        .arg("absent-package==1.0.x"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to parse: `flask==1.0.x`
+    error: Failed to parse: `absent-package==1.0.x`
       cause: after parsing `1.0`, found `.x`, which is not part of a valid version
-             flask==1.0.x
-                  ^^^^^^^
+             absent-package==1.0.x
+                           ^^^^^^^
     ");
 }
 
 #[test]
 fn missing_requirements_txt() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     uv_snapshot!(context.filters(), context.pip_uninstall()
         .arg("-r")
@@ -56,10 +59,11 @@ fn missing_requirements_txt() {
 
 #[test]
 fn invalid_requirements_txt_requirement() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("flask==1.0.x")?;
+    requirements_txt.write_str("absent-package==1.0.x")?;
 
     uv_snapshot!(context.filters(), context.pip_uninstall()
         .arg("-r")
@@ -68,20 +72,20 @@ fn invalid_requirements_txt_requirement() -> Result<()> {
     ----- stderr -----
     error: Couldn't parse requirement in `requirements.txt` at position 0
       cause: after parsing `1.0`, found `.x`, which is not part of a valid version
-             flask==1.0.x
-                  ^^^^^^^
+             absent-package==1.0.x
+                           ^^^^^^^
     ");
 
     Ok(())
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn uninstall() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("MarkupSafe==2.1.3")?;
+    requirements_txt.write_str("simple-package==2.1.3")?;
 
     context
         .pip_sync()
@@ -89,29 +93,29 @@ fn uninstall() -> Result<()> {
         .assert()
         .success();
 
-    context.assert_command("import markupsafe").success();
+    context.assert_command("import simple_package").success();
 
     uv_snapshot!(context.pip_uninstall()
-        .arg("MarkupSafe"), @"
+        .arg("simple-package"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Uninstalled 1 package in [TIME]
-     - markupsafe==2.1.3
+     - simple-package==2.1.3
     "
     );
 
-    context.assert_command("import markupsafe").failure();
+    context.assert_command("import simple_package").failure();
 
     Ok(())
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn missing_record() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("MarkupSafe==2.1.3")?;
+    requirements_txt.write_str("simple-package==2.1.3")?;
 
     context
         .pip_sync()
@@ -119,17 +123,19 @@ fn missing_record() -> Result<()> {
         .assert()
         .success();
 
-    context.assert_command("import markupsafe").success();
+    context.assert_command("import simple_package").success();
 
     // Delete the RECORD file.
-    let dist_info = context.site_packages().join("MarkupSafe-2.1.3.dist-info");
+    let dist_info = context
+        .site_packages()
+        .join("simple_package-2.1.3.dist-info");
     fs_err::remove_file(dist_info.join("RECORD"))?;
 
     uv_snapshot!(context.filters(), context.pip_uninstall()
-        .arg("MarkupSafe"), @"
+        .arg("simple-package"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Cannot uninstall package; `RECORD` file not found at: [SITE_PACKAGES]/MarkupSafe-2.1.3.dist-info/RECORD
+    error: Cannot uninstall package; `RECORD` file not found at: [SITE_PACKAGES]/simple_package-2.1.3.dist-info/RECORD
     "
     );
 
@@ -137,9 +143,9 @@ fn missing_record() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn uninstall_editable_by_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -175,9 +181,9 @@ fn uninstall_editable_by_name() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn uninstall_by_path() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(
@@ -213,9 +219,9 @@ fn uninstall_by_path() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn uninstall_duplicate_by_path() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(
@@ -253,14 +259,14 @@ fn uninstall_duplicate_by_path() -> Result<()> {
 
 /// Uninstall a duplicate package in a virtual environment.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn uninstall_duplicate() -> Result<()> {
     use uv_fs::copy_dir_all;
 
-    // Sync a version of `pip` into a virtual environment.
-    let context1 = uv_test::test_context!("3.12");
+    // Sync one package version into a virtual environment.
+    let _server1 = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context1 = uv_test::test_context!("3.12").with_default_index(&_server1.index_url());
     let requirements_txt = context1.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("pip==21.3.1")?;
+    requirements_txt.write_str("simple-package==1.0.0")?;
 
     // Run `pip sync`.
     context1
@@ -269,10 +275,11 @@ fn uninstall_duplicate() -> Result<()> {
         .assert()
         .success();
 
-    // Sync a different version of `pip` into a virtual environment.
-    let context2 = uv_test::test_context!("3.12");
+    // Sync a different package version into a virtual environment.
+    let _server2 = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context2 = uv_test::test_context!("3.12").with_default_index(&_server2.index_url());
     let requirements_txt = context2.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("pip==22.1.1")?;
+    requirements_txt.write_str("simple-package==2.0.0")?;
 
     // Run `pip sync`.
     context2
@@ -283,18 +290,22 @@ fn uninstall_duplicate() -> Result<()> {
 
     // Copy the virtual environment to a new location.
     copy_dir_all(
-        context2.site_packages().join("pip-22.1.1.dist-info"),
-        context1.site_packages().join("pip-22.1.1.dist-info"),
+        context2
+            .site_packages()
+            .join("simple_package-2.0.0.dist-info"),
+        context1
+            .site_packages()
+            .join("simple_package-2.0.0.dist-info"),
     )?;
 
     // Run `pip uninstall`.
     uv_snapshot!(context1.pip_uninstall()
-        .arg("pip"), @"
+        .arg("simple-package"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Uninstalled 2 packages in [TIME]
-     - pip==21.3.1
-     - pip==22.1.1
+     - simple-package==1.0.0
+     - simple-package==2.0.0
     "
     );
 
@@ -304,7 +315,8 @@ fn uninstall_duplicate() -> Result<()> {
 /// Uninstall a `.egg-info` package in a virtual environment.
 #[test]
 fn uninstall_egg_info() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let site_packages = ChildPath::new(context.site_packages());
 
@@ -383,7 +395,8 @@ fn normcase(s: &str) -> String {
 /// Uninstall a legacy editable package in a virtual environment.
 #[test]
 fn uninstall_legacy_editable() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let site_packages = ChildPath::new(context.site_packages());
 
@@ -436,7 +449,8 @@ Version: 0.22.0
 
 #[test]
 fn dry_run_uninstall_egg_info() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let site_packages = ChildPath::new(context.site_packages());
 
@@ -667,15 +681,16 @@ fn uninstall_egg_info_top_level_drive_relative() -> Result<()> {
 /// `--yes` is accepted for `pip uninstall` compatibility, but emits a warning.
 #[test]
 fn yes_flag() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     uv_snapshot!(context.filters(), context.pip_uninstall()
         .arg("--yes")
-        .arg("flask"), @"
+        .arg("absent-package"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: `--yes` has no effect (uv never asks for confirmation)
-    warning: Skipping flask as it is not installed
+    warning: Skipping absent-package as it is not installed
     warning: No packages to uninstall
     "
     );
@@ -684,15 +699,16 @@ fn yes_flag() {
 /// `-y` is accepted for `pip uninstall` compatibility, but emits a warning.
 #[test]
 fn yes_short_flag() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     uv_snapshot!(context.filters(), context.pip_uninstall()
         .arg("-y")
-        .arg("flask"), @"
+        .arg("absent-package"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: `--yes` has no effect (uv never asks for confirmation)
-    warning: Skipping flask as it is not installed
+    warning: Skipping absent-package as it is not installed
     warning: No packages to uninstall
     "
     );

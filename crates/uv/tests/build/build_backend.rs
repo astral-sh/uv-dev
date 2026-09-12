@@ -13,6 +13,7 @@ use tar_codec::{Archive as _, TarArchive, extract::ExtractPolicy};
 use tempfile::TempDir;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use uv_static::EnvVars;
+use uv_test::packse::PackseServer;
 use uv_test::{uv_snapshot, venv_bin_path};
 
 #[test]
@@ -56,7 +57,6 @@ fn unpack_tar_gz(source_dist_path: &Path, target: &Path) -> Result<()> {
 ///
 /// We can't test end-to-end here including the PEP 517 bridge code since we don't have a uv wheel.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn built_by_uv_direct_wheel() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let built_by_uv = Path::new("../../test/packages/built-by-uv");
@@ -75,6 +75,7 @@ fn built_by_uv_direct_wheel() -> Result<()> {
 
     context
         .pip_install()
+        .arg("--no-deps")
         .arg(temp_dir.path().join("built_by_uv-0.1.0-py3-none-any.whl"))
         .assert()
         .success();
@@ -103,7 +104,6 @@ fn built_by_uv_direct_wheel() -> Result<()> {
 /// We can't test end-to-end here including the PEP 517 bridge code since we don't have a uv wheel,
 /// so we call the build backend directly.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn built_by_uv_direct() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let built_by_uv = Path::new("../../test/packages/built-by-uv");
@@ -145,6 +145,7 @@ fn built_by_uv_direct() -> Result<()> {
 
     context
         .pip_install()
+        .arg("--no-deps")
         .arg(wheel_dir.path().join("built_by_uv-0.1.0-py3-none-any.whl"))
         .assert()
         .success();
@@ -168,18 +169,15 @@ fn built_by_uv_direct() -> Result<()> {
 /// We can't test end-to-end here including the PEP 517 bridge code since we don't have a uv wheel,
 /// so we call the build backend directly.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn built_by_uv_editable() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let built_by_uv = Path::new("../../test/packages/built-by-uv");
 
-    // Without the editable, pytest fails.
-    context.pip_install().arg("pytest").assert().success();
+    // Without the wheel, the package cannot be imported.
     context
         .python_command()
-        .arg("-m")
-        .arg("pytest")
-        .current_dir(built_by_uv)
+        .arg("-c")
+        .arg(BUILT_BY_UV_TEST_SCRIPT)
         .assert()
         .failure();
 
@@ -197,24 +195,21 @@ fn built_by_uv_editable() -> Result<()> {
     ");
     context
         .pip_install()
+        .arg("--no-deps")
         .arg(wheel_dir.path().join("built_by_uv-0.1.0-py3-none-any.whl"))
         .assert()
         .success();
 
     drop(wheel_dir);
 
-    // Now, pytest passes.
+    // Now, the package can be imported.
     uv_snapshot!(context.python_command()
-        .arg("-m")
-        .arg("pytest")
-        // Avoid showing absolute paths and column dependent layout
-        .arg("--quiet")
-        .arg("--capture=no")
-        .current_dir(built_by_uv), @"
+        .arg("-c")
+        .arg(BUILT_BY_UV_TEST_SCRIPT), @"
     exit_code: 0 (success)
     ----- stdout -----
-    ..
-    2 passed in [TIME]
+    Hello 👋
+    Area of a circle with r=2: 12.56636
     ");
 
     Ok(())
@@ -1391,7 +1386,6 @@ fn invalid_pyproject_toml() -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "test-pypi")]
 #[test]
 fn build_with_all_metadata() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -1483,6 +1477,7 @@ fn build_with_all_metadata() -> Result<()> {
 
     context
         .pip_install()
+        .arg("--no-deps")
         .arg(temp_dir.path().join("foo-1.0.0-py3-none-any.whl"))
         .assert()
         .success();
@@ -1616,7 +1611,6 @@ fn build_with_all_metadata() -> Result<()> {
 /// Warn for cases where `tool.uv.build-backend` is used without the corresponding build backend
 /// entry.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn tool_uv_build_backend_without_build_backend() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -1671,9 +1665,9 @@ fn tool_uv_build_backend_without_build_backend() -> Result<()> {
 /// Warn for cases where `tool.uv.build-backend` is used without the corresponding build backend
 /// entry.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn tool_uv_build_backend_wrong_build_backend() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::empty();
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
 
     let project = context.temp_dir.child("project");
     let pyproject_toml = project.child("pyproject.toml");
@@ -1722,10 +1716,8 @@ fn tool_uv_build_backend_wrong_build_backend() -> Result<()> {
 ///
 /// See <https://github.com/astral-sh/uv/issues/20128>.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn tool_uv_build_backend_in_tree_backend() -> Result<()> {
-    // We need to use a real `uv_build` package.
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-05-27T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_uv_build_backend()?;
 
     let project = context.temp_dir.child("project");
     let pyproject_toml = project.child("pyproject.toml");

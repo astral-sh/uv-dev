@@ -10,10 +10,11 @@ use uv_test::uv_snapshot;
 /// `cache prune` should be a no-op if there's nothing out-of-date in the cache.
 #[test]
 fn prune_no_op() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio")?;
+    requirements_txt.write_str("simple-package")?;
 
     // Install a requirement, to populate the cache.
     context
@@ -102,10 +103,11 @@ fn prune_physical_space_unsupported_fs() -> Result<()> {
 /// `cache prune` should remove any stale top-level directories from the cache.
 #[test]
 fn prune_stale_directory() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio")?;
+    requirements_txt.write_str("simple-package")?;
 
     // Install a requirement, to populate the cache.
     context
@@ -157,6 +159,7 @@ fn prune_python_downloads() -> Result<()> {
 #[test]
 fn prune_cached_env() {
     let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/tool-run.toml")
         .with_filtered_counts()
         .with_filtered_sizes_and_units()
         // The cache entry does not have a stable key, so we filter it out.
@@ -168,22 +171,20 @@ fn prune_cached_env() {
     let bin_dir = context.temp_dir.child("bin");
 
     uv_snapshot!(context.filters(), context.tool_run()
-        .arg("pytest@8.0.0")
+        .arg("run-tool@8.0.0")
         .arg("--version")
         .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
         .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.0.0
+    run-tool 8.0.0
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.0.0
+     + run-helper==1.4.0
+     + run-tool==8.0.0
     ");
 
     uv_snapshot!(context.filters(), context.prune().arg("--verbose"), @"
@@ -201,10 +202,13 @@ fn prune_cached_env() {
 /// `cache prune` should remove any stale symlink from the cache.
 #[test]
 fn prune_stale_symlink() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes_and_units();
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_default_index(&_server.index_url())
+        .with_filtered_sizes_and_units();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio")?;
+    requirements_txt.write_str("simple-package")?;
 
     // Install a requirement, to populate the cache.
     context
@@ -226,6 +230,8 @@ fn prune_stale_symlink() -> Result<()> {
                 r"\[CACHE_DIR\](\\|\/)(.*?)(\\|\/).*",
                 "[CACHE_DIR]/$2/[ENTRY]",
             ),
+            // The file count varies by package and operating system.
+            ("Removed \\d+ files?", "Removed [N] files"),
         ])
         .collect();
 
@@ -236,7 +242,7 @@ fn prune_stale_symlink() -> Result<()> {
     DEBUG uv [VERSION] ([COMMIT] DATE)
     Pruning cache at: [CACHE_DIR]/
     DEBUG Removing dangling cache archive: [CACHE_DIR]/archive-v0/[ENTRY]
-    Removed 44 files ([SIZE])
+    Removed [N] files ([SIZE])
     ");
 
     Ok(())
@@ -244,10 +250,12 @@ fn prune_stale_symlink() -> Result<()> {
 
 #[tokio::test]
 async fn prune_force() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_counts();
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("typing-extensions\niniconfig")?;
+    requirements_txt.write_str("simple-package\nother-package")?;
 
     // Install a requirement, to populate the cache.
     context
@@ -309,64 +317,84 @@ fn prune_ci_empty_cache() -> Result<()> {
 /// `cache prune --ci` should remove all unzipped archives.
 #[test]
 fn prune_unzipped() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context
         .with_exclude_newer("2025-01-01T00:00Z")
         .with_filtered_file_counts()
         .with_filtered_sizes_and_units();
-
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc! { r"
-        source-distribution==0.0.1
-        iniconfig
-    " })?;
-
-    // Install a requirement, to populate the cache.
-    uv_snapshot!(context.filters(), context.pip_install().arg("-r").arg("requirements.txt").arg("--reinstall"), @"
+        sdist-package==0.0.1
+        simple-package
+    " })?; // Install a requirement, to populate the cache.
+    uv_snapshot!(
+        context.filters(),
+        context
+            .pip_install()
+            .arg("-r")
+            .arg("requirements.txt")
+            .arg("--reinstall"),
+        @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     Prepared 2 packages in [TIME]
     Installed 2 packages in [TIME]
-     + iniconfig==2.0.0
-     + source-distribution==0.0.1
-    ");
-
-    uv_snapshot!(context.filters(), context.prune().arg("--ci"), @"
+     + sdist-package==0.0.1
+     + simple-package==2.1.3
+    "
+    );
+    uv_snapshot!(
+        context.filters(),
+        context.prune().arg("--ci"),
+        @"
     exit_code: 0 (success)
     ----- stderr -----
     Pruning cache at: [CACHE_DIR]/
     Removed [N] files ([SIZE])
-    ");
-
-    context.venv().arg("--clear").assert().success();
-
-    // Reinstalling the source distribution should not require re-downloading the source
+    "
+    );
+    context.venv().arg("--clear").assert().success(); // Reinstalling the source distribution should not require re-downloading the source
     // distribution.
     requirements_txt.write_str(indoc! { r"
-        source-distribution==0.0.1
+        sdist-package==0.0.1
     " })?;
-    uv_snapshot!(context.filters(), context.pip_install().arg("-r").arg("requirements.txt").arg("--offline"), @"
+    uv_snapshot!(
+        context.filters(),
+        context
+            .pip_install()
+            .arg("-r")
+            .arg("requirements.txt")
+            .arg("--offline"),
+        @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + source-distribution==0.0.1
-    ");
-
-    // But reinstalling the other package should require a download, since we pruned the wheel.
+     + sdist-package==0.0.1
+    "
+    ); // But reinstalling the other package should require a download, since we pruned the wheel.
     requirements_txt.write_str(indoc! { r"
-        iniconfig
+        simple-package
     " })?;
-    uv_snapshot!(context.filters(), context.pip_install().arg("-r").arg("requirements.txt").arg("--offline"), @"
+    uv_snapshot!(
+        context.filters(),
+        context
+            .pip_install()
+            .arg("-r")
+            .arg("requirements.txt")
+            .arg("--offline"),
+        @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because all versions of iniconfig need to be downloaded from a registry and you require iniconfig, we can conclude that your requirements are unsatisfiable.
+      cause: Because all versions of simple-package need to be downloaded from a registry and you require simple-package, we can conclude that your requirements are unsatisfiable.
 
     hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
-    ");
-
+    "
+    );
     Ok(())
 }
 

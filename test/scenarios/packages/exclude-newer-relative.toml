@@ -1,0 +1,34 @@
+name = "exclude-newer-relative"
+description = "Timestamped packages for relative exclude-newer lock tests."
+
+[root]
+requires = ["dated-package"]
+
+[expected]
+satisfiable = true
+
+[expected.packages]
+dated-package = "3.6"
+
+[packages.dated-package.versions."3.6"]
+upload_time = "2023-11-25T15:40:54.902Z"
+sdist_backend = "in-tree"
+
+[packages.dated-package.versions."3.7"]
+upload_time = "2024-04-11T03:34:43.276Z"
+sdist_backend = "in-tree"
+
+[packages.dated-support.versions."4.10.0"]
+upload_time = "2024-02-25T22:12:49.693Z"
+sdist_backend = "in-tree"
+
+[packages.dated-support.versions."4.11.0"]
+upload_time = "2024-04-05T12:35:47.093Z"
+sdist_backend = "in-tree"
+
+[packages.late-package.versions."2.0.0"]
+upload_time = "2023-01-07T11:08:09.864Z"
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true

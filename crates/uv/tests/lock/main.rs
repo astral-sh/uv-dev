@@ -1,11 +1,7 @@
 //! Integration tests for `uv lock`.
 
-#[cfg(all(
-    feature = "test-python",
-    feature = "test-pypi",
-    feature = "test-universal"
-))]
+#[cfg(all(feature = "test-python", feature = "test-universal"))]
 use uv_test::pypi_proxy;
 
-#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+#[cfg(feature = "test-python")]
 mod lock;

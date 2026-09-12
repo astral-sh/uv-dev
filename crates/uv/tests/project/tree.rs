@@ -94,7 +94,8 @@ fn tree_centralized_environment_no_cache() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn nested_dependencies() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -104,7 +105,7 @@ fn nested_dependencies() -> Result<()> {
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = [
-            "scikit-learn==1.4.1.post1"
+            "tree-root"
         ]
     "#,
     )?;
@@ -113,15 +114,17 @@ fn nested_dependencies() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    └── scikit-learn v1.4.1.post1
-        ├── joblib v1.3.2
-        ├── numpy v1.26.4
-        ├── scipy v1.12.0
-        │   └── numpy v1.26.4
-        └── threadpoolctl v3.4.0
+    └── tree-root v3.0.2
+        ├── tree-branch-a v1.7.0
+        ├── tree-branch-b v8.1.7
+        ├── tree-branch-c v2.1.2
+        ├── tree-branch-d v3.1.3
+        │   └── tree-shared-leaf v2.1.5
+        └── tree-branch-e v3.0.1
+            └── tree-shared-leaf v2.1.5
 
     ----- stderr -----
-    Resolved 6 packages in [TIME]
+    Resolved 8 packages in [TIME]
     "
     );
 
@@ -1396,7 +1399,8 @@ fn json_output_depth_with_extra_context() -> Result<()> {
 
 #[test]
 fn nested_platform_dependencies() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1406,7 +1410,7 @@ fn nested_platform_dependencies() -> Result<()> {
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = [
-            "jupyter-client"
+            "platform-parent"
         ]
     "#,
     )?;
@@ -1415,18 +1419,12 @@ fn nested_platform_dependencies() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    └── jupyter-client v8.6.1
-        ├── jupyter-core v5.7.2
-        │   ├── platformdirs v4.2.0
-        │   └── traitlets v5.14.2
-        ├── python-dateutil v2.9.0.post0
-        │   └── six v1.16.0
-        ├── pyzmq v25.1.2
-        ├── tornado v6.4
-        └── traitlets v5.14.2
+    └── platform-parent v24.3.0
+        ├── platform-leaf v1.0.0
+        └── platform-marker v8.1.7
 
     ----- stderr -----
-    Resolved 12 packages in [TIME]
+    Resolved 5 packages in [TIME]
     "
     );
 
@@ -1434,21 +1432,13 @@ fn nested_platform_dependencies() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    └── jupyter-client v8.6.1
-        ├── jupyter-core v5.7.2
-        │   ├── platformdirs v4.2.0
-        │   ├── pywin32 v306
-        │   └── traitlets v5.14.2
-        ├── python-dateutil v2.9.0.post0
-        │   └── six v1.16.0
-        ├── pyzmq v25.1.2
-        │   └── cffi v1.16.0
-        │       └── pycparser v2.21
-        ├── tornado v6.4
-        └── traitlets v5.14.2
+    └── platform-parent v24.3.0
+        ├── platform-leaf v1.0.0
+        └── platform-marker v8.1.7
+            └── platform-windows v0.4.6
 
     ----- stderr -----
-    Resolved 12 packages in [TIME]
+    Resolved 5 packages in [TIME]
     "
     );
 
@@ -1461,7 +1451,8 @@ fn nested_platform_dependencies() -> Result<()> {
 
 #[test]
 fn invert() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1471,7 +1462,7 @@ fn invert() -> Result<()> {
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = [
-            "scikit-learn==1.4.1.post1"
+            "tree-root"
         ]
     "#,
     )?;
@@ -1479,40 +1470,47 @@ fn invert() -> Result<()> {
     uv_snapshot!(context.filters(), context.tree().arg("--invert"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    joblib v1.3.2
-    └── scikit-learn v1.4.1.post1
+    tree-branch-a v1.7.0
+    └── tree-root v3.0.2
         └── project v0.1.0
-    numpy v1.26.4
-    ├── scikit-learn v1.4.1.post1 (*)
-    └── scipy v1.12.0
-        └── scikit-learn v1.4.1.post1 (*)
-    threadpoolctl v3.4.0
-    └── scikit-learn v1.4.1.post1 (*)
+    tree-branch-b v8.1.7
+    └── tree-root v3.0.2 (*)
+    tree-branch-c v2.1.2
+    └── tree-root v3.0.2 (*)
+    tree-shared-leaf v2.1.5
+    ├── tree-branch-d v3.1.3
+    │   └── tree-root v3.0.2 (*)
+    └── tree-branch-e v3.0.1
+        └── tree-root v3.0.2 (*)
     (*) Package tree already displayed
 
     ----- stderr -----
-    Resolved 6 packages in [TIME]
+    Resolved 8 packages in [TIME]
     "
     );
 
     uv_snapshot!(context.filters(), context.tree().arg("--invert").arg("--no-dedupe"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    joblib v1.3.2
-    └── scikit-learn v1.4.1.post1
+    tree-branch-a v1.7.0
+    └── tree-root v3.0.2
         └── project v0.1.0
-    numpy v1.26.4
-    ├── scikit-learn v1.4.1.post1
-    │   └── project v0.1.0
-    └── scipy v1.12.0
-        └── scikit-learn v1.4.1.post1
+    tree-branch-b v8.1.7
+    └── tree-root v3.0.2
+        └── project v0.1.0
+    tree-branch-c v2.1.2
+    └── tree-root v3.0.2
+        └── project v0.1.0
+    tree-shared-leaf v2.1.5
+    ├── tree-branch-d v3.1.3
+    │   └── tree-root v3.0.2
+    │       └── project v0.1.0
+    └── tree-branch-e v3.0.1
+        └── tree-root v3.0.2
             └── project v0.1.0
-    threadpoolctl v3.4.0
-    └── scikit-learn v1.4.1.post1
-        └── project v0.1.0
 
     ----- stderr -----
-    Resolved 6 packages in [TIME]
+    Resolved 8 packages in [TIME]
     "
     );
 
@@ -1522,7 +1520,8 @@ fn invert() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn frozen() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1531,7 +1530,7 @@ fn frozen() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["anyio"]
+        dependencies = ["outdated-package"]
     "#,
     )?;
 
@@ -1539,12 +1538,10 @@ fn frozen() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    └── anyio v4.3.0
-        ├── idna v3.6
-        └── sniffio v1.3.1
+    └── outdated-package v4.3.0
 
     ----- stderr -----
-    Resolved 4 packages in [TIME]
+    Resolved 2 packages in [TIME]
     "
     );
 
@@ -1560,7 +1557,7 @@ fn frozen() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
+        dependencies = ["simple-package"]
     "#,
     )?;
 
@@ -1569,9 +1566,7 @@ fn frozen() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    └── anyio v4.3.0
-        ├── idna v3.6
-        └── sniffio v1.3.1
+    └── outdated-package v4.3.0
     "
     );
 
@@ -1581,7 +1576,8 @@ fn frozen() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn outdated() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1590,7 +1586,7 @@ fn outdated() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["anyio==3.0.0"]
+        dependencies = ["outdated-package==3.0.0"]
     "#,
     )?;
 
@@ -1598,12 +1594,10 @@ fn outdated() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    └── anyio v3.0.0 (latest: v4.3.0)
-        ├── idna v3.6
-        └── sniffio v1.3.1
+    └── outdated-package v3.0.0 (latest: v4.3.0)
 
     ----- stderr -----
-    Resolved 4 packages in [TIME]
+    Resolved 2 packages in [TIME]
     "
     );
 
@@ -1618,11 +1612,15 @@ fn outdated() -> Result<()> {
         .output()?;
     output.clone().assert().success();
     let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    let anyio = report["resolution"]
+    let package = report["resolution"]
         .as_object()
-        .and_then(|resolution| resolution.values().find(|node| node["name"] == "anyio"))
-        .expect("anyio should be included in the dependency graph");
-    assert_eq!(anyio["latest_version"], "4.3.0");
+        .and_then(|resolution| {
+            resolution
+                .values()
+                .find(|node| node["name"] == "outdated-package")
+        })
+        .expect("outdated-package should be included in the dependency graph");
+    assert_eq!(package["latest_version"], "4.3.0");
 
     Ok(())
 }
@@ -1677,7 +1675,7 @@ fn outdated_exclude_newer_relative() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    └── idna v3.6 (latest: v3.7)
+    └── idna v3.6
 
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -1767,7 +1765,8 @@ fn scoped_exclude_dependencies() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn platform_dependencies() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1777,7 +1776,7 @@ fn platform_dependencies() -> Result<()> {
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = [
-            "black"
+            "platform-parent"
         ]
     "#,
     )?;
@@ -1788,15 +1787,12 @@ fn platform_dependencies() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    └── black v24.3.0
-        ├── click v8.1.7
-        ├── mypy-extensions v1.0.0
-        ├── packaging v24.0
-        ├── pathspec v0.12.1
-        └── platformdirs v4.2.0
+    └── platform-parent v24.3.0
+        ├── platform-leaf v1.0.0
+        └── platform-marker v8.1.7
 
     ----- stderr -----
-    Resolved 8 packages in [TIME]
+    Resolved 5 packages in [TIME]
     ");
 
     // Unless `--python-platform` is set to `windows`, in which case it should be included.
@@ -1804,16 +1800,13 @@ fn platform_dependencies() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    └── black v24.3.0
-        ├── click v8.1.7
-        │   └── colorama v0.4.6
-        ├── mypy-extensions v1.0.0
-        ├── packaging v24.0
-        ├── pathspec v0.12.1
-        └── platformdirs v4.2.0
+    └── platform-parent v24.3.0
+        ├── platform-leaf v1.0.0
+        └── platform-marker v8.1.7
+            └── platform-windows v0.4.6
 
     ----- stderr -----
-    Resolved 8 packages in [TIME]
+    Resolved 5 packages in [TIME]
     ");
 
     // When `--universal` is provided, should include `colorama`, even though it's only included on
@@ -1822,16 +1815,13 @@ fn platform_dependencies() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    └── black v24.3.0
-        ├── click v8.1.7
-        │   └── colorama v0.4.6
-        ├── mypy-extensions v1.0.0
-        ├── packaging v24.0
-        ├── pathspec v0.12.1
-        └── platformdirs v4.2.0
+    └── platform-parent v24.3.0
+        ├── platform-leaf v1.0.0
+        └── platform-marker v8.1.7
+            └── platform-windows v0.4.6
 
     ----- stderr -----
-    Resolved 8 packages in [TIME]
+    Resolved 5 packages in [TIME]
     "
     );
 
@@ -1844,7 +1834,8 @@ fn platform_dependencies() -> Result<()> {
 
 #[test]
 fn platform_dependencies_inverted() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1854,7 +1845,7 @@ fn platform_dependencies_inverted() -> Result<()> {
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = [
-            "click"
+            "platform-marker"
         ]
     "#,
     )?;
@@ -1863,7 +1854,7 @@ fn platform_dependencies_inverted() -> Result<()> {
     uv_snapshot!(context.filters(), context.tree().arg("--invert").arg("--python-platform").arg("linux"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    click v8.1.7
+    platform-marker v8.1.7
     └── project v0.1.0
 
     ----- stderr -----
@@ -1874,8 +1865,8 @@ fn platform_dependencies_inverted() -> Result<()> {
     uv_snapshot!(context.filters(), context.tree().arg("--invert").arg("--python-platform").arg("windows"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    colorama v0.4.6
-    └── click v8.1.7
+    platform-windows v0.4.6
+    └── platform-marker v8.1.7
         └── project v0.1.0
 
     ----- stderr -----
@@ -1888,7 +1879,8 @@ fn platform_dependencies_inverted() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn repeated_dependencies() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1898,27 +1890,22 @@ fn repeated_dependencies() -> Result<()> {
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = [
-            "anyio < 2 ; sys_platform == 'win32'",
-            "anyio > 2 ; sys_platform == 'linux'",
+            "outdated-package < 2 ; sys_platform == 'win32'",
+            "outdated-package > 2 ; sys_platform == 'linux'",
         ]
     "#,
     )?;
 
-    // Should include both versions of `anyio`, which have different dependencies.
+    // Should include both versions of `outdated-package`, which have different dependencies.
     uv_snapshot!(context.filters(), context.tree().arg("--universal"), @"
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    ├── anyio v1.4.0
-    │   ├── async-generator v1.10
-    │   ├── idna v3.6
-    │   └── sniffio v1.3.1
-    └── anyio v4.3.0
-        ├── idna v3.6
-        └── sniffio v1.3.1
+    ├── outdated-package v1.4.0
+    └── outdated-package v4.3.0
 
     ----- stderr -----
-    Resolved 6 packages in [TIME]
+    Resolved 3 packages in [TIME]
     "
     );
 
@@ -1943,7 +1930,7 @@ fn repeated_dependencies() -> Result<()> {
         let project_edges = if invert {
             resolution
                 .iter()
-                .filter(|(_, node)| node["name"] == "anyio" && node["kind"] == "package")
+                .filter(|(_, node)| node["name"] == "outdated-package" && node["kind"] == "package")
                 .flat_map(|(package, node)| {
                     node["dependencies"]
                         .as_array()
@@ -1983,17 +1970,18 @@ fn repeated_dependencies() -> Result<()> {
             "edges": project_edges,
         }));
     }
+    insta::with_settings!({ filters => context.filters() }, {
     assert_json_snapshot!(projected_edges, @r#"
     [
       {
         "edges": [
           {
             "marker": "sys_platform == 'win32'",
-            "package": "anyio==1.4.0@registry+https://pypi.org/simple"
+            "package": "outdated-package==1.4.0@registry+http://[LOCALHOST]/simple/"
           },
           {
             "marker": "sys_platform == 'linux'",
-            "package": "anyio==4.3.0@registry+https://pypi.org/simple"
+            "package": "outdated-package==4.3.0@registry+http://[LOCALHOST]/simple/"
           }
         ],
         "inverted": false
@@ -2002,17 +1990,18 @@ fn repeated_dependencies() -> Result<()> {
         "edges": [
           {
             "marker": "sys_platform == 'win32'",
-            "package": "anyio==1.4.0@registry+https://pypi.org/simple"
+            "package": "outdated-package==1.4.0@registry+http://[LOCALHOST]/simple/"
           },
           {
             "marker": "sys_platform == 'linux'",
-            "package": "anyio==4.3.0@registry+https://pypi.org/simple"
+            "package": "outdated-package==4.3.0@registry+http://[LOCALHOST]/simple/"
           }
         ],
         "inverted": true
       }
     ]
     "#);
+    });
 
     // `uv tree` should update the lockfile
     let lock = context.read("uv.lock");
@@ -2026,7 +2015,8 @@ fn repeated_dependencies() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn repeated_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let v1 = context.temp_dir.child("v1");
     fs_err::create_dir_all(&v1)?;
@@ -2037,7 +2027,7 @@ fn repeated_version() -> Result<()> {
         name = "dependency"
         version = "0.0.1"
         requires-python = ">=3.12"
-        dependencies = ["anyio==3.7.0"]
+        dependencies = ["outdated-package==3.7.0"]
         "#,
     )?;
 
@@ -2050,7 +2040,7 @@ fn repeated_version() -> Result<()> {
         name = "dependency"
         version = "0.0.1"
         requires-python = ">=3.12"
-        dependencies = ["anyio==3.0.0"]
+        dependencies = ["outdated-package==3.0.0"]
         "#,
     )?;
 
@@ -2075,16 +2065,12 @@ fn repeated_version() -> Result<()> {
     ----- stdout -----
     project v0.1.0
     ├── dependency v0.0.1
-    │   └── anyio v3.7.0
-    │       ├── idna v3.6
-    │       └── sniffio v1.3.1
+    │   └── outdated-package v3.7.0
     └── dependency v0.0.1
-        └── anyio v3.0.0
-            ├── idna v3.6
-            └── sniffio v1.3.1
+        └── outdated-package v3.0.0
 
     ----- stderr -----
-    Resolved 7 packages in [TIME]
+    Resolved 5 packages in [TIME]
     "
     );
 
@@ -2097,7 +2083,8 @@ fn repeated_version() -> Result<()> {
 
 #[test]
 fn dev_dependencies() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2106,10 +2093,10 @@ fn dev_dependencies() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
+        dependencies = ["simple-package"]
 
         [tool.uv]
-        dev-dependencies = ["anyio"]
+        dev-dependencies = ["outdated-package"]
     "#,
     )?;
 
@@ -2117,14 +2104,12 @@ fn dev_dependencies() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    ├── iniconfig v2.0.0
-    └── anyio v4.3.0 (group: dev)
-        ├── idna v3.6
-        └── sniffio v1.3.1
+    ├── simple-package v2.1.3
+    └── outdated-package v4.3.0 (group: dev)
 
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
-    Resolved 5 packages in [TIME]
+    Resolved 3 packages in [TIME]
     "
     );
 
@@ -2132,11 +2117,11 @@ fn dev_dependencies() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    └── iniconfig v2.0.0
+    └── simple-package v2.1.3
 
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
-    Resolved 5 packages in [TIME]
+    Resolved 3 packages in [TIME]
     "
     );
 
@@ -2150,7 +2135,8 @@ fn dev_dependencies() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn dev_dependencies_inverted() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2159,40 +2145,36 @@ fn dev_dependencies_inverted() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
+        dependencies = ["simple-package"]
 
         [tool.uv]
-        dev-dependencies = ["anyio"]
+        dev-dependencies = ["outdated-package"]
     "#,
     )?;
 
     uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--invert"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    idna v3.6
-    └── anyio v4.3.0
-        └── project v0.1.0 (group: dev)
-    iniconfig v2.0.0
+    outdated-package v4.3.0
+    └── project v0.1.0 (group: dev)
+    simple-package v2.1.3
     └── project v0.1.0
-    sniffio v1.3.1
-    └── anyio v4.3.0 (*)
-    (*) Package tree already displayed
 
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
-    Resolved 5 packages in [TIME]
+    Resolved 3 packages in [TIME]
     "
     );
 
     uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--invert").arg("--no-dev"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    iniconfig v2.0.0
+    simple-package v2.1.3
     └── project v0.1.0
 
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
-    Resolved 5 packages in [TIME]
+    Resolved 3 packages in [TIME]
     "
     );
 
@@ -2206,7 +2188,8 @@ fn dev_dependencies_inverted() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn optional_dependencies() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2215,10 +2198,10 @@ fn optional_dependencies() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig", "flask[dotenv]"]
+        dependencies = ["simple-package", "tree-root[dotenv]"]
 
         [project.optional-dependencies]
-        async = ["anyio"]
+        async = ["outdated-package"]
     "#,
     )?;
 
@@ -2226,23 +2209,20 @@ fn optional_dependencies() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    ├── flask[dotenv] v3.0.2
-    │   ├── blinker v1.7.0
-    │   ├── click v8.1.7
-    │   │   └── colorama v0.4.6
-    │   ├── itsdangerous v2.1.2
-    │   ├── jinja2 v3.1.3
-    │   │   └── markupsafe v2.1.5
-    │   ├── werkzeug v3.0.1
-    │   │   └── markupsafe v2.1.5
-    │   └── python-dotenv v1.0.1 (extra: dotenv)
-    ├── iniconfig v2.0.0
-    └── anyio v4.3.0 (extra: async)
-        ├── idna v3.6
-        └── sniffio v1.3.1
+    ├── simple-package v2.1.3
+    ├── tree-root[dotenv] v3.0.2
+    │   ├── tree-branch-a v1.7.0
+    │   ├── tree-branch-b v8.1.7
+    │   ├── tree-branch-c v2.1.2
+    │   ├── tree-branch-d v3.1.3
+    │   │   └── tree-shared-leaf v2.1.5
+    │   ├── tree-branch-e v3.0.1
+    │   │   └── tree-shared-leaf v2.1.5
+    │   └── tree-extra v1.0.1 (extra: dotenv)
+    └── outdated-package v4.3.0 (extra: async)
 
     ----- stderr -----
-    Resolved 14 packages in [TIME]
+    Resolved 11 packages in [TIME]
     "
     );
 
@@ -2256,7 +2236,8 @@ fn optional_dependencies() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn optional_dependencies_inverted() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2265,44 +2246,39 @@ fn optional_dependencies_inverted() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig", "flask[dotenv]"]
+        dependencies = ["simple-package", "tree-root[dotenv]"]
 
         [project.optional-dependencies]
-        async = ["anyio"]
+        async = ["outdated-package"]
     "#,
     )?;
 
     uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--invert"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    blinker v1.7.0
-    └── flask v3.0.2
-        └── project[dotenv] v0.1.0
-    colorama v0.4.6
-    └── click v8.1.7
-        └── flask v3.0.2
-            └── project[dotenv] v0.1.0
-    idna v3.6
-    └── anyio v4.3.0
-        └── project v0.1.0 (extra: async)
-    iniconfig v2.0.0
+    outdated-package v4.3.0
+    └── project v0.1.0 (extra: async)
+    simple-package v2.1.3
     └── project v0.1.0
-    itsdangerous v2.1.2
-    └── flask v3.0.2 (*)
-    markupsafe v2.1.5
-    ├── jinja2 v3.1.3
-    │   └── flask v3.0.2 (*)
-    └── werkzeug v3.0.1
-        └── flask v3.0.2 (*)
-    python-dotenv v1.0.1
-    └── flask v3.0.2 (extra: dotenv)
+    tree-branch-a v1.7.0
+    └── tree-root v3.0.2
         └── project[dotenv] v0.1.0
-    sniffio v1.3.1
-    └── anyio v4.3.0 (*)
+    tree-branch-b v8.1.7
+    └── tree-root v3.0.2 (*)
+    tree-branch-c v2.1.2
+    └── tree-root v3.0.2 (*)
+    tree-extra v1.0.1
+    └── tree-root v3.0.2 (extra: dotenv)
+        └── project[dotenv] v0.1.0
+    tree-shared-leaf v2.1.5
+    ├── tree-branch-d v3.1.3
+    │   └── tree-root v3.0.2 (*)
+    └── tree-branch-e v3.0.1
+        └── tree-root v3.0.2 (*)
     (*) Package tree already displayed
 
     ----- stderr -----
-    Resolved 14 packages in [TIME]
+    Resolved 11 packages in [TIME]
     "
     );
 
@@ -2321,7 +2297,8 @@ fn optional_dependencies_inverted() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn dep_and_group_extras() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2330,70 +2307,67 @@ fn dep_and_group_extras() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["flask"]
+        dependencies = ["tree-root"]
 
         [dependency-groups]
-        dev = ["flask[dotenv]"]
+        dev = ["tree-root[dotenv]"]
     "#,
     )?;
 
-    // Plain `flask` should not show `python-dotenv` (which belongs to the `dotenv` extra),
-    // but the `flask[dotenv]` occurrence should still be expanded in its own extra context.
+    // Plain `tree-root` should not show `python-dotenv` (which belongs to the `dotenv` extra),
+    // but the `tree-root[dotenv]` occurrence should still be expanded in its own extra context.
     uv_snapshot!(context.filters(), context.tree().arg("--universal"), @"
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    ├── flask v3.0.2
-    │   ├── blinker v1.7.0
-    │   ├── click v8.1.7
-    │   │   └── colorama v0.4.6
-    │   ├── itsdangerous v2.1.2
-    │   ├── jinja2 v3.1.3
-    │   │   └── markupsafe v2.1.5
-    │   └── werkzeug v3.0.1
-    │       └── markupsafe v2.1.5
-    └── flask[dotenv] v3.0.2 (group: dev)
-        ├── blinker v1.7.0
-        ├── click v8.1.7 (*)
-        ├── itsdangerous v2.1.2
-        ├── jinja2 v3.1.3 (*)
-        ├── werkzeug v3.0.1 (*)
-        └── python-dotenv v1.0.1 (extra: dotenv)
+    ├── tree-root v3.0.2
+    │   ├── tree-branch-a v1.7.0
+    │   ├── tree-branch-b v8.1.7
+    │   ├── tree-branch-c v2.1.2
+    │   ├── tree-branch-d v3.1.3
+    │   │   └── tree-shared-leaf v2.1.5
+    │   └── tree-branch-e v3.0.1
+    │       └── tree-shared-leaf v2.1.5
+    └── tree-root[dotenv] v3.0.2 (group: dev)
+        ├── tree-branch-a v1.7.0
+        ├── tree-branch-b v8.1.7
+        ├── tree-branch-c v2.1.2
+        ├── tree-branch-d v3.1.3 (*)
+        ├── tree-branch-e v3.0.1 (*)
+        └── tree-extra v1.0.1 (extra: dotenv)
     (*) Package tree already displayed
 
     ----- stderr -----
-    Resolved 10 packages in [TIME]
+    Resolved 9 packages in [TIME]
     "
     );
 
-    // With `--no-dedupe`, `flask[dotenv]` is expanded and shows `python-dotenv` as an extra dep,
-    // while plain `flask` still does not show it.
+    // With `--no-dedupe`, `tree-root[dotenv]` is expanded and shows `python-dotenv` as an extra dep,
+    // while plain `tree-root` still does not show it.
     uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--no-dedupe"), @"
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    ├── flask v3.0.2
-    │   ├── blinker v1.7.0
-    │   ├── click v8.1.7
-    │   │   └── colorama v0.4.6
-    │   ├── itsdangerous v2.1.2
-    │   ├── jinja2 v3.1.3
-    │   │   └── markupsafe v2.1.5
-    │   └── werkzeug v3.0.1
-    │       └── markupsafe v2.1.5
-    └── flask[dotenv] v3.0.2 (group: dev)
-        ├── blinker v1.7.0
-        ├── click v8.1.7
-        │   └── colorama v0.4.6
-        ├── itsdangerous v2.1.2
-        ├── jinja2 v3.1.3
-        │   └── markupsafe v2.1.5
-        ├── werkzeug v3.0.1
-        │   └── markupsafe v2.1.5
-        └── python-dotenv v1.0.1 (extra: dotenv)
+    ├── tree-root v3.0.2
+    │   ├── tree-branch-a v1.7.0
+    │   ├── tree-branch-b v8.1.7
+    │   ├── tree-branch-c v2.1.2
+    │   ├── tree-branch-d v3.1.3
+    │   │   └── tree-shared-leaf v2.1.5
+    │   └── tree-branch-e v3.0.1
+    │       └── tree-shared-leaf v2.1.5
+    └── tree-root[dotenv] v3.0.2 (group: dev)
+        ├── tree-branch-a v1.7.0
+        ├── tree-branch-b v8.1.7
+        ├── tree-branch-c v2.1.2
+        ├── tree-branch-d v3.1.3
+        │   └── tree-shared-leaf v2.1.5
+        ├── tree-branch-e v3.0.1
+        │   └── tree-shared-leaf v2.1.5
+        └── tree-extra v1.0.1 (extra: dotenv)
 
     ----- stderr -----
-    Resolved 10 packages in [TIME]
+    Resolved 9 packages in [TIME]
     "
     );
 
@@ -2402,7 +2376,8 @@ fn dep_and_group_extras() -> Result<()> {
 
 #[test]
 fn dep_and_group_extras_with_extra_only_dependency() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let leaf = context.temp_dir.child("leaf");
     fs_err::create_dir_all(leaf.path())?;
@@ -2467,7 +2442,8 @@ fn dep_and_group_extras_with_extra_only_dependency() -> Result<()> {
 
 #[test]
 fn dep_and_group_extras_with_different_extras_in_path() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let leaf = context.temp_dir.child("leaf");
     fs_err::create_dir_all(leaf.path())?;
@@ -2546,7 +2522,8 @@ fn dep_and_group_extras_with_different_extras_in_path() -> Result<()> {
 
 #[test]
 fn package() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2555,7 +2532,7 @@ fn package() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["scikit-learn==1.4.1.post1", "pandas"]
+        dependencies = ["tree-root", "shared-root"]
     "#,
     )?;
 
@@ -2563,49 +2540,51 @@ fn package() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    ├── pandas v2.2.1
-    │   ├── numpy v1.26.4
-    │   ├── python-dateutil v2.9.0.post0
-    │   │   └── six v1.16.0
-    │   ├── pytz v2024.1
-    │   └── tzdata v2024.1
-    └── scikit-learn v1.4.1.post1
-        ├── joblib v1.3.2
-        ├── numpy v1.26.4
-        ├── scipy v1.12.0
-        │   └── numpy v1.26.4
-        └── threadpoolctl v3.4.0
-
-    ----- stderr -----
-    Resolved 11 packages in [TIME]
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.tree().arg("--package").arg("scipy"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    scipy v1.12.0
-    └── numpy v1.26.4
-
-    ----- stderr -----
-    Resolved 11 packages in [TIME]
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.tree().arg("--package").arg("numpy").arg("--invert"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    numpy v1.26.4
-    ├── pandas v2.2.1
-    │   └── project v0.1.0
-    ├── scikit-learn v1.4.1.post1
-    │   └── project v0.1.0
-    └── scipy v1.12.0
-        └── scikit-learn v1.4.1.post1 (*)
+    ├── shared-root v3.0.0
+    │   ├── shared-branch v2.14.1
+    │   │   └── shared-leaf v2.9.0
+    │   │       └── shared-bottom v1.16.0
+    │   ├── shared-extra v2024.1
+    │   └── shared-leaf v2.9.0 (*)
+    └── tree-root v3.0.2
+        ├── tree-branch-a v1.7.0
+        ├── tree-branch-b v8.1.7
+        ├── tree-branch-c v2.1.2
+        ├── tree-branch-d v3.1.3
+        │   └── tree-shared-leaf v2.1.5
+        └── tree-branch-e v3.0.1
+            └── tree-shared-leaf v2.1.5
     (*) Package tree already displayed
 
     ----- stderr -----
-    Resolved 11 packages in [TIME]
+    Resolved 13 packages in [TIME]
+    "
+    );
+
+    uv_snapshot!(context.filters(), context.tree().arg("--package").arg("tree-branch-d"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    tree-branch-d v3.1.3
+    └── tree-shared-leaf v2.1.5
+
+    ----- stderr -----
+    Resolved 13 packages in [TIME]
+    "
+    );
+
+    uv_snapshot!(context.filters(), context.tree().arg("--package").arg("tree-shared-leaf").arg("--invert"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    tree-shared-leaf v2.1.5
+    ├── tree-branch-d v3.1.3
+    │   └── tree-root v3.0.2
+    │       └── project v0.1.0
+    └── tree-branch-e v3.0.1
+        └── tree-root v3.0.2 (*)
+    (*) Package tree already displayed
+
+    ----- stderr -----
+    Resolved 13 packages in [TIME]
     "
     );
 
@@ -2618,7 +2597,8 @@ fn package() -> Result<()> {
 
 #[test]
 fn group() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2627,12 +2607,12 @@ fn group() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["typing-extensions"]
+        dependencies = ["tree-leaf-b"]
 
         [dependency-groups]
-        foo = ["anyio"]
-        bar = ["iniconfig"]
-        dev = ["sniffio"]
+        foo = ["outdated-package"]
+        bar = ["simple-package"]
+        dev = ["tree-leaf-c"]
         "#,
     )?;
 
@@ -2642,79 +2622,71 @@ fn group() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    ├── typing-extensions v4.10.0
-    └── sniffio v1.3.1 (group: dev)
+    ├── tree-leaf-b v3.3.2
+    └── tree-leaf-c v3.6 (group: dev)
 
     ----- stderr -----
-    Resolved 6 packages in [TIME]
+    Resolved 5 packages in [TIME]
     ");
 
     uv_snapshot!(context.filters(), context.tree().arg("--only-group").arg("bar"), @"
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    └── iniconfig v2.0.0 (group: bar)
+    └── simple-package v2.1.3 (group: bar)
 
     ----- stderr -----
-    Resolved 6 packages in [TIME]
+    Resolved 5 packages in [TIME]
     ");
 
     uv_snapshot!(context.filters(), context.tree().arg("--group").arg("foo"), @"
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    ├── typing-extensions v4.10.0
-    ├── sniffio v1.3.1 (group: dev)
-    └── anyio v4.3.0 (group: foo)
-        ├── idna v3.6
-        └── sniffio v1.3.1
+    ├── tree-leaf-b v3.3.2
+    ├── tree-leaf-c v3.6 (group: dev)
+    └── outdated-package v4.3.0 (group: foo)
 
     ----- stderr -----
-    Resolved 6 packages in [TIME]
+    Resolved 5 packages in [TIME]
     ");
 
     uv_snapshot!(context.filters(), context.tree().arg("--group").arg("foo").arg("--group").arg("bar"), @"
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    ├── typing-extensions v4.10.0
-    ├── iniconfig v2.0.0 (group: bar)
-    ├── sniffio v1.3.1 (group: dev)
-    └── anyio v4.3.0 (group: foo)
-        ├── idna v3.6
-        └── sniffio v1.3.1
+    ├── tree-leaf-b v3.3.2
+    ├── simple-package v2.1.3 (group: bar)
+    ├── tree-leaf-c v3.6 (group: dev)
+    └── outdated-package v4.3.0 (group: foo)
 
     ----- stderr -----
-    Resolved 6 packages in [TIME]
+    Resolved 5 packages in [TIME]
     ");
 
     uv_snapshot!(context.filters(), context.tree().arg("--all-groups"), @"
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    ├── typing-extensions v4.10.0
-    ├── iniconfig v2.0.0 (group: bar)
-    ├── sniffio v1.3.1 (group: dev)
-    └── anyio v4.3.0 (group: foo)
-        ├── idna v3.6
-        └── sniffio v1.3.1
+    ├── tree-leaf-b v3.3.2
+    ├── simple-package v2.1.3 (group: bar)
+    ├── tree-leaf-c v3.6 (group: dev)
+    └── outdated-package v4.3.0 (group: foo)
 
     ----- stderr -----
-    Resolved 6 packages in [TIME]
+    Resolved 5 packages in [TIME]
     ");
 
     uv_snapshot!(context.filters(), context.tree().arg("--all-groups").arg("--no-group").arg("bar"), @"
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    ├── typing-extensions v4.10.0
-    ├── sniffio v1.3.1 (group: dev)
-    └── anyio v4.3.0 (group: foo)
-        ├── idna v3.6
-        └── sniffio v1.3.1
+    ├── tree-leaf-b v3.3.2
+    ├── tree-leaf-c v3.6 (group: dev)
+    └── outdated-package v4.3.0 (group: foo)
 
     ----- stderr -----
-    Resolved 6 packages in [TIME]
+    Resolved 5 packages in [TIME]
     ");
 
     Ok(())
@@ -2723,7 +2695,8 @@ fn group() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cycle() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2732,7 +2705,7 @@ fn cycle() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["testtools==2.3.0", "fixtures==3.0.0"]
+        dependencies = ["cycle-root==2.3.0", "cycle-backref==3.0.0"]
     "#,
     )?;
 
@@ -2740,60 +2713,54 @@ fn cycle() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    ├── fixtures v3.0.0
-    │   ├── pbr v6.0.0
-    │   ├── six v1.16.0
-    │   └── testtools v2.3.0
-    │       ├── extras v1.0.0
-    │       ├── fixtures v3.0.0 (*)
-    │       ├── pbr v6.0.0
-    │       ├── python-mimeparse v1.6.0
-    │       ├── six v1.16.0
-    │       ├── traceback2 v1.4.0
-    │       │   └── linecache2 v1.0.0
-    │       └── unittest2 v1.1.0
-    │           ├── argparse v1.4.0
-    │           ├── six v1.16.0
-    │           └── traceback2 v1.4.0 (*)
-    └── testtools v2.3.0 (*)
+    ├── cycle-backref v3.0.0
+    │   ├── cycle-leaf-c v1.16.0
+    │   └── cycle-root v2.3.0
+    │       ├── cycle-backref v3.0.0 (*)
+    │       ├── cycle-leaf-a v1.0.0
+    │       ├── cycle-leaf-b v6.0.0
+    │       └── cycle-nested v1.1.0
+    │           ├── cycle-leaf-c v1.16.0
+    │           ├── cycle-leaf-d v1.4.0
+    │           └── cycle-trace v1.4.0
+    │               └── cycle-leaf-e v1.0.0
+    └── cycle-root v2.3.0 (*)
     (*) Package tree already displayed
 
     ----- stderr -----
-    Resolved 11 packages in [TIME]
+    Resolved 10 packages in [TIME]
     "
     );
 
-    uv_snapshot!(context.filters(), context.tree().arg("--package").arg("traceback2").arg("--package").arg("six"), @"
+    uv_snapshot!(context.filters(), context.tree().arg("--package").arg("cycle-trace").arg("--package").arg("cycle-leaf-c"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    six v1.16.0
-    traceback2 v1.4.0
-    └── linecache2 v1.0.0
+    cycle-leaf-c v1.16.0
+    cycle-trace v1.4.0
+    └── cycle-leaf-e v1.0.0
 
     ----- stderr -----
-    Resolved 11 packages in [TIME]
+    Resolved 10 packages in [TIME]
     "
     );
 
-    uv_snapshot!(context.filters(), context.tree().arg("--package").arg("traceback2").arg("--package").arg("six").arg("--invert"), @"
+    uv_snapshot!(context.filters(), context.tree().arg("--package").arg("cycle-trace").arg("--package").arg("cycle-leaf-c").arg("--invert"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    six v1.16.0
-    ├── fixtures v3.0.0
-    │   ├── project v0.1.0
-    │   └── testtools v2.3.0
-    │       ├── fixtures v3.0.0 (*)
-    │       └── project v0.1.0
-    ├── testtools v2.3.0 (*)
-    └── unittest2 v1.1.0
-        └── testtools v2.3.0 (*)
-    traceback2 v1.4.0
-    ├── testtools v2.3.0 (*)
-    └── unittest2 v1.1.0 (*)
+    cycle-leaf-c v1.16.0
+    ├── cycle-backref v3.0.0
+    │   ├── cycle-root v2.3.0
+    │   │   ├── cycle-backref v3.0.0 (*)
+    │   │   └── project v0.1.0
+    │   └── project v0.1.0
+    └── cycle-nested v1.1.0
+        └── cycle-root v2.3.0 (*)
+    cycle-trace v1.4.0
+    └── cycle-nested v1.1.0 (*)
     (*) Package tree already displayed
 
     ----- stderr -----
-    Resolved 11 packages in [TIME]
+    Resolved 10 packages in [TIME]
     "
     );
 
@@ -2807,7 +2774,8 @@ fn cycle() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cycle_no_orphaned_roots() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2816,22 +2784,22 @@ fn cycle_no_orphaned_roots() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["testtools==2.3.0", "fixtures==3.0.0"]
+        dependencies = ["cycle-root==2.3.0", "cycle-backref==3.0.0"]
     "#,
     )?;
 
     // With --depth 1, only "project" should appear as a root — transitive deps
-    // involved in cycles (e.g. testtools <-> fixtures) must not be promoted to roots.
-    uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--depth").arg("1"), @r###"
+    // involved in cycles (e.g. cycle-root <-> cycle-backref) must not be promoted to roots.
+    uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--depth").arg("1"), @"
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    ├── fixtures v3.0.0
-    └── testtools v2.3.0
+    ├── cycle-backref v3.0.0
+    └── cycle-root v2.3.0
 
     ----- stderr -----
-    Resolved 11 packages in [TIME]
-    "###);
+    Resolved 10 packages in [TIME]
+    ");
 
     Ok(())
 }
@@ -2839,7 +2807,8 @@ fn cycle_no_orphaned_roots() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cycle_no_infinite_loop() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2848,32 +2817,28 @@ fn cycle_no_infinite_loop() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["testtools==2.3.0", "fixtures==3.0.0"]
+        dependencies = ["cycle-root==2.3.0", "cycle-backref==3.0.0"]
     "#,
     )?;
 
     // This should complete without hanging, and cycles should be marked with (*)
-    uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--depth").arg("2"), @r###"
+    uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--depth").arg("2"), @"
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    ├── fixtures v3.0.0
-    │   ├── pbr v6.0.0
-    │   ├── six v1.16.0
-    │   └── testtools v2.3.0
-    └── testtools v2.3.0
-        ├── extras v1.0.0
-        ├── fixtures v3.0.0 (*)
-        ├── pbr v6.0.0
-        ├── python-mimeparse v1.6.0
-        ├── six v1.16.0
-        ├── traceback2 v1.4.0
-        └── unittest2 v1.1.0
+    ├── cycle-backref v3.0.0
+    │   ├── cycle-leaf-c v1.16.0
+    │   └── cycle-root v2.3.0
+    └── cycle-root v2.3.0
+        ├── cycle-backref v3.0.0 (*)
+        ├── cycle-leaf-a v1.0.0
+        ├── cycle-leaf-b v6.0.0
+        └── cycle-nested v1.1.0
     (*) Package tree already displayed
 
     ----- stderr -----
-    Resolved 11 packages in [TIME]
-    "###
+    Resolved 10 packages in [TIME]
+    "
     );
 
     Ok(())
@@ -2882,7 +2847,8 @@ fn cycle_no_infinite_loop() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cycle_invert() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2891,34 +2857,30 @@ fn cycle_invert() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["testtools==2.3.0", "fixtures==3.0.0"]
+        dependencies = ["cycle-root==2.3.0", "cycle-backref==3.0.0"]
     "#,
     )?;
 
     // With --invert, leaf packages should be roots and the tree should show
     // reverse dependencies without orphaned roots from cycle-breaking.
-    uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--invert").arg("--depth").arg("1"), @r###"
+    uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--invert").arg("--depth").arg("1"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    argparse v1.4.0
-    └── unittest2 v1.1.0
-    extras v1.0.0
-    └── testtools v2.3.0
-    linecache2 v1.0.0
-    └── traceback2 v1.4.0
-    pbr v6.0.0
-    ├── fixtures v3.0.0
-    └── testtools v2.3.0
-    python-mimeparse v1.6.0
-    └── testtools v2.3.0
-    six v1.16.0
-    ├── fixtures v3.0.0
-    ├── testtools v2.3.0
-    └── unittest2 v1.1.0
+    cycle-leaf-a v1.0.0
+    └── cycle-root v2.3.0
+    cycle-leaf-b v6.0.0
+    └── cycle-root v2.3.0
+    cycle-leaf-c v1.16.0
+    ├── cycle-backref v3.0.0
+    └── cycle-nested v1.1.0
+    cycle-leaf-d v1.4.0
+    └── cycle-nested v1.1.0
+    cycle-leaf-e v1.0.0
+    └── cycle-trace v1.4.0
 
     ----- stderr -----
-    Resolved 11 packages in [TIME]
-    "###);
+    Resolved 10 packages in [TIME]
+    ");
 
     Ok(())
 }
@@ -3004,7 +2966,8 @@ fn cycle_invert_leaf_with_acyclic_leaf() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cycle_depth_boundary_no_premature_dedupe() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3013,35 +2976,31 @@ fn cycle_depth_boundary_no_premature_dedupe() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["testtools==2.3.0", "fixtures==3.0.0"]
+        dependencies = ["cycle-root==2.3.0", "cycle-backref==3.0.0"]
     "#,
     )?;
 
     // With --depth 3, packages at the depth boundary (depth 3) are shown but not
-    // marked as visited. Packages below the boundary (e.g., `fixtures` at depth 1)
+    // marked as visited. Packages below the boundary (e.g., `cycle-backref` at depth 1)
     // are correctly marked visited and show (*) on later appearances. Leaf packages
     // like `pbr` (no children in this graph) appear without (*) even when visited,
     // since there is nothing to deduplicate.
-    uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--depth").arg("3"), @r"
+    uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--depth").arg("3"), @"
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    ├── fixtures v3.0.0
-    │   ├── pbr v6.0.0
-    │   ├── six v1.16.0
-    │   └── testtools v2.3.0
-    │       ├── extras v1.0.0
-    │       ├── fixtures v3.0.0 (*)
-    │       ├── pbr v6.0.0
-    │       ├── python-mimeparse v1.6.0
-    │       ├── six v1.16.0
-    │       ├── traceback2 v1.4.0
-    │       └── unittest2 v1.1.0
-    └── testtools v2.3.0 (*)
+    ├── cycle-backref v3.0.0
+    │   ├── cycle-leaf-c v1.16.0
+    │   └── cycle-root v2.3.0
+    │       ├── cycle-backref v3.0.0 (*)
+    │       ├── cycle-leaf-a v1.0.0
+    │       ├── cycle-leaf-b v6.0.0
+    │       └── cycle-nested v1.1.0
+    └── cycle-root v2.3.0 (*)
     (*) Package tree already displayed
 
     ----- stderr -----
-    Resolved 11 packages in [TIME]
+    Resolved 10 packages in [TIME]
     ");
 
     Ok(())
@@ -3050,7 +3009,8 @@ fn cycle_depth_boundary_no_premature_dedupe() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cycle_invert_deep() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3059,41 +3019,36 @@ fn cycle_invert_deep() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["testtools==2.3.0", "fixtures==3.0.0"]
+        dependencies = ["cycle-root==2.3.0", "cycle-backref==3.0.0"]
     "#,
     )?;
 
     // With --invert and --depth 2, cycles in the reversed graph should be
     // detected and marked with (*) without causing infinite loops.
-    uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--invert").arg("--depth").arg("2"), @r"
+    uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--invert").arg("--depth").arg("2"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    argparse v1.4.0
-    └── unittest2 v1.1.0
-        └── testtools v2.3.0
-    extras v1.0.0
-    └── testtools v2.3.0
-        ├── fixtures v3.0.0
+    cycle-leaf-a v1.0.0
+    └── cycle-root v2.3.0
+        ├── cycle-backref v3.0.0
         └── project v0.1.0
-    linecache2 v1.0.0
-    └── traceback2 v1.4.0
-        ├── testtools v2.3.0 (*)
-        └── unittest2 v1.1.0 (*)
-    pbr v6.0.0
-    ├── fixtures v3.0.0
-    │   ├── project v0.1.0
-    │   └── testtools v2.3.0 (*)
-    └── testtools v2.3.0 (*)
-    python-mimeparse v1.6.0
-    └── testtools v2.3.0 (*)
-    six v1.16.0
-    ├── fixtures v3.0.0 (*)
-    ├── testtools v2.3.0 (*)
-    └── unittest2 v1.1.0 (*)
+    cycle-leaf-b v6.0.0
+    └── cycle-root v2.3.0 (*)
+    cycle-leaf-c v1.16.0
+    ├── cycle-backref v3.0.0
+    │   ├── cycle-root v2.3.0 (*)
+    │   └── project v0.1.0
+    └── cycle-nested v1.1.0
+        └── cycle-root v2.3.0 (*)
+    cycle-leaf-d v1.4.0
+    └── cycle-nested v1.1.0 (*)
+    cycle-leaf-e v1.0.0
+    └── cycle-trace v1.4.0
+        └── cycle-nested v1.1.0 (*)
     (*) Package tree already displayed
 
     ----- stderr -----
-    Resolved 11 packages in [TIME]
+    Resolved 10 packages in [TIME]
     ");
 
     Ok(())
@@ -3102,7 +3057,8 @@ fn cycle_invert_deep() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cycle_depth_no_dedupe() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3111,32 +3067,28 @@ fn cycle_depth_no_dedupe() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["testtools==2.3.0", "fixtures==3.0.0"]
+        dependencies = ["cycle-root==2.3.0", "cycle-backref==3.0.0"]
     "#,
     )?;
 
     // With --no-dedupe and --depth 2, packages should be expanded each time they
     // appear (up to the depth limit), and cycles should still be marked with (*).
-    uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--no-dedupe").arg("--depth").arg("2"), @r###"
+    uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--no-dedupe").arg("--depth").arg("2"), @"
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    ├── fixtures v3.0.0
-    │   ├── pbr v6.0.0
-    │   ├── six v1.16.0
-    │   └── testtools v2.3.0
-    └── testtools v2.3.0
-        ├── extras v1.0.0
-        ├── fixtures v3.0.0
-        ├── pbr v6.0.0
-        ├── python-mimeparse v1.6.0
-        ├── six v1.16.0
-        ├── traceback2 v1.4.0
-        └── unittest2 v1.1.0
+    ├── cycle-backref v3.0.0
+    │   ├── cycle-leaf-c v1.16.0
+    │   └── cycle-root v2.3.0
+    └── cycle-root v2.3.0
+        ├── cycle-backref v3.0.0
+        ├── cycle-leaf-a v1.0.0
+        ├── cycle-leaf-b v6.0.0
+        └── cycle-nested v1.1.0
 
     ----- stderr -----
-    Resolved 11 packages in [TIME]
-    "###);
+    Resolved 10 packages in [TIME]
+    ");
 
     Ok(())
 }
@@ -3144,7 +3096,8 @@ fn cycle_depth_no_dedupe() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn workspace_dev() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3153,7 +3106,7 @@ fn workspace_dev() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["anyio"]
+        dependencies = ["outdated-package"]
 
         [dependency-groups]
         dev = ["child"]
@@ -3174,7 +3127,7 @@ fn workspace_dev() -> Result<()> {
         name = "child"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
+        dependencies = ["simple-package"]
     "#,
     )?;
 
@@ -3182,16 +3135,14 @@ fn workspace_dev() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    ├── anyio v4.3.0
-    │   ├── idna v3.6
-    │   └── sniffio v1.3.1
+    ├── outdated-package v4.3.0
     └── child v0.1.0 (group: dev)
-        └── iniconfig v2.0.0
+        └── simple-package v2.1.3
     child v0.1.0 (*)
     (*) Package tree already displayed
 
     ----- stderr -----
-    Resolved 6 packages in [TIME]
+    Resolved 4 packages in [TIME]
     "
     );
 
@@ -3201,14 +3152,12 @@ fn workspace_dev() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    └── anyio v4.3.0
-        ├── idna v3.6
-        └── sniffio v1.3.1
+    └── outdated-package v4.3.0
     child v0.1.0
-    └── iniconfig v2.0.0
+    └── simple-package v2.1.3
 
     ----- stderr -----
-    Resolved 6 packages in [TIME]
+    Resolved 4 packages in [TIME]
     "
     );
 
@@ -3701,7 +3650,8 @@ fn invert_preserves_conflict_marker_attribution() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn non_project() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3710,20 +3660,18 @@ fn non_project() -> Result<()> {
         members = []
 
         [dependency-groups]
-        async = ["anyio"]
+        async = ["outdated-package"]
     "#,
     )?;
 
     uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--group").arg("async"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    anyio v4.3.0 (group: async)
-    ├── idna v3.6
-    └── sniffio v1.3.1
+    outdated-package v4.3.0 (group: async)
 
     ----- stderr -----
     warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
-    Resolved 3 packages in [TIME]
+    Resolved 1 package in [TIME]
     "
     );
 
@@ -3937,7 +3885,8 @@ fn non_project_group_selection_with_extras() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn non_project_member() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3946,7 +3895,7 @@ fn non_project_member() -> Result<()> {
         members = ["child"]
 
         [dependency-groups]
-        async = ["anyio"]
+        async = ["outdated-package"]
         "#,
     )?;
 
@@ -3957,7 +3906,7 @@ fn non_project_member() -> Result<()> {
         name = "child"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig", "sniffio", "anyio"]
+        dependencies = ["simple-package", "tree-leaf-c", "outdated-package"]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
@@ -3968,35 +3917,29 @@ fn non_project_member() -> Result<()> {
     uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--group").arg("async"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    anyio v4.3.0 (group: async)
-    ├── idna v3.6
-    └── sniffio v1.3.1
+    outdated-package v4.3.0 (group: async)
     child v0.1.0
-    ├── anyio v4.3.0 (*)
-    ├── iniconfig v2.0.0
-    └── sniffio v1.3.1
-    (*) Package tree already displayed
+    ├── outdated-package v4.3.0
+    ├── simple-package v2.1.3
+    └── tree-leaf-c v3.6
 
     ----- stderr -----
-    Resolved 5 packages in [TIME]
+    Resolved 4 packages in [TIME]
     "
     );
 
     uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--invert").arg("--group").arg("async"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    idna v3.6
-    └── anyio v4.3.0
-        └── child v0.1.0
-    iniconfig v2.0.0
+    outdated-package v4.3.0
     └── child v0.1.0
-    sniffio v1.3.1
-    ├── anyio v4.3.0 (*)
+    simple-package v2.1.3
     └── child v0.1.0
-    (*) Package tree already displayed
+    tree-leaf-c v3.6
+    └── child v0.1.0
 
     ----- stderr -----
-    Resolved 5 packages in [TIME]
+    Resolved 4 packages in [TIME]
     "
     );
 
@@ -4009,22 +3952,23 @@ fn non_project_member() -> Result<()> {
 
 #[test]
 fn script() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! {r#"
         # /// script
-        # requires-python = ">=3.11"
+        # requires-python = ">=3.12"
         # dependencies = [
-        #   "requests<3",
-        #   "rich",
+        #   "tree-parent<3",
+        #   "tree-root",
         # ]
         # ///
 
-        import requests
-        from rich.pretty import pprint
+        import tree_parent
+        from tree_root.pretty import pprint
 
-        resp = requests.get("https://peps.python.org/api/peps.json")
+        resp = tree_parent.get("https://peps.python.org/api/peps.json")
         data = resp.json()
         pprint([(k, v["title"]) for k, v in data.items()][:10])
     "#})?;
@@ -4032,18 +3976,22 @@ fn script() -> Result<()> {
     uv_snapshot!(context.filters(), context.tree().arg("--script").arg(script.path()), @"
     exit_code: 0 (success)
     ----- stdout -----
-    rich v13.7.1
-    ├── markdown-it-py v3.0.0
-    │   └── mdurl v0.1.2
-    └── pygments v2.17.2
-    requests v2.31.0
-    ├── certifi v2024.2.2
-    ├── charset-normalizer v3.3.2
-    ├── idna v3.6
-    └── urllib3 v2.2.1
+    tree-root v3.0.2
+    ├── tree-branch-a v1.7.0
+    ├── tree-branch-b v8.1.7
+    ├── tree-branch-c v2.1.2
+    ├── tree-branch-d v3.1.3
+    │   └── tree-shared-leaf v2.1.5
+    └── tree-branch-e v3.0.1
+        └── tree-shared-leaf v2.1.5
+    tree-parent v2.31.0
+    ├── tree-leaf-a v2024.2.2
+    ├── tree-leaf-b v3.3.2
+    ├── tree-leaf-c v3.6
+    └── tree-leaf-d v2.2.1
 
     ----- stderr -----
-    Resolved 9 packages in [TIME]
+    Resolved 12 packages in [TIME]
     ");
 
     // If the lockfile didn't exist already, it shouldn't be persisted to disk.
@@ -4053,7 +4001,7 @@ fn script() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock().arg("--script").arg(script.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 9 packages in [TIME]
+    Resolved 12 packages in [TIME]
     ");
 
     let lock = context.read("script.py.lock");
@@ -4065,139 +4013,142 @@ fn script() -> Result<()> {
             lock, @r#"
         version = 1
         revision = 3
-        requires-python = ">=3.11"
+        requires-python = ">=3.12"
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [manifest]
         requirements = [
-            { name = "requests", specifier = "<3" },
-            { name = "rich" },
+            { name = "tree-parent", specifier = "<3" },
+            { name = "tree-root" },
         ]
 
         [[package]]
-        name = "certifi"
+        name = "tree-branch-a"
+        version = "1.7.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/tree_branch_a-1.7.0.tar.gz", hash = "sha256:0e8b4d8d1cc1c99e663b0cfd72b0719ed54f5e608f93b7dd060bee21c768df6f", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/tree_branch_a-1.7.0-py3-none-any.whl", hash = "sha256:accb8b35b9634f68a3511b28d73914e3000352a178792b82d0bb715101d00a05", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "tree-branch-b"
+        version = "8.1.7"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/tree_branch_b-8.1.7.tar.gz", hash = "sha256:81fee543af2969cc2841108e4e95ed699d9e4406c41e81b21a7bd2b0f6a57ba7", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/tree_branch_b-8.1.7-py3-none-any.whl", hash = "sha256:04ff0ba82fcb8dbbe389ebcec80b95f2ccc9dd9dc22a3ee4f5d1c03d9a369b54", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "tree-branch-c"
+        version = "2.1.2"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/tree_branch_c-2.1.2.tar.gz", hash = "sha256:60fbd7d5254df5565235d0ef3aba0d40b64ce11895109795666b5df2c12789c7", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/tree_branch_c-2.1.2-py3-none-any.whl", hash = "sha256:04883160b5990d638f357d739e7c8e9fd5ff69ace5912f09a8298b1cbd9c377b", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "tree-branch-d"
+        version = "3.1.3"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "tree-shared-leaf" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/tree_branch_d-3.1.3.tar.gz", hash = "sha256:fb4f82511c4c7912c6e270694ff46526e3debdd622f124fcecdb3ce365a152a6", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/tree_branch_d-3.1.3-py3-none-any.whl", hash = "sha256:4a5e468bb4d521fb171724fbb55d955c9ebebb062d24fee88364fd197d3af22a", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "tree-branch-e"
+        version = "3.0.1"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "tree-shared-leaf" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/tree_branch_e-3.0.1.tar.gz", hash = "sha256:eec8f5bea87e562a30f7b77d8469f20a9a4288f3c14519fc44224083e2a3d6cd", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/tree_branch_e-3.0.1-py3-none-any.whl", hash = "sha256:b35bd1854ba606553a75765a64cdc6491ec5247b95e298b691ed7cc74e065384", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "tree-leaf-a"
         version = "2024.2.2"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/71/da/e94e26401b62acd6d91df2b52954aceb7f561743aa5ccc32152886c76c96/certifi-2024.2.2.tar.gz", hash = "sha256:0569859f95fc761b18b45ef421b1290a0f65f147e92a1e5eb3e635f9a5e4e66f", size = 164886, upload-time = "2024-02-02T01:22:17.364Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/tree_leaf_a-2024.2.2.tar.gz", hash = "sha256:cb4c647683d931656c195fccfdaf8e9d14d120c7a85f997fe737813f59b2b0a6", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/ba/06/a07f096c664aeb9f01624f858c3add0a4e913d6c96257acb4fce61e7de14/certifi-2024.2.2-py3-none-any.whl", hash = "sha256:dc383c07b76109f368f6106eee2b593b04a011ea4d55f652c6ca24a754d1cdd1", size = 163774, upload-time = "2024-02-02T01:22:14.86Z" },
+            { url = "http://[LOCALHOST]/files/tree_leaf_a-2024.2.2-py3-none-any.whl", hash = "sha256:59564d25467f6680748a6ce50268b92950cafb5e99f670232c34946c4a0db296", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
-        name = "charset-normalizer"
+        name = "tree-leaf-b"
         version = "3.3.2"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/63/09/c1bc53dab74b1816a00d8d030de5bf98f724c52c1635e07681d312f20be8/charset-normalizer-3.3.2.tar.gz", hash = "sha256:f30c3cb33b24454a82faecaf01b19c18562b1e89558fb6c56de4d9118a032fd5", size = 104809, upload-time = "2023-11-01T04:04:59.997Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/tree_leaf_b-3.3.2.tar.gz", hash = "sha256:87dde9d0913d868ddff2fd9eb437ee782e85638cc03f6b782a258568125f2d55", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/68/77/02839016f6fbbf808e8b38601df6e0e66c17bbab76dff4613f7511413597/charset_normalizer-3.3.2-cp311-cp311-macosx_10_9_universal2.whl", hash = "sha256:802fe99cca7457642125a8a88a084cef28ff0cf9407060f7b93dca5aa25480db", size = 191647, upload-time = "2023-11-01T04:02:55.329Z" },
-            { url = "https://files.pythonhosted.org/packages/3e/33/21a875a61057165e92227466e54ee076b73af1e21fe1b31f1e292251aa1e/charset_normalizer-3.3.2-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:573f6eac48f4769d667c4442081b1794f52919e7edada77495aaed9236d13a96", size = 121434, upload-time = "2023-11-01T04:02:57.173Z" },
-            { url = "https://files.pythonhosted.org/packages/dd/51/68b61b90b24ca35495956b718f35a9756ef7d3dd4b3c1508056fa98d1a1b/charset_normalizer-3.3.2-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:549a3a73da901d5bc3ce8d24e0600d1fa85524c10287f6004fbab87672bf3e1e", size = 118979, upload-time = "2023-11-01T04:02:58.442Z" },
-            { url = "https://files.pythonhosted.org/packages/e4/a6/7ee57823d46331ddc37dd00749c95b0edec2c79b15fc0d6e6efb532e89ac/charset_normalizer-3.3.2-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:f27273b60488abe721a075bcca6d7f3964f9f6f067c8c4c605743023d7d3944f", size = 136582, upload-time = "2023-11-01T04:02:59.776Z" },
-            { url = "https://files.pythonhosted.org/packages/74/f1/0d9fe69ac441467b737ba7f48c68241487df2f4522dd7246d9426e7c690e/charset_normalizer-3.3.2-cp311-cp311-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:1ceae2f17a9c33cb48e3263960dc5fc8005351ee19db217e9b1bb15d28c02574", size = 146645, upload-time = "2023-11-01T04:03:02.186Z" },
-            { url = "https://files.pythonhosted.org/packages/05/31/e1f51c76db7be1d4aef220d29fbfa5dbb4a99165d9833dcbf166753b6dc0/charset_normalizer-3.3.2-cp311-cp311-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:65f6f63034100ead094b8744b3b97965785388f308a64cf8d7c34f2f2e5be0c4", size = 139398, upload-time = "2023-11-01T04:03:04.255Z" },
-            { url = "https://files.pythonhosted.org/packages/40/26/f35951c45070edc957ba40a5b1db3cf60a9dbb1b350c2d5bef03e01e61de/charset_normalizer-3.3.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:753f10e867343b4511128c6ed8c82f7bec3bd026875576dfd88483c5c73b2fd8", size = 140273, upload-time = "2023-11-01T04:03:05.983Z" },
-            { url = "https://files.pythonhosted.org/packages/07/07/7e554f2bbce3295e191f7e653ff15d55309a9ca40d0362fcdab36f01063c/charset_normalizer-3.3.2-cp311-cp311-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:4a78b2b446bd7c934f5dcedc588903fb2f5eec172f3d29e52a9096a43722adfc", size = 142577, upload-time = "2023-11-01T04:03:07.567Z" },
-            { url = "https://files.pythonhosted.org/packages/d8/b5/eb705c313100defa57da79277d9207dc8d8e45931035862fa64b625bfead/charset_normalizer-3.3.2-cp311-cp311-musllinux_1_1_aarch64.whl", hash = "sha256:e537484df0d8f426ce2afb2d0f8e1c3d0b114b83f8850e5f2fbea0e797bd82ae", size = 137747, upload-time = "2023-11-01T04:03:08.886Z" },
-            { url = "https://files.pythonhosted.org/packages/19/28/573147271fd041d351b438a5665be8223f1dd92f273713cb882ddafe214c/charset_normalizer-3.3.2-cp311-cp311-musllinux_1_1_i686.whl", hash = "sha256:eb6904c354526e758fda7167b33005998fb68c46fbc10e013ca97f21ca5c8887", size = 143375, upload-time = "2023-11-01T04:03:10.613Z" },
-            { url = "https://files.pythonhosted.org/packages/cf/7c/f3b682fa053cc21373c9a839e6beba7705857075686a05c72e0f8c4980ca/charset_normalizer-3.3.2-cp311-cp311-musllinux_1_1_ppc64le.whl", hash = "sha256:deb6be0ac38ece9ba87dea880e438f25ca3eddfac8b002a2ec3d9183a454e8ae", size = 148474, upload-time = "2023-11-01T04:03:11.973Z" },
-            { url = "https://files.pythonhosted.org/packages/1e/49/7ab74d4ac537ece3bc3334ee08645e231f39f7d6df6347b29a74b0537103/charset_normalizer-3.3.2-cp311-cp311-musllinux_1_1_s390x.whl", hash = "sha256:4ab2fe47fae9e0f9dee8c04187ce5d09f48eabe611be8259444906793ab7cbce", size = 140232, upload-time = "2023-11-01T04:03:13.505Z" },
-            { url = "https://files.pythonhosted.org/packages/2d/dc/9dacba68c9ac0ae781d40e1a0c0058e26302ea0660e574ddf6797a0347f7/charset_normalizer-3.3.2-cp311-cp311-musllinux_1_1_x86_64.whl", hash = "sha256:80402cd6ee291dcb72644d6eac93785fe2c8b9cb30893c1af5b8fdd753b9d40f", size = 140859, upload-time = "2023-11-01T04:03:17.362Z" },
-            { url = "https://files.pythonhosted.org/packages/6c/c2/4a583f800c0708dd22096298e49f887b49d9746d0e78bfc1d7e29816614c/charset_normalizer-3.3.2-cp311-cp311-win32.whl", hash = "sha256:7cd13a2e3ddeed6913a65e66e94b51d80a041145a026c27e6bb76c31a853c6ab", size = 92509, upload-time = "2023-11-01T04:03:21.453Z" },
-            { url = "https://files.pythonhosted.org/packages/57/ec/80c8d48ac8b1741d5b963797b7c0c869335619e13d4744ca2f67fc11c6fc/charset_normalizer-3.3.2-cp311-cp311-win_amd64.whl", hash = "sha256:663946639d296df6a2bb2aa51b60a2454ca1cb29835324c640dafb5ff2131a77", size = 99870, upload-time = "2023-11-01T04:03:22.723Z" },
-            { url = "https://files.pythonhosted.org/packages/d1/b2/fcedc8255ec42afee97f9e6f0145c734bbe104aac28300214593eb326f1d/charset_normalizer-3.3.2-cp312-cp312-macosx_10_9_universal2.whl", hash = "sha256:0b2b64d2bb6d3fb9112bafa732def486049e63de9618b5843bcdd081d8144cd8", size = 192892, upload-time = "2023-11-01T04:03:24.135Z" },
-            { url = "https://files.pythonhosted.org/packages/2e/7d/2259318c202f3d17f3fe6438149b3b9e706d1070fe3fcbb28049730bb25c/charset_normalizer-3.3.2-cp312-cp312-macosx_10_9_x86_64.whl", hash = "sha256:ddbb2551d7e0102e7252db79ba445cdab71b26640817ab1e3e3648dad515003b", size = 122213, upload-time = "2023-11-01T04:03:25.66Z" },
-            { url = "https://files.pythonhosted.org/packages/3a/52/9f9d17c3b54dc238de384c4cb5a2ef0e27985b42a0e5cc8e8a31d918d48d/charset_normalizer-3.3.2-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:55086ee1064215781fff39a1af09518bc9255b50d6333f2e4c74ca09fac6a8f6", size = 119404, upload-time = "2023-11-01T04:03:27.04Z" },
-            { url = "https://files.pythonhosted.org/packages/99/b0/9c365f6d79a9f0f3c379ddb40a256a67aa69c59609608fe7feb6235896e1/charset_normalizer-3.3.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:8f4a014bc36d3c57402e2977dada34f9c12300af536839dc38c0beab8878f38a", size = 137275, upload-time = "2023-11-01T04:03:28.466Z" },
-            { url = "https://files.pythonhosted.org/packages/91/33/749df346e93d7a30cdcb90cbfdd41a06026317bfbfb62cd68307c1a3c543/charset_normalizer-3.3.2-cp312-cp312-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:a10af20b82360ab00827f916a6058451b723b4e65030c5a18577c8b2de5b3389", size = 147518, upload-time = "2023-11-01T04:03:29.82Z" },
-            { url = "https://files.pythonhosted.org/packages/72/1a/641d5c9f59e6af4c7b53da463d07600a695b9824e20849cb6eea8a627761/charset_normalizer-3.3.2-cp312-cp312-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:8d756e44e94489e49571086ef83b2bb8ce311e730092d2c34ca8f7d925cb20aa", size = 140182, upload-time = "2023-11-01T04:03:31.511Z" },
-            { url = "https://files.pythonhosted.org/packages/ee/fb/14d30eb4956408ee3ae09ad34299131fb383c47df355ddb428a7331cfa1e/charset_normalizer-3.3.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:90d558489962fd4918143277a773316e56c72da56ec7aa3dc3dbbe20fdfed15b", size = 141869, upload-time = "2023-11-01T04:03:32.887Z" },
-            { url = "https://files.pythonhosted.org/packages/df/3e/a06b18788ca2eb6695c9b22325b6fde7dde0f1d1838b1792a0076f58fe9d/charset_normalizer-3.3.2-cp312-cp312-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:6ac7ffc7ad6d040517be39eb591cac5ff87416c2537df6ba3cba3bae290c0fed", size = 144042, upload-time = "2023-11-01T04:03:34.412Z" },
-            { url = "https://files.pythonhosted.org/packages/45/59/3d27019d3b447a88fe7e7d004a1e04be220227760264cc41b405e863891b/charset_normalizer-3.3.2-cp312-cp312-musllinux_1_1_aarch64.whl", hash = "sha256:7ed9e526742851e8d5cc9e6cf41427dfc6068d4f5a3bb03659444b4cabf6bc26", size = 138275, upload-time = "2023-11-01T04:03:35.759Z" },
-            { url = "https://files.pythonhosted.org/packages/7b/ef/5eb105530b4da8ae37d506ccfa25057961b7b63d581def6f99165ea89c7e/charset_normalizer-3.3.2-cp312-cp312-musllinux_1_1_i686.whl", hash = "sha256:8bdb58ff7ba23002a4c5808d608e4e6c687175724f54a5dade5fa8c67b604e4d", size = 144819, upload-time = "2023-11-01T04:03:37.216Z" },
-            { url = "https://files.pythonhosted.org/packages/a2/51/e5023f937d7f307c948ed3e5c29c4b7a3e42ed2ee0b8cdf8f3a706089bf0/charset_normalizer-3.3.2-cp312-cp312-musllinux_1_1_ppc64le.whl", hash = "sha256:6b3251890fff30ee142c44144871185dbe13b11bab478a88887a639655be1068", size = 149415, upload-time = "2023-11-01T04:03:38.694Z" },
-            { url = "https://files.pythonhosted.org/packages/24/9d/2e3ef673dfd5be0154b20363c5cdcc5606f35666544381bee15af3778239/charset_normalizer-3.3.2-cp312-cp312-musllinux_1_1_s390x.whl", hash = "sha256:b4a23f61ce87adf89be746c8a8974fe1c823c891d8f86eb218bb957c924bb143", size = 141212, upload-time = "2023-11-01T04:03:40.07Z" },
-            { url = "https://files.pythonhosted.org/packages/5b/ae/ce2c12fcac59cb3860b2e2d76dc405253a4475436b1861d95fe75bdea520/charset_normalizer-3.3.2-cp312-cp312-musllinux_1_1_x86_64.whl", hash = "sha256:efcb3f6676480691518c177e3b465bcddf57cea040302f9f4e6e191af91174d4", size = 142167, upload-time = "2023-11-01T04:03:41.491Z" },
-            { url = "https://files.pythonhosted.org/packages/ed/3a/a448bf035dce5da359daf9ae8a16b8a39623cc395a2ffb1620aa1bce62b0/charset_normalizer-3.3.2-cp312-cp312-win32.whl", hash = "sha256:d965bba47ddeec8cd560687584e88cf699fd28f192ceb452d1d7ee807c5597b7", size = 93041, upload-time = "2023-11-01T04:03:42.836Z" },
-            { url = "https://files.pythonhosted.org/packages/b6/7c/8debebb4f90174074b827c63242c23851bdf00a532489fba57fef3416e40/charset_normalizer-3.3.2-cp312-cp312-win_amd64.whl", hash = "sha256:96b02a3dc4381e5494fad39be677abcb5e6634bf7b4fa83a6dd3112607547001", size = 100397, upload-time = "2023-11-01T04:03:44.467Z" },
-            { url = "https://files.pythonhosted.org/packages/28/76/e6222113b83e3622caa4bb41032d0b1bf785250607392e1b778aca0b8a7d/charset_normalizer-3.3.2-py3-none-any.whl", hash = "sha256:3e4d1f6587322d2788836a99c69062fbb091331ec940e02d12d179c1d53e25fc", size = 48543, upload-time = "2023-11-01T04:04:58.622Z" },
+            { url = "http://[LOCALHOST]/files/tree_leaf_b-3.3.2-py3-none-any.whl", hash = "sha256:38833589aa79148a32865dba93e2c157529bd3c7e481df6e62d1d16839d6c103", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
-        name = "idna"
+        name = "tree-leaf-c"
         version = "3.6"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426, upload-time = "2023-11-25T15:40:54.902Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/tree_leaf_c-3.6.tar.gz", hash = "sha256:6dad7aa8f7e7eaffc985524f72a5e374d927adc2b3ecb1175c3629a64ac2dbc6", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567, upload-time = "2023-11-25T15:40:52.604Z" },
+            { url = "http://[LOCALHOST]/files/tree_leaf_c-3.6-py3-none-any.whl", hash = "sha256:de387642087aac7657ec7aa72251887d82ba8b9172ad7ef059ced6064ecca693", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
-        name = "markdown-it-py"
-        version = "3.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        dependencies = [
-            { name = "mdurl" },
-        ]
-        sdist = { url = "https://files.pythonhosted.org/packages/38/71/3b932df36c1a044d397a1f92d1cf91ee0a503d91e470cbd670aa66b07ed0/markdown-it-py-3.0.0.tar.gz", hash = "sha256:e3f60a94fa066dc52ec76661e37c851cb232d92f9886b15cb560aaada2df8feb", size = 74596, upload-time = "2023-06-03T06:41:14.443Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/42/d7/1ec15b46af6af88f19b8e5ffea08fa375d433c998b8a7639e76935c14f1f/markdown_it_py-3.0.0-py3-none-any.whl", hash = "sha256:355216845c60bd96232cd8d8c40e8f9765cc86f46880e43a8fd22dc1a1a8cab1", size = 87528, upload-time = "2023-06-03T06:41:11.019Z" },
-        ]
-
-        [[package]]
-        name = "mdurl"
-        version = "0.1.2"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d6/54/cfe61301667036ec958cb99bd3efefba235e65cdeb9c84d24a8293ba1d90/mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba", size = 8729, upload-time = "2022-08-14T12:40:10.846Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8", size = 9979, upload-time = "2022-08-14T12:40:09.779Z" },
-        ]
-
-        [[package]]
-        name = "pygments"
-        version = "2.17.2"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/55/59/8bccf4157baf25e4aa5a0bb7fa3ba8600907de105ebc22b0c78cfbf6f565/pygments-2.17.2.tar.gz", hash = "sha256:da46cec9fd2de5be3a8a784f434e4c4ab670b4ff54d605c4c2717e9d49c4c367", size = 4827772, upload-time = "2023-11-21T20:43:53.875Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/97/9c/372fef8377a6e340b1704768d20daaded98bf13282b5327beb2e2fe2c7ef/pygments-2.17.2-py3-none-any.whl", hash = "sha256:b27c2826c47d0f3219f29554824c30c5e8945175d888647acd804ddd04af846c", size = 1179756, upload-time = "2023-11-21T20:43:49.423Z" },
-        ]
-
-        [[package]]
-        name = "requests"
-        version = "2.31.0"
-        source = { registry = "https://pypi.org/simple" }
-        dependencies = [
-            { name = "certifi" },
-            { name = "charset-normalizer" },
-            { name = "idna" },
-            { name = "urllib3" },
-        ]
-        sdist = { url = "https://files.pythonhosted.org/packages/9d/be/10918a2eac4ae9f02f6cfe6414b7a155ccd8f7f9d4380d62fd5b955065c3/requests-2.31.0.tar.gz", hash = "sha256:942c5a758f98d790eaed1a29cb6eefc7ffb0d1cf7af05c3d2791656dbd6ad1e1", size = 110794, upload-time = "2023-05-22T15:12:44.175Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/70/8e/0e2d847013cb52cd35b38c009bb167a1a26b2ce6cd6965bf26b47bc0bf44/requests-2.31.0-py3-none-any.whl", hash = "sha256:58cd2187c01e70e6e26505bca751777aa9f2ee0b7f4300988b709f44e013003f", size = 62574, upload-time = "2023-05-22T15:12:42.313Z" },
-        ]
-
-        [[package]]
-        name = "rich"
-        version = "13.7.1"
-        source = { registry = "https://pypi.org/simple" }
-        dependencies = [
-            { name = "markdown-it-py" },
-            { name = "pygments" },
-        ]
-        sdist = { url = "https://files.pythonhosted.org/packages/b3/01/c954e134dc440ab5f96952fe52b4fdc64225530320a910473c1fe270d9aa/rich-13.7.1.tar.gz", hash = "sha256:9be308cb1fe2f1f57d67ce99e95af38a1e2bc71ad9813b0e247cf7ffbcc3a432", size = 221248, upload-time = "2024-02-28T14:51:19.472Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/87/67/a37f6214d0e9fe57f6ae54b2956d550ca8365857f42a1ce0392bb21d9410/rich-13.7.1-py3-none-any.whl", hash = "sha256:4edbae314f59eb482f54e9e30bf00d33350aaa94f4bfcd4e9e3110e64d0d7222", size = 240681, upload-time = "2024-02-28T14:51:14.353Z" },
-        ]
-
-        [[package]]
-        name = "urllib3"
+        name = "tree-leaf-d"
         version = "2.2.1"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/7a/50/7fd50a27caa0652cd4caf224aa87741ea41d3265ad13f010886167cfcc79/urllib3-2.2.1.tar.gz", hash = "sha256:d0570876c61ab9e520d776c38acbbb5b05a776d3f9ff98a5c8fd5162a444cf19", size = 291020, upload-time = "2024-02-18T03:55:57.539Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/tree_leaf_d-2.2.1.tar.gz", hash = "sha256:2b0d10de82c9a5ed23ee0f04f85c7b61bebf4567c6695a532ef8bae394c86d5a", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/a2/73/a68704750a7679d0b6d3ad7aa8d4da8e14e151ae82e6fee774e6e0d05ec8/urllib3-2.2.1-py3-none-any.whl", hash = "sha256:450b20ec296a467077128bff42b73080516e71b56ff59a60a02bef2232c4fa9d", size = 121067, upload-time = "2024-02-18T03:55:54.704Z" },
+            { url = "http://[LOCALHOST]/files/tree_leaf_d-2.2.1-py3-none-any.whl", hash = "sha256:27ef175f3663d0b013d92c9fa49c66bf0ad154183a168921e4590ea5d7a4c662", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "tree-parent"
+        version = "2.31.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "tree-leaf-a" },
+            { name = "tree-leaf-b" },
+            { name = "tree-leaf-c" },
+            { name = "tree-leaf-d" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/tree_parent-2.31.0.tar.gz", hash = "sha256:e9883d43bca69de2c404151f689cdf40debb2cbdc730351d9a2611c826e53187", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/tree_parent-2.31.0-py3-none-any.whl", hash = "sha256:1da847b7426bf23f24cefedb23192c285d36754d87dae6db95a8190f3e98730e", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "tree-root"
+        version = "3.0.2"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "tree-branch-a" },
+            { name = "tree-branch-b" },
+            { name = "tree-branch-c" },
+            { name = "tree-branch-d" },
+            { name = "tree-branch-e" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/tree_root-3.0.2.tar.gz", hash = "sha256:751cabcd159b54e2490056472ff5c99a7ae97ba1c5b0aea10d55ce09fb5687ee", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/tree_root-3.0.2-py3-none-any.whl", hash = "sha256:85ea5d6c627e1ffc8c5933ecd28c762d5c886c2352f8840e84866c754f1986f6", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "tree-shared-leaf"
+        version = "2.1.5"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/tree_shared_leaf-2.1.5.tar.gz", hash = "sha256:5d58e887adc7cb408c7f9275064623e7b47a1a116f77722ffb07142a7413ac77", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/tree_shared_leaf-2.1.5-py3-none-any.whl", hash = "sha256:c07e3823316e4e58917f3cd8bead1c541a9eb0bb8340fb3cec3020ea9cd4bd1f", upload-time = "2024-03-24T00:00:00Z" },
         ]
         "#
         );
@@ -4206,18 +4157,18 @@ fn script() -> Result<()> {
     // Update the dependencies.
     script.write_str(indoc! {r#"
         # /// script
-        # requires-python = ">=3.11"
+        # requires-python = ">=3.12"
         # dependencies = [
-        #   "iniconfig",
-        #   "requests<3",
-        #   "rich",
+        #   "simple-package",
+        #   "tree-parent<3",
+        #   "tree-root",
         # ]
         # ///
 
-        import requests
-        from rich.pretty import pprint
+        import tree_parent
+        from tree_root.pretty import pprint
 
-        resp = requests.get("https://peps.python.org/api/peps.json")
+        resp = tree_parent.get("https://peps.python.org/api/peps.json")
         data = resp.json()
         pprint([(k, v["title"]) for k, v in data.items()][:10])
     "#})?;
@@ -4226,19 +4177,23 @@ fn script() -> Result<()> {
     uv_snapshot!(context.filters(), context.tree().arg("--script").arg(script.path()), @"
     exit_code: 0 (success)
     ----- stdout -----
-    rich v13.7.1
-    ├── markdown-it-py v3.0.0
-    │   └── mdurl v0.1.2
-    └── pygments v2.17.2
-    requests v2.31.0
-    ├── certifi v2024.2.2
-    ├── charset-normalizer v3.3.2
-    ├── idna v3.6
-    └── urllib3 v2.2.1
-    iniconfig v2.0.0
+    tree-root v3.0.2
+    ├── tree-branch-a v1.7.0
+    ├── tree-branch-b v8.1.7
+    ├── tree-branch-c v2.1.2
+    ├── tree-branch-d v3.1.3
+    │   └── tree-shared-leaf v2.1.5
+    └── tree-branch-e v3.0.1
+        └── tree-shared-leaf v2.1.5
+    tree-parent v2.31.0
+    ├── tree-leaf-a v2024.2.2
+    ├── tree-leaf-b v3.3.2
+    ├── tree-leaf-c v3.6
+    └── tree-leaf-d v2.2.1
+    simple-package v2.1.3
 
     ----- stderr -----
-    Resolved 10 packages in [TIME]
+    Resolved 13 packages in [TIME]
     ");
 
     let lock = context.read("script.py.lock");
@@ -4250,149 +4205,152 @@ fn script() -> Result<()> {
             lock, @r#"
         version = 1
         revision = 3
-        requires-python = ">=3.11"
+        requires-python = ">=3.12"
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [manifest]
         requirements = [
-            { name = "iniconfig" },
-            { name = "requests", specifier = "<3" },
-            { name = "rich" },
+            { name = "simple-package" },
+            { name = "tree-parent", specifier = "<3" },
+            { name = "tree-root" },
         ]
 
         [[package]]
-        name = "certifi"
+        name = "simple-package"
+        version = "2.1.3"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/simple_package-2.1.3.tar.gz", hash = "sha256:10d19b0f846b6482adf48cbe1d53470b837bbd77d44777dfa92f5be59cad45e4", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/simple_package-2.1.3-py3-none-any.whl", hash = "sha256:0a27d6da31d01818d02c374ab253af79875bff7e3ad144e6d2b16d545f2f329b", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "tree-branch-a"
+        version = "1.7.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/tree_branch_a-1.7.0.tar.gz", hash = "sha256:0e8b4d8d1cc1c99e663b0cfd72b0719ed54f5e608f93b7dd060bee21c768df6f", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/tree_branch_a-1.7.0-py3-none-any.whl", hash = "sha256:accb8b35b9634f68a3511b28d73914e3000352a178792b82d0bb715101d00a05", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "tree-branch-b"
+        version = "8.1.7"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/tree_branch_b-8.1.7.tar.gz", hash = "sha256:81fee543af2969cc2841108e4e95ed699d9e4406c41e81b21a7bd2b0f6a57ba7", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/tree_branch_b-8.1.7-py3-none-any.whl", hash = "sha256:04ff0ba82fcb8dbbe389ebcec80b95f2ccc9dd9dc22a3ee4f5d1c03d9a369b54", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "tree-branch-c"
+        version = "2.1.2"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/tree_branch_c-2.1.2.tar.gz", hash = "sha256:60fbd7d5254df5565235d0ef3aba0d40b64ce11895109795666b5df2c12789c7", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/tree_branch_c-2.1.2-py3-none-any.whl", hash = "sha256:04883160b5990d638f357d739e7c8e9fd5ff69ace5912f09a8298b1cbd9c377b", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "tree-branch-d"
+        version = "3.1.3"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "tree-shared-leaf" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/tree_branch_d-3.1.3.tar.gz", hash = "sha256:fb4f82511c4c7912c6e270694ff46526e3debdd622f124fcecdb3ce365a152a6", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/tree_branch_d-3.1.3-py3-none-any.whl", hash = "sha256:4a5e468bb4d521fb171724fbb55d955c9ebebb062d24fee88364fd197d3af22a", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "tree-branch-e"
+        version = "3.0.1"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "tree-shared-leaf" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/tree_branch_e-3.0.1.tar.gz", hash = "sha256:eec8f5bea87e562a30f7b77d8469f20a9a4288f3c14519fc44224083e2a3d6cd", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/tree_branch_e-3.0.1-py3-none-any.whl", hash = "sha256:b35bd1854ba606553a75765a64cdc6491ec5247b95e298b691ed7cc74e065384", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "tree-leaf-a"
         version = "2024.2.2"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/71/da/e94e26401b62acd6d91df2b52954aceb7f561743aa5ccc32152886c76c96/certifi-2024.2.2.tar.gz", hash = "sha256:0569859f95fc761b18b45ef421b1290a0f65f147e92a1e5eb3e635f9a5e4e66f", size = 164886, upload-time = "2024-02-02T01:22:17.364Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/tree_leaf_a-2024.2.2.tar.gz", hash = "sha256:cb4c647683d931656c195fccfdaf8e9d14d120c7a85f997fe737813f59b2b0a6", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/ba/06/a07f096c664aeb9f01624f858c3add0a4e913d6c96257acb4fce61e7de14/certifi-2024.2.2-py3-none-any.whl", hash = "sha256:dc383c07b76109f368f6106eee2b593b04a011ea4d55f652c6ca24a754d1cdd1", size = 163774, upload-time = "2024-02-02T01:22:14.86Z" },
+            { url = "http://[LOCALHOST]/files/tree_leaf_a-2024.2.2-py3-none-any.whl", hash = "sha256:59564d25467f6680748a6ce50268b92950cafb5e99f670232c34946c4a0db296", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
-        name = "charset-normalizer"
+        name = "tree-leaf-b"
         version = "3.3.2"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/63/09/c1bc53dab74b1816a00d8d030de5bf98f724c52c1635e07681d312f20be8/charset-normalizer-3.3.2.tar.gz", hash = "sha256:f30c3cb33b24454a82faecaf01b19c18562b1e89558fb6c56de4d9118a032fd5", size = 104809, upload-time = "2023-11-01T04:04:59.997Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/tree_leaf_b-3.3.2.tar.gz", hash = "sha256:87dde9d0913d868ddff2fd9eb437ee782e85638cc03f6b782a258568125f2d55", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/68/77/02839016f6fbbf808e8b38601df6e0e66c17bbab76dff4613f7511413597/charset_normalizer-3.3.2-cp311-cp311-macosx_10_9_universal2.whl", hash = "sha256:802fe99cca7457642125a8a88a084cef28ff0cf9407060f7b93dca5aa25480db", size = 191647, upload-time = "2023-11-01T04:02:55.329Z" },
-            { url = "https://files.pythonhosted.org/packages/3e/33/21a875a61057165e92227466e54ee076b73af1e21fe1b31f1e292251aa1e/charset_normalizer-3.3.2-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:573f6eac48f4769d667c4442081b1794f52919e7edada77495aaed9236d13a96", size = 121434, upload-time = "2023-11-01T04:02:57.173Z" },
-            { url = "https://files.pythonhosted.org/packages/dd/51/68b61b90b24ca35495956b718f35a9756ef7d3dd4b3c1508056fa98d1a1b/charset_normalizer-3.3.2-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:549a3a73da901d5bc3ce8d24e0600d1fa85524c10287f6004fbab87672bf3e1e", size = 118979, upload-time = "2023-11-01T04:02:58.442Z" },
-            { url = "https://files.pythonhosted.org/packages/e4/a6/7ee57823d46331ddc37dd00749c95b0edec2c79b15fc0d6e6efb532e89ac/charset_normalizer-3.3.2-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:f27273b60488abe721a075bcca6d7f3964f9f6f067c8c4c605743023d7d3944f", size = 136582, upload-time = "2023-11-01T04:02:59.776Z" },
-            { url = "https://files.pythonhosted.org/packages/74/f1/0d9fe69ac441467b737ba7f48c68241487df2f4522dd7246d9426e7c690e/charset_normalizer-3.3.2-cp311-cp311-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:1ceae2f17a9c33cb48e3263960dc5fc8005351ee19db217e9b1bb15d28c02574", size = 146645, upload-time = "2023-11-01T04:03:02.186Z" },
-            { url = "https://files.pythonhosted.org/packages/05/31/e1f51c76db7be1d4aef220d29fbfa5dbb4a99165d9833dcbf166753b6dc0/charset_normalizer-3.3.2-cp311-cp311-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:65f6f63034100ead094b8744b3b97965785388f308a64cf8d7c34f2f2e5be0c4", size = 139398, upload-time = "2023-11-01T04:03:04.255Z" },
-            { url = "https://files.pythonhosted.org/packages/40/26/f35951c45070edc957ba40a5b1db3cf60a9dbb1b350c2d5bef03e01e61de/charset_normalizer-3.3.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:753f10e867343b4511128c6ed8c82f7bec3bd026875576dfd88483c5c73b2fd8", size = 140273, upload-time = "2023-11-01T04:03:05.983Z" },
-            { url = "https://files.pythonhosted.org/packages/07/07/7e554f2bbce3295e191f7e653ff15d55309a9ca40d0362fcdab36f01063c/charset_normalizer-3.3.2-cp311-cp311-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:4a78b2b446bd7c934f5dcedc588903fb2f5eec172f3d29e52a9096a43722adfc", size = 142577, upload-time = "2023-11-01T04:03:07.567Z" },
-            { url = "https://files.pythonhosted.org/packages/d8/b5/eb705c313100defa57da79277d9207dc8d8e45931035862fa64b625bfead/charset_normalizer-3.3.2-cp311-cp311-musllinux_1_1_aarch64.whl", hash = "sha256:e537484df0d8f426ce2afb2d0f8e1c3d0b114b83f8850e5f2fbea0e797bd82ae", size = 137747, upload-time = "2023-11-01T04:03:08.886Z" },
-            { url = "https://files.pythonhosted.org/packages/19/28/573147271fd041d351b438a5665be8223f1dd92f273713cb882ddafe214c/charset_normalizer-3.3.2-cp311-cp311-musllinux_1_1_i686.whl", hash = "sha256:eb6904c354526e758fda7167b33005998fb68c46fbc10e013ca97f21ca5c8887", size = 143375, upload-time = "2023-11-01T04:03:10.613Z" },
-            { url = "https://files.pythonhosted.org/packages/cf/7c/f3b682fa053cc21373c9a839e6beba7705857075686a05c72e0f8c4980ca/charset_normalizer-3.3.2-cp311-cp311-musllinux_1_1_ppc64le.whl", hash = "sha256:deb6be0ac38ece9ba87dea880e438f25ca3eddfac8b002a2ec3d9183a454e8ae", size = 148474, upload-time = "2023-11-01T04:03:11.973Z" },
-            { url = "https://files.pythonhosted.org/packages/1e/49/7ab74d4ac537ece3bc3334ee08645e231f39f7d6df6347b29a74b0537103/charset_normalizer-3.3.2-cp311-cp311-musllinux_1_1_s390x.whl", hash = "sha256:4ab2fe47fae9e0f9dee8c04187ce5d09f48eabe611be8259444906793ab7cbce", size = 140232, upload-time = "2023-11-01T04:03:13.505Z" },
-            { url = "https://files.pythonhosted.org/packages/2d/dc/9dacba68c9ac0ae781d40e1a0c0058e26302ea0660e574ddf6797a0347f7/charset_normalizer-3.3.2-cp311-cp311-musllinux_1_1_x86_64.whl", hash = "sha256:80402cd6ee291dcb72644d6eac93785fe2c8b9cb30893c1af5b8fdd753b9d40f", size = 140859, upload-time = "2023-11-01T04:03:17.362Z" },
-            { url = "https://files.pythonhosted.org/packages/6c/c2/4a583f800c0708dd22096298e49f887b49d9746d0e78bfc1d7e29816614c/charset_normalizer-3.3.2-cp311-cp311-win32.whl", hash = "sha256:7cd13a2e3ddeed6913a65e66e94b51d80a041145a026c27e6bb76c31a853c6ab", size = 92509, upload-time = "2023-11-01T04:03:21.453Z" },
-            { url = "https://files.pythonhosted.org/packages/57/ec/80c8d48ac8b1741d5b963797b7c0c869335619e13d4744ca2f67fc11c6fc/charset_normalizer-3.3.2-cp311-cp311-win_amd64.whl", hash = "sha256:663946639d296df6a2bb2aa51b60a2454ca1cb29835324c640dafb5ff2131a77", size = 99870, upload-time = "2023-11-01T04:03:22.723Z" },
-            { url = "https://files.pythonhosted.org/packages/d1/b2/fcedc8255ec42afee97f9e6f0145c734bbe104aac28300214593eb326f1d/charset_normalizer-3.3.2-cp312-cp312-macosx_10_9_universal2.whl", hash = "sha256:0b2b64d2bb6d3fb9112bafa732def486049e63de9618b5843bcdd081d8144cd8", size = 192892, upload-time = "2023-11-01T04:03:24.135Z" },
-            { url = "https://files.pythonhosted.org/packages/2e/7d/2259318c202f3d17f3fe6438149b3b9e706d1070fe3fcbb28049730bb25c/charset_normalizer-3.3.2-cp312-cp312-macosx_10_9_x86_64.whl", hash = "sha256:ddbb2551d7e0102e7252db79ba445cdab71b26640817ab1e3e3648dad515003b", size = 122213, upload-time = "2023-11-01T04:03:25.66Z" },
-            { url = "https://files.pythonhosted.org/packages/3a/52/9f9d17c3b54dc238de384c4cb5a2ef0e27985b42a0e5cc8e8a31d918d48d/charset_normalizer-3.3.2-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:55086ee1064215781fff39a1af09518bc9255b50d6333f2e4c74ca09fac6a8f6", size = 119404, upload-time = "2023-11-01T04:03:27.04Z" },
-            { url = "https://files.pythonhosted.org/packages/99/b0/9c365f6d79a9f0f3c379ddb40a256a67aa69c59609608fe7feb6235896e1/charset_normalizer-3.3.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:8f4a014bc36d3c57402e2977dada34f9c12300af536839dc38c0beab8878f38a", size = 137275, upload-time = "2023-11-01T04:03:28.466Z" },
-            { url = "https://files.pythonhosted.org/packages/91/33/749df346e93d7a30cdcb90cbfdd41a06026317bfbfb62cd68307c1a3c543/charset_normalizer-3.3.2-cp312-cp312-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:a10af20b82360ab00827f916a6058451b723b4e65030c5a18577c8b2de5b3389", size = 147518, upload-time = "2023-11-01T04:03:29.82Z" },
-            { url = "https://files.pythonhosted.org/packages/72/1a/641d5c9f59e6af4c7b53da463d07600a695b9824e20849cb6eea8a627761/charset_normalizer-3.3.2-cp312-cp312-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:8d756e44e94489e49571086ef83b2bb8ce311e730092d2c34ca8f7d925cb20aa", size = 140182, upload-time = "2023-11-01T04:03:31.511Z" },
-            { url = "https://files.pythonhosted.org/packages/ee/fb/14d30eb4956408ee3ae09ad34299131fb383c47df355ddb428a7331cfa1e/charset_normalizer-3.3.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:90d558489962fd4918143277a773316e56c72da56ec7aa3dc3dbbe20fdfed15b", size = 141869, upload-time = "2023-11-01T04:03:32.887Z" },
-            { url = "https://files.pythonhosted.org/packages/df/3e/a06b18788ca2eb6695c9b22325b6fde7dde0f1d1838b1792a0076f58fe9d/charset_normalizer-3.3.2-cp312-cp312-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:6ac7ffc7ad6d040517be39eb591cac5ff87416c2537df6ba3cba3bae290c0fed", size = 144042, upload-time = "2023-11-01T04:03:34.412Z" },
-            { url = "https://files.pythonhosted.org/packages/45/59/3d27019d3b447a88fe7e7d004a1e04be220227760264cc41b405e863891b/charset_normalizer-3.3.2-cp312-cp312-musllinux_1_1_aarch64.whl", hash = "sha256:7ed9e526742851e8d5cc9e6cf41427dfc6068d4f5a3bb03659444b4cabf6bc26", size = 138275, upload-time = "2023-11-01T04:03:35.759Z" },
-            { url = "https://files.pythonhosted.org/packages/7b/ef/5eb105530b4da8ae37d506ccfa25057961b7b63d581def6f99165ea89c7e/charset_normalizer-3.3.2-cp312-cp312-musllinux_1_1_i686.whl", hash = "sha256:8bdb58ff7ba23002a4c5808d608e4e6c687175724f54a5dade5fa8c67b604e4d", size = 144819, upload-time = "2023-11-01T04:03:37.216Z" },
-            { url = "https://files.pythonhosted.org/packages/a2/51/e5023f937d7f307c948ed3e5c29c4b7a3e42ed2ee0b8cdf8f3a706089bf0/charset_normalizer-3.3.2-cp312-cp312-musllinux_1_1_ppc64le.whl", hash = "sha256:6b3251890fff30ee142c44144871185dbe13b11bab478a88887a639655be1068", size = 149415, upload-time = "2023-11-01T04:03:38.694Z" },
-            { url = "https://files.pythonhosted.org/packages/24/9d/2e3ef673dfd5be0154b20363c5cdcc5606f35666544381bee15af3778239/charset_normalizer-3.3.2-cp312-cp312-musllinux_1_1_s390x.whl", hash = "sha256:b4a23f61ce87adf89be746c8a8974fe1c823c891d8f86eb218bb957c924bb143", size = 141212, upload-time = "2023-11-01T04:03:40.07Z" },
-            { url = "https://files.pythonhosted.org/packages/5b/ae/ce2c12fcac59cb3860b2e2d76dc405253a4475436b1861d95fe75bdea520/charset_normalizer-3.3.2-cp312-cp312-musllinux_1_1_x86_64.whl", hash = "sha256:efcb3f6676480691518c177e3b465bcddf57cea040302f9f4e6e191af91174d4", size = 142167, upload-time = "2023-11-01T04:03:41.491Z" },
-            { url = "https://files.pythonhosted.org/packages/ed/3a/a448bf035dce5da359daf9ae8a16b8a39623cc395a2ffb1620aa1bce62b0/charset_normalizer-3.3.2-cp312-cp312-win32.whl", hash = "sha256:d965bba47ddeec8cd560687584e88cf699fd28f192ceb452d1d7ee807c5597b7", size = 93041, upload-time = "2023-11-01T04:03:42.836Z" },
-            { url = "https://files.pythonhosted.org/packages/b6/7c/8debebb4f90174074b827c63242c23851bdf00a532489fba57fef3416e40/charset_normalizer-3.3.2-cp312-cp312-win_amd64.whl", hash = "sha256:96b02a3dc4381e5494fad39be677abcb5e6634bf7b4fa83a6dd3112607547001", size = 100397, upload-time = "2023-11-01T04:03:44.467Z" },
-            { url = "https://files.pythonhosted.org/packages/28/76/e6222113b83e3622caa4bb41032d0b1bf785250607392e1b778aca0b8a7d/charset_normalizer-3.3.2-py3-none-any.whl", hash = "sha256:3e4d1f6587322d2788836a99c69062fbb091331ec940e02d12d179c1d53e25fc", size = 48543, upload-time = "2023-11-01T04:04:58.622Z" },
+            { url = "http://[LOCALHOST]/files/tree_leaf_b-3.3.2-py3-none-any.whl", hash = "sha256:38833589aa79148a32865dba93e2c157529bd3c7e481df6e62d1d16839d6c103", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
-        name = "idna"
+        name = "tree-leaf-c"
         version = "3.6"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426, upload-time = "2023-11-25T15:40:54.902Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/tree_leaf_c-3.6.tar.gz", hash = "sha256:6dad7aa8f7e7eaffc985524f72a5e374d927adc2b3ecb1175c3629a64ac2dbc6", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567, upload-time = "2023-11-25T15:40:52.604Z" },
+            { url = "http://[LOCALHOST]/files/tree_leaf_c-3.6-py3-none-any.whl", hash = "sha256:de387642087aac7657ec7aa72251887d82ba8b9172ad7ef059ced6064ecca693", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
-        name = "iniconfig"
-        version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
-        ]
-
-        [[package]]
-        name = "markdown-it-py"
-        version = "3.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        dependencies = [
-            { name = "mdurl" },
-        ]
-        sdist = { url = "https://files.pythonhosted.org/packages/38/71/3b932df36c1a044d397a1f92d1cf91ee0a503d91e470cbd670aa66b07ed0/markdown-it-py-3.0.0.tar.gz", hash = "sha256:e3f60a94fa066dc52ec76661e37c851cb232d92f9886b15cb560aaada2df8feb", size = 74596, upload-time = "2023-06-03T06:41:14.443Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/42/d7/1ec15b46af6af88f19b8e5ffea08fa375d433c998b8a7639e76935c14f1f/markdown_it_py-3.0.0-py3-none-any.whl", hash = "sha256:355216845c60bd96232cd8d8c40e8f9765cc86f46880e43a8fd22dc1a1a8cab1", size = 87528, upload-time = "2023-06-03T06:41:11.019Z" },
-        ]
-
-        [[package]]
-        name = "mdurl"
-        version = "0.1.2"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d6/54/cfe61301667036ec958cb99bd3efefba235e65cdeb9c84d24a8293ba1d90/mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba", size = 8729, upload-time = "2022-08-14T12:40:10.846Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8", size = 9979, upload-time = "2022-08-14T12:40:09.779Z" },
-        ]
-
-        [[package]]
-        name = "pygments"
-        version = "2.17.2"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/55/59/8bccf4157baf25e4aa5a0bb7fa3ba8600907de105ebc22b0c78cfbf6f565/pygments-2.17.2.tar.gz", hash = "sha256:da46cec9fd2de5be3a8a784f434e4c4ab670b4ff54d605c4c2717e9d49c4c367", size = 4827772, upload-time = "2023-11-21T20:43:53.875Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/97/9c/372fef8377a6e340b1704768d20daaded98bf13282b5327beb2e2fe2c7ef/pygments-2.17.2-py3-none-any.whl", hash = "sha256:b27c2826c47d0f3219f29554824c30c5e8945175d888647acd804ddd04af846c", size = 1179756, upload-time = "2023-11-21T20:43:49.423Z" },
-        ]
-
-        [[package]]
-        name = "requests"
-        version = "2.31.0"
-        source = { registry = "https://pypi.org/simple" }
-        dependencies = [
-            { name = "certifi" },
-            { name = "charset-normalizer" },
-            { name = "idna" },
-            { name = "urllib3" },
-        ]
-        sdist = { url = "https://files.pythonhosted.org/packages/9d/be/10918a2eac4ae9f02f6cfe6414b7a155ccd8f7f9d4380d62fd5b955065c3/requests-2.31.0.tar.gz", hash = "sha256:942c5a758f98d790eaed1a29cb6eefc7ffb0d1cf7af05c3d2791656dbd6ad1e1", size = 110794, upload-time = "2023-05-22T15:12:44.175Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/70/8e/0e2d847013cb52cd35b38c009bb167a1a26b2ce6cd6965bf26b47bc0bf44/requests-2.31.0-py3-none-any.whl", hash = "sha256:58cd2187c01e70e6e26505bca751777aa9f2ee0b7f4300988b709f44e013003f", size = 62574, upload-time = "2023-05-22T15:12:42.313Z" },
-        ]
-
-        [[package]]
-        name = "rich"
-        version = "13.7.1"
-        source = { registry = "https://pypi.org/simple" }
-        dependencies = [
-            { name = "markdown-it-py" },
-            { name = "pygments" },
-        ]
-        sdist = { url = "https://files.pythonhosted.org/packages/b3/01/c954e134dc440ab5f96952fe52b4fdc64225530320a910473c1fe270d9aa/rich-13.7.1.tar.gz", hash = "sha256:9be308cb1fe2f1f57d67ce99e95af38a1e2bc71ad9813b0e247cf7ffbcc3a432", size = 221248, upload-time = "2024-02-28T14:51:19.472Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/87/67/a37f6214d0e9fe57f6ae54b2956d550ca8365857f42a1ce0392bb21d9410/rich-13.7.1-py3-none-any.whl", hash = "sha256:4edbae314f59eb482f54e9e30bf00d33350aaa94f4bfcd4e9e3110e64d0d7222", size = 240681, upload-time = "2024-02-28T14:51:14.353Z" },
-        ]
-
-        [[package]]
-        name = "urllib3"
+        name = "tree-leaf-d"
         version = "2.2.1"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/7a/50/7fd50a27caa0652cd4caf224aa87741ea41d3265ad13f010886167cfcc79/urllib3-2.2.1.tar.gz", hash = "sha256:d0570876c61ab9e520d776c38acbbb5b05a776d3f9ff98a5c8fd5162a444cf19", size = 291020, upload-time = "2024-02-18T03:55:57.539Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/tree_leaf_d-2.2.1.tar.gz", hash = "sha256:2b0d10de82c9a5ed23ee0f04f85c7b61bebf4567c6695a532ef8bae394c86d5a", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/a2/73/a68704750a7679d0b6d3ad7aa8d4da8e14e151ae82e6fee774e6e0d05ec8/urllib3-2.2.1-py3-none-any.whl", hash = "sha256:450b20ec296a467077128bff42b73080516e71b56ff59a60a02bef2232c4fa9d", size = 121067, upload-time = "2024-02-18T03:55:54.704Z" },
+            { url = "http://[LOCALHOST]/files/tree_leaf_d-2.2.1-py3-none-any.whl", hash = "sha256:27ef175f3663d0b013d92c9fa49c66bf0ad154183a168921e4590ea5d7a4c662", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "tree-parent"
+        version = "2.31.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "tree-leaf-a" },
+            { name = "tree-leaf-b" },
+            { name = "tree-leaf-c" },
+            { name = "tree-leaf-d" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/tree_parent-2.31.0.tar.gz", hash = "sha256:e9883d43bca69de2c404151f689cdf40debb2cbdc730351d9a2611c826e53187", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/tree_parent-2.31.0-py3-none-any.whl", hash = "sha256:1da847b7426bf23f24cefedb23192c285d36754d87dae6db95a8190f3e98730e", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "tree-root"
+        version = "3.0.2"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "tree-branch-a" },
+            { name = "tree-branch-b" },
+            { name = "tree-branch-c" },
+            { name = "tree-branch-d" },
+            { name = "tree-branch-e" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/tree_root-3.0.2.tar.gz", hash = "sha256:751cabcd159b54e2490056472ff5c99a7ae97ba1c5b0aea10d55ce09fb5687ee", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/tree_root-3.0.2-py3-none-any.whl", hash = "sha256:85ea5d6c627e1ffc8c5933ecd28c762d5c886c2352f8840e84866c754f1986f6", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "tree-shared-leaf"
+        version = "2.1.5"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/tree_shared_leaf-2.1.5.tar.gz", hash = "sha256:5d58e887adc7cb408c7f9275064623e7b47a1a116f77722ffb07142a7413ac77", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/tree_shared_leaf-2.1.5-py3-none-any.whl", hash = "sha256:c07e3823316e4e58917f3cd8bead1c541a9eb0bb8340fb3cec3020ea9cd4bd1f", upload-time = "2024-03-24T00:00:00Z" },
         ]
         "#
         );
@@ -4404,7 +4362,8 @@ fn script() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn only_group() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -4414,17 +4373,17 @@ fn only_group() -> Result<()> {
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = [
-            "iniconfig",
-            "pip",
+            "simple-package",
+            "other-package",
         ]
 
         [dependency-groups]
         dev = [
-            "plotly",
-            "pip",
+            "tree-root",
+            "other-package",
         ]
         test = [
-            "pytest",
+            "tree-parent",
         ]
     "#,
     )?;
@@ -4433,15 +4392,20 @@ fn only_group() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    ├── iniconfig v2.0.0
-    ├── pip v24.0
-    ├── pip v24.0 (group: dev)
-    └── plotly v5.20.0 (group: dev)
-        ├── packaging v24.0
-        └── tenacity v8.2.3
+    ├── other-package v2.0.1
+    ├── simple-package v2.1.3
+    ├── other-package v2.0.1 (group: dev)
+    └── tree-root v3.0.2 (group: dev)
+        ├── tree-branch-a v1.7.0
+        ├── tree-branch-b v8.1.7
+        ├── tree-branch-c v2.1.2
+        ├── tree-branch-d v3.1.3
+        │   └── tree-shared-leaf v2.1.5
+        └── tree-branch-e v3.0.1
+            └── tree-shared-leaf v2.1.5
 
     ----- stderr -----
-    Resolved 9 packages in [TIME]
+    Resolved 15 packages in [TIME]
     "
     );
 
@@ -4449,13 +4413,18 @@ fn only_group() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    ├── pip v24.0 (group: dev)
-    └── plotly v5.20.0 (group: dev)
-        ├── packaging v24.0
-        └── tenacity v8.2.3
+    ├── other-package v2.0.1 (group: dev)
+    └── tree-root v3.0.2 (group: dev)
+        ├── tree-branch-a v1.7.0
+        ├── tree-branch-b v8.1.7
+        ├── tree-branch-c v2.1.2
+        ├── tree-branch-d v3.1.3
+        │   └── tree-shared-leaf v2.1.5
+        └── tree-branch-e v3.0.1
+            └── tree-shared-leaf v2.1.5
 
     ----- stderr -----
-    Resolved 9 packages in [TIME]
+    Resolved 15 packages in [TIME]
     "
     );
 
@@ -4463,14 +4432,14 @@ fn only_group() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    └── pytest v8.1.1 (group: test)
-        ├── colorama v0.4.6
-        ├── iniconfig v2.0.0
-        ├── packaging v24.0
-        └── pluggy v1.4.0
+    └── tree-parent v2.31.0 (group: test)
+        ├── tree-leaf-a v2024.2.2
+        ├── tree-leaf-b v3.3.2
+        ├── tree-leaf-c v3.6
+        └── tree-leaf-d v2.2.1
 
     ----- stderr -----
-    Resolved 9 packages in [TIME]
+    Resolved 15 packages in [TIME]
     "
     );
 
@@ -4484,7 +4453,10 @@ fn only_group() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn show_sizes() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_default_index(&_server.index_url())
+        .with_filtered_sizes();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -4493,7 +4465,7 @@ fn show_sizes() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
+        dependencies = ["simple-package"]
     "#,
     )?;
 
@@ -4501,7 +4473,7 @@ fn show_sizes() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
-    └── iniconfig v2.0.0 ([SIZE]KiB)
+    └── simple-package v2.1.3
 
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -4539,28 +4511,6 @@ fn show_sizes() -> Result<()> {
         }
       ],
       "resolution": {
-        "iniconfig==2.0.0@registry+https://pypi.org/simple": {
-          "name": "iniconfig",
-          "version": "2.0.0",
-          "source": {
-            "registry": {
-              "url": "https://pypi.org/simple"
-            }
-          },
-          "kind": "package",
-          "dependencies": [],
-          "wheels": [
-            {
-              "url": "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl",
-              "hashes": {
-                "sha256": "b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374"
-              },
-              "size": 5892,
-              "upload_time": "2023-01-07T11:08:09.864Z",
-              "filename": "iniconfig-2.0.0-py3-none-any.whl"
-            }
-          ]
-        },
         "project==0.1.0@virtual+[TEMP_DIR]/": {
           "name": "project",
           "version": "0.1.0",
@@ -4570,7 +4520,28 @@ fn show_sizes() -> Result<()> {
           "kind": "package",
           "dependencies": [
             {
-              "id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+              "id": "simple-package==2.1.3@registry+http://[LOCALHOST]/simple/"
+            }
+          ]
+        },
+        "simple-package==2.1.3@registry+http://[LOCALHOST]/simple/": {
+          "name": "simple-package",
+          "version": "2.1.3",
+          "source": {
+            "registry": {
+              "url": "http://[LOCALHOST]/simple/"
+            }
+          },
+          "kind": "package",
+          "dependencies": [],
+          "wheels": [
+            {
+              "url": "http://[LOCALHOST]/files/simple_package-2.1.3-py3-none-any.whl",
+              "hashes": {
+                "sha256": "0a27d6da31d01818d02c374ab253af79875bff7e3ad144e6d2b16d545f2f329b"
+              },
+              "upload_time": "2024-03-24T00:00:00Z",
+              "filename": "simple_package-2.1.3-py3-none-any.whl"
             }
           ]
         },
@@ -4591,7 +4562,8 @@ fn show_sizes() -> Result<()> {
 
 #[test]
 fn workspace_circular_dependencies() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     // Create workspace root
     let pyproject_toml = context.temp_dir.child("pyproject.toml");

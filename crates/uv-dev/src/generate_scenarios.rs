@@ -289,7 +289,7 @@ fn update_snapshots(template: TemplateKind) -> Result<()> {
             "insta",
             "test",
             "--features",
-            "test-python,test-pypi,test-python-patch",
+            "test-python,test-python-patch",
             "--accept",
             "--test-runner",
             "nextest",
@@ -327,7 +327,7 @@ fn render_header(output: &mut String) {
 
 fn render_install(output: &mut String, cases: &[&ScenarioCase]) -> Result<()> {
     render_header(output);
-    output.push_str("#![cfg(all(feature = \"test-python\", feature = \"test-pypi\", unix))]\n\n");
+    output.push_str("#![cfg(all(feature = \"test-python\", unix))]\n\n");
     output.push_str("use std::process::Command;\n\n");
     output.push_str("use uv_static::EnvVars;\n");
     output.push_str("use uv_test::packse::PackseServer;\n");
@@ -379,7 +379,7 @@ fn render_install_case(output: &mut String, case: &ScenarioCase) -> Result<()> {
 
 fn render_compile(output: &mut String, cases: &[&ScenarioCase]) -> Result<()> {
     render_header(output);
-    output.push_str("#![cfg(all(feature = \"test-python\", feature = \"test-pypi\", unix))]\n\n");
+    output.push_str("#![cfg(all(feature = \"test-python\", unix))]\n\n");
     output.push_str("use std::process::Command;\n\n");
     output.push_str("use anyhow::Result;\n");
     output.push_str("use assert_cmd::assert::OutputAssertExt;\n");
@@ -483,7 +483,7 @@ fn render_compile_case(output: &mut String, case: &ScenarioCase) -> Result<()> {
 
 fn render_lock(output: &mut String, cases: &[&ScenarioCase]) -> Result<()> {
     render_header(output);
-    output.push_str("#![cfg(all(feature = \"test-python\", feature = \"test-pypi\"))]\n");
+    output.push_str("#![cfg(feature = \"test-python\")]\n");
     output.push_str("#![expect(clippy::needless_raw_string_hashes)]\n");
     output.push_str("#![expect(clippy::doc_markdown)]\n");
     output.push('\n');
@@ -849,7 +849,11 @@ fn render_versions(
         } else {
             ""
         };
-        let yanked = if row.metadata.yanked { " (yanked)" } else { "" };
+        let yanked = if row.metadata.yanked.is_yanked() {
+            " (yanked)"
+        } else {
+            ""
+        };
         lines.push(format!(
             "{prefix}{pointer}{satisfied}{package_name}-{}{yanked}",
             row.label
@@ -871,7 +875,7 @@ fn matching_versions<'a>(
         .versions
         .iter()
         .filter(|(version, metadata)| {
-            if metadata.yanked {
+            if metadata.yanked.is_yanked() {
                 return requirement.is_none();
             }
             requirement
@@ -945,20 +949,17 @@ mod tests {
     }
 
     #[test]
-    fn scenario_suites_require_pypi_feature() {
+    fn scenario_suites_do_not_require_pypi_feature() {
         for (template, expected_gate) in [
             (
                 TemplateKind::Install,
-                r#"#![cfg(all(feature = "test-python", feature = "test-pypi", unix))]"#,
+                r#"#![cfg(all(feature = "test-python", unix))]"#,
             ),
             (
                 TemplateKind::Compile,
-                r#"#![cfg(all(feature = "test-python", feature = "test-pypi", unix))]"#,
+                r#"#![cfg(all(feature = "test-python", unix))]"#,
             ),
-            (
-                TemplateKind::Lock,
-                r#"#![cfg(all(feature = "test-python", feature = "test-pypi"))]"#,
-            ),
+            (TemplateKind::Lock, r#"#![cfg(feature = "test-python")]"#),
         ] {
             let output = render(template, &[]).expect("empty scenario suite should render");
             let gate = output

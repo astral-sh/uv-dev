@@ -1,0 +1,23 @@
+name = "conflict-environments"
+description = "Two conflicting versions with a dependency shared across environment forks."
+
+[root]
+requires = ["forked-package", "shared-package"]
+
+[expected]
+satisfiable = true
+
+[packages.forked-package.versions."1.0.0"]
+requires_python = ">=3.10"
+sdist_backend = "in-tree"
+
+[packages.forked-package.versions."2.0.0"]
+requires_python = ">=3.10"
+sdist_backend = "in-tree"
+
+[packages.shared-package.versions."1.0.0"]
+requires_python = ">=3.10"
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true

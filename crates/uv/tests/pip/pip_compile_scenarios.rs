@@ -3,7 +3,7 @@
 //! Generated with `cargo dev generate-scenario-tests`
 //! Scenarios from <test/scenarios>
 //!
-#![cfg(all(feature = "test-python", feature = "test-pypi", unix))]
+#![cfg(all(feature = "test-python", unix))]
 
 use std::process::Command;
 

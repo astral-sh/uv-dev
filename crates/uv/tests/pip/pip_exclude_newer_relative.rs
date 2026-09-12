@@ -44,11 +44,7 @@ fn pip_install_exclude_newer_relative() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - idna==3.6
-     + idna==3.7
+    Checked 1 package in [TIME]
     ");
 }
 
@@ -100,11 +96,7 @@ fn pip_install_exclude_newer_relative_config() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - idna==3.6
-     + idna==3.7
+    Checked 1 package in [TIME]
     ");
 
     Ok(())
