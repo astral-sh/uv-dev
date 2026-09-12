@@ -27,8 +27,8 @@ use uv_configuration::initialize_rayon_once;
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
     ArchiveHashPolicy, BuildInfo, BuildableSource, BuiltDist, Dist, DistRef, HashCollection,
-    HashValidation, Hashed, IndexUrl, InstalledDist, MetadataHashPolicy, Name, SourceDist,
-    SourceUrl, parse_url_hashes,
+    HashValidation, Hashed, IndexLocationsLookup, IndexUrl, InstalledDist, MetadataHashPolicy,
+    Name, SourceDist, SourceUrl, parse_url_hashes,
 };
 use uv_extract::dirhash::{DirectoryDigest, HashedFile};
 use uv_extract::hash::Hasher;
@@ -64,6 +64,7 @@ use crate::{Error, LocalWheel, Reporter, RequiresDist};
 pub struct DistributionDatabase<'a, Context: BuildContext> {
     build_context: &'a Context,
     builder: SourceDistributionBuilder<'a, Context>,
+    index_lookup: IndexLocationsLookup,
     client: ManagedClient<'a>,
     reporter: Option<Arc<dyn Reporter>>,
     content_addressed_cache: bool,
@@ -80,9 +81,11 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         // Avoid using an incomplete digest as a content-addressed archive ID.
         let content_addressed_cache = uv_preview::is_enabled(PreviewFeature::ContentAddressedCache)
             && !uv_extract::insecure_no_validate();
+        let index_lookup = IndexLocationsLookup::from(build_context.locations());
         Self {
             build_context,
-            builder: SourceDistributionBuilder::new(build_context),
+            builder: SourceDistributionBuilder::new(build_context, index_lookup.clone()),
+            index_lookup,
             client: ManagedClient::new(client, downloads_semaphore),
             reporter: None,
             content_addressed_cache,
@@ -818,11 +821,8 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         // Determine the cache control policy for the URL.
         let cache_control = match self.client.unmanaged.connectivity() {
             Connectivity::Online
-                if let Some(header) = index.and_then(|index| {
-                    self.build_context
-                        .locations()
-                        .artifact_cache_control_for(index)
-                }) =>
+                if let Some(header) =
+                    index.and_then(|index| self.index_lookup.artifact_cache_control_for(index)) =>
             {
                 CacheControl::Override(header)
             }
@@ -946,11 +946,8 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         // Determine the cache control policy for the URL.
         let cache_control = match self.client.unmanaged.connectivity() {
             Connectivity::Online
-                if let Some(header) = index.and_then(|index| {
-                    self.build_context
-                        .locations()
-                        .artifact_cache_control_for(index)
-                }) =>
+                if let Some(header) =
+                    index.and_then(|index| self.index_lookup.artifact_cache_control_for(index)) =>
             {
                 CacheControl::Override(header)
             }
