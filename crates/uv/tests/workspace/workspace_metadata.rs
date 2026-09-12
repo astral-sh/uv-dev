@@ -1507,6 +1507,164 @@ fn workspace_metadata_installed_origin_is_not_locked_source() -> Result<()> {
 }
 
 #[test]
+fn workspace_metadata_reports_installed_requirements() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = context
+        .temp_dir
+        .child("metadata_declarations-0.1.0-py3-none-any.whl");
+    write_wheel_with_metadata(
+        wheel.path(),
+        "metadata-declarations",
+        "0.1.0",
+        "metadata_declarations-0.1.0",
+        indoc! {r#"
+            Requires-Python: >=3.9,<4
+            Requires-Dist: metadata-base >=2
+            Requires-Dist: metadata-platform >=3 ; sys_platform == "win32"
+            Requires-Dist: metadata-secure[crypto] >=4 ; extra == "security"
+            Requires-Dist: metadata-direct @ https://user:requires-secret@example.com/metadata_direct-1.0-py3-none-any.whl?X-Amz-Signature=signature-secret
+            Provides-Extra: Security
+        "#},
+        &[("declarations_module.py", "")],
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "metadata-root"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = []
+        "#})?;
+    context.lock().arg("--offline").assert().success();
+    context
+        .pip_install()
+        .arg("--no-index")
+        .arg("--no-deps")
+        .arg(wheel.path())
+        .assert()
+        .success();
+
+    let metadata_path = context
+        .site_packages()
+        .join("metadata_declarations-0.1.0.dist-info/METADATA");
+    let contents = fs_err::read(&metadata_path)?;
+    let assert = context
+        .workspace_metadata()
+        .arg("--frozen")
+        .arg("--offline")
+        .assert()
+        .success();
+    let metadata = parse_metadata(&assert.get_output().stdout)?;
+    let package = metadata["environment"]["packages"]
+        .as_object()
+        .context("missing installed package inventory")?
+        .values()
+        .find(|package| package["name"] == "metadata-declarations")
+        .context("missing installed distribution")?;
+    assert_eq!(package["requires_python"], ">=3.9,<4");
+    assert_eq!(
+        package["requires_dist"],
+        serde_json::json!([
+            "metadata-base>=2",
+            "metadata-platform>=3 ; sys_platform == 'win32'",
+            "metadata-secure[crypto]>=4 ; extra == 'security'",
+            "metadata-direct @ https://user:****@example.com/metadata_direct-1.0-py3-none-any.whl?X-Amz-Signature=****",
+        ])
+    );
+    assert_eq!(package["provides_extra"], serde_json::json!(["security"]));
+    assert!(package.get("requested_extras").is_none());
+    assert!(
+        metadata["environment"]["selected_packages"]
+            .get("metadata-declarations")
+            .is_none()
+    );
+    assert!(!String::from_utf8_lossy(&assert.get_output().stdout).contains("requires-secret"));
+    assert!(!String::from_utf8_lossy(&assert.get_output().stdout).contains("signature-secret"));
+    assert_eq!(fs_err::read(&metadata_path)?, contents);
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_rejects_invalid_installed_requirements() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = context
+        .temp_dir
+        .child("metadata_error-0.1.0-py3-none-any.whl");
+    write_wheel(
+        wheel.path(),
+        "metadata-error",
+        "metadata_error-0.1.0",
+        &[("error_module.py", "")],
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "metadata-root"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = []
+        "#})?;
+    context.lock().arg("--offline").assert().success();
+    context
+        .pip_install()
+        .arg("--no-index")
+        .arg(wheel.path())
+        .assert()
+        .success();
+
+    let metadata_path = context
+        .site_packages()
+        .join("metadata_error-0.1.0.dist-info/METADATA");
+    for (contents, reason) in [
+        (
+            "Metadata-Version: 2.1\nVersion: 0.1.0\n",
+            "Metadata field Name not found",
+        ),
+        (
+            "Metadata-Version: 2.1\nName: metadata-error\nVersion: 0.1.0\nRequires-Dist: metadata-private @ https://user:requires-secret@example.com/private-1.0-py3-none-any.whl?sig=signature-secret ; python_version <\n",
+            "Expected marker value, found end of dependency specification",
+        ),
+        (
+            "Metadata-Version: 2.1\nName: metadata-error\nVersion: 0.1.0\nRequires-Dist: metadata-private @ https://user:requires-secret@example.com/not-an-archive?sig=signature-secret\n",
+            "Invalid URL requirement",
+        ),
+    ] {
+        fs_err::write(&metadata_path, contents)?;
+        let assert = context
+            .workspace_metadata()
+            .arg("--frozen")
+            .arg("--offline")
+            .assert()
+            .code(2);
+        let output = assert.get_output();
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("Failed to collect installed package metadata"));
+        assert!(stderr.contains("metadata_error-0.1.0.dist-info"));
+        assert!(stderr.contains("METADATA"));
+        assert!(stderr.contains(reason), "{stderr}");
+        assert!(!stderr.contains("requires-secret"));
+        assert!(!stderr.contains("signature-secret"));
+        assert_eq!(fs_err::read_to_string(&metadata_path)?, contents);
+    }
+
+    fs_err::remove_file(&metadata_path)?;
+    let assert = context
+        .workspace_metadata()
+        .arg("--frozen")
+        .arg("--offline")
+        .assert()
+        .code(2);
+    assert!(assert.get_output().stdout.is_empty());
+    assert!(String::from_utf8_lossy(&assert.get_output().stderr).contains("METADATA"));
+    Ok(())
+}
+
+#[test]
 fn workspace_metadata_includes_existing_environment() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_python_keys()
