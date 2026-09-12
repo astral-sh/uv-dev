@@ -11,15 +11,18 @@ use crate::{HashAlgorithm, Hashes};
 /// See: <https://packaging.python.org/en/latest/specifications/direct-url-data-structure/>
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", untagged)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum DirectUrl {
     /// The direct URL is a local directory. For example:
     /// ```json
     /// {"url": "file:///home/user/project", "dir_info": {}}
     /// ```
     LocalDirectory {
+        #[cfg_attr(feature = "schemars", schemars(with = "url::Url"))]
         url: String,
         dir_info: DirInfo,
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "schemars", schemars(with = "String"))]
         subdirectory: Option<Box<Path>>,
     },
     /// The direct URL is a path to an archive. For example:
@@ -31,9 +34,11 @@ pub enum DirectUrl {
         ///
         /// For example, for `pip install git+https://github.com/tqdm/tqdm@cc372d09dcd5a5eabdc6ed4cf365bdb0be004d44#subdirectory=.`,
         /// the URL is `https://github.com/tqdm/tqdm`.
+        #[cfg_attr(feature = "schemars", schemars(with = "url::Url"))]
         url: String,
         archive_info: ArchiveInfo,
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "schemars", schemars(with = "String"))]
         subdirectory: Option<Box<Path>>,
     },
     /// The direct URL is path to a VCS repository. For example:
@@ -41,45 +46,58 @@ pub enum DirectUrl {
     /// {"url": "https://github.com/pallets/flask.git", "vcs_info": {"commit_id": "8d9519df093864ff90ca446d4af2dc8facd3c542", "vcs": "git", "git_lfs": true }}
     /// ```
     VcsUrl {
+        #[cfg_attr(feature = "schemars", schemars(with = "url::Url"))]
         url: String,
         vcs_info: VcsInfo,
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "schemars", schemars(with = "String"))]
         subdirectory: Option<Box<Path>>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "schemars", schemars(with = "String"))]
         path: Option<PathBuf>,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct DirInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "bool"))]
     pub editable: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ArchiveInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "String"))]
     pub(crate) hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "BTreeMap<String, String>"))]
     pub(crate) hashes: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct VcsInfo {
     pub vcs: VcsKind,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "String"))]
     pub commit_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "String"))]
     pub requested_revision: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "bool"))]
     pub git_lfs: Option<bool>, // Prefix lfs with VcsKind::Git per PEP 610
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum VcsKind {
     Git,
     Hg,

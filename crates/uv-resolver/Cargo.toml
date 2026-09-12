@@ -93,5 +93,6 @@ schemars = [
     "dep:schemars",
     "uv-distribution-types/schemars",
     "uv-fs/schemars",
+    "uv-pypi-types/schemars",
 ]
 tracing-durations-export = []

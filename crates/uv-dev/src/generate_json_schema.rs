@@ -199,6 +199,30 @@ mod tests {
             definitions["MetadataInstalledPackage"]["properties"]["version"]["type"],
             "string"
         );
+        assert!(
+            definitions["MetadataInstalledPackage"]["required"]
+                .as_array()
+                .is_some_and(|fields| !fields.iter().any(|field| field == "direct_url"))
+        );
+        assert_eq!(
+            definitions["MetadataInstalledPackage"]["properties"]["direct_url"]["allOf"][0]["$ref"],
+            "#/definitions/MetadataDirectUrl"
+        );
+        for variant in definitions["DirectUrl"]["anyOf"]
+            .as_array()
+            .expect("direct URL variants")
+        {
+            assert_eq!(variant["properties"]["url"]["format"], "uri");
+            assert_eq!(variant["properties"]["subdirectory"]["type"], "string");
+        }
+        assert_eq!(
+            definitions["VcsInfo"]["properties"]["commit_id"]["type"],
+            "string"
+        );
+        assert_eq!(
+            definitions["DirInfo"]["properties"]["editable"]["type"],
+            "boolean"
+        );
         assert_eq!(
             definitions["PythonReport"]["properties"]["version"]["type"],
             "string"

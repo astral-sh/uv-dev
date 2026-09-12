@@ -4,14 +4,15 @@ use std::path::Path;
 
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
-    InstalledDist, Name, Requirement, RequiresPython, ResolvedDist, UrlString,
+    InstalledDist, InstalledDistKind, Name, Requirement, RequiresPython, ResolvedDist, UrlString,
 };
 use uv_fs::PortablePathBuf;
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::Version;
 use uv_pep508::{MarkerTree, StringVersion};
-use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, Conflicts, ModuleName};
+use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, Conflicts, DirectUrl, ModuleName};
 use uv_python::{Interpreter, LenientImplementationName, PythonEnvironment};
+use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 use uv_workspace::Workspace;
 
 use crate::lock::{
@@ -26,6 +27,8 @@ enum MetadataErrorKind {
     Serialize(#[from] serde_json::error::Error),
     #[error(transparent)]
     Lock(#[from] LockError),
+    #[error(transparent)]
+    InstalledOrigin(#[from] DisplaySafeUrlError),
 }
 
 #[derive(Debug)]
@@ -165,16 +168,30 @@ struct MetadataInstalledPackage {
     path: PortablePathBuf,
     /// Whether the distribution is installed in editable mode.
     editable: bool,
+    /// Parsed `direct_url.json` metadata, with URL credentials and sensitive query parameters redacted.
+    ///
+    /// Its absence does not identify the index or artifact that supplied the distribution.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[cfg_attr(feature = "schemars", schemars(with = "MetadataDirectUrl"))]
+    direct_url: Option<MetadataDirectUrl>,
 }
 
 impl MetadataInstalledPackage {
-    fn from_dist(dist: &InstalledDist) -> Self {
-        Self {
+    fn from_dist(dist: &InstalledDist) -> Result<Self, MetadataError> {
+        let direct_url = match &dist.kind {
+            InstalledDistKind::Url(dist) => Some(MetadataDirectUrl::try_from(&*dist.direct_url)?),
+            InstalledDistKind::Registry(_)
+            | InstalledDistKind::EggInfoFile(_)
+            | InstalledDistKind::EggInfoDirectory(_)
+            | InstalledDistKind::LegacyEditable(_) => None,
+        };
+        Ok(Self {
             name: dist.name().clone(),
             version: dist.version().clone(),
             path: PortablePathBuf::from(dist.install_path()),
             editable: dist.is_editable(),
-        }
+            direct_url,
+        })
     }
 
     fn id(&self) -> String {
@@ -183,6 +200,27 @@ impl MetadataInstalledPackage {
 
     fn id_for_path(path: &Path) -> String {
         format!("installed+{}", PortablePathBuf::from(path))
+    }
+}
+
+/// The installed direct-URL record, sanitized for user-facing output.
+#[derive(Debug, serde::Serialize)]
+#[serde(transparent)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+struct MetadataDirectUrl(DirectUrl);
+
+impl TryFrom<&DirectUrl> for MetadataDirectUrl {
+    type Error = DisplaySafeUrlError;
+
+    fn try_from(direct_url: &DirectUrl) -> Result<Self, Self::Error> {
+        let mut direct_url = direct_url.clone();
+        let url = match &mut direct_url {
+            DirectUrl::LocalDirectory { url, .. }
+            | DirectUrl::ArchiveUrl { url, .. }
+            | DirectUrl::VcsUrl { url, .. } => url,
+        };
+        *url = DisplaySafeUrl::parse(url)?.to_string();
+        Ok(Self(direct_url))
     }
 }
 
@@ -1566,14 +1604,13 @@ impl Metadata {
         MetadataInstalledPackage::id_for_path(dist.install_path())
     }
 
-    #[must_use]
     pub fn with_environment<'a>(
         mut self,
         environment: &PythonEnvironment,
         packages: impl IntoIterator<Item = &'a InstalledDist>,
         selected_packages: BTreeMap<PackageName, String>,
         module_owners: BTreeMap<ModuleName, Vec<String>>,
-    ) -> Self {
+    ) -> Result<Self, MetadataError> {
         let selected_packages = selected_packages
             .into_iter()
             .filter(|(_, package_id)| self.resolution.contains_key(package_id))
@@ -1581,8 +1618,8 @@ impl Metadata {
         let packages = packages
             .into_iter()
             .map(MetadataInstalledPackage::from_dist)
-            .map(|package| (package.id(), package))
-            .collect::<BTreeMap<_, _>>();
+            .map(|package| package.map(|package| (package.id(), package)))
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
         let module_owners = module_owners
             .into_iter()
             .filter_map(|(module, owners)| {
@@ -1601,7 +1638,7 @@ impl Metadata {
             packages,
             module_owners,
         });
-        self
+        Ok(self)
     }
 
     #[must_use]
@@ -1622,5 +1659,61 @@ impl Metadata {
 
     pub fn write_json(&self, writer: impl std::io::Write) -> Result<(), MetadataError> {
         Ok(serde_json::to_writer_pretty(writer, self)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use uv_pypi_types::DirectUrl;
+
+    use super::{MetadataDirectUrl, MetadataError};
+
+    #[test]
+    fn installed_direct_url_report_redacts_credentials() -> Result<(), MetadataError> {
+        let records = [
+            (
+                serde_json::json!({
+                    "url": "file:///workspace/project",
+                    "dir_info": {"editable": true},
+                    "subdirectory": "src",
+                }),
+                "file:///workspace/project",
+            ),
+            (
+                serde_json::json!({
+                    "url": "https://user:archive-secret@example.com/demo.whl?X-Amz-Signature=signature-secret&download=1",
+                    "archive_info": {
+                        "hash": format!("sha256={}", "a".repeat(64)),
+                        "hashes": {"sha256": "a".repeat(64), "sha512": "b".repeat(128)},
+                    },
+                    "subdirectory": "src",
+                }),
+                "https://user:****@example.com/demo.whl?X-Amz-Signature=****&download=1",
+            ),
+            (
+                serde_json::json!({
+                    "url": "https://vcs-secret@example.com/repository.git",
+                    "vcs_info": {
+                        "vcs": "git",
+                        "commit_id": "c".repeat(40),
+                        "requested_revision": "v1",
+                        "git_lfs": true,
+                    },
+                    "subdirectory": "src",
+                    "path": "checkout",
+                }),
+                "https://****@example.com/repository.git",
+            ),
+        ];
+
+        for (record, expected_url) in records {
+            let direct_url: DirectUrl = serde_json::from_value(record.clone())?;
+            let report = serde_json::to_value(MetadataDirectUrl::try_from(&direct_url)?)?;
+            let mut expected = record.clone();
+            expected["url"] = serde_json::json!(expected_url);
+            assert_eq!(report, expected);
+            assert_eq!(serde_json::to_value(direct_url)?, record);
+        }
+        Ok(())
     }
 }

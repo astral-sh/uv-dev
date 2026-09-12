@@ -252,6 +252,7 @@ pub(crate) async fn metadata(
                         collected.selected_packages,
                         collected.installed_module_owners,
                     )
+                    .context("Failed to collect installed package metadata")?
                     .with_module_owners(collected.module_owners);
             }
 

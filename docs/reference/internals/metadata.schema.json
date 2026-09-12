@@ -92,6 +92,88 @@
   },
   "required": ["schema", "workspace_root", "requires_python", "conflicts"],
   "definitions": {
+    "ArchiveInfo": {
+      "type": "object",
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "hashes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "DirInfo": {
+      "type": "object",
+      "properties": {
+        "editable": {
+          "type": "boolean"
+        }
+      }
+    },
+    "DirectUrl": {
+      "description": "Metadata for a distribution that was installed via a direct URL.\n\nSee: <https://packaging.python.org/en/latest/specifications/direct-url-data-structure/>",
+      "anyOf": [
+        {
+          "description": "The direct URL is a local directory. For example:\n```json\n{\"url\": \"file:///home/user/project\", \"dir_info\": {}}\n```",
+          "type": "object",
+          "properties": {
+            "dir_info": {
+              "$ref": "#/definitions/DirInfo"
+            },
+            "subdirectory": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          "required": ["url", "dir_info"]
+        },
+        {
+          "description": "The direct URL is a path to an archive. For example:\n```json\n{\"archive_info\": {\"hash\": \"sha256=75909db2664838d015e3d9139004ee16711748a52c8f336b52882266540215d8\", \"hashes\": {\"sha256\": \"75909db2664838d015e3d9139004ee16711748a52c8f336b52882266540215d8\"}}, \"url\": \"https://files.pythonhosted.org/packages/b8/8b/31273bf66016be6ad22bb7345c37ff350276cfd46e389a0c2ac5da9d9073/wheel-0.41.2-py3-none-any.whl\"}\n```",
+          "type": "object",
+          "properties": {
+            "archive_info": {
+              "$ref": "#/definitions/ArchiveInfo"
+            },
+            "subdirectory": {
+              "type": "string"
+            },
+            "url": {
+              "description": "The URL without parsed information (such as the Git revision or subdirectory).\n\nFor example, for `pip install git+https://github.com/tqdm/tqdm@cc372d09dcd5a5eabdc6ed4cf365bdb0be004d44#subdirectory=.`,\nthe URL is `https://github.com/tqdm/tqdm`.",
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          "required": ["url", "archive_info"]
+        },
+        {
+          "description": "The direct URL is path to a VCS repository. For example:\n```json\n{\"url\": \"https://github.com/pallets/flask.git\", \"vcs_info\": {\"commit_id\": \"8d9519df093864ff90ca446d4af2dc8facd3c542\", \"vcs\": \"git\", \"git_lfs\": true }}\n```",
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "subdirectory": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string",
+              "format": "uri"
+            },
+            "vcs_info": {
+              "$ref": "#/definitions/VcsInfo"
+            }
+          },
+          "required": ["url", "vcs_info"]
+        }
+      ]
+    },
     "ExtraName": {
       "description": "The normalized name of an extra dependency.\n\nConverts the name to lowercase and collapses runs of `-`, `_`, and `.` down to a single `-`.\nFor example, `---`, `.`, and `__` are all converted to a single `-`.\n\nSee:\n- <https://peps.python.org/pep-0685/#specification/>\n- <https://packaging.python.org/en/latest/specifications/name-normalization/>",
       "type": "string"
@@ -199,6 +281,14 @@
       },
       "required": ["id"]
     },
+    "MetadataDirectUrl": {
+      "description": "The installed direct-URL record, sanitized for user-facing output.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/DirectUrl"
+        }
+      ]
+    },
     "MetadataEnvironment": {
       "description": "Information about the existing or synchronized environment for the workspace.",
       "type": "object",
@@ -291,6 +381,14 @@
       "description": "A distribution observed in an existing Python environment.",
       "type": "object",
       "properties": {
+        "direct_url": {
+          "description": "Parsed `direct_url.json` metadata, with URL credentials and sensitive query parameters redacted.\n\nIts absence does not identify the index or artifact that supplied the distribution.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/MetadataDirectUrl"
+            }
+          ]
+        },
         "editable": {
           "description": "Whether the distribution is installed in editable mode.",
           "type": "boolean"
@@ -912,6 +1010,28 @@
     "UrlString": {
       "description": "A [`Url`] represented as a `String`.\n\nThis type is not guaranteed to be a valid URL, and may error on conversion.",
       "type": "string"
+    },
+    "VcsInfo": {
+      "type": "object",
+      "properties": {
+        "commit_id": {
+          "type": "string"
+        },
+        "git_lfs": {
+          "type": "boolean"
+        },
+        "requested_revision": {
+          "type": "string"
+        },
+        "vcs": {
+          "$ref": "#/definitions/VcsKind"
+        }
+      },
+      "required": ["vcs"]
+    },
+    "VcsKind": {
+      "type": "string",
+      "enum": ["git", "hg", "bzr", "svn"]
     }
   }
 }
