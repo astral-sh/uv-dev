@@ -6945,6 +6945,14 @@ impl std::fmt::Display for LockError {
 }
 
 impl LockError {
+    /// Returns the root package name if the lockfile contains multiple matching packages.
+    pub fn multiple_root_package(&self) -> Option<&PackageName> {
+        match &*self.kind {
+            LockErrorKind::MultipleRootPackages { name } => Some(name),
+            _ => None,
+        }
+    }
+
     /// Returns true if the [`LockError`] is a resolver error.
     pub fn is_resolution(&self) -> bool {
         matches!(&*self.kind, LockErrorKind::Resolution { .. })
