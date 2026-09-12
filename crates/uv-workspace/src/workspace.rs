@@ -759,6 +759,7 @@ impl Workspace {
         groups: &DependencyGroupsWithDefaults,
     ) -> Result<RequiresPythonSources, DependencyGroupError> {
         let mut requires = RequiresPythonSources::new();
+        let root_dependency_groups = self.workspace_dependency_groups()?;
         for (name, member) in self.packages() {
             // Get the top-level requires-python for this package, which is always active
             //
@@ -777,6 +778,25 @@ impl Workspace {
             // We need to do full flattening here because include-group can transfer requires-python
             let dependency_groups =
                 FlatDependencyGroups::from_pyproject_toml(member.root(), &member.pyproject_toml)?;
+
+            // Projectless workspace roots can define dependency groups, but they have no package
+            // of their own. Attribute an explicitly requested group's Python requirement to each
+            // member, unless that member defines a same-named group that takes precedence.
+            // Root defaults do not apply to selected members, so inheriting default-only groups
+            // here would incorrectly constrain the interpreter for an unrelated member.
+            for (group_name, flat_group) in &root_dependency_groups {
+                if groups.contains(group_name)
+                    && !groups.contains_because_default(group_name)
+                    && dependency_groups.get(group_name).is_none()
+                    && let Some(requires_python) = &flat_group.requires_python
+                {
+                    requires.insert(
+                        (name.to_owned(), Some(group_name.clone())),
+                        requires_python.clone(),
+                    );
+                }
+            }
+
             let group_requires =
                 dependency_groups
                     .into_iter()
