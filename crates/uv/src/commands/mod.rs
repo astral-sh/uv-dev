@@ -36,7 +36,10 @@ pub(crate) use project::audit::audit;
 pub(crate) use project::check::check;
 pub(crate) use project::export::export;
 pub(crate) use project::format::format;
-pub(crate) use project::init::{InitKind, InitProjectKind, init};
+pub(crate) use project::init::{
+    InitDescription, InitKind, InitMode, InitProjectKind, InitPythonPin, InitReadme,
+    InitWorkspaceDiscovery, init,
+};
 pub(crate) use project::lock::lock;
 pub(crate) use project::remove::remove;
 pub(crate) use project::run::{ParsedRunCommand, RunCommand, run};

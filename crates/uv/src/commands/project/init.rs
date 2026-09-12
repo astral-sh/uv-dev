@@ -41,23 +41,22 @@ use crate::commands::reporters::PythonDownloadReporter;
 use crate::printer::Printer;
 
 /// Add one or more packages to the project requirements.
-#[expect(clippy::single_match_else, clippy::fn_params_excessive_bools)]
+#[expect(clippy::single_match_else)]
 pub(crate) async fn init(
     project_dir: &Path,
     explicit_path: Option<PathBuf>,
     name: Option<PackageName>,
     init_kind: InitKind,
-    bare: bool,
-    description: Option<String>,
-    no_description: bool,
+    bare: InitMode,
+    description: InitDescription,
     vcs: Option<VersionControlSystem>,
     build_backend: Option<ProjectBuildBackend>,
-    no_readme: bool,
+    readme: InitReadme,
     author_from: Option<AuthorFrom>,
-    pin_python: bool,
+    pin_python: InitPythonPin,
     python: Option<String>,
     install_mirrors: PythonInstallMirrors,
-    no_workspace: bool,
+    workspace_discovery: InitWorkspaceDiscovery,
     client_builder: &BaseClientBuilder<'_>,
     python_preference: PythonPreference,
     python_downloads: PythonDownloads,
@@ -81,8 +80,8 @@ pub(crate) async fn init(
                 python_downloads,
                 cache,
                 printer,
-                no_workspace,
-                no_readme,
+                workspace_discovery,
+                readme,
                 author_from,
                 pin_python,
                 config_discovery,
@@ -152,15 +151,14 @@ pub(crate) async fn init(
                 project_kind,
                 bare,
                 description,
-                no_description,
                 vcs,
                 build_backend,
-                no_readme,
+                readme,
                 author_from,
                 pin_python,
                 python,
                 install_mirrors,
-                no_workspace,
+                workspace_discovery,
                 client_builder,
                 python_preference,
                 python_downloads,
@@ -171,7 +169,7 @@ pub(crate) async fn init(
             .await?;
 
             // Create the `README.md` if it does not already exist.
-            if !no_readme && !bare {
+            if matches!(readme, InitReadme::Include) && matches!(bare, InitMode::Full) {
                 let readme = path.join("README.md");
                 if !readme.exists() {
                     fs_err::write(readme, String::new())?;
@@ -201,10 +199,9 @@ pub(crate) async fn init(
     Ok(ExitStatus::Success)
 }
 
-#[expect(clippy::fn_params_excessive_bools)]
 async fn init_script(
     script_path: &Path,
-    bare: bool,
+    bare: InitMode,
     python: Option<String>,
     install_mirrors: PythonInstallMirrors,
     client_builder: &BaseClientBuilder<'_>,
@@ -212,16 +209,16 @@ async fn init_script(
     python_downloads: PythonDownloads,
     cache: &Cache,
     printer: Printer,
-    no_workspace: bool,
-    no_readme: bool,
+    workspace_discovery: InitWorkspaceDiscovery,
+    readme: InitReadme,
     author_from: Option<AuthorFrom>,
-    pin_python: bool,
+    pin_python: InitPythonPin,
     config_discovery: ConfigDiscovery,
 ) -> Result<()> {
-    if no_workspace {
+    if matches!(workspace_discovery, InitWorkspaceDiscovery::Ignore) {
         warn_user_once!("`--no-workspace` is a no-op for Python scripts, which are standalone");
     }
-    if no_readme {
+    if matches!(readme, InitReadme::Omit) {
         warn_user_once!("`--no-readme` is a no-op for Python scripts, which are standalone");
     }
     if author_from.is_some() {
@@ -258,7 +255,7 @@ async fn init_script(
         python.as_deref(),
         &install_mirrors,
         script_path.parent().unwrap_or(&CWD),
-        !pin_python,
+        pin_python,
         python_preference,
         python_downloads,
         config_discovery,
@@ -272,28 +269,32 @@ async fn init_script(
         fs_err::tokio::create_dir_all(parent).await?;
     }
 
-    Pep723Script::create(script_path, requires_python.specifiers(), content, bare).await?;
+    Pep723Script::create(
+        script_path,
+        requires_python.specifiers(),
+        content,
+        matches!(bare, InitMode::Bare),
+    )
+    .await?;
 
     Ok(())
 }
 
 /// Initialize a project (and, implicitly, a workspace root) at the given path.
-#[expect(clippy::fn_params_excessive_bools)]
 async fn init_project(
     path: &Path,
     name: &PackageName,
     project_kind: InitProjectKind,
-    bare: bool,
-    description: Option<String>,
-    no_description: bool,
+    bare: InitMode,
+    description: InitDescription,
     vcs: Option<VersionControlSystem>,
     build_backend: Option<ProjectBuildBackend>,
-    no_readme: bool,
+    readme: InitReadme,
     author_from: Option<AuthorFrom>,
-    pin_python: bool,
+    pin_python: InitPythonPin,
     python: Option<String>,
     install_mirrors: PythonInstallMirrors,
-    no_workspace: bool,
+    workspace_discovery: InitWorkspaceDiscovery,
     client_builder: &BaseClientBuilder<'_>,
     python_preference: PythonPreference,
     python_downloads: PythonDownloads,
@@ -329,7 +330,7 @@ async fn init_project(
         {
             Ok(workspace) => {
                 // Ignore the current workspace if `--no-workspace` was provided.
-                if no_workspace {
+                if matches!(workspace_discovery, InitWorkspaceDiscovery::Ignore) {
                     debug!("Ignoring discovered workspace due to `--no-workspace`");
                     None
                 } else {
@@ -341,13 +342,13 @@ async fn init_project(
                     err.as_ref(),
                     WorkspaceErrorKind::MissingPyprojectToml | WorkspaceErrorKind::NonWorkspace(_)
                 ) {
-                    if no_workspace {
+                    if matches!(workspace_discovery, InitWorkspaceDiscovery::Ignore) {
                         warn!("`--no-workspace` was provided, but no workspace was found");
                     }
                     None
                 } else {
                     // If the user runs with `--no-workspace`, ignore the error.
-                    if no_workspace {
+                    if matches!(workspace_discovery, InitWorkspaceDiscovery::Ignore) {
                         warn!("Ignoring workspace discovery error due to `--no-workspace`: {err}");
                         None
                     } else {
@@ -406,13 +407,12 @@ async fn init_project(
         name,
         path,
         &requires_python,
-        description.as_deref(),
-        no_description,
+        &description,
         bare,
         vcs,
         build_backend,
         author_from,
-        no_readme,
+        readme,
     )?;
 
     if let Some(workspace) = workspace {
@@ -494,7 +494,7 @@ async fn init_project(
 
 async fn determine_requires_python(
     path: &Path,
-    pin_python: bool,
+    pin_python: InitPythonPin,
     install_mirrors: PythonInstallMirrors,
     client_builder: &BaseClientBuilder<'_>,
     python_preference: PythonPreference,
@@ -516,7 +516,7 @@ async fn determine_requires_python(
                     u64::from(*minor),
                 ]));
 
-                let python_pin = if pin_python {
+                let python_pin = if matches!(pin_python, InitPythonPin::Pin) {
                     Some(PythonRequest::Version(VersionRequest::MajorMinor(
                         *major, *minor, *variant,
                     )))
@@ -538,7 +538,7 @@ async fn determine_requires_python(
                     u64::from(*patch),
                 ]));
 
-                let python_pin = if pin_python {
+                let python_pin = if matches!(pin_python, InitPythonPin::Pin) {
                     Some(PythonRequest::Version(VersionRequest::MajorMinorPatch(
                         *major, *minor, *patch, *variant,
                     )))
@@ -551,7 +551,7 @@ async fn determine_requires_python(
             python_request @ PythonRequest::Version(VersionRequest::Range(specifiers, variant)) => {
                 let requires_python = RequiresPython::from_specifiers(specifiers.clone());
 
-                let python_pin = if pin_python {
+                let python_pin = if matches!(pin_python, InitPythonPin::Pin) {
                     let interpreter = PythonInstallation::find_or_download(
                         Some(python_request),
                         EnvironmentPreference::OnlySystem,
@@ -597,7 +597,7 @@ async fn determine_requires_python(
                 let requires_python =
                     RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());
 
-                let python_pin = if pin_python {
+                let python_pin = if matches!(pin_python, InitPythonPin::Pin) {
                     Some(PythonRequest::Version(VersionRequest::MajorMinor(
                         interpreter.python_major(),
                         interpreter.python_minor(),
@@ -622,7 +622,7 @@ async fn determine_requires_python(
             RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());
 
         // Pin to the minor version.
-        let python_pin = if pin_python {
+        let python_pin = if matches!(pin_python, InitPythonPin::Pin) {
             Some(PythonRequest::Version(VersionRequest::MajorMinor(
                 interpreter.python_major(),
                 interpreter.python_minor(),
@@ -648,7 +648,7 @@ async fn determine_requires_python(
             PythonRequest::from_requires_python(&requires_python).unwrap_or(PythonRequest::Default);
 
         // Pin to the minor version.
-        let python_pin = if pin_python {
+        let python_pin = if matches!(pin_python, InitPythonPin::Pin) {
             let interpreter = PythonInstallation::find_or_download(
                 Some(&python_request),
                 EnvironmentPreference::OnlySystem,
@@ -697,7 +697,7 @@ async fn determine_requires_python(
             RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());
 
         // Pin to the minor version.
-        let python_pin = if pin_python {
+        let python_pin = if matches!(pin_python, InitPythonPin::Pin) {
             Some(PythonRequest::Version(VersionRequest::MajorMinor(
                 interpreter.python_major(),
                 interpreter.python_minor(),
@@ -720,6 +720,110 @@ pub(crate) enum InitKind {
     Project(InitProjectKind),
     /// Initialize a PEP 723 script.
     Script,
+}
+
+/// Whether to initialize a bare or full project.
+#[derive(Debug, Copy, Clone)]
+pub(crate) enum InitMode {
+    /// Initialize only the required project files.
+    Bare,
+    /// Initialize the full project scaffold.
+    Full,
+}
+
+impl InitMode {
+    /// Determine the [`InitMode`] setting based on the command-line arguments.
+    pub(crate) fn from_args(bare: bool) -> Self {
+        if bare { Self::Bare } else { Self::Full }
+    }
+}
+
+/// The description to include in a newly initialized project.
+#[derive(Debug, Clone)]
+pub(crate) enum InitDescription {
+    /// Include the default project description.
+    Default,
+    /// Include a user-provided project description.
+    Custom(String),
+    /// Omit the project description.
+    None,
+}
+
+impl InitDescription {
+    /// Determine the [`InitDescription`] setting based on the command-line arguments.
+    pub(crate) fn from_args(description: Option<String>, no_description: bool) -> Self {
+        if no_description {
+            Self::None
+        } else if let Some(description) = description {
+            Self::Custom(description)
+        } else {
+            Self::Default
+        }
+    }
+}
+
+/// Whether to include a README in a newly initialized project.
+#[derive(Debug, Copy, Clone)]
+pub(crate) enum InitReadme {
+    /// Include a README.
+    Include,
+    /// Omit the README.
+    Omit,
+}
+
+impl InitReadme {
+    /// Determine the [`InitReadme`] setting based on the command-line arguments.
+    pub(crate) fn from_args(no_readme: bool) -> Self {
+        if no_readme { Self::Omit } else { Self::Include }
+    }
+
+    /// Omit the README for bare projects.
+    fn for_mode(self, mode: InitMode) -> Self {
+        match mode {
+            InitMode::Bare => Self::Omit,
+            InitMode::Full => self,
+        }
+    }
+}
+
+/// Whether to pin the selected Python version in a newly initialized project.
+#[derive(Debug, Copy, Clone)]
+pub(crate) enum InitPythonPin {
+    /// Pin the selected Python version.
+    Pin,
+    /// Do not pin the selected Python version.
+    DoNotPin,
+}
+
+impl InitPythonPin {
+    /// Determine the [`InitPythonPin`] setting based on the command-line arguments.
+    pub(crate) fn from_args(pin_python: bool) -> Self {
+        if pin_python {
+            Self::Pin
+        } else {
+            Self::DoNotPin
+        }
+    }
+}
+
+/// Whether to discover a parent workspace while initializing a project.
+#[derive(Debug, Copy, Clone)]
+pub(crate) enum InitWorkspaceDiscovery {
+    /// Discover a parent workspace.
+    Discover,
+    /// Ignore any parent workspace.
+    Ignore,
+}
+
+impl InitWorkspaceDiscovery {
+    /// Determine the [`InitWorkspaceDiscovery`] setting based on the command-line arguments.
+    pub(crate) fn from_args(no_workspace: bool) -> Self {
+        if no_workspace {
+            Self::Ignore
+        } else {
+            Self::Discover
+        }
+    }
 }
 
 /// The kind of Python project to initialize (either an application or a library).
@@ -747,13 +851,12 @@ impl InitProjectKind {
         name: &PackageName,
         path: &Path,
         requires_python: &RequiresPython,
-        description: Option<&str>,
-        no_description: bool,
-        bare: bool,
+        description: &InitDescription,
+        bare: InitMode,
         vcs: Option<VersionControlSystem>,
         build_backend: Option<ProjectBuildBackend>,
         author_from: Option<AuthorFrom>,
-        no_readme: bool,
+        readme: InitReadme,
     ) -> Result<()> {
         fs_err::create_dir_all(path)?;
 
@@ -776,8 +879,7 @@ impl InitProjectKind {
             requires_python,
             author.as_ref(),
             description,
-            no_description,
-            no_readme || bare,
+            readme.for_mode(bare),
         );
 
         match self {
@@ -818,7 +920,7 @@ impl InitProjectKind {
                 // (This isn't intended to be a particularly special or magical filename, just nice)
                 // TODO(zanieb): Only create `main.py` if there are no other Python files?
                 let main_py = path.join("main.py");
-                if !main_py.try_exists()? && !bare {
+                if !main_py.try_exists()? && matches!(bare, InitMode::Full) {
                     fs_err::write(path.join("main.py"), main_contents)?;
                 }
             }
@@ -870,9 +972,8 @@ fn pyproject_project(
     name: &PackageName,
     requires_python: &RequiresPython,
     author: Option<&Author>,
-    description: Option<&str>,
-    no_description: bool,
-    no_readme: bool,
+    description: &InitDescription,
+    readme: InitReadme,
 ) -> String {
     indoc::formatdoc! {r#"
         [project]
@@ -881,11 +982,14 @@ fn pyproject_project(
         requires-python = "{requires_python}"
         dependencies = []
     "#,
-        readme = if no_readme { "" } else { "\nreadme = \"README.md\"" },
-        description = if no_description {
-            String::new()
-        } else {
-            format!("\ndescription = \"{description}\"", description = description.unwrap_or("Add your description here"))
+        readme = match readme {
+            InitReadme::Include => "\nreadme = \"README.md\"",
+            InitReadme::Omit => "",
+        },
+        description = match description {
+            InitDescription::Default => "\ndescription = \"Add your description here\"".to_string(),
+            InitDescription::Custom(description) => format!("\ndescription = \"{description}\""),
+            InitDescription::None => String::new(),
         },
         authors = author.map_or_else(String::new, |author| format!("\nauthors = [\n    {}\n]", author.to_toml_string())),
         requires_python = requires_python.specifiers(),

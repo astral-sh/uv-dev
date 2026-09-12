@@ -47,6 +47,7 @@ use uv_workspace::{
 };
 
 use crate::commands::pip::loggers::{DefaultResolveLogger, ResolveLogger, SummaryResolveLogger};
+use crate::commands::project::init::InitPythonPin;
 use crate::commands::project::lock_target::{LockTarget, find_lock_format_error};
 use crate::commands::project::{
     MissingLockfileSource, ProjectEnvironmentPolicy, ProjectError, ProjectInterpreter,
@@ -113,7 +114,7 @@ pub(crate) async fn lock(
                 python.as_deref(),
                 &install_mirrors,
                 project_dir,
-                false,
+                InitPythonPin::Pin,
                 python_preference,
                 python_downloads,
                 config_discovery,
