@@ -74,6 +74,11 @@ path = "benches/native_source_install.rs"
 harness = false
 
 [[bench]]
+name = "source_cache_keys"
+path = "benches/source_cache_keys.rs"
+harness = false
+
+[[bench]]
 name = "core_metadata"
 path = "benches/core_metadata.rs"
 harness = false
@@ -244,6 +249,7 @@ uv = { workspace = true }
 uv-auth = { workspace = true }
 uv-build-backend = { workspace = true }
 uv-cache = { workspace = true }
+uv-cache-info = { workspace = true }
 uv-cli = { workspace = true }
 uv-client = { workspace = true }
 uv-configuration = { workspace = true }
