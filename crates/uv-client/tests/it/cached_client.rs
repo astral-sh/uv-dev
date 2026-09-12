@@ -137,7 +137,7 @@ async fn seed_numeric_cache(
     Ok(())
 }
 
-fn cached_payload<T: DeserializeOwned>(cache_entry: &CacheEntry) -> Result<T> {
+pub(super) fn cached_payload<T: DeserializeOwned>(cache_entry: &CacheEntry) -> Result<T> {
     let cached = DataWithCachePolicy::from_reader(fs_err::File::open(cache_entry.path())?)?;
     Ok(rmp_serde::from_slice(&cached.data)?)
 }

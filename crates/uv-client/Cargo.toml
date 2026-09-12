@@ -92,5 +92,6 @@ temp-env = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 tokio-rustls = { workspace = true }
-tracing-test = { workspace = true }
+# Cache coordination tests observe lock contention in `uv-fs`.
+tracing-test = { workspace = true, features = ["no-env-filter"] }
 wiremock = { workspace = true }

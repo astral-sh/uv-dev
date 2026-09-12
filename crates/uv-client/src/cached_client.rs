@@ -489,20 +489,57 @@ impl CachedClient {
         .await
     }
 
+    /// Reads the cache, removing an invalid cache policy before retrying the request.
+    async fn read_cache<Payload: Cacheable + 'static>(
+        &self,
+        req: Request,
+        cache_entry: &CacheEntry,
+        cache_control: CacheControl,
+    ) -> (Request, Option<CachedEntry<Payload::Target>>) {
+        let (req, cached) = self
+            .read_cache_inner::<Payload>(req, cache_entry, cache_control)
+            .await;
+        let cached = match cached {
+            Ok(Some(cached)) => Some(cached),
+            Ok(None) => {
+                warn!(
+                    "Cached response doesn't match current request for: {}",
+                    DisplaySafeUrl::from_url(req.url().clone())
+                );
+                None
+            }
+            Err(err) => {
+                // When we know the cache entry doesn't exist, then things are
+                // normal and we shouldn't emit a WARN.
+                if err.is_file_not_exists() {
+                    trace!("No cache entry exists for {}", cache_entry.path().display());
+                } else {
+                    warn!(
+                        "Broken cache policy entry at {}, removing: {err}",
+                        cache_entry.path().display()
+                    );
+                    let _ = fs_err::tokio::remove_file(&cache_entry.path()).await;
+                }
+                None
+            }
+        };
+        (req, cached)
+    }
+
     /// Reads the cache policy and decodes a fresh payload in one blocking task.
     ///
-    /// Stale payloads remain encoded until revalidation confirms they can be reused.
+    /// Stale payloads remain encoded until revalidation confirms they can be reused. This read
+    /// never modifies the cache, including when the policy or payload cannot be decoded.
     #[instrument(name = "read_and_parse_cache", skip_all, fields(file = %cache_entry.path().display()))]
-    async fn read_cache<Payload: Cacheable + 'static>(
+    async fn read_cache_inner<Payload: Cacheable + 'static>(
         &self,
         mut req: Request,
         cache_entry: &CacheEntry,
         cache_control: CacheControl,
-    ) -> (Request, Option<CachedEntry<Payload::Target>>) {
+    ) -> (Request, CacheReadResult<Payload::Target>) {
         let path = cache_entry.path().to_path_buf();
         let span = Span::current();
-        let (req, cached) = self
-            .0
+        self.0
             .cache_read_runtime()
             .spawn_blocking(move || {
                 span.in_scope(|| {
@@ -527,35 +564,14 @@ impl CachedClient {
                                     new_cache_policy_builder: Box::new(new_cache_policy_builder),
                                 })
                             }
-                            BeforeRequest::NoMatch => {
-                                warn!("Cached response doesn't match current request for: {url}");
-                                None
-                            }
+                            BeforeRequest::NoMatch => None,
                         }
                     });
                     (req, cached)
                 })
             })
             .await
-            .expect("cache read and payload decoding task panicked");
-        let cached = match cached {
-            Ok(cached) => cached,
-            Err(err) => {
-                // When we know the cache entry doesn't exist, then things are
-                // normal and we shouldn't emit a WARN.
-                if err.is_file_not_exists() {
-                    trace!("No cache entry exists for {}", cache_entry.path().display());
-                } else {
-                    warn!(
-                        "Broken cache policy entry at {}, removing: {err}",
-                        cache_entry.path().display()
-                    );
-                    let _ = fs_err::tokio::remove_file(&cache_entry.path()).await;
-                }
-                None
-            }
-        };
-        (req, cached)
+            .expect("cache read and payload decoding task panicked")
     }
 
     /// Reads and decodes an allowed-stale cache entry in one blocking task.
@@ -583,6 +599,41 @@ impl CachedClient {
             })
             .await
             .expect("cache read and payload decoding task panicked")
+    }
+
+    /// Returns a complete cached payload when the request's cache policy permits reuse.
+    ///
+    /// Misses, stale entries, and decoding errors are left untouched so callers can retry under
+    /// their publication lock. In particular, an unsuccessful read must not remove a replacement
+    /// that another process publishes concurrently.
+    pub(crate) async fn get_cached_serde<Payload: Serialize + DeserializeOwned + Send + 'static>(
+        &self,
+        req: &Request,
+        cache_entry: &CacheEntry,
+        cache_control: &CacheControl,
+    ) -> Option<Payload> {
+        let req = req.try_clone()?;
+        match cache_control {
+            CacheControl::AllowStale => {
+                let (_, cached) = self
+                    .read_and_decode_stale_cache::<SerdeCacheable<Payload>>(req, cache_entry)
+                    .await;
+                cached.ok().flatten()
+            }
+            CacheControl::None | CacheControl::MustRevalidate | CacheControl::Override(_) => {
+                let (_, cached) = self
+                    .read_cache_inner::<SerdeCacheable<Payload>>(
+                        req,
+                        cache_entry,
+                        cache_control.clone(),
+                    )
+                    .await;
+                match cached.ok().flatten()? {
+                    CachedEntry::Fresh(payload) => payload.ok(),
+                    CachedEntry::Stale { .. } => None,
+                }
+            }
+        }
     }
 
     async fn send_cached_handle_stale(
@@ -817,6 +868,9 @@ impl CachedClient {
         }
     }
 }
+
+/// A cache policy read may fail or belong to a different request.
+type CacheReadResult<Payload> = Result<Option<CachedEntry<Payload>>, Error>;
 
 /// A cache entry checked against the current request.
 #[derive(Debug)]

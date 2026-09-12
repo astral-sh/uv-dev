@@ -522,7 +522,7 @@ fn header_missing(header: HeaderName) -> HeaderMissing {
 }
 
 /// Loads the wheel fixture served by each redirect target.
-fn wheel() -> Result<Vec<u8>> {
+pub(super) fn wheel() -> Result<Vec<u8>> {
     Ok(fs_err::read(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test/links/ok-1.0.0-py3-none-any.whl"),
     )?)
@@ -566,7 +566,7 @@ fn authenticated_url(base: &str, path: &str, username: &str, password: &str) -> 
 }
 
 /// Serves a byte range from the wheel fixture, as an artifact host would.
-fn wheel_range_response(request: &Request, wheel: &[u8]) -> ResponseTemplate {
+pub(super) fn wheel_range_response(request: &Request, wheel: &[u8]) -> ResponseTemplate {
     let Some((start, end)) = request
         .headers
         .get(RANGE)

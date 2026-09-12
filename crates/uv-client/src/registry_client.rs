@@ -10,7 +10,7 @@ use async_http_range_reader::AsyncHttpRangeReader;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use http::{HeaderMap, StatusCode};
 use itertools::Either;
-use reqwest::{Proxy, Response};
+use reqwest::{Proxy, Request, Response};
 use rustc_hash::FxHashMap;
 use tokio::sync::{Mutex, Semaphore};
 use tracing::{Instrument, Span, debug, info_span, instrument, trace, warn};
@@ -1064,8 +1064,9 @@ impl RegistryClient {
 
     /// Acquire an advisory lock for a wheel metadata cache entry.
     ///
-    /// Callers hold the lock across freshness checks, HTTP requests, and cache publication so
-    /// a process that waited for another request can reuse the completed metadata entry.
+    /// Complete cache hits can be read without the lock. Callers recheck freshness after acquiring
+    /// it, then hold it across HTTP requests and publication so waiting processes can reuse the
+    /// completed metadata entry.
     async fn lock_wheel_metadata(
         cache_entry: &CacheEntry,
         filename: &WheelFilename,
@@ -1080,6 +1081,53 @@ impl RegistryClient {
 
         let lock_entry = cache_entry.with_file(format!("{lock_key}.lock"));
         Ok(lock_entry.lock().await.map_err(ErrorKind::CacheLock)?)
+    }
+
+    /// Select the HTTP cache policy for a wheel metadata entry.
+    fn wheel_metadata_cache_control(
+        &self,
+        cache_entry: &CacheEntry,
+        filename: &WheelFilename,
+        index: Option<&IndexUrl>,
+    ) -> Result<CacheControl, Error> {
+        Ok(match self.connectivity {
+            Connectivity::Online
+                if let Some(index) = index
+                    && let Some(header) = self.indexes.artifact_cache_control_for(index) =>
+            {
+                CacheControl::Override(header)
+            }
+            Connectivity::Online => CacheControl::from(
+                self.cache
+                    .freshness(cache_entry, Some(&filename.name), None)
+                    .map_err(ErrorKind::Io)?,
+            ),
+            Connectivity::Offline => CacheControl::AllowStale,
+        })
+    }
+
+    /// Build the request used to cache metadata read from a wheel archive.
+    fn wheel_metadata_archive_request(
+        &self,
+        url: &DisplaySafeUrl,
+        range_requests: bool,
+    ) -> Result<Request, Error> {
+        let client = self.uncached_client(url);
+        let request = if range_requests {
+            client.head(Url::from(url.clone()))
+        } else {
+            client.get(Url::from(url.clone()))
+        };
+        // Range offsets and streamed wheel contents refer to the original archive bytes.
+        request
+            .header(
+                "accept-encoding",
+                http::HeaderValue::from_static("identity"),
+            )
+            .build()
+            .map_err(|err| {
+                ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source()).into()
+            })
     }
 
     /// Fetch the metadata from a wheel file.
@@ -1108,22 +1156,27 @@ impl RegistryClient {
                 format!("{}.msgpack", filename.cache_key()),
             );
 
-            // Acquire an advisory lock, to guard against concurrent writes.
-            let _lock = Self::lock_wheel_metadata(&cache_entry, filename).await?;
+            let req = self
+                .uncached_client(&url)
+                .get(Url::from(url.clone()))
+                .build()
+                .map_err(|err| {
+                    ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
+                })?;
+            let cache_control =
+                self.wheel_metadata_cache_control(&cache_entry, filename, Some(index))?;
+            if let Some(metadata) = self
+                .cached_client()
+                .get_cached_serde(&req, &cache_entry, &cache_control)
+                .await
+            {
+                return Ok(metadata);
+            }
 
-            let cache_control = match self.connectivity {
-                Connectivity::Online
-                    if let Some(header) = self.indexes.artifact_cache_control_for(index) =>
-                {
-                    CacheControl::Override(header)
-                }
-                Connectivity::Online => CacheControl::from(
-                    self.cache
-                        .freshness(&cache_entry, Some(&filename.name), None)
-                        .map_err(ErrorKind::Io)?,
-                ),
-                Connectivity::Offline => CacheControl::AllowStale,
-            };
+            let _lock = Self::lock_wheel_metadata(&cache_entry, filename).await?;
+            // A concurrent publisher may have refreshed the entry while this request waited.
+            let cache_control =
+                self.wheel_metadata_cache_control(&cache_entry, filename, Some(index))?;
 
             let response_callback = async |response: Response, _: &mut RetryState| {
                 let bytes = response.bytes().await.map_err(|err| {
@@ -1154,13 +1207,6 @@ impl RegistryClient {
                         ))
                     })
             };
-            let req = self
-                .uncached_client(&url)
-                .get(Url::from(url.clone()))
-                .build()
-                .map_err(|err| {
-                    ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
-                })?;
             Ok(self
                 .cached_client()
                 .get_serde_with_retry(req, &cache_entry, cache_control, response_callback)
@@ -1195,37 +1241,26 @@ impl RegistryClient {
             format!("{}.msgpack", filename.cache_key()),
         );
 
-        // Acquire an advisory lock, to guard against concurrent writes.
-        let _lock = Self::lock_wheel_metadata(&cache_entry, filename).await?;
+        let cache_request = self.wheel_metadata_archive_request(
+            url,
+            index.is_none_or(|index| capabilities.supports_range_requests(index)),
+        )?;
+        let cache_control = self.wheel_metadata_cache_control(&cache_entry, filename, index)?;
+        if let Some(metadata) = self
+            .cached_client()
+            .get_cached_serde(&cache_request, &cache_entry, &cache_control)
+            .await
+        {
+            return Ok(metadata);
+        }
 
-        let cache_control = match self.connectivity {
-            Connectivity::Online
-                if let Some(index) = index
-                    && let Some(header) = self.indexes.artifact_cache_control_for(index) =>
-            {
-                CacheControl::Override(header)
-            }
-            Connectivity::Online => CacheControl::from(
-                self.cache
-                    .freshness(&cache_entry, Some(&filename.name), None)
-                    .map_err(ErrorKind::Io)?,
-            ),
-            Connectivity::Offline => CacheControl::AllowStale,
-        };
+        let _lock = Self::lock_wheel_metadata(&cache_entry, filename).await?;
+        // Recompute the refresh cutoff decision after waiting for another publisher.
+        let cache_control = self.wheel_metadata_cache_control(&cache_entry, filename, index)?;
 
         // Attempt to fetch via a range request.
         if index.is_none_or(|index| capabilities.supports_range_requests(index)) {
-            let req = self
-                .uncached_client(url)
-                .head(Url::from(url.clone()))
-                .header(
-                    "accept-encoding",
-                    http::HeaderValue::from_static("identity"),
-                )
-                .build()
-                .map_err(|err| {
-                    ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
-                })?;
+            let req = self.wheel_metadata_archive_request(url, true)?;
 
             // Copy authorization headers from the HEAD request to subsequent requests
             let mut headers = HeaderMap::default();
@@ -1309,20 +1344,7 @@ impl RegistryClient {
         }
 
         // Create a request to stream the file.
-        let req = self
-            .uncached_client(url)
-            .get(Url::from(url.clone()))
-            .header(
-                // `reqwest` defaults to accepting compressed responses.
-                // Specify identity encoding to get consistent .whl downloading
-                // behavior from servers. ref: https://github.com/pypa/pip/pull/1688
-                "accept-encoding",
-                reqwest::header::HeaderValue::from_static("identity"),
-            )
-            .build()
-            .map_err(|err| {
-                ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
-            })?;
+        let req = self.wheel_metadata_archive_request(url, false)?;
 
         // Stream the file, searching for the METADATA.
         let read_metadata_stream = |response: Response, _: &mut RetryState| {
