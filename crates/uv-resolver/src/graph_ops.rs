@@ -6,6 +6,7 @@ use petgraph::visit::EdgeRef;
 use petgraph::{Direction, Graph};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
+use uv_normalize::PackageName;
 use uv_pep508::MarkerTree;
 use uv_pypi_types::{ConflictItem, ConflictItemRef, Conflicts, Inference};
 
@@ -202,8 +203,9 @@ pub(crate) fn simplify_conflict_markers(
         inferences.insert(node_id, new_sets);
     }
 
+    let ambiguous_edges = ambiguous_edges(graph, ResolutionGraphNode::package_name);
     for edge_index in (0..graph.edge_count()).map(EdgeIndex::new) {
-        let (from_index, to_index) = graph.edge_endpoints(edge_index).unwrap();
+        let (from_index, _) = graph.edge_endpoints(edge_index).unwrap();
         // If there are ambiguous edges (i.e., two or more edges
         // with the same package name), then we specifically skip
         // conflict marker simplification. It seems that in some
@@ -211,11 +213,7 @@ pub(crate) fn simplify_conflict_markers(
         // to perfectly disambiguate between them. It's plausible we
         // could do better here, but it requires smarter simplification
         // logic. ---AG
-        let ambiguous_edges = graph
-            .edges_directed(from_index, Direction::Outgoing)
-            .filter(|edge| graph[to_index].package_name() == graph[edge.target()].package_name())
-            .count();
-        if ambiguous_edges > 1 {
+        if ambiguous_edges.contains(&edge_index) {
             continue;
         }
         let Some(inference_sets) = inferences.get(&from_index) else {
@@ -267,6 +265,26 @@ pub(crate) fn simplify_conflict_markers(
             graph[edge_index].unify_inference_sets(inference_sets);
         }
     }
+}
+
+/// Return the edges whose parent has more than one outgoing edge with the same package name.
+fn ambiguous_edges<Node, Edge>(
+    graph: &Graph<Node, Edge>,
+    package_name: impl for<'a> Fn(&'a Node) -> Option<&'a PackageName>,
+) -> FxHashSet<EdgeIndex> {
+    let mut ambiguous_edges = FxHashSet::default();
+    for parent_index in graph.node_indices() {
+        let mut previous_edges = FxHashMap::default();
+        for edge in graph.edges_directed(parent_index, Direction::Outgoing) {
+            if let Some(previous_edge) =
+                previous_edges.insert(package_name(&graph[edge.target()]), edge.id())
+            {
+                ambiguous_edges.insert(previous_edge);
+                ambiguous_edges.insert(edge.id());
+            }
+        }
+    }
+    ambiguous_edges
 }
 
 pub(crate) trait Reachable<T> {
@@ -334,5 +352,48 @@ impl Boolean for MarkerTree {
 
     fn or(&mut self, other: Self) {
         *self = Self::or(*self, other);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ambiguous_edges_are_scoped_to_the_parent() {
+        let mut graph = Graph::<Option<PackageName>, ()>::default();
+        let parent = graph.add_node(None);
+        let other_parent = graph.add_node(None);
+
+        let distinct_edges: Vec<_> = (0..1_024)
+            .map(|index| {
+                let name = PackageName::from_owned(format!("package-{index}")).unwrap();
+                let target = graph.add_node(Some(name));
+                graph.add_edge(parent, target, ())
+            })
+            .collect();
+
+        let duplicate = "duplicate".parse::<PackageName>().unwrap();
+        let first_target = graph.add_node(Some(duplicate.clone()));
+        let second_target = graph.add_node(Some(duplicate));
+        let first = graph.add_edge(parent, first_target, ());
+        let second = graph.add_edge(parent, second_target, ());
+        let repeated_target = graph.add_edge(parent, first_target, ());
+        let different_parent = graph.add_edge(other_parent, second_target, ());
+
+        let unnamed_first_target = graph.add_node(None);
+        let unnamed_second_target = graph.add_node(None);
+        let unnamed_first = graph.add_edge(parent, unnamed_first_target, ());
+        let unnamed_second = graph.add_edge(parent, unnamed_second_target, ());
+
+        let ambiguous = ambiguous_edges(&graph, Option::as_ref);
+        assert_eq!(ambiguous.len(), 5);
+        assert!(ambiguous.contains(&first));
+        assert!(ambiguous.contains(&second));
+        assert!(ambiguous.contains(&repeated_target));
+        assert!(ambiguous.contains(&unnamed_first));
+        assert!(ambiguous.contains(&unnamed_second));
+        assert!(!ambiguous.contains(&different_parent));
+        assert!(distinct_edges.iter().all(|edge| !ambiguous.contains(edge)));
     }
 }
