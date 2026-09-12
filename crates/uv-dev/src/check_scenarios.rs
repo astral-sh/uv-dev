@@ -9,8 +9,8 @@ use anyhow::{Context, Result, ensure};
 use uv_python::PythonVersion;
 use uv_test::TestContext;
 use uv_test::packse::check::{
-    LockCheckResult, ScenarioPlatform, ScenarioTarget, check_lock_scenario, check_scenario,
-    check_scenario_with_artifacts,
+    LockCheckResult, ScenarioPlatform, ScenarioTarget, check_lock_scenario,
+    check_lock_scenario_with_artifacts, check_scenario, check_scenario_with_artifacts,
 };
 use uv_test::packse::generate::{SmallGraphOptions, generate_marker_graph, generate_small_graph};
 use uv_test::packse::scenario::ScenarioDocument;
@@ -37,8 +37,8 @@ pub(crate) struct Args {
     #[arg(long)]
     lock: bool,
 
-    /// Save a failed fixed-environment command and its served wheels in a new directory.
-    #[arg(long, conflicts_with = "lock", value_name = "DIR")]
+    /// Save failed resolver commands and their served wheels in a new directory.
+    #[arg(long, value_name = "DIR")]
     failure_dir: Option<PathBuf>,
 
     /// Generate small graphs beginning at this seed instead of reading scenario files.
@@ -159,7 +159,22 @@ fn check_case(
     let scenario = document.scenario()?;
     if args.lock {
         let context = TestContext::new_with_versions_and_bin(&[interpreter], uv.to_path_buf());
-        let result = check_lock_scenario(&context, &scenario, targets, args.max_states)?;
+        let failure_dir = args.failure_dir.clone().or_else(|| {
+            args.output_dir
+                .as_ref()
+                .map(|directory| directory.join(format!("{}.lock.failure", scenario.name)))
+        });
+        let result = if let Some(failure_dir) = failure_dir {
+            check_lock_scenario_with_artifacts(
+                &context,
+                document,
+                targets,
+                args.max_states,
+                &failure_dir,
+            )
+        } else {
+            check_lock_scenario(&context, &scenario, targets, args.max_states)
+        }?;
         Ok(match result {
             LockCheckResult::Satisfiable {
                 projections,
