@@ -80,7 +80,6 @@ tokio-util = { workspace = true, features = ["compat"] }
 toml = { workspace = true }
 toml_edit = { workspace = true }
 toml_parser = { workspace = true }
-toml_writer = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 
