@@ -159,6 +159,11 @@ path = "benches/tls_handshake.rs"
 harness = false
 
 [[bench]]
+name = "entrypoint_startup"
+path = "benches/entrypoint_startup.rs"
+harness = false
+
+[[bench]]
 name = "uv_pypi_types"
 path = "benches/uv_pypi_types.rs"
 harness = false
