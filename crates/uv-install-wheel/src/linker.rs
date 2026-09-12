@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -155,20 +156,21 @@ impl InstallState {
     /// the directories contain conflicting files.
     ///
     /// Returns `true` if a warning was emitted.
-    fn warn_directory_conflict(
+    fn warn_directory_conflict<W: Borrow<WheelFilename>>(
         directory: &Path,
-        wheels: &BTreeSet<(WheelFilename, PathBuf)>,
+        wheels: &BTreeSet<(W, PathBuf)>,
     ) -> Result<bool, io::Error> {
         // The files in the directory, as paths relative to the site-packages, with their origin and
         // size.
         let mut files: BTreeMap<PathBuf, BTreeSet<(&WheelFilename, u64)>> = BTreeMap::default();
         // The directories in the directory, as paths relative to the site-packages, with their
         // origin and absolute path.
-        let mut subdirectories: BTreeMap<PathBuf, BTreeSet<(WheelFilename, PathBuf)>> =
+        let mut subdirectories: BTreeMap<PathBuf, BTreeSet<(&WheelFilename, PathBuf)>> =
             BTreeMap::default();
 
         // Read the shared directory in each unpacked wheel.
         for (wheel, absolute) in wheels {
+            let wheel = wheel.borrow();
             for dir_entry in fs_err::read_dir(absolute)? {
                 let dir_entry = dir_entry?;
                 let relative = directory.join(dir_entry.file_name());
@@ -182,7 +184,7 @@ impl InstallState {
                     subdirectories
                         .entry(relative)
                         .or_default()
-                        .insert((wheel.clone(), dir_entry.path()));
+                        .insert((wheel, dir_entry.path()));
                 } else {
                     // We don't expect any other file type, but it's ok if this check has false
                     // negatives.
@@ -313,4 +315,84 @@ fn register_installed_paths(
         state.register_installed_path(&relative, &path, filename);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::io;
+    use std::path::{Path, PathBuf};
+
+    use anyhow::Result;
+    use assert_fs::prelude::*;
+
+    use uv_distribution_filename::WheelFilename;
+
+    use super::InstallState;
+
+    fn namespace_wheels(root: &assert_fs::TempDir) -> Result<BTreeSet<(WheelFilename, PathBuf)>> {
+        let mut wheels = BTreeSet::new();
+        for name in ["left", "right"] {
+            let directory = root.child(name).child("namespace");
+            directory.create_dir_all()?;
+            wheels.insert((
+                format!("conflict_{name}-1.0-py3-none-any.whl").parse()?,
+                directory.path().to_path_buf(),
+            ));
+        }
+        Ok(wheels)
+    }
+
+    #[test]
+    fn directory_conflicts_allow_shared_namespaces() -> Result<()> {
+        let root = assert_fs::TempDir::new()?;
+        let wheels = namespace_wheels(&root)?;
+        root.child("left/namespace/__init__.py").write_str("")?;
+        root.child("right/namespace/__init__.py").write_str("")?;
+        root.child("left/namespace/left/module.py")
+            .write_str("left")?;
+        root.child("right/namespace/right/module.py")
+            .write_str("right")?;
+        // The existing heuristic treats equal-length files as identical.
+        root.child("left/namespace/shared/module.py")
+            .write_str("one")?;
+        root.child("right/namespace/shared/module.py")
+            .write_str("two")?;
+
+        assert!(!InstallState::warn_directory_conflict(
+            Path::new("namespace"),
+            &wheels,
+        )?);
+        Ok(())
+    }
+
+    #[test]
+    fn directory_conflicts_find_nested_files() -> Result<()> {
+        let root = assert_fs::TempDir::new()?;
+        let wheels = namespace_wheels(&root)?;
+        root.child("left/namespace/shared/deep/module.py")
+            .write_str("one")?;
+        root.child("right/namespace/shared/deep/module.py")
+            .write_str("different")?;
+
+        assert!(InstallState::warn_directory_conflict(
+            Path::new("namespace"),
+            &wheels,
+        )?);
+        Ok(())
+    }
+
+    #[test]
+    fn directory_conflicts_propagate_read_errors() -> Result<()> {
+        let root = assert_fs::TempDir::new()?;
+        let wheels = BTreeSet::from([(
+            "conflict_missing-1.0-py3-none-any.whl".parse::<WheelFilename>()?,
+            root.child("missing").path().to_path_buf(),
+        )]);
+
+        let error =
+            InstallState::warn_directory_conflict(Path::new("namespace"), &wheels).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        Ok(())
+    }
 }
