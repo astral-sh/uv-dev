@@ -30,7 +30,8 @@ fn zip_file_names(path: &Path) -> Result<Vec<String>> {
     })
 }
 
-/// The self-contained scenario backend produces installable, reproducible wheels with valid RECORDs.
+/// The self-contained scenario backend produces installable, reproducible wheels with valid
+/// `RECORD` files.
 #[test]
 fn build_packse_in_tree_sdist() -> Result<()> {
     let scenario = toml::from_str::<uv_test::packse::scenario::Scenario>(indoc! {r#"
