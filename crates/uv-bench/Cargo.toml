@@ -124,6 +124,11 @@ path = "benches/project_noop.rs"
 harness = false
 
 [[bench]]
+name = "project_lock"
+path = "benches/project_lock.rs"
+harness = false
+
+[[bench]]
 name = "environment_reinstall"
 path = "benches/environment_reinstall.rs"
 harness = false
