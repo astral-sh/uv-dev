@@ -79,6 +79,8 @@ pub(crate) mod install_target;
 pub(crate) mod lock;
 pub(crate) mod lock_target;
 pub(crate) mod remove;
+#[cfg(test)]
+mod requires_python_warnings;
 pub(crate) mod run;
 pub(crate) mod sync;
 mod toolchain;
@@ -577,33 +579,67 @@ pub(crate) fn find_requires_python(
     if requires_python.is_empty() {
         return Ok(None);
     }
-    for ((package, group), specifiers) in &requires_python {
+    if let Some(warning) = format_tilde_requires_python_warning(&requires_python) {
+        warn_user_once!("{warning}");
+    }
+    match RequiresPython::intersection(requires_python.iter().map(|(.., specifiers)| specifiers)) {
+        Some(requires_python) => Ok(Some(requires_python)),
+        None => Err(ProjectError::DisjointRequiresPython(requires_python)),
+    }
+}
+
+/// Consolidate ambiguous tilde specifiers without changing the single-source warning.
+fn format_tilde_requires_python_warning(requires_python: &RequiresPythonSources) -> Option<String> {
+    let mut sources = Vec::new();
+    for ((package, group), specifiers) in requires_python {
         if let [spec] = &specifiers[..] {
             if let Some(spec) = TildeVersionSpecifier::from_specifier_ref(spec) {
                 if spec.has_patch() {
                     continue;
                 }
-                let (lower, upper) = spec.bounding_specifiers();
-                let spec_0 = spec.with_patch_version(0);
-                let (lower_0, upper_0) = spec_0.bounding_specifiers();
-                warn_user_once!(
-                    "The `requires-python` specifier (`{spec}`) in `{package}{group}` \
-                    uses the tilde specifier (`~=`) without a patch version. This will be \
-                    interpreted as `{lower}, {upper}`. Did you mean `{spec_0}` to constrain the \
-                    version as `{lower_0}, {upper_0}`? We recommend only using \
-                    the tilde specifier with a patch version to avoid ambiguity.",
-                    group = if let Some(group) = group {
-                        format!(":{group}")
-                    } else {
-                        String::new()
-                    },
-                );
+                let source = if let Some(group) = group {
+                    format!("{package}:{group}")
+                } else {
+                    package.to_string()
+                };
+                sources.push((source, spec));
             }
         }
     }
-    match RequiresPython::intersection(requires_python.iter().map(|(.., specifiers)| specifiers)) {
-        Some(requires_python) => Ok(Some(requires_python)),
-        None => Err(ProjectError::DisjointRequiresPython(requires_python)),
+
+    match sources.as_slice() {
+        [] => None,
+        [(source, spec)] => {
+            let (lower, upper) = spec.bounding_specifiers();
+            let spec_0 = spec.with_patch_version(0);
+            let (lower_0, upper_0) = spec_0.bounding_specifiers();
+            Some(format!(
+                "The `requires-python` specifier (`{spec}`) in `{source}` \
+                uses the tilde specifier (`~=`) without a patch version. This will be \
+                interpreted as `{lower}, {upper}`. Did you mean `{spec_0}` to constrain the \
+                version as `{lower_0}, {upper_0}`? We recommend only using \
+                the tilde specifier with a patch version to avoid ambiguity."
+            ))
+        }
+        _ => {
+            let sources = sources
+                .iter()
+                .map(|(source, spec)| {
+                    let (lower, upper) = spec.bounding_specifiers();
+                    let spec_0 = spec.with_patch_version(0);
+                    let (lower_0, upper_0) = spec_0.bounding_specifiers();
+                    format!(
+                        "- `{source}`: `{spec}` is interpreted as `{lower}, {upper}`; use \
+                        `{spec_0}` to constrain the version as `{lower_0}, {upper_0}`"
+                    )
+                })
+                .join("\n");
+            Some(format!(
+                "The following `requires-python` specifiers use the tilde specifier (`~=`) \
+                without a patch version:\n{sources}\nWe recommend only using the tilde \
+                specifier with a patch version to avoid ambiguity."
+            ))
+        }
     }
 }
 
