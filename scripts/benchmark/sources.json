@@ -1,0 +1,11 @@
+[
+  { "name": "sampleproject", "git": "sampleproject" },
+  { "name": "flask", "git": "flask" },
+  { "name": "django", "git": "django" },
+  { "name": "pip-test-package", "git": "pip-test-package" },
+  {
+    "name": "uv",
+    "archive": "uv-source.tar.gz",
+    "prefix": "uv-c7db143b6a64b9ef73ab5cd39a3241a24c8807bc"
+  }
+]
