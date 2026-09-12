@@ -1,5 +1,8 @@
 //! Integration tests for uv project commands.
 
+#[cfg(feature = "test-python")]
+mod download;
+
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 use uv_test::pypi_proxy;
 

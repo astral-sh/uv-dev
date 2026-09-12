@@ -1044,6 +1044,38 @@ pub trait CleanReporter: Send + Sync {
 /// are subdirectories of the cache root.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum CacheBucket {
+    /// Original, packed distributions explicitly fetched by `uv download`.
+    ///
+    /// Source and package shards contain `.http` or `.rev` pointers and the original archives,
+    /// named by their SHA-256 digests. Wheel pointers distinguish the packed representation;
+    /// source archive pointers are keyed by version and format (or format alone for direct URLs).
+    ///
+    /// Cache structure:
+    ///
+    /// ```text
+    /// packed-v1
+    /// ├── pypi
+    /// │   └── foo
+    /// │       ├── <sha256>
+    /// │       ├── 1.0.0-py3-none-any.whl.http
+    /// │       └── 1.0.0.tar.gz.http
+    /// ├── index
+    /// │   └── <digest(index-url)>
+    /// │       └── foo
+    /// │           ├── <sha256>
+    /// │           └── 1.0.0-py3-none-any.whl.http
+    /// ├── url
+    /// │   └── <digest(url)>
+    /// │       └── foo
+    /// │           ├── <sha256>
+    /// │           └── archive.tar.gz.http
+    /// └── path
+    ///     └── <digest(path-url)>
+    ///         └── foo
+    ///             ├── <sha256>
+    ///             └── 1.0.0-py3-none-any.whl.rev
+    /// ```
+    Packed,
     /// Wheels (excluding built wheels), alongside their metadata and cache policy.
     ///
     /// There are three kinds from cache entries: Wheel metadata and policy as `MsgPack` files, the
@@ -1298,6 +1330,7 @@ pub enum CacheBucket {
 impl CacheBucket {
     fn to_str(self) -> &'static str {
         match self {
+            Self::Packed => "packed-v1",
             // Note that when bumping this, you'll also need to bump it
             // in `crates/uv/tests/build/cache_prune.rs`.
             Self::SourceDistributions => "sdists-v9",
@@ -1341,7 +1374,7 @@ impl CacheBucket {
 
         let mut summary = cache.removal();
         match self {
-            Self::Wheels => {
+            Self::Packed | Self::Wheels => {
                 // For `pypi` wheels, we expect a directory per package (indexed by name).
                 let root = cache.bucket(self).join(WheelCacheKind::Pypi);
                 summary += cache.remove_path(root.join(name.to_string()))?;
@@ -1358,6 +1391,13 @@ impl CacheBucket {
                 let root = cache.bucket(self).join(WheelCacheKind::Url);
                 for directory in directories(root)? {
                     summary += cache.remove_path(directory.join(name.to_string()))?;
+                }
+                // Packed local archives use the same package nesting as remote archives.
+                if self == Self::Packed {
+                    let root = cache.bucket(self).join(WheelCacheKind::Path);
+                    for directory in directories(root)? {
+                        summary += cache.remove_path(directory.join(name.to_string()))?;
+                    }
                 }
             }
             Self::SourceDistributions => {
@@ -1440,6 +1480,7 @@ impl CacheBucket {
     /// Return an iterator over all cache buckets.
     fn iter() -> impl Iterator<Item = Self> {
         [
+            Self::Packed,
             Self::Wheels,
             Self::SourceDistributions,
             Self::FlatIndex,
