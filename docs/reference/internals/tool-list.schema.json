@@ -1,0 +1,174 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "uv tool list (preview)",
+  "description": "The preview `uv tool list` JSON report.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "description": "Format information.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/SchemaReport"
+        }
+      ]
+    },
+    "tools": {
+      "description": "Installed tools, sorted by normalized name.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ToolReport"
+      }
+    }
+  },
+  "required": ["schema", "tools"],
+  "definitions": {
+    "CommandReport": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "The installed command name.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Absolute path to the installed command.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          ]
+        }
+      },
+      "required": ["name", "path"]
+    },
+    "PackageName": {
+      "description": "The normalized name of a package.\n\nConverts the name to lowercase and collapses runs of `-`, `_`, and `.` down to a single `-`.\nFor example, `---`, `.`, and `__` are all converted to a single `-`.\n\nSee: <https://packaging.python.org/en/latest/specifications/name-normalization/>",
+      "type": "string"
+    },
+    "PortablePathBuf": {
+      "type": "string"
+    },
+    "PythonReport": {
+      "description": "Information about the Python interpreter in an existing environment.",
+      "type": "object",
+      "properties": {
+        "implementation": {
+          "description": "Python implementation name.",
+          "type": "string"
+        },
+        "key": {
+          "description": "Interpreter installation key, as used by `uv python list`.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Absolute path to the Python executable.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          ]
+        },
+        "version": {
+          "description": "Full Python version.",
+          "type": "string"
+        }
+      },
+      "required": ["path", "version", "implementation", "key"]
+    },
+    "SchemaReport": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "description": "The version of the schema.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SchemaVersion"
+            }
+          ]
+        }
+      },
+      "required": ["version"]
+    },
+    "SchemaVersion": {
+      "oneOf": [
+        {
+          "description": "An unstable, experimental schema.",
+          "type": "string",
+          "const": "preview"
+        }
+      ]
+    },
+    "ToolReport": {
+      "type": "object",
+      "properties": {
+        "commands": {
+          "description": "Commands installed from the tool environment.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/CommandReport"
+          }
+        },
+        "extras": {
+          "description": "Extras requested for the primary tool package.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "latest_version": {
+          "description": "Latest available version when `--outdated` is requested, or null otherwise.",
+          "type": ["string", "null"]
+        },
+        "name": {
+          "description": "Normalized name of the installed tool.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PackageName"
+            }
+          ]
+        },
+        "path": {
+          "description": "The path to the environment.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          ]
+        },
+        "python": {
+          "description": "The Python interpreter for the environment.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PythonReport"
+            }
+          ]
+        },
+        "version": {
+          "description": "Installed version of the tool.",
+          "type": "string"
+        },
+        "version_specifiers": {
+          "description": "Recorded version or source constraints for the primary tool.",
+          "type": "string"
+        },
+        "with": {
+          "description": "Additional recorded installation requirements, formatted for display.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "latest_version",
+        "path",
+        "python",
+        "commands",
+        "extras",
+        "version_specifiers",
+        "with"
+      ]
+    }
+  }
+}

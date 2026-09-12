@@ -41,6 +41,8 @@ pub(crate) enum Target {
     Configuration,
     /// The preview `uv workspace metadata` output format.
     WorkspaceMetadata,
+    /// The preview `uv tool list` JSON output format.
+    ToolList,
 }
 
 impl Target {
@@ -48,6 +50,7 @@ impl Target {
         match self {
             Self::Configuration => "uv.schema.json",
             Self::WorkspaceMetadata => "docs/reference/internals/metadata.schema.json",
+            Self::ToolList => "docs/reference/internals/tool-list.schema.json",
         }
     }
 
@@ -55,6 +58,7 @@ impl Target {
         match self {
             Self::Configuration => "cargo dev generate-json-schema",
             Self::WorkspaceMetadata => "cargo dev generate-json-schema --target workspace-metadata",
+            Self::ToolList => "cargo dev generate-json-schema --target tool-list",
         }
     }
 }
@@ -126,6 +130,7 @@ fn schema(target: Target) -> schemars::Schema {
             .for_serialize()
             .into_generator()
             .into_root_schema_for::<uv_resolver::Metadata>(),
+        Target::ToolList => uv::commands::tool_list_json_schema(),
     }
 }
 
@@ -207,6 +212,36 @@ mod tests {
             assert!(owners.get("patternProperties").is_none());
             assert_eq!(owners["additionalProperties"]["type"], "array");
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn tool_list_schema_describes_serialized_values() -> anyhow::Result<()> {
+        let schema = serde_json::to_value(schema(Target::ToolList))?;
+        let definitions = &schema["definitions"];
+        let tool = &definitions["ToolReport"];
+
+        assert_eq!(schema["title"], "uv tool list (preview)");
+        assert_eq!(definitions["SchemaVersion"]["oneOf"][0]["const"], "preview");
+        assert_eq!(tool["properties"]["version"]["type"], "string");
+        assert_eq!(
+            tool["properties"]["latest_version"]["type"],
+            serde_json::json!(["string", "null"])
+        );
+        assert!(
+            tool["required"]
+                .as_array()
+                .is_some_and(|fields| fields.iter().any(|field| field == "latest_version"))
+        );
+        assert_eq!(
+            definitions["PythonReport"]["properties"]["key"]["type"],
+            "string"
+        );
+        assert_eq!(
+            definitions["CommandReport"]["properties"]["name"]["type"],
+            "string"
+        );
 
         Ok(())
     }
