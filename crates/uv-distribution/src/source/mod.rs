@@ -45,6 +45,7 @@ use uv_pep440::{Version, release_specifiers_to_ranges};
 use uv_platform_tags::Tags;
 use uv_pypi_types::{HashAlgorithm, HashDigest, HashDigests, PyProjectToml, ResolutionMetadata};
 use uv_redacted::DisplaySafeUrl;
+use uv_static::EnvVars;
 use uv_types::{BuildContext, BuildKey, BuildStack, SourceBuildTrait};
 use uv_workspace::pyproject::ToolUvSources;
 
@@ -2632,8 +2633,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         };
 
         // Fetch the `pyproject.toml` from the resolved commit.
-        let url =
-            format!("https://raw.githubusercontent.com/{owner}/{repo}/{commit}/pyproject.toml");
+        let github_raw_base_url = std::env::var(EnvVars::UV_GITHUB_RAW_URL)
+            .unwrap_or_else(|_| "https://raw.githubusercontent.com".to_owned());
+        let url = format!("{github_raw_base_url}/{owner}/{repo}/{commit}/pyproject.toml");
 
         debug!("Attempting to fetch `pyproject.toml` from: {url}");
 
