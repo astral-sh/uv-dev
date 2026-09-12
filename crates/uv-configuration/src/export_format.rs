@@ -42,3 +42,30 @@ pub enum PipCompileFormat {
     #[cfg_attr(feature = "clap", clap(name = "pylock.toml", alias = "pylock-toml"))]
     PylockToml,
 }
+
+bitflags::bitflags! {
+    /// The optional content to include in exported output.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub struct OutputFlags: u16 {
+        /// Include distribution hashes.
+        const HASHES = 1 << 0;
+        /// Include extras in requirements.
+        const EXTRAS = 1 << 1;
+        /// Include environment markers in requirements.
+        const MARKERS = 1 << 2;
+        /// Include dependency annotations.
+        const ANNOTATIONS = 1 << 3;
+        /// Include the generated-file header.
+        const HEADER = 1 << 4;
+        /// Include index URLs.
+        const INDEX_URL = 1 << 5;
+        /// Include find-links locations.
+        const FIND_LINKS = 1 << 6;
+        /// Include build options.
+        const BUILD_OPTIONS = 1 << 7;
+        /// Include the marker expression.
+        const MARKER_EXPRESSION = 1 << 8;
+        /// Include index annotations.
+        const INDEX_ANNOTATION = 1 << 9;
+    }
+}
