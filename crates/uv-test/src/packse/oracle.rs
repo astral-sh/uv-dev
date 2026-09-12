@@ -109,6 +109,33 @@ impl<'a> ScenarioOracle<'a> {
 
     /// Check that a selection is exactly the reachable, compatible dependency closure.
     pub fn validate(&self, selection: &Selection) -> Result<()> {
+        let active = self.activated_packages(selection)?;
+        if let Some(name) = selection.keys().find(|name| !active.contains_key(*name)) {
+            bail!("the selection contains unreachable package `{name}`");
+        }
+        Ok(())
+    }
+
+    /// Project a proposed version assignment to its compatible dependency closure.
+    ///
+    /// This does not choose versions. Every reachable package must already have a compatible
+    /// version in `assignment`; unreachable entries are ignored. The result can be passed to
+    /// [`Self::validate`] as an independent satisfiability witness.
+    pub fn reachable_selection(&self, assignment: &Selection) -> Result<Selection> {
+        let active = self.activated_packages(assignment)?;
+        Ok(active
+            .into_keys()
+            .map(|name| {
+                let version = assignment[&name].clone();
+                (name, version)
+            })
+            .collect())
+    }
+
+    fn activated_packages(
+        &self,
+        selection: &Selection,
+    ) -> Result<BTreeMap<PackageName, BTreeSet<ExtraName>>> {
         ensure!(
             self.scenario
                 .root
@@ -159,10 +186,7 @@ impl<'a> ScenarioOracle<'a> {
             }
         }
 
-        if let Some(name) = selection.keys().find(|name| !active.contains_key(*name)) {
-            bail!("the selection contains unreachable package `{name}`");
-        }
-        Ok(())
+        Ok(active)
     }
 
     /// Exhaustively search every possible selection, subject to a strict search-space bound.
@@ -438,6 +462,55 @@ requires = ["b>=2"]
             @"the selection contains unreachable package `unused`"
         );
         oracle.validate(&selection(&[("a", "1"), ("b", "2")]))?;
+        Ok(())
+    }
+
+    #[test]
+    fn projects_witnesses_to_reachable_packages() -> Result<()> {
+        let scenario = scenario(
+            r#"
+name = "witness-closure"
+[root]
+requires = ["a[all]"]
+[expected]
+satisfiable = true
+[packages.a.versions."1"]
+requires = ["b>=2"]
+[packages.a.versions."1".extras]
+all = ["a[feature]"]
+feature = ["c; python_version >= '3.13'"]
+[packages.b.versions."1"]
+[packages.b.versions."2"]
+[packages.c.versions."1"]
+[packages.unused.versions."1"]
+"#,
+        );
+        let assignment = selection(&[("a", "1"), ("b", "2"), ("c", "1"), ("unused", "1")]);
+        let environment = environment();
+        let oracle = ScenarioOracle::new(&scenario, &environment)?;
+        let projected = oracle.reachable_selection(&assignment)?;
+        assert_eq!(projected, selection(&[("a", "1"), ("b", "2")]));
+        oracle.validate(&projected)?;
+        insta::assert_snapshot!(
+            oracle.validate(&assignment).expect_err("the exact selection rejects unused pins"),
+            @"the selection contains unreachable package `c`"
+        );
+
+        let environment = environment_for_python("3.13.0", "3.13");
+        let oracle = ScenarioOracle::new(&scenario, &environment)?;
+        let projected = oracle.reachable_selection(&assignment)?;
+        assert_eq!(projected, selection(&[("a", "1"), ("b", "2"), ("c", "1")]));
+        oracle.validate(&projected)?;
+        insta::assert_snapshot!(
+            oracle.reachable_selection(&selection(&[("a", "1"), ("b", "2")]))
+                .expect_err("the witness must include activated dependencies"),
+            @"the selection is missing `c ; python_full_version >= '3.13'`"
+        );
+        insta::assert_snapshot!(
+            oracle.reachable_selection(&selection(&[("a", "1"), ("b", "1"), ("c", "1")]))
+                .expect_err("the witness must satisfy dependency constraints"),
+            @"b==1 does not satisfy `b>=2`"
+        );
         Ok(())
     }
 
