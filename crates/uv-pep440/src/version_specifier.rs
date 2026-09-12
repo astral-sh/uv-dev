@@ -79,7 +79,11 @@ impl VersionSpecifiers {
         Self(specifiers.into_boxed_slice())
     }
 
-    /// Returns the [`VersionSpecifiers`] whose union represents the given range.
+    /// Returns conjunctive [`VersionSpecifiers`] approximating the union of the given ranges.
+    ///
+    /// The bounds are expected in ascending, non-overlapping order. Supported exact-version and
+    /// within-major minor-version gaps are preserved; other gaps are ignored, potentially admitting
+    /// additional versions. An empty iterator returns [`Self::empty`], which matches all versions.
     ///
     /// This function is not applicable to ranges involving pre-release versions.
     pub fn from_release_only_bounds<'a>(
@@ -573,7 +577,7 @@ impl VersionSpecifier {
         self.version.any_prerelease()
     }
 
-    /// Returns the version specifiers whose union represents the given range.
+    /// Returns the version specifiers whose conjunction represents the given range.
     ///
     /// This function is not applicable to ranges involving pre-release versions.
     pub fn from_release_only_bounds(
@@ -1073,13 +1077,227 @@ impl std::fmt::Display for TildeVersionSpecifier<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::{cmp::Ordering, str::FromStr};
+    use std::{
+        cmp::Ordering,
+        ops::{
+            Bound::{Excluded, Included, Unbounded},
+            RangeBounds,
+        },
+        str::FromStr,
+    };
 
     use indoc::indoc;
 
     use crate::LocalSegment;
 
     use super::*;
+
+    #[test]
+    fn test_from_release_only_bounds() -> Result<(), VersionSpecifiersParseError> {
+        // Callers handle empty intersections separately; no bounds produces no specifiers.
+        assert_eq!(
+            VersionSpecifiers::from_release_only_bounds([].into_iter()),
+            VersionSpecifiers::empty()
+        );
+
+        let cases = [
+            ("unbounded", vec![(Unbounded, Unbounded)], ""),
+            (
+                "inclusive upper bound",
+                vec![(Unbounded, Included(Version::new([3, 8])))],
+                "<=3.8",
+            ),
+            (
+                "exclusive lower bound",
+                vec![(Excluded(Version::new([3, 8])), Unbounded)],
+                ">3.8",
+            ),
+            (
+                "equal bounds",
+                vec![(
+                    Included(Version::new([3, 7])),
+                    Included(Version::new([3, 7, 0])),
+                )],
+                "==3.7",
+            ),
+            (
+                "minor wildcard",
+                vec![(
+                    Included(Version::new([3, 7])),
+                    Excluded(Version::new([3, 8])),
+                )],
+                "==3.7.*",
+            ),
+            (
+                "zero minor wildcard",
+                vec![(
+                    Included(Version::new([3, 0, 0])),
+                    Excluded(Version::new([3, 1, 0])),
+                )],
+                "==3.0.*",
+            ),
+            (
+                "bounded interval",
+                vec![(
+                    Excluded(Version::new([3, 7])),
+                    Included(Version::new([3, 9])),
+                )],
+                ">3.7,<=3.9",
+            ),
+            (
+                "exact patch exclusions",
+                vec![
+                    (
+                        Included(Version::new([3, 10])),
+                        Excluded(Version::new([3, 10, 9])),
+                    ),
+                    (
+                        Excluded(Version::new([3, 10, 9])),
+                        Excluded(Version::new([3, 10, 10])),
+                    ),
+                    (
+                        Excluded(Version::new([3, 10, 10])),
+                        Excluded(Version::new([3, 13])),
+                    ),
+                ],
+                ">=3.10,!=3.10.9,!=3.10.10,<3.13",
+            ),
+            (
+                "single wildcard exclusion",
+                vec![
+                    (
+                        Included(Version::new([3, 7])),
+                        Excluded(Version::new([3, 8])),
+                    ),
+                    (
+                        Included(Version::new([3, 9])),
+                        Excluded(Version::new([3, 10])),
+                    ),
+                ],
+                ">=3.7,!=3.8.*,<3.10",
+            ),
+            (
+                "consecutive wildcard exclusions",
+                vec![
+                    (
+                        Included(Version::new([3, 10])),
+                        Excluded(Version::new([3, 11])),
+                    ),
+                    (
+                        Included(Version::new([3, 13])),
+                        Excluded(Version::new([3, 14])),
+                    ),
+                ],
+                ">=3.10,!=3.11.*,!=3.12.*,<3.14",
+            ),
+            (
+                "wildcard exclusions from a major-only bound",
+                vec![
+                    (Unbounded, Excluded(Version::new([3]))),
+                    (Included(Version::new([3, 2])), Unbounded),
+                ],
+                "!=3.0.*,!=3.1.*",
+            ),
+        ];
+
+        for (name, bounds, expected) in cases {
+            let specifiers = VersionSpecifiers::from_release_only_bounds(
+                bounds
+                    .iter()
+                    .map(|(lower, upper)| (lower.as_ref(), upper.as_ref())),
+            );
+            assert_eq!(specifiers, expected.parse::<VersionSpecifiers>()?, "{name}");
+
+            // Compare only ordinary releases, as required by this conversion's contract.
+            for major in 0..=4 {
+                for minor in 0..=15 {
+                    for patch in 0..=12 {
+                        let version = Version::new([major, minor, patch]);
+                        assert_eq!(
+                            specifiers.contains(&version),
+                            bounds.iter().any(|range| range.contains(&version)),
+                            "{name}: membership differs for {version}"
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_from_release_only_bounds_unsupported_gaps() -> Result<(), VersionSpecifiersParseError> {
+        let cases = [
+            (
+                "patch gap",
+                vec![
+                    (
+                        Included(Version::new([3, 7])),
+                        Excluded(Version::new([3, 8, 5])),
+                    ),
+                    (
+                        Included(Version::new([3, 8, 7])),
+                        Excluded(Version::new([3, 10])),
+                    ),
+                ],
+                ">=3.7,<3.10",
+                Version::new([3, 8, 6]),
+                None,
+            ),
+            (
+                "supported wildcard and unsupported patch gap",
+                vec![
+                    (
+                        Included(Version::new([3, 7])),
+                        Excluded(Version::new([3, 8])),
+                    ),
+                    (
+                        Included(Version::new([3, 9])),
+                        Excluded(Version::new([3, 9, 5])),
+                    ),
+                    (
+                        Included(Version::new([3, 9, 7])),
+                        Excluded(Version::new([4])),
+                    ),
+                ],
+                ">=3.7,!=3.8.*,<4",
+                Version::new([3, 9, 6]),
+                Some(Version::new([3, 8, 5])),
+            ),
+        ];
+
+        for (name, bounds, expected, admitted, preserved_exclusion) in cases {
+            let specifiers = VersionSpecifiers::from_release_only_bounds(
+                bounds
+                    .iter()
+                    .map(|(lower, upper)| (lower.as_ref(), upper.as_ref())),
+            );
+            assert_eq!(specifiers, expected.parse::<VersionSpecifiers>()?, "{name}");
+
+            assert!(
+                !bounds.iter().any(|range| range.contains(&admitted)),
+                "{name}: the original range must exclude {admitted}"
+            );
+            assert!(
+                specifiers.contains(&admitted),
+                "{name}: reconstruction must admit {admitted}"
+            );
+
+            if let Some(excluded) = preserved_exclusion {
+                assert!(
+                    !bounds.iter().any(|range| range.contains(&excluded)),
+                    "{name}: the original range must exclude {excluded}"
+                );
+                assert!(
+                    !specifiers.contains(&excluded),
+                    "{name}: reconstruction must preserve the exclusion of {excluded}"
+                );
+            }
+        }
+
+        Ok(())
+    }
 
     /// <https://peps.python.org/pep-0440/#version-matching>
     #[test]
