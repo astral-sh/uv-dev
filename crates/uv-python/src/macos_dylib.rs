@@ -1,14 +1,15 @@
-use std::{io::ErrorKind, path::PathBuf};
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
 
 use uv_fs::Simplified as _;
 use uv_warnings::warn_user;
 
 use crate::managed::ManagedPythonInstallation;
 
-pub(crate) fn patch_dylib_install_name(dylib: PathBuf) -> Result<(), Error> {
+pub(crate) fn patch_dylib_install_name(dylib: PathBuf, install_name: &Path) -> Result<(), Error> {
     let output = match std::process::Command::new("install_name_tool")
         .arg("-id")
-        .arg(&dylib)
+        .arg(install_name)
         .arg(&dylib)
         .output()
     {
@@ -48,7 +49,7 @@ For more information, see: https://developer.apple.com/xcode/")]
 
 impl Error {
     /// Emit a user-friendly warning about the patching failure.
-    pub fn warn_user(&self, installation: &ManagedPythonInstallation) {
+    pub(crate) fn warn_user(&self, installation: &ManagedPythonInstallation) {
         let error = if tracing::enabled!(tracing::Level::DEBUG) {
             format!("\nUnderlying error: {self}")
         } else {

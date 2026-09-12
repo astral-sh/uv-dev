@@ -638,10 +638,8 @@ async fn perform_install(
     while let Some((download, result)) = tasks.next().await {
         match result {
             Ok(download_result) => {
-                // `Fetched` installations are already finalized in `downloads.rs`
-                // (externally-managed, sysconfig, executables, build-file, dylib,
-                // and minor-version-link). `AlreadyAvailable` installations skipped
-                // the download path and still need finalization here.
+                // Downloads finalize installation contents before publishing the directory.
+                // An existing installation still needs any missing metadata repaired.
                 let (path, finalized_in_download) = match download_result {
                     DownloadResult::AlreadyAvailable(path) => (path, false),
                     DownloadResult::Fetched(path) => (path, true),
@@ -689,28 +687,12 @@ async fn perform_install(
 
     let installations: Vec<_> = downloaded.iter().chain(satisfied.iter().copied()).collect();
 
-    // Finalize installations that were not already finalized during download.
-    // `Fetched` installations are finalized in `downloads.rs` before the rename;
-    // `AlreadyAvailable` and pre-existing (`satisfied`) installations still need
-    // finalization here.
+    // Repair installations that did not pass through the staged download path.
     for installation in not_finalized.iter().chain(satisfied.iter().copied()) {
-        installation.ensure_externally_managed()?;
-        installation.ensure_sysconfig_patched()?;
-        installation.ensure_canonical_executables()?;
-        installation.ensure_build_file()?;
-        if let Err(e) = installation.ensure_dylib_patched() {
-            e.warn_user(installation);
-        }
+        installation.finalize()?;
     }
 
     for installation in &installations {
-        // Patch dylib install_name after rename (Fetched installations are finalized
-        // in downloads.rs before the atomic rename to the staging path, so the
-        // install_name is stale; idempotent, so safe for all installations).
-        if let Err(e) = installation.ensure_dylib_patched() {
-            e.warn_user(installation);
-        }
-
         let upgradeable = (default || is_default_install)
             || requested_minor_versions.contains(&installation.key().version().python_version());
 
