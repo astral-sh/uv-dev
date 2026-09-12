@@ -9419,6 +9419,7 @@ fn sync_python_version() -> Result<()> {
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
     ----- stderr -----
+    warning: The project environment's Python version does not satisfy the request: `Python 3.12` (from version file at `.python-version`)
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Removed virtual environment at: .venv
     Creating virtual environment at: .venv
@@ -9440,6 +9441,7 @@ fn sync_python_version() -> Result<()> {
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    warning: The project environment's Python version does not satisfy the request: `Python 3.10` (from version file at `.python-version`)
     Using CPython 3.10.[X] interpreter at: [PYTHON-3.10]
     error: The Python request from `.python-version` resolved to Python 3.10.[X], which is incompatible with the project's Python requirement: `>=3.11` (from `project.requires-python`)
     Use `uv python pin` to update the `.python-version` file to a compatible version
