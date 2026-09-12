@@ -99,7 +99,7 @@ impl BatchPrefetcher {
             return Ok(());
         };
 
-        let (num_tried, do_prefetch) = self.should_prefetch(next);
+        let (num_tried, do_prefetch) = self.should_prefetch(name);
         if !do_prefetch {
             return Ok(());
         }
@@ -162,17 +162,7 @@ impl BatchPrefetcher {
     /// After 5, 10, 20, 40 tried versions, prefetch that many versions to start early but not
     /// too aggressive. Later we schedule the prefetch of 50 versions every 20 versions, this gives
     /// us a good buffer until we see prefetch again and is high enough to saturate the task pool.
-    fn should_prefetch(&self, next: &PubGrubPackage) -> (usize, bool) {
-        let PubGrubPackageInner::Package {
-            name,
-            extra: None,
-            group: None,
-            marker: MarkerTree::TRUE,
-        } = &**next
-        else {
-            return (0, false);
-        };
-
+    fn should_prefetch(&self, name: &PackageName) -> (usize, bool) {
         let num_tried = self.tried_versions.get(name).map_or(0, FxHashSet::len);
         let previous_prefetch = self.last_prefetch.get(name).copied().unwrap_or_default();
         let do_prefetch = (num_tried >= 5 && previous_prefetch < 5)
@@ -358,4 +348,190 @@ fn satisfies_python(dist: &CompatibleDist, python_requirement: &PythonRequiremen
     }
 
     true
+}
+
+#[cfg(test)]
+mod scheduling_tests {
+    use uv_normalize::{ExtraName, GroupName};
+
+    use super::*;
+    use crate::pubgrub::PubGrubPython;
+
+    fn prefetcher() -> BatchPrefetcher {
+        let (request_sink, _) = tokio::sync::mpsc::channel(1);
+        BatchPrefetcher::new(
+            IndexCapabilities::default(),
+            InMemoryIndex::default(),
+            request_sink,
+        )
+    }
+
+    fn package_name(name: &str) -> PackageName {
+        name.parse().expect("valid package name")
+    }
+
+    fn version(minor: usize) -> Version {
+        Version::new([1, u64::try_from(minor).expect("small test version")])
+    }
+
+    fn record_versions(prefetcher: &mut BatchPrefetcher, package: &PubGrubPackage, count: usize) {
+        for minor in 0..count {
+            prefetcher.version_tried(package, &version(minor));
+        }
+    }
+
+    fn scheduling_state(prefetcher: &BatchPrefetcher, name: &PackageName) -> (usize, bool) {
+        prefetcher.should_prefetch(name)
+    }
+
+    #[test]
+    fn counts_distinct_versions_per_package() {
+        let mut prefetcher = prefetcher();
+        let alpha = package_name("alpha");
+        let beta = package_name("beta");
+        let alpha_package = PubGrubPackage::base(alpha.clone());
+        let beta_package = PubGrubPackage::base(beta.clone());
+
+        assert_eq!(scheduling_state(&prefetcher, &alpha), (0, false));
+        prefetcher.version_tried(&alpha_package, &version(0));
+        prefetcher.version_tried(&alpha_package, &version(0));
+        assert_eq!(scheduling_state(&prefetcher, &alpha), (1, false));
+
+        record_versions(&mut prefetcher, &alpha_package, 5);
+        assert_eq!(scheduling_state(&prefetcher, &alpha), (5, true));
+        assert_eq!(scheduling_state(&prefetcher, &beta), (0, false));
+
+        // Emulate a completed scheduling decision without invoking the runner.
+        prefetcher.last_prefetch.insert(alpha.clone(), 5);
+        record_versions(&mut prefetcher, &beta_package, 5);
+        assert_eq!(scheduling_state(&prefetcher, &alpha), (5, false));
+        assert_eq!(scheduling_state(&prefetcher, &beta), (5, true));
+        assert_eq!(prefetcher.last_prefetch.get(&beta), None);
+    }
+
+    #[test]
+    fn ignores_non_base_packages() {
+        let mut prefetcher = prefetcher();
+        let name = package_name("example");
+        let extra: ExtraName = "feature".parse().expect("valid extra");
+        let group: GroupName = "development".parse().expect("valid group");
+        let marker: MarkerTree = "sys_platform == 'linux'".parse().expect("valid marker");
+        let packages = [
+            PubGrubPackageInner::Root(None),
+            PubGrubPackageInner::Root(Some(name.clone())),
+            PubGrubPackageInner::Python(PubGrubPython::Installed),
+            PubGrubPackageInner::Python(PubGrubPython::Target),
+            PubGrubPackageInner::System(name.clone()),
+            PubGrubPackageInner::Package {
+                name: name.clone(),
+                extra: Some(extra.clone()),
+                group: None,
+                marker: MarkerTree::TRUE,
+            },
+            PubGrubPackageInner::Package {
+                name: name.clone(),
+                extra: None,
+                group: Some(group.clone()),
+                marker: MarkerTree::TRUE,
+            },
+            PubGrubPackageInner::Package {
+                name: name.clone(),
+                extra: None,
+                group: None,
+                marker,
+            },
+            PubGrubPackageInner::Package {
+                name: name.clone(),
+                extra: None,
+                group: None,
+                marker: MarkerTree::FALSE,
+            },
+            PubGrubPackageInner::Extra {
+                name: name.clone(),
+                extra,
+                marker: MarkerTree::TRUE,
+            },
+            PubGrubPackageInner::Group {
+                name: name.clone(),
+                group,
+                marker: MarkerTree::TRUE,
+            },
+            PubGrubPackageInner::Marker {
+                name: name.clone(),
+                marker,
+            },
+        ];
+
+        for package in packages {
+            let package = PubGrubPackage::from(package);
+            record_versions(&mut prefetcher, &package, 60);
+            assert_eq!(
+                scheduling_state(&prefetcher, &name),
+                (0, false),
+                "{package:?}"
+            );
+        }
+        assert!(prefetcher.tried_versions.is_empty());
+        assert!(prefetcher.last_prefetch.is_empty());
+    }
+
+    #[test]
+    fn prefetches_at_distinct_version_thresholds() {
+        let mut prefetcher = prefetcher();
+        let name = package_name("example");
+        let package = PubGrubPackage::base(name.clone());
+        let mut scheduled = Vec::new();
+
+        for num_tried in 1..=100 {
+            prefetcher.version_tried(&package, &version(num_tried - 1));
+            let (count, do_prefetch) = scheduling_state(&prefetcher, &name);
+            assert_eq!(count, num_tried);
+            if do_prefetch {
+                scheduled.push(count);
+                prefetcher.last_prefetch.insert(name.clone(), count);
+                assert_eq!(scheduling_state(&prefetcher, &name), (count, false));
+            }
+        }
+
+        assert_eq!(scheduled, [5, 10, 20, 40, 60, 80, 100]);
+    }
+
+    #[test]
+    fn respects_previous_prefetch_count() {
+        for (num_tried, previous_prefetch, expected) in [
+            (0, 0, false),
+            (4, 0, false),
+            (5, 0, true),
+            (5, 5, false),
+            (6, 4, true),
+            (9, 5, false),
+            (10, 5, true),
+            (11, 9, true),
+            (19, 10, false),
+            (20, 10, true),
+            (21, 19, true),
+            (39, 20, false),
+            (40, 20, true),
+            (40, 40, false),
+            (59, 40, false),
+            (60, 40, true),
+            (74, 55, false),
+            (75, 55, true),
+            (100, 100, false),
+        ] {
+            let mut prefetcher = prefetcher();
+            let name = package_name("example");
+            let package = PubGrubPackage::base(name.clone());
+            record_versions(&mut prefetcher, &package, num_tried);
+            prefetcher
+                .last_prefetch
+                .insert(name.clone(), previous_prefetch);
+
+            assert_eq!(
+                scheduling_state(&prefetcher, &name),
+                (num_tried, expected),
+                "tried {num_tried}, previous prefetch {previous_prefetch}"
+            );
+        }
+    }
 }
