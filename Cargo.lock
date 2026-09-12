@@ -7378,6 +7378,7 @@ dependencies = [
  "memchr",
  "regex",
  "serde",
+ "serde_json",
  "thiserror",
  "toml",
  "tracing",
