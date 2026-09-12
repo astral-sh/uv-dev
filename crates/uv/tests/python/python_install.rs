@@ -2063,7 +2063,7 @@ fn canonicalize_link_path(path: &Path) -> String {
         .to_string()
 }
 
-fn read_link(path: &Path) -> String {
+pub(super) fn read_link(path: &Path) -> String {
     #[cfg(unix)]
     let linked_path =
         fs_err::read_link(path).unwrap_or_else(|_| panic!("{} should be readable", path.display()));
