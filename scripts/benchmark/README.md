@@ -47,7 +47,10 @@ The installation workload installs one, two, or four real interpreter versions i
 directory. It compares a populated archive cache with a fresh cache and the delayed loopback mirror.
 Both cases include extraction and installation; fixture downloads happen before timing. The Unix
 uninstall workload prepares the same installed versions and their executable links, then removes
-either one version or the entire installation set.
+either one version or the entire installation set. Concurrent installation uses one, two, or four uv
+processes with independent installation directories and one empty archive cache. Separate cases
+request the same version or distinct versions, exposing cache-publication contention without
+conflating it with installation-directory locking.
 
 Pass `--project-caches` to also prepare a separate cache for each frozen environment. Cache
 maintenance workloads copy these caches and reconstruct their environments before timing, retaining
