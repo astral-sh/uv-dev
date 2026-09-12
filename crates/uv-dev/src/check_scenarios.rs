@@ -102,7 +102,7 @@ pub(crate) fn main(args: &Args) -> Result<()> {
             let document = generate_small_graph(seed, options, &target, args.max_states)?;
             let scenario = document.scenario()?;
             let path = output_dir.join(format!("{}.toml", scenario.name));
-            save_generated_input(&path, &document.to_toml()?)?;
+            save_scenario_input(&path, &document.to_toml()?)?;
             let failure_dir = (!args.lock).then(|| {
                 args.failure_dir
                     .clone()
@@ -201,7 +201,7 @@ fn check_case(
     }
 }
 
-fn save_generated_input(path: &Path, contents: &str) -> Result<()> {
+pub(crate) fn save_scenario_input(path: &Path, contents: &str) -> Result<()> {
     match fs_err::OpenOptions::new()
         .write(true)
         .create_new(true)

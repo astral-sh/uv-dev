@@ -129,6 +129,19 @@ exact served distributions in a neighboring `.failure` directory. Use `--failure
 new directory when replaying an existing fixture. The capture includes the uv binary's SHA-256
 digest and the advertised distribution hashes; existing evidence directories are never overwritten.
 
+Use the same binary and target to reduce a fixed-environment counterexample:
+
+```shell
+cargo dev minimize-scenario --uv target/debug/uv --output reduced.toml scenario.toml
+```
+
+The reducer removes root requirements, packages, versions, extras, and dependency edges while
+retaining the original kind of semantic mismatch. Each candidate uses a fresh cache. Unrelated
+command failures stop the reduction, and `--max-attempts` bounds the number of candidate checks. A
+deletion-minimal result only means that no supported single deletion retains the mismatch, not that
+the graph is globally minimal. The output records the concrete Python and platform target and avoids
+claiming a preferred solution or universal satisfiability from one environment.
+
 ### Snapshot testing
 
 uv uses [insta](https://insta.rs/) for snapshot testing. It's recommended (but not necessary) to use

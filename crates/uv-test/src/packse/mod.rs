@@ -6,6 +6,7 @@
 
 pub mod check;
 pub mod generate;
+pub mod minimize;
 pub mod oracle;
 pub mod scenario;
 mod server;
