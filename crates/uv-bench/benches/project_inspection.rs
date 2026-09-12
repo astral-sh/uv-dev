@@ -14,7 +14,7 @@ fn project_inspection(c: &mut Criterion<WallTime>) {
         return;
     }
     let mut group = c.benchmark_group("project_inspection");
-    for project in ["uv", "prefect"] {
+    for project in ["packse", "uv", "prefect"] {
         let directory = tempfile::tempdir().expect("Failed to create project directory");
         fs_err::copy(
             fixture_path(&format!("{project}.pyproject.toml")),
