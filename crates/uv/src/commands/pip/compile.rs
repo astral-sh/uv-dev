@@ -14,8 +14,9 @@ use tracing::debug;
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, FlatIndexClient, RegistryClientBuilder};
 use uv_configuration::{
-    BuildIsolation, BuildOptions, Concurrency, Constraints, ExcludeDependency, ExtrasSpecification,
-    IndexStrategy, NoBinary, NoBuild, NoSources, Override, PipCompileFormat, Reinstall, Upgrade,
+    BuildIsolation, BuildOptions, ConcurrencyState, Constraints, ExcludeDependency,
+    ExtrasSpecification, IndexStrategy, NoBinary, NoBuild, NoSources, Override, PipCompileFormat,
+    Reinstall, Upgrade,
 };
 use uv_configuration::{KeyringProviderType, TargetTriple};
 use uv_dispatch::{BuildDispatch, SharedState};
@@ -120,7 +121,7 @@ pub(crate) async fn pip_compile(
     mut python: Option<String>,
     system: bool,
     python_preference: PythonPreference,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     quiet: bool,
     cache: Cache,
     workspace_cache: WorkspaceCache,
@@ -765,7 +766,7 @@ pub(crate) async fn pip_compile(
             // Registries don't always provide hashes, but `packages.*.hashes` is a required
             // key in PEP 751, so we have to download and hash files with missing hashes.
             export
-                .generate_missing_hashes(&client, concurrency.downloads, install_path)
+                .generate_missing_hashes(&client, concurrency.limits().downloads, install_path)
                 .await?;
 
             write!(writer, "{}", export.to_toml()?)?;

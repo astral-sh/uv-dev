@@ -14,7 +14,7 @@ use tracing::{debug, warn};
 use uv_cache::{Cache, Refresh};
 use uv_client::{BaseClientBuilder, FlatIndexClient, RegistryClientBuilder};
 use uv_configuration::{
-    BuildOptions, Concurrency, Constraints, DependencyGroupsWithDefaults, ExcludeDependency,
+    BuildOptions, ConcurrencyState, Constraints, DependencyGroupsWithDefaults, ExcludeDependency,
     ExtrasSpecification, GitLfsSetting, InstallOptions, Override, TargetTriple,
 };
 use uv_dispatch::BuildDispatch;
@@ -403,7 +403,7 @@ impl ToolLock {
         settings: &ResolverSettings,
         client_builder: &BaseClientBuilder<'_>,
         state: &PlatformState,
-        concurrency: &Concurrency,
+        concurrency: &ConcurrencyState,
         cache: &Cache,
         workspace_cache: &WorkspaceCache,
         printer: Printer,
@@ -504,11 +504,8 @@ impl ToolLock {
             concurrency.clone(),
             preview,
         );
-        let database = DistributionDatabase::new(
-            &client,
-            &build_dispatch,
-            concurrency.downloads_semaphore.clone(),
-        );
+        let database =
+            DistributionDatabase::new(&client, &build_dispatch, concurrency.downloads_semaphore());
 
         let requires_python =
             RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());

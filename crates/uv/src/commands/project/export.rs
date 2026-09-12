@@ -12,7 +12,7 @@ use rustc_hash::FxHashSet;
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
-    ActiveEnvironment, Concurrency, DependencyGroups, EditableMode, ExportFormat,
+    ActiveEnvironment, ConcurrencyState, DependencyGroups, EditableMode, ExportFormat,
     ExtrasSpecification, InstallOptions,
 };
 use uv_distribution_types::Verbatim;
@@ -84,7 +84,7 @@ pub(crate) async fn export(
     client_builder: BaseClientBuilder<'_>,
     python_preference: PythonPreference,
     python_downloads: PythonDownloads,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     config_discovery: ConfigDiscovery,
     quiet: bool,
     cache: &Cache,
@@ -460,7 +460,11 @@ pub(crate) async fn export(
                     .index_locations(settings.index_locations.clone())
                     .build()?;
                 export
-                    .generate_missing_hashes(&client, concurrency.downloads, target.install_path())
+                    .generate_missing_hashes(
+                        &client,
+                        concurrency.limits().downloads,
+                        target.install_path(),
+                    )
                     .await?;
             }
 

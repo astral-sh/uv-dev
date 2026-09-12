@@ -9,7 +9,7 @@ use rustc_hash::FxHashMap;
 use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
-use uv_configuration::Concurrency;
+use uv_configuration::ConcurrencyState;
 use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{IndexCapabilities, RequiresPython};
 use uv_fs::Simplified;
@@ -37,7 +37,7 @@ pub(crate) async fn list(
     args: ResolverInstallerOptions,
     filesystem: ResolverInstallerOptions,
     client_builder: BaseClientBuilder<'_>,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     cache: &Cache,
     printer: Printer,
 ) -> Result<ExitStatus> {
@@ -117,7 +117,7 @@ pub(crate) async fn list(
     let latest: FxHashMap<PackageName, Option<DistFilename>> = if outdated
         && !valid_tools.is_empty()
     {
-        let download_concurrency = concurrency.downloads_semaphore.clone();
+        let download_concurrency = concurrency.downloads_semaphore();
 
         let reporter = LatestVersionReporter::from(printer).with_length(valid_tools.len() as u64);
 
@@ -166,7 +166,7 @@ pub(crate) async fn list(
                     Ok::<(&PackageName, Option<DistFilename>), anyhow::Error>((name, latest))
                 }
             })
-            .buffer_unordered(concurrency.downloads);
+            .buffer_unordered(concurrency.limits().downloads);
 
         let mut map = FxHashMap::default();
         while let Some((name, version)) = fetches.next().await.transpose()? {

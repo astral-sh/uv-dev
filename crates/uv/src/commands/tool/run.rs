@@ -15,7 +15,9 @@ use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
 use uv_cli::ExternalCommand;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
-use uv_configuration::{Concurrency, Constraints, DependencyMode, GitLfsSetting, TargetTriple};
+use uv_configuration::{
+    ConcurrencyState, Constraints, DependencyMode, GitLfsSetting, TargetTriple,
+};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::InstalledDist;
 use uv_distribution_types::{
@@ -161,7 +163,7 @@ pub(crate) async fn run(
     python_preference: PythonPreference,
     python_downloads: PythonDownloads,
     installer_metadata: bool,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     cache: Cache,
     workspace_cache: WorkspaceCache,
     printer: Printer,
@@ -752,7 +754,7 @@ async fn get_or_create_environment(
     python_preference: PythonPreference,
     python_downloads: PythonDownloads,
     installer_metadata: bool,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     printer: Printer,
@@ -962,7 +964,7 @@ async fn get_or_create_environment(
 
         // Initialize the capabilities.
         let capabilities = IndexCapabilities::default();
-        let download_concurrency = concurrency.downloads_semaphore.clone();
+        let download_concurrency = concurrency.downloads_semaphore();
 
         // Initialize the client to fetch the latest version.
         let latest_client = LatestClient {
