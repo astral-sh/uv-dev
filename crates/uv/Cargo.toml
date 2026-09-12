@@ -96,6 +96,7 @@ owo-colors = { workspace = true }
 petgraph = { workspace = true }
 rkyv = { workspace = true }
 rustc-hash = { workspace = true }
+schemars = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tar-codec = { workspace = true }
@@ -169,6 +170,7 @@ performance-memory-allocator = ["dep:uv-performance-memory-allocator"]
 self-update = ["axoupdater", "uv-cli/self-update"]
 
 # Features for development only.
+schemars = ["dep:schemars", "uv-fs/schemars", "uv-normalize/schemars", "uv-resolver/schemars"]
 tracing-durations-export = ["dep:tracing-durations-export", "uv-resolver/tracing-durations-export", "uv-settings/tracing-durations-export", "uv-test/tracing-durations-export"]
 
 # Features that only apply when running tests, no-ops otherwise.

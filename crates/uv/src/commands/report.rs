@@ -8,6 +8,7 @@ use uv_resolver::PythonReport;
 
 #[derive(Serialize, Debug, Default)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 enum SchemaVersion {
     /// An unstable, experimental schema.
     #[default]
@@ -15,12 +16,14 @@ enum SchemaVersion {
 }
 
 #[derive(Serialize, Debug, Default)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub(crate) struct SchemaReport {
     /// The version of the schema.
     version: SchemaVersion,
 }
 
 #[derive(Serialize, Debug)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub(crate) struct EnvironmentReport {
     /// The path to the environment.
     path: PortablePathBuf,

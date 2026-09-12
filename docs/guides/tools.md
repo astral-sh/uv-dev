@@ -247,7 +247,8 @@ $ uv tool list --output-format json --preview-features json-output
 The JSON report includes each tool's environment, Python interpreter, commands, and recorded
 installation requirements. It includes all details regardless of the `--show-*` flags. The
 interpreter's `key` uses the same format as `uv python list`. The schema is in preview and may
-change without warning.
+change without warning. A [JSON Schema](../reference/internals/tool-list.schema.json) is generated
+from the report's serialization types.
 
 ## Upgrading tools
 

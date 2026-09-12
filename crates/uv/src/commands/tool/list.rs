@@ -56,8 +56,11 @@ bitflags::bitflags! {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct CommandReport {
+    /// The installed command name.
     name: String,
+    /// Absolute path to the installed command.
     path: PortablePathBuf,
 }
 
@@ -80,22 +83,46 @@ impl fmt::Display for CommandReport {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct ToolReport {
+    /// Normalized name of the installed tool.
     name: PackageName,
+    /// Installed version of the tool.
+    #[cfg_attr(feature = "schemars", schemars(with = "String"))]
     version: Version,
+    /// Latest available version when `--outdated` is requested, or null otherwise.
+    #[cfg_attr(feature = "schemars", schemars(with = "Option<String>"))]
     latest_version: Option<Version>,
     #[serde(flatten)]
     environment: EnvironmentReport,
+    /// Commands installed from the tool environment.
     commands: Vec<CommandReport>,
+    /// Extras requested for the primary tool package.
     extras: Vec<String>,
+    /// Recorded version or source constraints for the primary tool.
     version_specifiers: String,
+    /// Additional recorded installation requirements, formatted for display.
     with: Vec<String>,
 }
 
+/// The preview `uv tool list` JSON report.
 #[derive(Debug, Default, Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schemars", schemars(title = "uv tool list (preview)"))]
 struct ToolListReport {
+    /// Format information.
     schema: SchemaReport,
+    /// Installed tools, sorted by normalized name.
     tools: Vec<ToolReport>,
+}
+
+/// Generate the preview `uv tool list` output schema for repository development tools.
+#[cfg(feature = "schemars")]
+pub fn json_schema() -> schemars::Schema {
+    schemars::generate::SchemaSettings::draft07()
+        .for_serialize()
+        .into_generator()
+        .into_root_schema_for::<ToolListReport>()
 }
 
 impl ToolListReport {
