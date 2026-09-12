@@ -1592,7 +1592,13 @@ impl ParsedRunCommand {
             .for_host(url)
             .get(Url::from(url.clone()))
             .send()
-            .await?;
+            .await?
+            .error_for_status()
+            .map_err(|err| {
+                let mut safe_url = url.clone();
+                safe_url.set_query(None);
+                anyhow!("{} for url ({safe_url})", err.without_url())
+            })?;
 
         let gist_url;
         // If it's a Gist URL, use the GitHub API to get the raw URL.
@@ -1605,7 +1611,13 @@ impl ParsedRunCommand {
                 .for_host(url)
                 .get(Url::from(url.clone()))
                 .send()
-                .await?;
+                .await?
+                .error_for_status()
+                .map_err(|err| {
+                    let mut safe_url = url.clone();
+                    safe_url.set_query(None);
+                    anyhow!("{} for url ({safe_url})", err.without_url())
+                })?;
         }
 
         let file_stem = url
