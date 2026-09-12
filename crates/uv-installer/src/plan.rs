@@ -7,7 +7,7 @@ use owo_colors::OwoColorize;
 use tracing::{debug, warn};
 
 use uv_cache::{Cache, CacheBucket, WheelCache};
-use uv_cache_info::Timestamp;
+use uv_cache_info::{CacheInfo, Timestamp};
 use uv_configuration::{BuildOptions, Reinstall};
 use uv_distribution::{
     BuiltWheelIndex, HttpArchivePointer, PathArchivePointer, RegistryWheelIndex,
@@ -15,8 +15,8 @@ use uv_distribution::{
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
     BuiltDist, CachedDirectUrlDist, CachedDist, ConfigSettings, Dist, Error, ExtraBuildRequires,
-    ExtraBuildVariables, Hashed, IndexLocations, InstalledDist, Name, PackageConfigSettings,
-    RequirementSource, Resolution, ResolvedDist, SourceDist,
+    ExtraBuildVariables, Hashed, IndexLocations, IndexUrl, InstalledDist, InstalledDistKind, Name,
+    PackageConfigSettings, RequirementSource, Resolution, ResolvedDist, SourceDist,
 };
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
@@ -327,7 +327,7 @@ impl<'a> Planner<'a> {
                     [] => {}
                     [installed] => {
                         let source = RequirementSource::from(dist);
-                        match RequirementSatisfaction::check(
+                        let mut satisfaction = RequirementSatisfaction::check(
                             dist.name(),
                             installed,
                             &source,
@@ -338,7 +338,14 @@ impl<'a> Planner<'a> {
                             config_settings_package,
                             extra_build_requires,
                             extra_build_variables,
-                        ) {
+                        );
+                        if matches!(satisfaction, RequirementSatisfaction::Satisfied)
+                            && cache.must_revalidate_package(dist.name())
+                            && local_registry_wheel_is_out_of_date(dist, installed)
+                        {
+                            satisfaction = RequirementSatisfaction::OutOfDate;
+                        }
+                        match satisfaction {
                             RequirementSatisfaction::Mismatch => {
                                 debug!(
                                     "Requirement installed, but mismatched:\n  Installed: {installed:?}\n  Requested: {source:?}"
@@ -768,6 +775,43 @@ impl<'a> Planner<'a> {
             reinstalls,
             extraneous,
         })
+    }
+}
+
+/// Returns true if a registry wheel selected from a local flat index has changed since it was
+/// installed.
+fn local_registry_wheel_is_out_of_date(dist: &ResolvedDist, installed: &InstalledDist) -> bool {
+    let ResolvedDist::Installable { dist, .. } = dist else {
+        return false;
+    };
+    let Dist::Built(BuiltDist::Registry(wheels)) = dist.as_ref() else {
+        return false;
+    };
+    let wheel = wheels.best_wheel();
+    if !matches!(wheel.index, IndexUrl::Path(_)) {
+        return false;
+    }
+    let InstalledDistKind::Registry(installed) = &installed.kind else {
+        return false;
+    };
+
+    let Ok(url) = wheel.file.url.to_url() else {
+        debug!("Failed to read local wheel URL for: {}", wheel.filename);
+        return true;
+    };
+    let Ok(path) = url.to_file_path() else {
+        debug!("Failed to read local wheel path for: {}", wheel.filename);
+        return true;
+    };
+    match CacheInfo::from_file(&path) {
+        Ok(cache_info) => installed.cache_info.as_ref() != Some(&cache_info),
+        Err(err) => {
+            debug!(
+                "Failed to read cached requirement for: {} ({err})",
+                wheel.filename
+            );
+            true
+        }
     }
 }
 
