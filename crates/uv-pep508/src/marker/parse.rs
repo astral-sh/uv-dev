@@ -333,7 +333,7 @@ pub(crate) fn parse_marker_key_op_value<T: Pep508Url>(
                                 Ok(name) => CanonicalMarkerListPair::DependencyGroup(name),
                                 Err(err) => {
                                     reporter.report(
-                                    MarkerWarningKind::ExtrasInvalidComparison,
+                                    MarkerWarningKind::DependencyGroupsInvalidComparison,
                                     format!("Expected dependency group name (found `{l_string}`): {err}"),
                                 );
                                     CanonicalMarkerListPair::Arbitrary {
@@ -696,4 +696,124 @@ pub(crate) fn parse_markers<T: Pep508Url>(
     // If the tree consisted entirely of arbitrary expressions
     // that were ignored, it evaluates to true.
     parse_markers_cursor(&mut chars, reporter).map(|result| result.unwrap_or(MarkerTree::TRUE))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use uv_pep440::VersionParseError;
+
+    use super::parse_markers;
+    use crate::{
+        MarkerEnvironment, MarkerEnvironmentBuilder, MarkerTree, MarkerWarningKind, VerbatimUrl,
+    };
+
+    fn environment() -> Result<MarkerEnvironment, VersionParseError> {
+        MarkerEnvironmentBuilder {
+            implementation_name: "cpython",
+            implementation_version: "3.13",
+            os_name: "posix",
+            platform_machine: "x86_64",
+            platform_python_implementation: "CPython",
+            platform_release: "",
+            platform_system: "Linux",
+            platform_version: "",
+            python_full_version: "3.13",
+            python_version: "3.13",
+            sys_platform: "linux",
+        }
+        .try_into()
+    }
+
+    #[test]
+    fn invalid_list_marker_names() -> Result<(), Box<dyn Error>> {
+        let environment = environment()?;
+        for (key, kind, name_kind) in [
+            (
+                "extras",
+                MarkerWarningKind::ExtrasInvalidComparison,
+                "extra",
+            ),
+            (
+                "dependency_groups",
+                MarkerWarningKind::DependencyGroupsInvalidComparison,
+                "dependency group",
+            ),
+        ] {
+            for operator in ["in", "not in"] {
+                let input = format!("'invalid name' {operator} {key}");
+                let mut warnings = Vec::new();
+                let marker = parse_markers::<VerbatimUrl>(&input, &mut |kind, message| {
+                    warnings.push((kind, message));
+                })?;
+                assert_eq!(
+                    warnings,
+                    [(
+                        kind,
+                        format!(
+                            "Expected {name_kind} name (found `invalid name`): Not a valid package or extra name: \"invalid name\". Names must start and end with a letter or digit and may only contain -, _, ., and alphanumeric characters."
+                        )
+                    )],
+                    "{input}"
+                );
+                assert_eq!(marker.try_to_string(), Some(input));
+                assert!(!marker.evaluate_pep751(&environment, &[], &[]));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_singular_extra_name() -> Result<(), Box<dyn Error>> {
+        for operator in ["==", "!="] {
+            let input = format!("extra {operator} 'invalid name'");
+            let mut warnings = Vec::new();
+            let marker = parse_markers::<VerbatimUrl>(&input, &mut |kind, message| {
+                warnings.push((kind, message));
+            })?;
+            assert_eq!(
+                warnings,
+                [(MarkerWarningKind::ExtraInvalidComparison, "Expected extra name (found `invalid name`): Not a valid package or extra name: \"invalid name\". Names must start and end with a letter or digit and may only contain -, _, ., and alphanumeric characters.".to_owned())],
+                "{input}"
+            );
+            assert_eq!(marker, MarkerTree::FALSE);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn valid_list_marker_names() -> Result<(), Box<dyn Error>> {
+        let environment = environment()?;
+        let extras = ["dev-test".parse()?];
+        let groups = ["dev-test".parse()?];
+        for key in ["extras", "dependency_groups"] {
+            for (operator, present) in [("in", true), ("not in", false)] {
+                let input = format!("'Dev_Test' {operator} {key}");
+                let mut warnings = Vec::new();
+                let marker = parse_markers::<VerbatimUrl>(&input, &mut |kind, message| {
+                    warnings.push((kind, message));
+                })?;
+                assert!(warnings.is_empty(), "{input}: {warnings:?}");
+                assert_eq!(
+                    marker.try_to_string(),
+                    Some(format!("'dev-test' {operator} {key}"))
+                );
+                assert_eq!(marker.evaluate_pep751(&environment, &[], &[]), !present);
+                assert_eq!(
+                    marker.evaluate_pep751(&environment, &extras, &groups),
+                    present
+                );
+                assert_eq!(
+                    marker.evaluate_pep751(&environment, &extras, &[]),
+                    (key == "extras") == present
+                );
+                assert_eq!(
+                    marker.evaluate_pep751(&environment, &[], &groups),
+                    (key == "dependency_groups") == present
+                );
+            }
+        }
+        Ok(())
+    }
 }
