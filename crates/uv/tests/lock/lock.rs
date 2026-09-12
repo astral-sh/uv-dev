@@ -1621,6 +1621,158 @@ async fn locked_build_dependency_wheel(module: &str) -> Result<Vec<u8>> {
     Ok(writer.close().await?)
 }
 
+/// A build dependency resolved from another index is incorrectly verified against the locked
+/// runtime artifact.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_editable_build_dependency_cross_index_hash_mismatch() -> Result<()> {
+    let locked_wheel = locked_build_dependency_wheel("LOCKED = True\n").await?;
+    let build_wheel = locked_build_dependency_wheel("LOCKED = False\n").await?;
+    let locked_digest = hex::encode(Sha256::digest(&locked_wheel));
+    let build_digest = hex::encode(Sha256::digest(&build_wheel));
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin()
+        .with_filtered_exe_suffix()
+        .with_filters([
+            (locked_digest.clone(), "[LOCKED_DIGEST]".to_string()),
+            (build_digest.clone(), "[BUILD_DIGEST]".to_string()),
+        ]);
+    let server = MockServer::start().await;
+    let wheel_filename = "review_dep-1.0.0-py3-none-any.whl";
+
+    Mock::given(method("GET"))
+        .and(path("/locked/simple/review-dep/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(
+                r#"<a href="/locked/files/{wheel_filename}#sha256={locked_digest}" data-upload-time="2024-01-01T00:00:00Z">{wheel_filename}</a>"#
+            ),
+            "text/html",
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/locked/files/{wheel_filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(locked_wheel))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/build/simple/review-dep/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(
+                r#"<a href="/build/files/{wheel_filename}#sha256={build_digest}" data-upload-time="2024-01-01T00:00:00Z">{wheel_filename}</a>"#
+            ),
+            "text/html",
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/build/files/{wheel_filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(build_wheel))
+        .mount(&server)
+        .await;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["editable-dep", "review-dep==1.0.0"]
+
+        [tool.uv.sources]
+        editable-dep = {{ path = "editable-dep", editable = true }}
+        review-dep = {{ index = "locked" }}
+
+        [[tool.uv.index]]
+        name = "locked"
+        url = "{}/locked/simple"
+        explicit = true
+
+        [[tool.uv.index]]
+        name = "build"
+        url = "{}/build/simple"
+        default = true
+    "#, server.uri(), server.uri()})?;
+    context
+        .temp_dir
+        .child("editable-dep/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "editable-dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["review-dep==1.0.0"]
+        backend-path = ["."]
+        build-backend = "backend"
+    "#})?;
+    context
+        .temp_dir
+        .child("editable-dep/backend.py")
+        .write_str(indoc! {r#"
+        from pathlib import Path
+        from zipfile import ZIP_STORED, ZipFile
+
+        import review_dep
+
+        def build_editable(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = "editable_dep-0.1.0-py3-none-any.whl"
+            dist_info = "editable_dep-0.1.0.dist-info"
+            with ZipFile(Path(wheel_directory) / filename, "w", ZIP_STORED) as wheel:
+                wheel.writestr("editable_dep.py", "__version__ = '0.1.0'\n")
+                wheel.writestr(
+                    f"{dist_info}/METADATA",
+                    "Metadata-Version: 2.2\nName: editable-dep\nVersion: 0.1.0\n",
+                )
+                wheel.writestr(
+                    f"{dist_info}/WHEEL",
+                    "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+                )
+                wheel.writestr(
+                    f"{dist_info}/RECORD",
+                    f"editable_dep.py,,\n{dist_info}/METADATA,,\n{dist_info}/WHEEL,,\n{dist_info}/RECORD,,\n",
+                )
+            return filename
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    let lock = context.read("uv.lock");
+    assert!(lock.contains(&locked_digest));
+    assert!(!lock.contains(&build_digest));
+
+    // Rejecting a valid wheel from another configured index makes the lock unusable on the
+    // affected platform; see astral-sh/uv#21608.
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--frozen")
+        .arg("--no-cache")
+        .arg("--no-install-project"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × Failed to build `editable-dep @ file://[TEMP_DIR]/editable-dep`
+      ├─▶ Failed to install requirements from `build-system.requires`
+      ├─▶ Failed to download `review-dep==1.0.0`
+      ╰─▶ Hash mismatch for `review-dep==1.0.0`
+
+          Expected:
+            sha256:[LOCKED_DIGEST]
+
+          Computed:
+            sha256:[BUILD_DIGEST]
+
+    hint: `editable-dep` was included because `project` (v0.1.0) depends on `editable-dep`
+    "#);
+
+    Ok(())
+}
+
 /// A known locked build dependency must be verified before its code enters an isolated build.
 #[cfg(feature = "test-universal")]
 #[tokio::test]
