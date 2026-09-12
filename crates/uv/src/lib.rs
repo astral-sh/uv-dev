@@ -1439,6 +1439,10 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
         }
         #[cfg(feature = "self-update")]
         Commands::Self_(SelfNamespace {
+            command: SelfCommand::Install(args),
+        }) => commands::self_install(args, printer).await,
+        #[cfg(feature = "self-update")]
+        Commands::Self_(SelfNamespace {
             command:
                 SelfCommand::Update(SelfUpdateArgs {
                     target_version,
