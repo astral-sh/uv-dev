@@ -18,7 +18,7 @@ use uv_distribution_types::{
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_platform_tags::{IncompatibleTag, TagCompatibility, Tags};
-use uv_pypi_types::{HashDigest, ResolutionMetadata, Yanked};
+use uv_pypi_types::{HashDigest, ResolutionMetadata, Status, Yanked};
 use uv_types::HashStrategy;
 use uv_warnings::warn_user_once;
 
@@ -165,6 +165,17 @@ impl VersionMap {
         match &self.inner {
             VersionMapInner::Eager(eager) => either::Either::Left(eager.map.keys()),
             VersionMapInner::Lazy(lazy) => either::Either::Right(lazy.included_versions()),
+        }
+    }
+
+    /// Return whether the originating index marked this project as quarantined.
+    pub(crate) fn is_quarantined(&self) -> bool {
+        match &self.inner {
+            VersionMapInner::Eager(_) => false,
+            VersionMapInner::Lazy(lazy) => rkyv::deserialize::<Status, rkyv::rancor::Error>(
+                &lazy.simple_metadata.project_status().status,
+            )
+            .is_ok_and(|status| status == Status::Quarantined),
         }
     }
 
