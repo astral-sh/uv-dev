@@ -598,6 +598,11 @@ pub(crate) async fn pip_compile(
         }
     };
 
+    let output_build_options = build_options
+        .has_build_policy()
+        .then(|| resolution.materialize_build_options(&build_options));
+    let output_build_options = output_build_options.as_ref().unwrap_or(&build_options);
+
     if generate_hashes && preview.is_enabled(PreviewFeature::ArtifactHashFiltering) {
         resolution.retain_allowed_distribution_hashes(&build_options);
     }
@@ -669,7 +674,7 @@ pub(crate) async fn pip_compile(
 
             // If necessary, include the `--no-binary` and `--only-binary` options.
             if include_build_options {
-                match build_options.no_binary() {
+                match output_build_options.no_binary() {
                     NoBinary::None => {}
                     NoBinary::All => {
                         writeln!(writer, "--no-binary :all:")?;
@@ -682,7 +687,7 @@ pub(crate) async fn pip_compile(
                         }
                     }
                 }
-                match build_options.no_build() {
+                match output_build_options.no_build() {
                     NoBuild::None => {}
                     NoBuild::All => {
                         writeln!(writer, "--only-binary :all:")?;

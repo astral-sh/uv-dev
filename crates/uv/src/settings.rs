@@ -24,9 +24,9 @@ use uv_cli::{
     TreeArgs, TreeFormat, UpgradeArgs, VenvArgs, VersionArgs, VersionBumpSpec, VersionFormat,
 };
 use uv_cli::{
-    AuthorFrom, BuildArgs, BuildOptionsArgs, CheckArgs, ExcludeNewerArgs, ExportArgs, FormatArgs,
-    HashCheckingArgs, PackageExcludeNewerArgs, PublishArgs, PythonDirArgs, RegistryClientArgs,
-    ResolverArgs, ResolverInstallerArgs, ToolUpgradeArgs,
+    AuthorFrom, BuildArgs, BuildOptionsArgs, BuildPolicyArgs, CheckArgs, ExcludeNewerArgs,
+    ExportArgs, FormatArgs, HashCheckingArgs, PackageExcludeNewerArgs, PublishArgs, PythonDirArgs,
+    RegistryClientArgs, ResolverArgs, ResolverInstallerArgs, ToolUpgradeArgs,
     options::{
         Flag, FlagSource, IntoPipOptions, check_conflicts, flag, resolve_flag, resolve_flag_pair,
         resolver_installer_options, resolver_options,
@@ -34,12 +34,12 @@ use uv_cli::{
 };
 use uv_client::{Certificates, Connectivity, MetadataRangeRequest};
 use uv_configuration::{
-    ActiveEnvironment, BuildIsolation, BuildOptions, Concurrency, DependencyGroups, DevMode,
-    DryRun, EditableMode, EnvFile, ExcludeDependency, ExportFormat, ExtrasSpecification,
-    GitLfsSetting, HashCheckingMode, IndexStrategy, InstallOptions, KeyringProviderType, NoBinary,
-    NoBuild, NoSources, Override, PackageOverride, PipCompileFormat, ProjectBuildBackend, ProxyUrl,
-    Reinstall, RequiredVersion, TargetTriple, TrustedHost, TrustedPublishing, Upgrade,
-    VersionControlSystem,
+    ActiveEnvironment, BuildIsolation, BuildOptions, BuildPolicy, BuildPolicyPackage, Concurrency,
+    DependencyGroups, DevMode, DryRun, EditableMode, EnvFile, ExcludeDependency, ExportFormat,
+    ExtrasSpecification, GitLfsSetting, HashCheckingMode, IndexStrategy, InstallOptions,
+    KeyringProviderType, NoBinary, NoBuild, NoSources, Override, PackageOverride, PipCompileFormat,
+    ProjectBuildBackend, ProxyUrl, Reinstall, RequiredVersion, TargetTriple, TrustedHost,
+    TrustedPublishing, Upgrade, VersionControlSystem,
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations, IndexUrl,
@@ -49,7 +49,7 @@ use uv_install_wheel::LinkMode;
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
 use uv_pep440::Version;
 use uv_pep508::{MarkerTree, RequirementOrigin};
-use uv_preview::Preview;
+use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::SupportedEnvironments;
 use uv_python::{Prefix, PythonDownloads, PythonPreference, PythonVersion, Target};
 use uv_redacted::DisplaySafeUrl;
@@ -3490,6 +3490,11 @@ impl PipCompileSettings {
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let PipCompileArgs {
+            build_policy:
+                BuildPolicyArgs {
+                    build_policy,
+                    build_policy_package,
+                },
             src_file,
             constraints,
             overrides,
@@ -3625,6 +3630,8 @@ impl PipCompileSettings {
             refresh: Refresh::try_from(refresh)?,
             settings: PipSettings::combine(
                 PipOptions {
+                    build_policy,
+                    build_policy_package: build_policy_package.map(BuildPolicyPackage::from_iter),
                     python: python.and_then(Maybe::into_option),
                     system: flag(system, no_system, "system")?,
                     no_build: flag(no_build, build, "build")?,
@@ -3668,7 +3675,8 @@ impl PipCompileSettings {
                 },
                 filesystem,
                 environment,
-            ),
+            )
+            .warn_build_policy_preview(),
         })
     }
 }
@@ -3692,6 +3700,11 @@ impl PipSyncSettings {
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let PipSyncArgs {
+            build_policy:
+                BuildPolicyArgs {
+                    build_policy,
+                    build_policy_package,
+                },
             src_file,
             constraints,
             build_constraints,
@@ -3744,6 +3757,8 @@ impl PipSyncSettings {
             refresh: Refresh::try_from(refresh)?,
             settings: PipSettings::combine(
                 PipOptions {
+                    build_policy,
+                    build_policy_package: build_policy_package.map(BuildPolicyPackage::from_iter),
                     python: python.and_then(Maybe::into_option),
                     system: flag(system, no_system, "system")?,
                     break_system_packages: flag(
@@ -3774,7 +3789,8 @@ impl PipSyncSettings {
                 },
                 filesystem,
                 environment,
-            ),
+            )
+            .warn_build_policy_preview(),
         })
     }
 }
@@ -3808,6 +3824,11 @@ impl PipInstallSettings {
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let PipInstallArgs {
+            build_policy:
+                BuildPolicyArgs {
+                    build_policy,
+                    build_policy_package,
+                },
             package,
             requirements,
             editable,
@@ -3934,6 +3955,8 @@ impl PipInstallSettings {
             refresh: Refresh::try_from(refresh)?,
             settings: PipSettings::combine(
                 PipOptions {
+                    build_policy,
+                    build_policy_package: build_policy_package.map(BuildPolicyPackage::from_iter),
                     python: python.and_then(Maybe::into_option),
                     system: flag(system, no_system, "system")?,
                     break_system_packages: flag(
@@ -3960,7 +3983,8 @@ impl PipInstallSettings {
                 },
                 filesystem,
                 environment,
-            ),
+            )
+            .warn_build_policy_preview(),
         })
     }
 }
@@ -4542,6 +4566,27 @@ fn warn_if_deprecated_prerelease_mode(prerelease: PrereleaseMode) -> PrereleaseM
     }
 }
 
+fn resolve_build_options(
+    no_binary: NoBinary,
+    no_build: NoBuild,
+    build_policy: Option<BuildPolicy>,
+    build_policy_package: BuildPolicyPackage,
+) -> BuildOptions {
+    let options = BuildOptions::new(no_binary, no_build)
+        .with_build_policy(build_policy, build_policy_package);
+    warn_build_policy_preview(&options);
+    options
+}
+
+fn warn_build_policy_preview(options: &BuildOptions) {
+    if options.has_build_policy() && !uv_preview::is_enabled(PreviewFeature::BuildPolicy) {
+        warn_user_once!(
+            "The `--build-policy` and `--build-policy-package` options are experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
+            PreviewFeature::BuildPolicy
+        );
+    }
+}
+
 fn resolve_prerelease(global: PrereleaseMode, mut package: PrereleasePackage) -> Prerelease {
     for mode in package.values_mut() {
         *mode = warn_if_deprecated_prerelease_mode(*mode);
@@ -4644,9 +4689,11 @@ impl From<ResolverOptions> for ResolverSettings {
                 value.no_sources_package.unwrap_or_default(),
             ),
             upgrade: value.upgrade.unwrap_or_default(),
-            build_options: BuildOptions::new(
+            build_options: resolve_build_options(
                 NoBinary::from_args(value.no_binary, value.no_binary_package.unwrap_or_default()),
                 NoBuild::from_args(value.no_build, value.no_build_package.unwrap_or_default()),
+                value.build_policy,
+                value.build_policy_package.unwrap_or_default(),
             ),
         }
     }
@@ -4726,12 +4773,14 @@ impl From<ResolverInstallerOptions> for ResolverInstallerSettings {
         let index_locations = value.indexes.into();
         Self {
             resolver: ResolverSettings {
-                build_options: BuildOptions::new(
+                build_options: resolve_build_options(
                     NoBinary::from_args(
                         value.no_binary,
                         value.no_binary_package.unwrap_or_default(),
                     ),
                     NoBuild::from_args(value.no_build, value.no_build_package.unwrap_or_default()),
+                    value.build_policy,
+                    value.build_policy_package.unwrap_or_default(),
                 ),
                 config_setting: value.config_settings.unwrap_or_default(),
                 config_settings_package: value.config_settings_package.unwrap_or_default(),
@@ -4835,6 +4884,11 @@ pub(crate) struct PipSettings {
 }
 
 impl PipSettings {
+    fn warn_build_policy_preview(self) -> Self {
+        warn_build_policy_preview(&self.build_options);
+        self
+    }
+
     /// Resolve the [`PipSettings`] from the CLI and filesystem configuration.
     fn combine(
         args: PipOptions,
@@ -4851,6 +4905,8 @@ impl PipSettings {
             .unwrap_or_default();
 
         let PipOptions {
+            build_policy,
+            build_policy_package,
             python,
             system,
             break_system_packages,
@@ -4917,6 +4973,8 @@ impl PipSettings {
         } = pip.unwrap_or_default();
 
         let ResolverInstallerSchema {
+            build_policy: top_level_build_policy,
+            build_policy_package: top_level_build_policy_package,
             index: top_level_index,
             index_url: top_level_index_url,
             extra_index_url: top_level_extra_index_url,
@@ -5208,6 +5266,19 @@ impl PipSettings {
                     top_level_no_build,
                     top_level_no_build_package.unwrap_or_default(),
                 )),
+            )
+            .with_no_build_unnamed_editable(
+                args.no_build.combine(no_build).unwrap_or_default()
+                    || top_level_no_build.unwrap_or_default(),
+            )
+            .with_build_policy(
+                args.build_policy
+                    .combine(build_policy)
+                    .combine(top_level_build_policy),
+                args.build_policy_package
+                    .combine(build_policy_package)
+                    .combine(top_level_build_policy_package)
+                    .unwrap_or_default(),
             ),
             install_mirrors: environment
                 .install_mirrors
