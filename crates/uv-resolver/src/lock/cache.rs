@@ -36,15 +36,21 @@ impl Cache {
         directory: &Path,
         skip_wheel_filename_check: bool,
     ) -> Option<Arc<Lock>> {
+        let mut entries = self.entries.iter().filter(|entry| {
+            (skip_wheel_filename_check || !entry.skip_wheel_filename_check)
+                && entry.directory == directory
+                && entry.contents.len() == contents.len()
+        });
+        // An exact match against the oldest compatible source avoids hashing unchanged
+        // lockfiles. The remaining entries use the digest to limit byte comparisons.
+        let first = entries.next()?;
+        if first.contents.as_ref() == contents {
+            return Some(Arc::clone(&first.lock));
+        }
+
         let digest = hash_digest(&contents);
-        self.entries
-            .iter()
-            .find(|entry| {
-                (skip_wheel_filename_check || !entry.skip_wheel_filename_check)
-                    && entry.directory == directory
-                    && entry.digest == digest
-                    && entry.contents.as_ref() == contents
-            })
+        entries
+            .find(|entry| entry.digest == digest && entry.contents.as_ref() == contents)
             .map(|entry| Arc::clone(&entry.lock))
     }
 
@@ -142,6 +148,8 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
+    use uv_cache_key::hash_digest;
+
     use super::{Cache, MAX_ENTRIES};
     use crate::Lock;
 
@@ -183,6 +191,92 @@ mod tests {
         let cached = cache.get(SOURCE, directory, false).expect("cached lock");
         assert!(Arc::ptr_eq(&lock, &cached));
         assert_eq!(cached.revision(), 3);
+    }
+
+    #[test]
+    fn cache_exact_source_hit_precedes_digest_lookup() {
+        let lock = Arc::new(Lock::from_toml(SOURCE).expect("valid lock"));
+        let mut cache = Cache::default();
+        let directory = Path::new("first");
+        assert!(cache.insert(SOURCE, directory, &lock, false));
+        cache
+            .entries
+            .front_mut()
+            .expect("cached entry")
+            .digest
+            .clear();
+
+        let cached = cache.get(SOURCE, directory, false).expect("cached lock");
+        assert!(Arc::ptr_eq(&lock, &cached));
+    }
+
+    #[test]
+    fn cache_returns_oldest_qualifying_snapshot() {
+        let unchecked = Arc::new(Lock::from_toml(SOURCE).expect("valid lock"));
+        let checked = Arc::new(Lock::from_toml(SOURCE).expect("valid lock"));
+        let other = Arc::new(Lock::from_toml(SOURCE).expect("valid lock"));
+        let directory = Path::new("first");
+
+        for unchecked_first in [true, false] {
+            let mut cache = Cache::default();
+            assert!(cache.insert(SOURCE, Path::new("second"), &other, false));
+            assert!(cache.insert(&format!("{SOURCE}# longer\n"), directory, &other, false));
+            if unchecked_first {
+                assert!(cache.insert(SOURCE, directory, &unchecked, true));
+                assert!(cache.insert(SOURCE, directory, &checked, false));
+            } else {
+                assert!(cache.insert(SOURCE, directory, &checked, false));
+                assert!(cache.insert(SOURCE, directory, &unchecked, true));
+            }
+
+            let strict = cache.get(SOURCE, directory, false).expect("checked lock");
+            assert!(Arc::ptr_eq(&checked, &strict));
+            let permissive = cache.get(SOURCE, directory, true).expect("cached lock");
+            assert!(Arc::ptr_eq(
+                if unchecked_first {
+                    &unchecked
+                } else {
+                    &checked
+                },
+                &permissive
+            ));
+        }
+    }
+
+    #[test]
+    fn cache_finds_later_exact_source_after_first_mismatch() {
+        let different = SOURCE.replace("3.12", "3.13");
+        let other = Arc::new(Lock::from_toml(&different).expect("valid lock"));
+        let unchecked = Arc::new(Lock::from_toml(SOURCE).expect("valid lock"));
+        let checked = Arc::new(Lock::from_toml(SOURCE).expect("valid lock"));
+        let mut cache = Cache::default();
+        let directory = Path::new("first");
+        assert!(cache.insert(&different, directory, &other, false));
+        assert!(cache.insert(SOURCE, directory, &unchecked, true));
+        assert!(cache.insert(SOURCE, directory, &checked, false));
+
+        let permissive = cache.get(SOURCE, directory, true).expect("cached lock");
+        assert!(Arc::ptr_eq(&unchecked, &permissive));
+        let strict = cache.get(SOURCE, directory, false).expect("checked lock");
+        assert!(Arc::ptr_eq(&checked, &strict));
+    }
+
+    #[test]
+    fn cache_checks_source_bytes_after_digest_collision() {
+        let lock = Arc::new(Lock::from_toml(SOURCE).expect("valid lock"));
+        let mut cache = Cache::default();
+        let directory = Path::new("first");
+        for version in ["3.13", "3.14"] {
+            let contents = SOURCE.replace("3.12", version);
+            let other = Arc::new(Lock::from_toml(&contents).expect("valid lock"));
+            assert!(cache.insert(&contents, directory, &other, false));
+            cache.entries.back_mut().expect("cached entry").digest = hash_digest(&SOURCE);
+        }
+
+        assert_eq!(cache.get(SOURCE, directory, false), None);
+        assert!(cache.insert(SOURCE, directory, &lock, false));
+        let cached = cache.get(SOURCE, directory, false).expect("cached lock");
+        assert!(Arc::ptr_eq(&lock, &cached));
     }
 
     #[test]

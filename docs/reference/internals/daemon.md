@@ -59,15 +59,16 @@ be incorrect.
 
 The shared cache sits at `Lock::from_toml`, so all ordinary callers of that parser benefit,
 including project, script, and tool lockfiles. Workers still read the file through their normal
-command path. They look up the exact bytes that were read, first using a digest and then confirming
-byte equality. The working directory is also part of the key: deserialized local requirements
-currently contain temporary absolute URLs. Each parse scopes its directory once, avoiding
-per-requirement filesystem queries. The parent parses each warm request in its originating
-directory, without initializing uv's invocation-specific working-directory cache. Cross-directory
-reuse requires making the parsed representation location-independent first. A changed file therefore
-cannot reuse its previous parsed value, even when its size and timestamps are unchanged. Missing
-files and read errors keep their normal behavior. A command that already read a file uses that
-immutable snapshot; a later command reads the new snapshot.
+command path. They compare the oldest eligible cached source directly with the bytes that were read.
+Other candidates are filtered by a digest before byte equality is confirmed. The working directory
+is also part of the key: deserialized local requirements currently contain temporary absolute URLs.
+Each parse scopes its directory once, avoiding per-requirement filesystem queries. The parent parses
+each warm request in its originating directory, without initializing uv's invocation-specific
+working-directory cache. Cross-directory reuse requires making the parsed representation
+location-independent first. A changed file therefore cannot reuse its previous parsed value, even
+when its size and timestamps are unchanged. Missing files and read errors keep their normal
+behavior. A command that already read a file uses that immutable snapshot; a later command reads the
+new snapshot.
 
 The parent caches only successfully parsed values under the parser's strict default policy. The
 wheel-filename compatibility flag is part of cache eligibility: a permissively parsed value must
