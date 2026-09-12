@@ -92,6 +92,22 @@ cargo run python install
 
 The storage directory can be configured with `UV_PYTHON_INSTALL_DIR`. (It must be an absolute path.)
 
+### Resolver scenarios
+
+Small dependency graphs in `test/scenarios` can be checked against an independent, exhaustive
+resolver oracle:
+
+```shell
+cargo build --package uv --bin uv
+cargo dev check-scenarios --uv target/debug/uv test/scenarios/backtracking/wrong-backtracking-basic.toml
+```
+
+Use `--python-version` and `--python-platform` (`linux`, `macos`, or `windows`) to select a concrete
+marker environment. The checker verifies satisfiability and the exact reachable dependency closure,
+not a particular preferred version. It uses a closed-world local index and rejects unsupported
+policies, including pre-releases, yanked candidates, non-universal wheels, and non-additive extras.
+`--max-states` bounds the exhaustive search and fails explicitly when a graph is too large.
+
 ### Snapshot testing
 
 uv uses [insta](https://insta.rs/) for snapshot testing. It's recommended (but not necessary) to use
