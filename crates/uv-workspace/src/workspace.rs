@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use glob::{GlobError, MatchOptions, Pattern, PatternError, glob};
 use itertools::Itertools;
-use rustc_hash::{FxHashSet, FxHasher};
+use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use tracing::{debug, trace, warn};
 
 use uv_cache::Cache;
@@ -89,12 +89,17 @@ impl WorkspaceCache {
     fn insert(&self, result: CachedWorkspaceResult, install_path: &Path) {
         match result {
             Ok(workspace) => {
+                let mut intermediate_pyprojects = FxHashMap::default();
                 for package in workspace.packages.values() {
                     // Historically, upward workspace discovery stopped at an intermediate
                     // `pyproject.toml`, so don't map this member to the outer workspace in that
                     // case.
                     // See: <https://github.com/astral-sh/uv/issues/19916>
-                    if has_intermediate_pyproject(&workspace.install_path, &package.root) {
+                    if has_intermediate_pyproject(
+                        &workspace.install_path,
+                        &package.root,
+                        &mut intermediate_pyprojects,
+                    ) {
                         continue;
                     }
                     self.workspaces
@@ -152,7 +157,11 @@ impl WorkspaceCache {
 
 /// Returns `true` when a `pyproject.toml` sits between the member project directory and the
 /// workspace root.
-fn has_intermediate_pyproject(workspace_root: &Path, project_dir: &Path) -> bool {
+fn has_intermediate_pyproject(
+    workspace_root: &Path,
+    project_dir: &Path,
+    intermediate_pyprojects: &mut FxHashMap<PathBuf, bool>,
+) -> bool {
     if project_dir == workspace_root {
         return false;
     }
@@ -165,7 +174,15 @@ fn has_intermediate_pyproject(workspace_root: &Path, project_dir: &Path) -> bool
         .ancestors()
         .skip(1)
         .take_while(|ancestor| *ancestor != workspace_root)
-        .any(|ancestor| ancestor.join("pyproject.toml").is_file())
+        .any(|ancestor| {
+            if let Some(exists) = intermediate_pyprojects.get(ancestor) {
+                return *exists;
+            }
+
+            let exists = ancestor.join("pyproject.toml").is_file();
+            intermediate_pyprojects.insert(ancestor.to_path_buf(), exists);
+            exists
+        })
 }
 
 #[derive(Debug, Clone)]
@@ -2323,13 +2340,16 @@ mod tests {
     use assert_fs::fixture::ChildPath;
     use assert_fs::prelude::*;
     use insta::{assert_json_snapshot, assert_snapshot};
+    use rustc_hash::FxHashMap;
 
     use uv_cache::Cache;
     use uv_normalize::{GroupName, PackageName};
     use uv_pypi_types::DependencyGroupSpecifier;
 
     use crate::pyproject::PyProjectToml;
-    use crate::workspace::{DiscoveryOptions, MemberDiscovery, ProjectWorkspace, Workspace};
+    use crate::workspace::{
+        DiscoveryOptions, MemberDiscovery, ProjectWorkspace, Workspace, has_intermediate_pyproject,
+    };
     use crate::{WorkspaceCache, WorkspaceError};
 
     async fn workspace_test(folder: &str) -> (ProjectWorkspace, String) {
@@ -2767,6 +2787,92 @@ mod tests {
         .expect("cached workspace member ignores invalid change in the meantime");
 
         assert!(Arc::ptr_eq(&root_workspace, &member_project.workspace));
+
+        Ok(())
+    }
+
+    #[test]
+    fn workspace_cache_reuses_shared_ancestors_without_intermediate_pyproject() -> Result<()> {
+        let root = tempfile::TempDir::new()?;
+        let root = ChildPath::new(root.path());
+        let shared = root.child("packages").child("nested");
+        let first = shared.child("first");
+        let second = shared.child("second");
+        let other = root.child("packages").child("other");
+        let third = other.child("third");
+        first.create_dir_all()?;
+        second.create_dir_all()?;
+        third.create_dir_all()?;
+        other.child("pyproject.toml").write_str("")?;
+
+        let mut intermediate_pyprojects = FxHashMap::default();
+        assert!(!has_intermediate_pyproject(
+            root.as_ref(),
+            first.as_ref(),
+            &mut intermediate_pyprojects,
+        ));
+        assert!(!has_intermediate_pyproject(
+            root.as_ref(),
+            second.as_ref(),
+            &mut intermediate_pyprojects,
+        ));
+        assert!(has_intermediate_pyproject(
+            root.as_ref(),
+            third.as_ref(),
+            &mut intermediate_pyprojects,
+        ));
+        assert!(!has_intermediate_pyproject(
+            root.as_ref(),
+            root.as_ref(),
+            &mut intermediate_pyprojects,
+        ));
+        assert!(!has_intermediate_pyproject(
+            shared.as_ref(),
+            third.as_ref(),
+            &mut intermediate_pyprojects,
+        ));
+
+        assert_eq!(intermediate_pyprojects.len(), 3);
+        assert_eq!(intermediate_pyprojects.get(shared.as_ref()), Some(&false));
+        assert_eq!(intermediate_pyprojects.get(other.as_ref()), Some(&true));
+        assert_eq!(
+            intermediate_pyprojects.get(root.child("packages").as_ref()),
+            Some(&false)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn workspace_cache_reuses_closest_intermediate_pyproject() -> Result<()> {
+        let root = tempfile::TempDir::new()?;
+        let root = ChildPath::new(root.path());
+        let shared = root.child("packages").child("nested");
+        let first = shared.child("first");
+        let second = shared.child("second");
+        first.create_dir_all()?;
+        second.create_dir_all()?;
+        let target = root.child("intermediate.toml");
+        target.write_str("")?;
+        shared
+            .child("pyproject.toml")
+            .symlink_to_file(target.path())?;
+
+        let mut intermediate_pyprojects = FxHashMap::default();
+        assert!(has_intermediate_pyproject(
+            root.as_ref(),
+            first.as_ref(),
+            &mut intermediate_pyprojects,
+        ));
+        assert!(has_intermediate_pyproject(
+            root.as_ref(),
+            second.as_ref(),
+            &mut intermediate_pyprojects,
+        ));
+
+        assert_eq!(intermediate_pyprojects.len(), 1);
+        assert_eq!(intermediate_pyprojects.get(shared.as_ref()), Some(&true));
+        assert!(!intermediate_pyprojects.contains_key(root.child("packages").as_ref()));
 
         Ok(())
     }
