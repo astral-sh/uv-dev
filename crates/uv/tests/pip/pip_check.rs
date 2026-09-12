@@ -2,6 +2,7 @@ use anyhow::Result;
 use assert_fs::fixture::ChildPath;
 use assert_fs::fixture::FileWriteStr;
 use assert_fs::fixture::PathChild;
+use assert_fs::fixture::PathCreateDir;
 
 use uv_test::uv_snapshot;
 
@@ -57,6 +58,42 @@ fn check_versionless_egg_info_file() -> Result<()> {
     All installed packages are compatible
     "
     );
+
+    Ok(())
+}
+
+/// Check a post-release against a dependency with a pre-release lower bound.
+#[test]
+fn check_greater_than_pre_release() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let site_packages = ChildPath::new(context.site_packages());
+
+    let parent = site_packages.child("parent-1.0.0.dist-info");
+    parent.create_dir_all()?;
+    parent.child("METADATA").write_str(
+        "Metadata-Version: 2.1\nName: parent\nVersion: 1.0.0\nRequires-Dist: demo>1.0a1\n",
+    )?;
+    parent.child("WHEEL").write_str(
+        "Wheel-Version: 1.0\nGenerator: uv-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+    )?;
+
+    let demo = site_packages.child("demo-1.0.post1.dist-info");
+    demo.create_dir_all()?;
+    demo.child("METADATA")
+        .write_str("Metadata-Version: 2.1\nName: demo\nVersion: 1.0.post1\n")?;
+    demo.child("WHEEL").write_str(
+        "Wheel-Version: 1.0\nGenerator: uv-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+    )?;
+
+    uv_snapshot!(context.pip_check(), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Checked 2 packages in [TIME]
+    All installed packages are compatible
+    ");
 
     Ok(())
 }
