@@ -17,11 +17,7 @@ pub(crate) async fn uninstall(name: Vec<PackageName>, printer: Printer) -> Resul
     let installed_tools = InstalledTools::from_settings()?.init()?;
     let _lock = match installed_tools.lock().await {
         Ok(lock) => lock,
-        Err(err)
-            if err
-                .as_io_error()
-                .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound) =>
-        {
+        Err(uv_tool::Error::ToolsDirectoryNotFound { .. }) => {
             if !name.is_empty() {
                 for name in name {
                     writeln!(printer.stderr(), "`{name}` is not installed")?;
