@@ -814,8 +814,13 @@ impl Cache {
                 for entry in entries {
                     let entry = entry?;
                     let path = entry.path();
-                    let target = fs_err::canonicalize(&path)?;
-                    if !references.contains_key(&target) {
+                    let referenced = match fs_err::canonicalize(&path) {
+                        Ok(target) => references.contains_key(&target),
+                        // Dangling links and concurrently removed entries cannot be referenced.
+                        Err(err) if err.kind() == io::ErrorKind::NotFound => false,
+                        Err(err) => return Err(err),
+                    };
+                    if !referenced {
                         debug!("Removing dangling cache archive: {}", path.display());
                         summary += self.remove_path(path)?;
                     }
