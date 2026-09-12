@@ -282,6 +282,10 @@ explicit = true
 
 To add a Git dependency source, prefix a Git-compatible URL with `git+`.
 
+uv uses the system `git` executable for Git dependencies.
+[Install Git](https://git-scm.com/install/) and make sure `git` is available on `PATH` before adding
+or installing a Git dependency.
+
 For example:
 
 ```console
