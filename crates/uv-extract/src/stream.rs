@@ -5,7 +5,6 @@ use std::pin::Pin;
 use async_zip::base::read::cd::Entry;
 use async_zip::error::ZipError;
 use futures::executor::block_on;
-use futures::io::AllowStdIo;
 use futures::{AsyncReadExt, StreamExt};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tar_codec::extract::{ExtractPolicy, LinkPolicy, SymlinkPolicy};
@@ -15,9 +14,7 @@ use tar_codec::{
 };
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt as TokioAsyncReadExt, AsyncWriteExt};
-use tokio_util::compat::{
-    FuturesAsyncReadCompatExt, FuturesAsyncWriteCompatExt, TokioAsyncReadCompatExt,
-};
+use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use tracing::{debug, warn};
 
 use uv_distribution_filename::{LegacySourceDistExtension, SourceDistExtension};
@@ -70,8 +67,9 @@ struct ComputedEntry {
 /// threads to work faster in that case.
 ///
 /// Returns the temporary directory and the list of unpacked files and their sizes.
-/// Filesystem operations run in a blocking task, fed through a bounded buffer. Dropping the future
-/// closes the pipe; the worker owns cleanup, which can be interrupted by process shutdown.
+/// The extraction worker is fed through a bounded buffer and dispatches individual filesystem
+/// operations through Tokio. Dropping the future closes the pipe; the worker owns cleanup, which
+/// can be interrupted by process shutdown.
 ///
 /// Extraction can leave unread bytes when ZIP validation is disabled. Callers must drain the
 /// reader before finalizing download hashes.
@@ -225,7 +223,9 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
         let is_dir = zip_entry.dir()?;
         let computed = if is_dir {
             if directories.insert(path.clone()) {
-                fs_err::create_dir_all(&path).map_err(Error::Io)?;
+                fs_err::tokio::create_dir_all(&path)
+                    .await
+                    .map_err(Error::Io)?;
             }
 
             // If this is a directory, we expect the CRC32 to be 0.
@@ -259,19 +259,21 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
         } else {
             if let Some(parent) = path.parent() {
                 if directories.insert(parent.to_path_buf()) {
-                    fs_err::create_dir_all(parent).map_err(Error::Io)?;
+                    fs_err::tokio::create_dir_all(parent)
+                        .await
+                        .map_err(Error::Io)?;
                 }
             }
 
             // We don't know the file permissions here, because we haven't seen the central directory yet.
-            let (actual_uncompressed_size, digest) = match fs_err::OpenOptions::new()
+            let (actual_uncompressed_size, digest) = match fs_err::tokio::OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .open(&path)
+                .await
             {
                 Ok(file) => {
                     // Write the file to disk.
-                    let file = AllowStdIo::new(file).compat_write();
                     let size = zip_entry.uncompressed_size();
                     let mut writer = if let Ok(size) = usize::try_from(size) {
                         tokio::io::BufWriter::with_capacity(std::cmp::min(size, 1024 * 1024), file)
@@ -313,7 +315,7 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                     );
 
                     // Read the existing file into memory.
-                    let existing_contents = fs_err::read(&path).map_err(Error::Io)?;
+                    let existing_contents = fs_err::tokio::read(&path).await.map_err(Error::Io)?;
 
                     // Read the entry into memory.
                     let mut expected_contents = Vec::with_capacity(existing_contents.len());
@@ -628,12 +630,16 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                     let has_any_executable_bit = mode & 0o111;
                     if has_any_executable_bit != 0 {
                         let path = target.join(relpath.as_path());
-                        let permissions = fs_err::metadata(&path).map_err(Error::Io)?.permissions();
+                        let permissions = fs_err::tokio::metadata(&path)
+                            .await
+                            .map_err(Error::Io)?
+                            .permissions();
                         if permissions.mode() & 0o111 != 0o111 {
-                            fs_err::set_permissions(
+                            fs_err::tokio::set_permissions(
                                 &path,
                                 Permissions::from_mode(permissions.mode() | 0o111),
                             )
+                            .await
                             .map_err(Error::Io)?;
                         }
                     }
