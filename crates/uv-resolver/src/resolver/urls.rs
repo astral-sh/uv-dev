@@ -55,19 +55,16 @@ impl Urls {
                 .find(|package_url| same_resource(&package_url.parsed_url, &url.parsed_url, git))
             {
                 // Allow editables to override non-editables.
-                let previous_editable = package_url.is_editable();
-                *package_url = url;
-                if previous_editable {
-                    if let VerbatimParsedUrl {
+                if package_url.is_editable()
+                    && let VerbatimParsedUrl {
                         parsed_url: ParsedUrl::Directory(ParsedDirectoryUrl { editable, .. }),
                         verbatim: _,
-                    } = package_url
-                    {
-                        if editable.is_none() {
-                            debug!("Allowing an editable variant of {}", &package_url.verbatim);
-                            *editable = Some(true);
-                        }
-                    }
+                    } = &url
+                    && editable.is_none()
+                {
+                    debug!("Allowing an editable variant of {}", &package_url.verbatim);
+                } else {
+                    *package_url = url;
                 }
             } else {
                 package_urls.push(url);
