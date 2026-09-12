@@ -18996,6 +18996,91 @@ fn lock_reuses_canonical_fork_marker_order() -> Result<()> {
     Ok(())
 }
 
+/// Equal-Python-bound forks must retain their wire order after reading a lockfile.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_reuses_equal_bound_fork_marker_order() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "equal-bound-fork-marker-order"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.node-0.versions."2.0.0"]
+        requires_python = ">=3.12,<3.15"
+        sdist = false
+
+        [packages.node-1.versions."1.0.0"]
+        requires_python = ">=3.12,<3.15"
+        sdist = false
+
+        [packages.node-1.versions."1.0.0".extras]
+        feature = ["node-0>=1; python_full_version >= '3.14'"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+
+    for fork_strategy in ["requires-python", "fewest"] {
+        for resolution in ["highest", "lowest", "lowest-direct"] {
+            let context = uv_test::test_context!("3.12");
+            context
+                .temp_dir
+                .child("pyproject.toml")
+                .write_str(indoc! {r#"
+                    [project]
+                    name = "project"
+                    version = "0.1.0"
+                    requires-python = ">=3.12,<3.15"
+
+                    [dependency-groups]
+                    shared = [
+                        "node-1>=1,<2; python_full_version < '3.14' or sys_platform == 'darwin'",
+                        "node-1[feature]!=2; sys_platform != 'win32'",
+                    ]
+                "#})?;
+            let command = || {
+                let mut command = context.lock();
+                command
+                    .arg("--no-config")
+                    .arg("--index-url")
+                    .arg(server.index_url())
+                    .arg("--no-build")
+                    .arg("--fork-strategy")
+                    .arg(fork_strategy)
+                    .arg("--resolution")
+                    .arg(resolution)
+                    .env_remove(EnvVars::UV_EXCLUDE_NEWER);
+                command
+            };
+
+            command().assert().success();
+            let initial = context.read("uv.lock");
+            let lock = toml::from_str::<toml::Value>(&initial)?;
+            let packages = lock["package"].as_array().expect("locked packages");
+            for (name, version) in [("node-0", "2.0.0"), ("node-1", "1.0.0")] {
+                assert!(packages.iter().any(|package| {
+                    package["name"].as_str() == Some(name)
+                        && package["version"].as_str() == Some(version)
+                }));
+            }
+
+            command()
+                .arg("--check")
+                .arg("--refresh")
+                .arg("--preview-features")
+                .arg("lockfile-format-check")
+                .assert()
+                .success();
+            assert_eq!(context.read("uv.lock"), initial);
+
+            command().arg("--refresh").assert().success();
+            assert_eq!(context.read("uv.lock"), initial);
+        }
+    }
+    Ok(())
+}
+
 /// Checks that a later `exclude-newer` cutoff does not invalidate a lock until a refresh occurs,
 /// while a more restrictive cutoff still requires an update.
 #[cfg(feature = "test-universal")]
