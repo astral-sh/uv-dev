@@ -60,6 +60,14 @@ class ProfileImports(unittest.TestCase):
         modes = {mode: "success" for mode in profiles.REQUIRED_MODES}
         self.assertIsNone(self.source_run(modes, {*modes, "walltime-macos"}))
 
+    def test_release_run_is_an_independent_optional_profile(self):
+        modes = {mode: "success" for mode in profiles.REQUIRED_MODES}
+        modes["walltime-release"] = None
+        self.assertIsNone(self.source_run(modes, profiles.REQUIRED_MODES))
+        modes["walltime-release"] = "success"
+        self.assertIsNone(self.source_run(modes, profiles.REQUIRED_MODES))
+        self.assertEqual(self.source_run(modes, set(modes)), "23")
+
     def test_walltime_parts_do_not_collide(self):
         source = {"version": 11, "runner": {"executor": "walltime"}}
         environment = {
@@ -75,8 +83,12 @@ class ProfileImports(unittest.TestCase):
         macos = profiles.destination_metadata(
             source, environment, part="walltime-macos"
         )
+        release = profiles.destination_metadata(
+            source, environment, part="walltime-release"
+        )
         self.assertEqual(linux["runPart"]["runPartId"], "import-walltime")
         self.assertEqual(macos["runPart"]["runPartId"], "import-walltime-macos")
+        self.assertEqual(release["runPart"]["runPartId"], "import-walltime-release")
         self.assertEqual(source, {"version": 11, "runner": {"executor": "walltime"}})
 
 
