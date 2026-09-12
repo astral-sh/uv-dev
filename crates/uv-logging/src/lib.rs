@@ -132,11 +132,31 @@ fn format_field(writer: &mut Writer<'_>, field: &Field, value: &dyn fmt::Debug) 
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::fmt;
+
     use tracing::{Callsite, Event, Level, field::Value, metadata::Kind};
     use tracing_subscriber::fmt::FormatFields;
     use tracing_subscriber::fmt::format::Writer;
 
     use super::uv_fields;
+
+    fn format_fields(event: Event<'_>) -> String {
+        let mut output = String::new();
+        uv_fields()
+            .format_fields(Writer::new(&mut output), event)
+            .expect("field formatting should succeed");
+        output
+    }
+
+    /// Unlike a string's `Debug` implementation, this emits control characters verbatim.
+    struct RawDebug<'a>(&'a str);
+
+    impl fmt::Debug for RawDebug<'_> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(self.0)
+        }
+    }
 
     #[test]
     fn strips_ansi_from_message_fields() {
@@ -151,12 +171,95 @@ mod tests {
         let values = [Some(&message as &dyn Value)];
         let fields = metadata.fields().value_set_all(&values);
         let event = Event::new(metadata, &fields);
-        let mut output = String::new();
 
-        uv_fields()
-            .format_fields(Writer::new(&mut output), event)
-            .expect("field formatting should succeed");
+        assert_eq!(format_fields(event), "Error trace: hint");
+    }
 
-        assert_eq!(output, "Error trace: hint");
+    #[test]
+    fn strips_terminal_sequences_from_display_and_debug_fields() {
+        let callsite = tracing::callsite! {
+            name: "event",
+            kind: Kind::EVENT,
+            level: Level::TRACE,
+            fields: message, display_value, debug_value
+        };
+        let metadata = callsite.metadata();
+
+        for (input, expected) in [
+            ("plain Unicode: λ", "plain Unicode: λ"),
+            ("\x1b[31mred\x1b[0m", "red"),
+            ("\x1b[2J\x1b[Hscreen", "screen"),
+            (
+                "\x1b]8;;https://example.invalid/\x07link\x1b]8;;\x07",
+                "link",
+            ),
+            (
+                "\x1b]8;;https://example.invalid/\x1b\\link\x1b]8;;\x1b\\",
+                "link",
+            ),
+            ("\x1b]52;c;c2FmZQ==\x07visible", "visible"),
+            ("\x1bP1;2|hidden\x1b\\visible", "visible"),
+        ] {
+            let display = tracing::field::display(input);
+            let debug = tracing::field::debug(RawDebug(input));
+            let values = [
+                Some(&display as &dyn Value),
+                Some(&display as &dyn Value),
+                Some(&debug as &dyn Value),
+            ];
+            let fields = metadata.fields().value_set_all(&values);
+            let event = Event::new(metadata, &fields);
+
+            assert_eq!(
+                format_fields(event),
+                format!("{expected} display_value={expected} debug_value={expected}"),
+                "input: {input:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn preserves_raw_identifier_field_formatting() {
+        let callsite = tracing::callsite! {
+            name: "event",
+            kind: Kind::EVENT,
+            level: Level::TRACE,
+            fields: "r#type" = ""
+        };
+        let metadata = callsite.metadata();
+        let value = tracing::field::display("\x1b[36mexample\x1b[0m");
+        let values = [Some(&value as &dyn Value)];
+        let fields = metadata.fields().value_set_all(&values);
+        let event = Event::new(metadata, &fields);
+
+        assert_eq!(format_fields(event), "type=example");
+    }
+
+    #[test]
+    fn ignores_log_metadata_before_formatting_values() {
+        struct ObservedDebug<'a>(&'a Cell<usize>);
+
+        impl fmt::Debug for ObservedDebug<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.0.set(self.0.get() + 1);
+                f.write_str("should not be formatted")
+            }
+        }
+
+        let callsite = tracing::callsite! {
+            name: "event",
+            kind: Kind::EVENT,
+            level: Level::TRACE,
+            fields: log.target
+        };
+        let metadata = callsite.metadata();
+        let calls = Cell::new(0);
+        let value = tracing::field::debug(ObservedDebug(&calls));
+        let values = [Some(&value as &dyn Value)];
+        let fields = metadata.fields().value_set_all(&values);
+        let event = Event::new(metadata, &fields);
+
+        assert_eq!(format_fields(event), "");
+        assert_eq!(calls.get(), 0);
     }
 }
