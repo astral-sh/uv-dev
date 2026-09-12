@@ -88,6 +88,7 @@ jobs:
           fi
 
           git checkout --detach "$HEAD_SHA"
+          git sparse-checkout set --no-cone '/*' '!/.codex/'
           git config user.name "astral-automations-bot[bot]"
           git config user.email "305554984+astral-automations-bot[bot]@users.noreply.github.com"
           base_sha=$(git rev-parse --verify "refs/remotes/origin/$BASE_REF^{commit}")
