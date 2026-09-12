@@ -40,6 +40,9 @@ pub enum InstalledDistError {
     #[error(transparent)]
     VersionParse(#[from] uv_pep440::VersionParseError),
 
+    #[error("Invalid `Version` field in installed metadata: `{}`", _0.user_display())]
+    InvalidLegacyMetadataVersion(PathBuf),
+
     #[error(transparent)]
     PackageNameParse(#[from] uv_normalize::InvalidNameError),
 
@@ -275,13 +278,17 @@ impl InstalledDist {
             }
 
             if metadata.is_dir() {
-                let Some(egg_metadata) = read_metadata(&path.join("PKG-INFO")) else {
+                let metadata_path = path.join("PKG-INFO");
+                let Some(egg_metadata) = read_metadata(&metadata_path) else {
                     return Ok(None);
                 };
                 return Ok(Some(Self::from(InstalledDistKind::EggInfoDirectory(
                     InstalledEggInfoDirectory {
                         name: file_name.name,
-                        version: Version::from_str(&egg_metadata.version)?,
+                        version: parse_legacy_metadata_version(
+                            &metadata_path,
+                            &egg_metadata.version,
+                        )?,
                         path: path.to_path_buf().into_boxed_path(),
                     },
                 ))));
@@ -294,7 +301,7 @@ impl InstalledDist {
                 return Ok(Some(Self::from(InstalledDistKind::EggInfoFile(
                     InstalledEggInfoFile {
                         name: file_name.name,
-                        version: Version::from_str(&egg_metadata.version)?,
+                        version: parse_legacy_metadata_version(path, &egg_metadata.version)?,
                         path: path.to_path_buf().into_boxed_path(),
                     },
                 ))));
@@ -337,14 +344,15 @@ impl InstalledDist {
                 .map_err(|()| InstalledDistError::InvalidEggLinkTarget(path.to_path_buf()))?;
 
             // Mildly unfortunate that we must read metadata to get the version.
-            let Some(egg_metadata) = read_metadata(&egg_info.join("PKG-INFO")) else {
+            let metadata_path = egg_info.join("PKG-INFO");
+            let Some(egg_metadata) = read_metadata(&metadata_path) else {
                 return Ok(None);
             };
 
             return Ok(Some(Self::from(InstalledDistKind::LegacyEditable(
                 InstalledLegacyEditable {
                     name: egg_metadata.name,
-                    version: Version::from_str(&egg_metadata.version)?,
+                    version: parse_legacy_metadata_version(&metadata_path, &egg_metadata.version)?,
                     egg_link: path.to_path_buf().into_boxed_path(),
                     target: target.into_boxed_path(),
                     target_url: url,
@@ -636,10 +644,26 @@ fn read_metadata(path: &Path) -> Option<uv_pypi_types::Metadata10> {
     let metadata = match uv_pypi_types::Metadata10::parse_pkg_info(&content) {
         Ok(metadata) => metadata,
         Err(err) => {
-            warn!("Failed to parse metadata for {path:?}: {err}");
+            // Parser errors can reproduce arbitrary metadata field values.
+            let reason = match err {
+                MetadataError::FieldNotFound("Name") => "missing `Name` field",
+                MetadataError::FieldNotFound("Version") => "missing `Version` field",
+                MetadataError::InvalidName(_) => "invalid `Name` field",
+                _ => "invalid core metadata",
+            };
+            warn!("Failed to parse metadata for {path:?}: {reason}");
             return None;
         }
     };
 
     Some(metadata)
+}
+
+/// Parse the legacy `Version` field without including its raw value in errors.
+fn parse_legacy_metadata_version(
+    path: &Path,
+    version: &str,
+) -> Result<Version, InstalledDistError> {
+    Version::from_str(version)
+        .map_err(|_| InstalledDistError::InvalidLegacyMetadataVersion(path.to_path_buf()))
 }
