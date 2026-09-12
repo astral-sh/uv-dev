@@ -53,7 +53,9 @@ use uv_distribution_types::{
     Requirement, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
 use uv_fs::{Simplified, normalize_path};
-use uv_pep508::{Pep508Error, RequirementOrigin, VerbatimUrl, expand_env_vars};
+use uv_pep508::{
+    Pep508Error, Pep508ErrorSource, RequirementOrigin, VerbatimUrl, VersionOrUrl, expand_env_vars,
+};
 use uv_pypi_types::VerbatimParsedUrl;
 #[cfg(feature = "http")]
 use uv_redacted::DisplaySafeUrl;
@@ -863,7 +865,8 @@ fn parse_entry(
             .flatten()
             .map(Cow::Owned)
             .unwrap_or(Cow::Borrowed(given));
-        let specifier = PackageNameSpecifier::from_str(given.as_ref()).map_err(|err| {
+        let expanded = expand_env_vars(given.as_ref());
+        let specifier = PackageNameSpecifier::from_str(expanded.as_ref()).map_err(|err| {
             RequirementsTxtParserError::NoBinary {
                 source: err,
                 specifier: given.to_string(),
@@ -879,7 +882,8 @@ fn parse_entry(
             .flatten()
             .map(Cow::Owned)
             .unwrap_or(Cow::Borrowed(given));
-        let specifier = PackageNameSpecifier::from_str(given.as_ref()).map_err(|err| {
+        let expanded = expand_env_vars(given.as_ref());
+        let specifier = PackageNameSpecifier::from_str(expanded.as_ref()).map_err(|err| {
             RequirementsTxtParserError::NoBinary {
                 source: err,
                 specifier: given.to_string(),
@@ -1023,18 +1027,56 @@ fn parse_requirement_and_hashes(
         }
     }
 
-    let requirement = RequirementsTxtRequirement::parse(requirement, working_dir, editable)
+    let expanded = expand_env_vars(requirement);
+    let verbatim = if expanded.as_ref() == requirement {
+        None
+    } else {
+        match RequirementsTxtRequirement::parse(requirement, working_dir, editable) {
+            Ok(requirement) => Some(requirement),
+            // URLs already expand environment variables while parsing. If the once-expanded URL
+            // is invalid, parsing the expanded requirement would expand nested variables again.
+            Err(source) if matches!(&source.message, Pep508ErrorSource::UrlError(_)) => {
+                return Err(RequirementsTxtParserError::Pep508 { source, start, end });
+            }
+            Err(_) => None,
+        }
+    };
+    let requirement = RequirementsTxtRequirement::parse(expanded.as_ref(), working_dir, editable)
         .map(|requirement| {
+            // Preserve an unexpanded URL in compiled output while still expanding package names,
+            // versions, and markers from the requirements file.
+            let requirement = match (requirement, verbatim) {
+                (
+                    RequirementsTxtRequirement::Named(mut requirement),
+                    Some(RequirementsTxtRequirement::Named(verbatim)),
+                ) if matches!(verbatim.version_or_url.as_ref(), Some(VersionOrUrl::Url(_))) => {
+                    requirement.version_or_url = verbatim.version_or_url;
+                    RequirementsTxtRequirement::Named(requirement)
+                }
+                (
+                    RequirementsTxtRequirement::Unnamed(mut requirement),
+                    Some(RequirementsTxtRequirement::Unnamed(verbatim)),
+                ) => {
+                    requirement.url = verbatim.url;
+                    RequirementsTxtRequirement::Unnamed(requirement)
+                }
+                (requirement, _) => requirement,
+            };
+
             if let Some(source) = source {
                 requirement.with_origin(RequirementOrigin::File(source.to_path_buf()))
             } else {
                 requirement
             }
         })
-        .map_err(|err| RequirementsTxtParserError::Pep508 {
-            source: err,
-            start,
-            end,
+        .map_err(|mut source| {
+            if expanded.as_ref() != requirement {
+                // Do not include expanded credentials in the displayed parser input.
+                source.input = requirement.to_string();
+                source.start = 0;
+                source.len = requirement.len();
+            }
+            RequirementsTxtParserError::Pep508 { source, start, end }
         })?;
 
     let hashes = if has_hashes {
@@ -1060,14 +1102,14 @@ fn parse_hashes(content: &str, s: &mut Scanner) -> Result<Vec<String>, Requireme
         });
     }
     let hash = parse_value("--hash", content, s, |c: char| !c.is_whitespace())?;
-    hashes.push(hash.to_string());
+    hashes.push(expand_env_vars(hash).into_owned());
     loop {
         eat_wrappable_whitespace(s);
         if !s.eat_if("--hash") {
             break;
         }
         let hash = parse_value("--hash", content, s, |c: char| !c.is_whitespace())?;
-        hashes.push(hash.to_string());
+        hashes.push(expand_env_vars(hash).into_owned());
     }
     Ok(hashes)
 }
@@ -1588,7 +1630,7 @@ mod test {
     use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
 
-    use anyhow::Result;
+    use anyhow::{Result, bail};
     use assert_fs::prelude::*;
     use fs_err as fs;
     use indoc::indoc;
@@ -1599,8 +1641,12 @@ mod test {
     use unscanny::Scanner;
 
     use uv_fs::Simplified;
+    use uv_pep508::Pep508ErrorSource;
 
-    use crate::{RequirementsTxt, calculate_row_column};
+    use crate::{
+        RequirementsTxt, RequirementsTxtParserError, calculate_row_column,
+        parse_requirement_and_hashes,
+    };
 
     fn workspace_test_data_dir() -> PathBuf {
         Path::new("./test-data").simple_canonicalize().unwrap()
@@ -2968,6 +3014,71 @@ mod test {
 
         // Assert line and columns are expected
         assert_eq!(line_column, expected, "Issues with input: {input}");
+    }
+
+    /// URL variables are expanded once, without recursively expanding a substituted value.
+    #[test]
+    fn requirements_environment_variables_expand_once() -> Result<()> {
+        let requirement =
+            "ok @ https://example.invalid:${UV_TEST_REQUIREMENT_PORT}/ok-1.0.0-py3-none-any.whl";
+        let mut scanner = Scanner::new(requirement);
+        let working_dir = tempdir()?;
+
+        let error = temp_env::with_vars(
+            [
+                ("UV_TEST_REQUIREMENT_PORT", Some("${UV_TEST_NESTED_PORT}")),
+                ("UV_TEST_NESTED_PORT", Some("443")),
+            ],
+            || {
+                parse_requirement_and_hashes(
+                    &mut scanner,
+                    requirement,
+                    None,
+                    working_dir.path(),
+                    false,
+                )
+                .unwrap_err()
+            },
+        );
+
+        let RequirementsTxtParserError::Pep508 { source, .. } = error else {
+            bail!("expected a PEP 508 parser error");
+        };
+        assert!(matches!(&source.message, Pep508ErrorSource::UrlError(_)));
+        assert_eq!(source.input, requirement);
+        Ok(())
+    }
+
+    /// Expanded credentials must not appear in diagnostics for invalid requirements.
+    #[test]
+    fn requirements_environment_variables_redact_error() -> Result<()> {
+        let requirement = "${UV_TEST_REQUIREMENT_NAME} @ https://${UV_TEST_REQUIREMENT_TOKEN}@example.invalid/ok-1.0.0-py3-none-any.whl ; invalid_marker == 'value'";
+        let mut scanner = Scanner::new(requirement);
+        let working_dir = tempdir()?;
+
+        let error = temp_env::with_vars(
+            [
+                ("UV_TEST_REQUIREMENT_NAME", Some("ok")),
+                ("UV_TEST_REQUIREMENT_TOKEN", Some("private-token")),
+            ],
+            || {
+                parse_requirement_and_hashes(
+                    &mut scanner,
+                    requirement,
+                    None,
+                    working_dir.path(),
+                    false,
+                )
+                .unwrap_err()
+            },
+        );
+
+        let RequirementsTxtParserError::Pep508 { source, .. } = error else {
+            bail!("expected a PEP 508 parser error");
+        };
+        assert_eq!(source.input, requirement);
+        assert!(!source.to_string().contains("private-token"));
+        Ok(())
     }
 
     /// Test different kinds of recursive inclusions with requirements and constraints

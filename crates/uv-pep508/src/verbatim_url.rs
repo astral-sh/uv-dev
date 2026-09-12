@@ -530,10 +530,12 @@ pub fn expand_env_vars(s: &str) -> Cow<'_, str> {
 
     regex!(r"(?P<var>\$\{(?P<name>[A-Z0-9_]+)})").replace_all(s, |caps: &regex::Captures<'_>| {
         let name = caps.name("name").unwrap().as_str();
-        std::env::var(name).unwrap_or_else(|_| match name {
-            "PROJECT_ROOT" => PROJECT_ROOT_FRAGMENT.to_string(),
-            _ => caps["var"].to_owned(),
-        })
+        match std::env::var(name) {
+            Ok(value) if value.is_empty() => caps["var"].to_owned(),
+            Ok(value) => value,
+            Err(_) if name == "PROJECT_ROOT" => PROJECT_ROOT_FRAGMENT.to_string(),
+            Err(_) => caps["var"].to_owned(),
+        }
     })
 }
 
@@ -904,6 +906,7 @@ mod tests {
                 ("FOO", None),
                 ("BAR", Some("bar")),
                 ("BAZ", Some("baz")),
+                ("EMPTY", Some("")),
                 ("Not-Valid", Some("Not-Valid")),
                 ("TEST_1", Some("Test 1")),
                 ("PROJECT_ROOT", None),
@@ -928,6 +931,7 @@ mod tests {
 
                 // Missing
                 assert_eq!(expand_env_vars("${FOO}"), "${FOO}");
+                assert_eq!(expand_env_vars("${EMPTY}"), "${EMPTY}");
 
                 // Case sensitive
                 assert_eq!(expand_env_vars("${bar}"), "${bar}");
