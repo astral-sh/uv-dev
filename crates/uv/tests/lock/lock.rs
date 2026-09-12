@@ -1,3 +1,6 @@
+#[cfg(feature = "test-universal")]
+use std::collections::BTreeMap;
+
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
@@ -6,6 +9,8 @@ use async_zip::base::write::ZipFileWriter;
 #[cfg(feature = "test-universal")]
 use async_zip::{Compression, ZipEntryBuilder};
 use indoc::{formatdoc, indoc};
+#[cfg(feature = "test-universal")]
+use insta::allow_duplicates;
 use insta::assert_snapshot;
 #[cfg(feature = "test-universal")]
 use serde_json::json;
@@ -25,7 +30,7 @@ use uv_static::EnvVars;
 #[cfg(feature = "test-universal")]
 use uv_test::archive::write_tar_gz;
 #[cfg(feature = "test-universal")]
-use uv_test::packse::{PackseServer, scenario::Scenario};
+use uv_test::packse::{PackseServer, generate_wheel_with_files, scenario::Scenario};
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 use uv_test::{READ_ONLY_GITHUB_TOKEN, decode_token};
 use uv_test::{diff_snapshot, uv_snapshot};
@@ -1619,6 +1624,229 @@ async fn locked_build_dependency_wheel(module: &str) -> Result<Vec<u8>> {
             .await?;
     }
     Ok(writer.close().await?)
+}
+
+/// Reproduce applying a runtime wheel's hashes to a build requirement from another index.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_editable_build_dependency_different_index_hashes() -> Result<()> {
+    check_editable_build_dependency_index_hashes("1.0.0", "build").await
+}
+
+/// Reproduce applying a public-version lock entry to another index's local build version.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_editable_build_dependency_local_version_hashes() -> Result<()> {
+    check_editable_build_dependency_index_hashes("1.0.0+local", "build").await
+}
+
+/// Reproduce rejecting a build wheel omitted from the runtime lock at the same index and version.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_editable_build_dependency_unrecorded_wheel_hashes() -> Result<()> {
+    check_editable_build_dependency_index_hashes("1.0.0", "runtime").await
+}
+
+#[cfg(feature = "test-universal")]
+async fn check_editable_build_dependency_index_hashes(
+    build_version: &str,
+    build_index: &str,
+) -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let name = "review-dep".parse()?;
+    let mut wheel_hashes = BTreeMap::new();
+    let mut simple_indexes = BTreeMap::new();
+    let same_index = build_index == "runtime";
+
+    for (role, index, version, build_tag) in [
+        ("runtime", "runtime", "1.0.0", 1),
+        ("build", build_index, build_version, 2),
+    ] {
+        let marker = format!("SOURCE = {role:?}\n");
+        let (filename, wheel) = generate_wheel_with_files(
+            &name,
+            &version.parse()?,
+            &[],
+            &BTreeMap::new(),
+            None,
+            "py3-none-any",
+            &[("review_dep/marker.py", marker.as_str())],
+        );
+        let filename = if same_index {
+            format!("review_dep-{version}-{build_tag}-py3-none-any.whl")
+        } else {
+            filename
+        };
+        let digest = hex::encode(Sha256::digest(&wheel));
+        let wheel_path = format!("/{index}/files/{filename}");
+        let simple_index = json!({
+            "meta": { "api-version": "1.0" },
+            "name": "review-dep",
+            "files": [{
+                "filename": filename,
+                "url": format!("{}{wheel_path}", server.uri()),
+                "hashes": { "sha256": digest },
+                "core-metadata": true,
+                "upload-time": "2024-01-01T00:00:00Z",
+            }],
+        });
+        Mock::given(method("GET"))
+            .and(path(format!("{wheel_path}.metadata")))
+            .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+                "Metadata-Version: 2.2\nName: review-dep\nVersion: {version}\n"
+            )))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(wheel_path))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+            .mount(&server)
+            .await;
+        wheel_hashes.insert(role, digest);
+        simple_indexes.insert(role, simple_index);
+    }
+
+    let runtime_index = Mock::given(method("GET"))
+        .and(path("/runtime/simple/review-dep/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            simple_indexes["runtime"].to_string(),
+            "application/vnd.pypi.simple.v1+json",
+        ))
+        .mount_as_scoped(&server)
+        .await;
+    let build_index_mock = Mock::given(method("GET"))
+        .and(path(format!("/{build_index}/simple/review-dep/")))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            simple_indexes["build"].to_string(),
+            "application/vnd.pypi.simple.v1+json",
+        ));
+    let replacement_index = if same_index {
+        Some(build_index_mock)
+    } else {
+        build_index_mock.mount(&server).await;
+        None
+    };
+
+    let dependency = context.temp_dir.child("demo-pkg");
+    dependency
+        .child("demo_pkg.py")
+        .write_str("__version__ = '1.0.0'\n")?;
+    dependency
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "demo-pkg"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["review-dep==1.0.0"]
+        build-backend = "backend"
+        backend-path = ["."]
+
+        [tool.uv.sources]
+        review-dep = {{ index = "{build_index}" }}
+
+        [[tool.uv.index]]
+        name = "{build_index}"
+        url = "{}/{build_index}/simple"
+        explicit = true
+    "#, server.uri()})?;
+    dependency.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+        from zipfile import ZipFile
+
+        def build_editable(wheel_directory, config_settings=None, metadata_directory=None):
+            import review_dep
+            from review_dep.marker import SOURCE
+
+            assert SOURCE == "build", SOURCE
+            Path(__file__).with_name("build-version").write_text(review_dep.__version__)
+            filename = "demo_pkg-1.0.0-py3-none-any.whl"
+            dist_info = "demo_pkg-1.0.0.dist-info"
+            with ZipFile(Path(wheel_directory) / filename, "w") as wheel:
+                wheel.writestr("demo_pkg.pth", str(Path(__file__).parent) + "\n")
+                wheel.writestr(f"{dist_info}/METADATA", "Metadata-Version: 2.2\nName: demo-pkg\nVersion: 1.0.0\nRequires-Python: >=3.12\n")
+                wheel.writestr(f"{dist_info}/WHEEL", "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
+                wheel.writestr(f"{dist_info}/RECORD", f"demo_pkg.pth,,\n{dist_info}/METADATA,,\n{dist_info}/WHEEL,,\n{dist_info}/RECORD,,\n")
+            return filename
+    "#})?;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["demo-pkg", "review-dep==1.0.0"]
+
+        [tool.uv.sources]
+        demo-pkg = {{ path = "demo-pkg", editable = true }}
+        review-dep = {{ index = "runtime" }}
+
+        [[tool.uv.index]]
+        name = "runtime"
+        url = "{}/runtime/simple"
+        explicit = true
+
+        [[tool.uv.index]]
+        name = "build"
+        url = "{}/build/simple"
+        default = true
+    "#, server.uri(), server.uri()})?;
+
+    allow_duplicates! {
+        uv_snapshot!(context.filters(), context.lock().arg("--no-cache"), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Resolved 3 packages in [TIME]
+        ");
+    }
+    let locked = context.read("uv.lock");
+    assert!(locked.contains(&wheel_hashes["runtime"]));
+    assert!(!locked.contains(&wheel_hashes["build"]));
+
+    // The runtime wheel remains downloadable, but independent build resolution sees only the
+    // higher build tag. The lockfile need not contain every wheel for a registry version.
+    if let Some(replacement_index) = replacement_index {
+        drop(runtime_index);
+        replacement_index.mount(&server).await;
+    }
+
+    // The build resolver incorrectly applies the runtime wheel's hashes to this distinct artifact.
+    // See astral-sh/uv#21608.
+    let build_requirement = regex::escape(&format!("review-dep=={build_version}"));
+    let mut filters = context.filters();
+    filters.push((&build_requirement, "review-dep==[BUILD_VERSION]"));
+    filters.push((&wheel_hashes["runtime"], "[RUNTIME_HASH]"));
+    filters.push((&wheel_hashes["build"], "[BUILD_HASH]"));
+    allow_duplicates! {
+        uv_snapshot!(filters, context.sync().arg("--frozen").arg("--no-install-project").arg("--no-cache"), @"
+        exit_code: 1 (failure)
+        ----- stderr -----
+          × Failed to build `demo-pkg @ file://[TEMP_DIR]/demo-pkg`
+          ├─▶ Failed to install requirements from `build-system.requires`
+          ├─▶ Failed to download `review-dep==[BUILD_VERSION]`
+          ╰─▶ Hash mismatch for `review-dep==[BUILD_VERSION]`
+
+              Expected:
+                sha256:[RUNTIME_HASH]
+
+              Computed:
+                sha256:[BUILD_HASH]
+
+        hint: `demo-pkg` was included because `project` (v0.1.0) depends on `demo-pkg`
+        ");
+    }
+    assert!(
+        !dependency.child("build-version").exists(),
+        "the editable backend unexpectedly ran"
+    );
+    assert_eq!(context.read("uv.lock"), locked);
+    Ok(())
 }
 
 /// A known locked build dependency must be verified before its code enters an isolated build.
