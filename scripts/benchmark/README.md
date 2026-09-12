@@ -41,6 +41,38 @@ python3 scripts/benchmark/qualify-source-preparation.py \
   --output source-preparation.json
 ```
 
+## Git archives
+
+`qualify-git-archives.py` compares two `uv` binaries using a real local Git repository containing
+two immutable source archives. It reuses the source-preparation fixture's standard-library PEP 517
+backend, records actual metadata and wheel-build events, and checks the installed module and build
+settings. The fixture gates a running backend, so source-cache lock contention and independent
+builds are observed directly instead of inferred from total command duration. The harness requires
+Git, Python 3.11 or newer, and a POSIX system.
+
+```shell
+python3 scripts/benchmark/qualify-git-archives.py \
+  --base /absolute/path/to/old-uv \
+  --candidate /absolute/path/to/new-uv \
+  --python /absolute/path/to/python3.11 \
+  --candidate-policy recovery \
+  --output git-archives.json
+```
+
+The default `record` policy for the base records duplicate builds and missing-source failures. The
+`serialized` policy requires same-reference builds to coalesce and metadata requests and different
+build settings to use the shared source lock. The `recovery` policy additionally requires an offline
+installation to restore a displaced source directory while its cached revision hashes remain. Every
+policy checks that distinct Git references can build independently, interrupted work can be
+recovered, and completed caches can be reused offline. Mixed-version scenarios exercise both
+writer/reader directions and concurrent publication; an older binary that does not participate in
+the source lock may still perform a duplicate build.
+
+Use `--scenario` to select an individual contract. The JSON receipt includes binary digests, Git
+commits, archive digests, commands, exit status, and backend events. An interrupted backend has no
+matching end event, so its event-derived unfinished count is evidence of interruption, not a count
+of processes still alive after the harness stops its process group.
+
 ## Getting Started
 
 From the `scripts/benchmark` directory:
