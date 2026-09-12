@@ -28,7 +28,7 @@ use uv_python::downloads::{
 use uv_python::managed::{
     ManagedPythonInstallation, ManagedPythonInstallations, PythonExecutable,
     PythonMinorVersionLink, compare_build_versions, create_link_to_executable,
-    python_executable_dir,
+    python_executable_dir, replace_link_to_executable,
 };
 use uv_python::{
     ConfigDiscovery, ImplementationName, Interpreter, PythonDownloads, PythonInstallationKey,
@@ -1160,12 +1160,14 @@ fn create_bin_links(
                 }
 
                 // Replace the existing link
-                if let Err(err) = fs_err::remove_file(&target) {
+                if let Err(err) =
+                    replace_link_to_executable(&target, PythonExecutable::console(&executable))
+                {
                     errors.push((
                         InstallErrorKind::Bin,
                         installation.key().clone(),
                         anyhow::anyhow!(
-                            "Executable already exists at `{}` but could not be removed: {err}",
+                            "Failed to replace link at `{}`: {err}",
                             target.simplified_display()
                         ),
                     ));
@@ -1180,20 +1182,6 @@ fn create_bin_links(
                         .entry(existing.key().clone())
                         .or_default()
                         .remove(&target);
-                }
-
-                if let Err(err) =
-                    create_link_to_executable(&target, PythonExecutable::console(&executable))
-                {
-                    errors.push((
-                        InstallErrorKind::Bin,
-                        installation.key().clone(),
-                        anyhow::anyhow!(
-                            "Failed to create link at `{}`: {err}",
-                            target.simplified_display()
-                        ),
-                    ));
-                    continue;
                 }
 
                 debug!(
@@ -1388,5 +1376,190 @@ fn matches_build(download_build: Option<&str>, installation_build: Option<&str>)
         (Some(_), None) => false,
         // Download doesn't have build info, assume matches
         (None, _) => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use anyhow::{Context, Result};
+    use uv_preview::Preview;
+    use uv_python::managed::{
+        ManagedPythonInstallation, ManagedPythonInstallations, PythonExecutable,
+        create_link_to_executable, platform_key_from_env,
+    };
+
+    use super::{Changelog, InstallErrorKind, create_bin_links, find_matching_bin_link};
+
+    fn create_installation(root: &Path, version: &str) -> Result<ManagedPythonInstallation> {
+        let managed = root.join("managed");
+        let path = managed.join(format!("cpython-{version}-{}", platform_key_from_env()?));
+        fs_err::create_dir_all(&path)?;
+        let installation = ManagedPythonInstallations::from_settings(Some(managed))?
+            .find_all()?
+            .find(|installation| installation.path() == path)
+            .context("missing test installation")?;
+        let executable = installation.executable(false);
+        fs_err::create_dir_all(executable.parent().context("missing executable parent")?)?;
+        fs_err::write(executable, b"inert Python fixture")?;
+        Ok(installation)
+    }
+
+    #[test]
+    fn create_bin_links_requires_force_for_unmanaged_executable() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let root = dunce::canonicalize(temp_dir.path())?;
+        let installation = create_installation(&root, "3.12.8")?;
+        let bin = root.join("bin");
+        fs_err::create_dir_all(&bin)?;
+        let target = bin.join(installation.key().executable_name_minor());
+        fs_err::write(&target, b"unmanaged executable")?;
+        let mut changelog = Changelog::default();
+        let mut errors = Vec::new();
+
+        create_bin_links(
+            &installation,
+            &bin,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[&installation],
+            &mut changelog,
+            &mut errors,
+            Preview::default(),
+        );
+        assert_eq!(fs_err::read(&target)?, b"unmanaged executable");
+        assert!(changelog.installed.is_empty());
+        assert!(changelog.installed_executables.is_empty());
+        let [(InstallErrorKind::Bin, key, _)] = errors.as_slice() else {
+            anyhow::bail!("unexpected errors: {errors:?}");
+        };
+        assert_eq!(key, installation.key());
+
+        errors.clear();
+        create_bin_links(
+            &installation,
+            &bin,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[&installation],
+            &mut changelog,
+            &mut errors,
+            Preview::default(),
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(
+            find_matching_bin_link([&installation].into_iter(), &target)
+                .map(ManagedPythonInstallation::key),
+            Some(installation.key())
+        );
+        assert!(changelog.installed.contains(installation.key()));
+        assert_eq!(
+            changelog.installed_executables.get(installation.key()),
+            Some(&[target].into_iter().collect())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn create_bin_links_updates_managed_executable_owner() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let root = dunce::canonicalize(temp_dir.path())?;
+        let older = create_installation(&root, "3.12.6")?;
+        let newer = create_installation(&root, "3.12.8")?;
+        let bin = root.join("bin");
+        let target = bin.join(older.key().executable_name_minor());
+        create_link_to_executable(&target, PythonExecutable::console(&older.executable(false)))?;
+        let mut changelog = Changelog::default();
+        changelog.installed.insert(older.key().clone());
+        changelog
+            .installed_executables
+            .insert(older.key().clone(), [target.clone()].into_iter().collect());
+        let mut errors = Vec::new();
+
+        create_bin_links(
+            &newer,
+            &bin,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            std::slice::from_ref(&older),
+            &[&newer],
+            &mut changelog,
+            &mut errors,
+            Preview::default(),
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(
+            find_matching_bin_link([&older, &newer].into_iter(), &target)
+                .map(ManagedPythonInstallation::key),
+            Some(newer.key())
+        );
+        assert!(changelog.installed.contains(newer.key()));
+        assert!(
+            changelog
+                .installed_executables
+                .get(older.key())
+                .context("missing previous executable owner")?
+                .is_empty()
+        );
+        assert_eq!(
+            changelog.installed_executables.get(newer.key()),
+            Some(&[target].into_iter().collect())
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn create_bin_links_preserves_directory_on_replacement_failure() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let root = dunce::canonicalize(temp_dir.path())?;
+        let installation = create_installation(&root, "3.12.8")?;
+        let bin = root.join("bin");
+        let target = bin.join(installation.key().executable_name_minor());
+        fs_err::create_dir_all(&target)?;
+        let existing = target.join("existing");
+        fs_err::write(&existing, b"existing directory contents")?;
+        let mut changelog = Changelog::default();
+        let mut errors = Vec::new();
+
+        create_bin_links(
+            &installation,
+            &bin,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[&installation],
+            &mut changelog,
+            &mut errors,
+            Preview::default(),
+        );
+        assert!(target.is_dir());
+        assert_eq!(fs_err::read(&existing)?, b"existing directory contents");
+        assert!(changelog.installed.is_empty());
+        assert!(changelog.installed_executables.is_empty());
+        let [(InstallErrorKind::Bin, key, _)] = errors.as_slice() else {
+            anyhow::bail!("unexpected errors: {errors:?}");
+        };
+        assert_eq!(key, installation.key());
+        Ok(())
     }
 }
