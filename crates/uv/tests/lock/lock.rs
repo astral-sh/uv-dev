@@ -6393,8 +6393,8 @@ fn lock_upgrade_log_multi_version() -> Result<()> {
         revision = 3
         requires-python = ">=3.12"
         resolution-markers = [
-            "sys_platform != 'win32'",
             "sys_platform == 'win32'",
+            "sys_platform != 'win32'",
         ]
 
         [options]
@@ -18584,6 +18584,126 @@ fn lock_omits_impossible_group_edges() -> Result<()> {
     Ok(())
 }
 
+/// Reusing recorded forks must not change the persisted order of their markers.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_reuses_canonical_fork_marker_order() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "fork-marker-order"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.node-1.versions."1.0.0"]
+        requires_python = ">=3.12,<3.15"
+        requires = ["node-2[feature]!=2"]
+        sdist = false
+
+        [packages.node-1.versions."1.0.0".extras]
+        feature = ["node-2==1; python_version < '3.14'"]
+
+        [packages.node-1.versions."2.0.0"]
+        requires_python = ">=3.12,<3.13"
+        sdist = false
+
+        [packages.node-1.versions."2.0.0".extras]
+        feature = []
+
+        [packages.node-2.versions."1.0.0"]
+        requires_python = ">=3.12,<3.15"
+        sdist = false
+
+        [packages.node-2.versions."1.0.0".extras]
+        feature = [
+            "missing; sys_platform == 'darwin'",
+            "node-2[feature]!=2; python_version >= '3.13'",
+        ]
+
+        [packages.node-2.versions."2.0.0"]
+        requires_python = ">=3.12,<3.13"
+        sdist = false
+
+        [packages.node-2.versions."2.0.0".extras]
+        feature = []
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.15"
+
+        [dependency-groups]
+        shared = [
+            "node-1>=1,<2; sys_platform == 'win32'",
+            "node-1[feature]>=1,<3; sys_platform != 'win32'",
+        ]
+        "#})?;
+    let command = || {
+        let mut command = context.lock();
+        command
+            .arg("--no-config")
+            .arg("--index-url")
+            .arg(server.index_url())
+            .arg("--no-build")
+            .env_remove(EnvVars::UV_EXCLUDE_NEWER);
+        command
+    };
+
+    uv_snapshot!(context.filters(), command(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    let initial = context.read("uv.lock");
+    let lock = toml::from_str::<toml::Value>(&initial)?;
+    assert_eq!(
+        lock["resolution-markers"]
+            .as_array()
+            .expect("top-level resolution markers")
+            .len(),
+        6
+    );
+    let node = lock["package"]
+        .as_array()
+        .expect("locked packages")
+        .iter()
+        .find(|package| {
+            package["name"].as_str() == Some("node-1")
+                && package["version"].as_str() == Some("1.0.0")
+        })
+        .expect("node-1==1.0.0 is locked");
+    assert_eq!(
+        node["resolution-markers"]
+            .as_array()
+            .expect("per-package resolution markers")
+            .len(),
+        4
+    );
+
+    uv_snapshot!(context.filters(), command().arg("--check").arg("--refresh").arg("--preview-features").arg("lockfile-format-check"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), initial);
+
+    command()
+        .arg("--refresh")
+        .arg("--preview-features")
+        .arg("lockfile-format-check")
+        .assert()
+        .success();
+    assert_eq!(context.read("uv.lock"), initial);
+    Ok(())
+}
+
 /// Checks that a later `exclude-newer` cutoff does not invalidate a lock until a refresh occurs,
 /// while a more restrictive cutoff still requires an update.
 #[cfg(feature = "test-universal")]
@@ -27285,6 +27405,30 @@ fn lock_fork_strategy_with_python_environments() -> Result<()> {
         "#);
     });
 
+    // The recorded policy and fork markers must produce the same canonical lock when reused.
+    for (name, project) in [
+        ("requires-python", &requires_python),
+        ("fewest", &fewest),
+        ("lowest", &lowest),
+    ] {
+        let initial = context.read(format!("{name}/uv.lock"));
+        let command = || {
+            let mut command = context.lock();
+            command
+                .current_dir(project)
+                .arg("--index-url")
+                .arg(server.index_url())
+                .arg("--refresh")
+                .arg("--preview-features")
+                .arg("lockfile-format-check");
+            command
+        };
+        command().arg("--locked").assert().success();
+        assert_eq!(context.read(format!("{name}/uv.lock")), initial);
+        command().assert().success();
+        assert_eq!(context.read(format!("{name}/uv.lock")), initial);
+    }
+
     Ok(())
 }
 
@@ -27324,9 +27468,9 @@ fn lock_python_upper_bound() -> Result<()> {
         revision = 3
         requires-python = ">=3.8"
         resolution-markers = [
+            "python_full_version >= '3.13'",
             "python_full_version >= '3.9' and python_full_version < '3.13'",
             "python_full_version < '3.9'",
-            "python_full_version >= '3.13'",
         ]
 
         [options]
@@ -29073,8 +29217,8 @@ fn lock_multiple_sources() -> Result<()> {
         revision = 3
         requires-python = ">=3.12"
         resolution-markers = [
-            "sys_platform != 'win32'",
             "sys_platform == 'win32'",
+            "sys_platform != 'win32'",
         ]
 
         [options]
@@ -34762,8 +34906,8 @@ fn lock_split_on_windows() -> Result<()> {
         revision = 3
         requires-python = ">=3.12"
         resolution-markers = [
-            "sys_platform != 'win32'",
             "sys_platform == 'win32'",
+            "sys_platform != 'win32'",
         ]
         required-markers = [
             "sys_platform == 'win32'",
@@ -35620,10 +35764,10 @@ fn lock_pytorch_cpu() -> Result<()> {
         revision = 3
         requires-python = ">=3.12.[X]"
         resolution-markers = [
-            "(python_full_version >= '3.13' and extra != 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (platform_machine != 'aarch64' and extra != 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (platform_python_implementation != 'CPython' and extra != 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (sys_platform != 'linux' and extra != 'extra-7-project-cpu' and extra == 'extra-7-project-cu124')",
-            "python_full_version < '3.13' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra != 'extra-7-project-cpu' and extra == 'extra-7-project-cu124'",
-            "(python_full_version >= '3.13' and sys_platform == 'linux' and extra == 'extra-7-project-cpu' and extra != 'extra-7-project-cu124') or (platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-7-project-cpu' and extra != 'extra-7-project-cu124') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-7-project-cpu' and extra != 'extra-7-project-cu124') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-7-project-cpu' and extra != 'extra-7-project-cu124')",
             "(python_full_version < '3.13' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-7-project-cpu' and extra != 'extra-7-project-cu124') or (sys_platform == 'darwin' and extra == 'extra-7-project-cpu' and extra != 'extra-7-project-cu124')",
+            "(python_full_version >= '3.13' and sys_platform == 'linux' and extra == 'extra-7-project-cpu' and extra != 'extra-7-project-cu124') or (platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-7-project-cpu' and extra != 'extra-7-project-cu124') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-7-project-cpu' and extra != 'extra-7-project-cu124') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-7-project-cpu' and extra != 'extra-7-project-cu124')",
+            "python_full_version < '3.13' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra != 'extra-7-project-cpu' and extra == 'extra-7-project-cu124'",
+            "(python_full_version >= '3.13' and extra != 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (platform_machine != 'aarch64' and extra != 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (platform_python_implementation != 'CPython' and extra != 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (sys_platform != 'linux' and extra != 'extra-7-project-cpu' and extra == 'extra-7-project-cu124')",
             "extra != 'extra-7-project-cpu' and extra != 'extra-7-project-cu124'",
         ]
         conflicts = [[
@@ -36271,11 +36415,11 @@ fn lock_pytorch_index_preferences() -> Result<()> {
         revision = 3
         requires-python = ">=3.10.0"
         resolution-markers = [
-            "sys_platform != 'darwin' and extra != 'extra-7-project-cpu' and extra == 'extra-7-project-cu118'",
             "sys_platform == 'darwin' and extra != 'extra-7-project-cpu' and extra == 'extra-7-project-cu118'",
+            "sys_platform == 'darwin' and extra == 'extra-7-project-cpu' and extra != 'extra-7-project-cu118'",
+            "sys_platform != 'darwin' and extra != 'extra-7-project-cpu' and extra == 'extra-7-project-cu118'",
             "(python_full_version >= '3.13' and sys_platform == 'linux' and extra == 'extra-7-project-cpu' and extra != 'extra-7-project-cu118') or (platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-7-project-cpu' and extra != 'extra-7-project-cu118') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-7-project-cpu' and extra != 'extra-7-project-cu118') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-7-project-cpu' and extra != 'extra-7-project-cu118')",
             "python_full_version < '3.13' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-7-project-cpu' and extra != 'extra-7-project-cu118'",
-            "sys_platform == 'darwin' and extra == 'extra-7-project-cpu' and extra != 'extra-7-project-cu118'",
             "extra != 'extra-7-project-cpu' and extra != 'extra-7-project-cu118'",
         ]
         conflicts = [[
@@ -36737,8 +36881,8 @@ fn lock_intel_mac() -> Result<()> {
         requires-python = ">=3.11"
         resolution-markers = [
             "(python_full_version >= '3.12' and platform_machine != 'x86_64') or (python_full_version >= '3.12' and sys_platform != 'darwin')",
-            "(python_full_version < '3.12' and platform_machine != 'x86_64') or (python_full_version < '3.12' and sys_platform != 'darwin')",
             "platform_machine == 'x86_64' and sys_platform == 'darwin'",
+            "(python_full_version < '3.12' and platform_machine != 'x86_64') or (python_full_version < '3.12' and sys_platform != 'darwin')",
         ]
         required-markers = [
             "platform_machine == 'x86_64' and sys_platform == 'darwin'",
@@ -38171,8 +38315,8 @@ fn lock_requires_python_empty_lock_file() -> Result<()> {
         requires-python = "==3.13.0"
         resolution-markers = [
             "sys_platform == 'darwin'",
-            "platform_machine == 'aarch64' and sys_platform == 'linux'",
             "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')",
+            "platform_machine == 'aarch64' and sys_platform == 'linux'",
         ]
 
         [options]
@@ -38244,8 +38388,8 @@ fn lock_requires_python_empty_lock_file() -> Result<()> {
         requires-python = "==3.13.2"
         resolution-markers = [
             "sys_platform == 'darwin'",
-            "platform_machine == 'aarch64' and sys_platform == 'linux'",
             "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')",
+            "platform_machine == 'aarch64' and sys_platform == 'linux'",
         ]
 
         [options]
@@ -40474,8 +40618,8 @@ fn lock_required_intersection() -> Result<()> {
         revision = 3
         requires-python = ">=3.12"
         resolution-markers = [
-            "platform_machine == 'x86_64' and sys_platform == 'linux'",
             "platform_machine == 'arm64' and sys_platform == 'darwin'",
+            "platform_machine == 'x86_64' and sys_platform == 'linux'",
         ]
         supported-markers = [
             "platform_machine == 'x86_64' and sys_platform == 'linux'",

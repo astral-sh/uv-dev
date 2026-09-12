@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::cmp::Ordering;
+use std::cmp::{Ordering, Reverse};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
@@ -72,6 +72,7 @@ pub use crate::lock::export::{
 pub use crate::lock::installable::{Installable, InstallableRootKind};
 pub use crate::lock::map::PackageMap;
 pub use crate::lock::tree::{TreeDisplay, TreeJsonTarget};
+use crate::marker::requires_python;
 use crate::resolution::{AnnotatedDist, ResolutionGraphNode};
 use crate::universal_marker::{ConflictMarker, UniversalMarker};
 use crate::{
@@ -1157,11 +1158,14 @@ impl Lock {
         conflicts: Conflicts,
         supported_environments: Vec<MarkerTree>,
         required_environments: Vec<MarkerTree>,
-        fork_markers: Vec<UniversalMarker>,
+        mut fork_markers: Vec<UniversalMarker>,
     ) -> Result<Self, LockError> {
+        sort_fork_markers(&mut fork_markers, &options);
+
         // Put all dependencies for each package in a canonical order and
         // check for duplicates.
         for package in &mut packages {
+            sort_fork_markers(&mut package.fork_markers, &options);
             package.dependencies.sort();
             for [dep1, dep2] in package.dependencies.array_windows() {
                 if dep1 == dep2 {
@@ -7811,6 +7815,37 @@ fn canonicalize_universal_markers(
         .collect()
 }
 
+/// Order persisted fork markers independently of fork discovery and interner allocation.
+///
+/// The stored resolution policy determines the direction of the Python lower bound. The
+/// [`MarkerTree`] structural tie-break makes equal-bound partitions stable across processes.
+fn sort_fork_markers(markers: &mut [UniversalMarker], options: &ResolverOptions) {
+    let key = |marker: &UniversalMarker| {
+        (
+            requires_python(marker.pep508())
+                .unwrap_or_default()
+                .lower()
+                .clone(),
+            marker.combined(),
+        )
+    };
+    match (options.fork_strategy, options.resolution_mode) {
+        (
+            ForkStrategy::Fewest,
+            ResolutionMode::Highest | ResolutionMode::Lowest | ResolutionMode::LowestDirect,
+        )
+        | (ForkStrategy::RequiresPython, ResolutionMode::Lowest) => {
+            markers.sort_by_cached_key(key);
+        }
+        (ForkStrategy::RequiresPython, ResolutionMode::Highest | ResolutionMode::LowestDirect) => {
+            markers.sort_by_cached_key(|marker| {
+                let (lower, marker) = key(marker);
+                (Reverse(lower), marker)
+            });
+        }
+    }
+}
+
 /// Return the simplified marker trees that would be persisted in `uv.lock`.
 fn canonical_marker_trees(
     markers: &[UniversalMarker],
@@ -8094,6 +8129,54 @@ mod tests {
             sys_platform: "darwin",
         })
         .expect("valid marker environment")
+    }
+
+    #[test]
+    fn fork_marker_order_is_canonical_on_read() -> Result<(), Box<dyn Error>> {
+        let markers = [
+            "python_version >= '3.13' and sys_platform == 'win32'",
+            "python_version < '3.13' and sys_platform == 'win32'",
+            "sys_platform != 'win32'",
+        ];
+        let make_lock = |top: [usize; 3], package: [usize; 2], options: &serde_json::Value| {
+            let value = serde_json::json!({
+                "version": 1,
+                "revision": 3,
+                "requires-python": ">=3.12,<3.14",
+                "resolution-markers": top.map(|index| markers[index]),
+                "options": options,
+                "package": [
+                    {
+                        "name": "a",
+                        "version": "1",
+                        "source": { "registry": "https://example.org/simple" },
+                        "resolution-markers": package.map(|index| markers[index]),
+                    },
+                    {
+                        "name": "a",
+                        "version": "2",
+                        "source": { "registry": "https://example.org/simple" },
+                        "resolution-markers": [markers[2]],
+                    },
+                ],
+            });
+            toml::from_str::<Lock>(&toml::to_string(&value).expect("valid lock document"))
+        };
+        for fork_strategy in ["requires-python", "fewest"] {
+            for resolution_mode in ["highest", "lowest", "lowest-direct"] {
+                let options = serde_json::json!({
+                    "fork-strategy": fork_strategy,
+                    "resolution-mode": resolution_mode,
+                });
+                let first = make_lock([0, 1, 2], [0, 1], &options)?;
+                let second = make_lock([2, 1, 0], [1, 0], &options)?;
+                assert_eq!(first, second);
+                let serialized = first.to_toml()?;
+                assert_eq!(serialized, second.to_toml()?);
+                assert_eq!(toml::from_str::<Lock>(&serialized)?, first);
+            }
+        }
+        Ok(())
     }
 
     #[test]

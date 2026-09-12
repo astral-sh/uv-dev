@@ -747,8 +747,8 @@ fn requirements_txt_dependency_conflicting_markers() -> Result<()> {
             requires-python = ">=3.12"
             resolution-markers = [
                 "sys_platform == 'darwin'",
-                "sys_platform == 'win32'",
                 "sys_platform != 'darwin' and sys_platform != 'win32'",
+                "sys_platform == 'win32'",
             ]
 
             [options]
@@ -1910,9 +1910,9 @@ fn requirements_txt_non_project_fork() -> Result<()> {
             revision = 3
             requires-python = ">=3.12"
             resolution-markers = [
-                "sys_platform == 'win32'",
                 "sys_platform == 'linux'",
                 "sys_platform != 'linux' and sys_platform != 'win32'",
+                "sys_platform == 'win32'",
             ]
 
             [options]
@@ -3084,9 +3084,9 @@ fn requirements_txt_script() -> Result<()> {
         revision = 3
         requires-python = ">=3.11"
         resolution-markers = [
-            "sys_platform == 'win32'",
             "sys_platform == 'linux'",
             "sys_platform != 'linux' and sys_platform != 'win32'",
+            "sys_platform == 'win32'",
         ]
 
         [options]
@@ -3202,9 +3202,9 @@ fn requirements_txt_script() -> Result<()> {
         revision = 3
         requires-python = ">=3.11"
         resolution-markers = [
-            "sys_platform == 'win32'",
             "sys_platform == 'linux'",
             "sys_platform != 'linux' and sys_platform != 'win32'",
+            "sys_platform == 'win32'",
         ]
 
         [options]
