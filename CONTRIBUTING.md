@@ -124,6 +124,11 @@ replay a failure; the checker refuses to overwrite a different input with the sa
 `--packages`, `--versions`, and `--max-states` to bound the graph and exhaustive search. Add
 `--lock` to run the same generated graphs through the lockfile checks.
 
+When a generated fixed-environment check fails, the checker also saves the command, output, and
+exact served distributions in a neighboring `.failure` directory. Use `--failure-dir` to choose a
+new directory when replaying an existing fixture. The capture includes the uv binary's SHA-256
+digest and the advertised distribution hashes; existing evidence directories are never overwritten.
+
 ### Snapshot testing
 
 uv uses [insta](https://insta.rs/) for snapshot testing. It's recommended (but not necessary) to use

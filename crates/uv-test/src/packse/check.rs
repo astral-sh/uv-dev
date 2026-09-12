@@ -1,11 +1,13 @@
 //! Execute finite Packse scenarios against a real uv binary.
 
 use std::fmt;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Read};
+use std::path::Path;
 use std::process::{Command, Output};
 use std::str::FromStr;
 
 use anyhow::{Context, Result, bail, ensure};
+use sha2::{Digest, Sha256};
 
 use uv_configuration::TargetTriple;
 use uv_normalize::PackageName;
@@ -18,7 +20,7 @@ use crate::TestContext;
 
 use super::PackseServer;
 use super::oracle::{ScenarioOracle, Selection};
-use super::scenario::Scenario;
+use super::scenario::{Scenario, ScenarioDocument};
 
 /// A representative platform for fixed-environment resolver checks.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -132,6 +134,37 @@ pub fn check_scenario(
     target: &ScenarioTarget,
     max_states: usize,
 ) -> Result<CheckResult> {
+    check_scenario_inner(context, scenario, target, max_states, None)
+}
+
+/// Check a replayable fixture and save the command output and served distributions on failure.
+///
+/// The destination is only created when uv runs and its result fails the comparison. It must not
+/// already exist, so evidence from a previous run cannot be replaced accidentally.
+pub fn check_scenario_with_artifacts(
+    context: &TestContext,
+    document: &ScenarioDocument,
+    target: &ScenarioTarget,
+    max_states: usize,
+    failure_dir: &Path,
+) -> Result<CheckResult> {
+    let scenario = document.scenario()?;
+    check_scenario_inner(
+        context,
+        &scenario,
+        target,
+        max_states,
+        Some((failure_dir, document)),
+    )
+}
+
+fn check_scenario_inner(
+    context: &TestContext,
+    scenario: &Scenario,
+    target: &ScenarioTarget,
+    max_states: usize,
+    artifacts: Option<(&Path, &ScenarioDocument)>,
+) -> Result<CheckResult> {
     let environment = target_environment(scenario, target)?;
     let oracle = ScenarioOracle::new(scenario, &environment)?;
     let expected = oracle.find_solution(max_states)?;
@@ -143,7 +176,7 @@ pub fn check_scenario(
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join("\n");
-    fs_err::write(context.temp_dir.join("requirements.in"), requirements)?;
+    fs_err::write(context.temp_dir.join("requirements.in"), &requirements)?;
 
     let mut command = context.pip_compile();
     command
@@ -167,11 +200,79 @@ pub fn check_scenario(
         command.arg("--prerelease=allow");
     }
     let output = command.output().context("failed to run uv pip compile")?;
-    let selection = compare_output(&oracle, &environment, expected.solution.as_ref(), &output)?;
+    let selection = match compare_output(&oracle, &environment, expected.solution.as_ref(), &output)
+    {
+        Ok(selection) => selection,
+        Err(error) => {
+            if let Some((directory, document)) = artifacts {
+                if let Err(capture_error) = write_failure_artifacts(
+                    directory,
+                    document,
+                    &requirements,
+                    &command,
+                    &output,
+                    &server,
+                ) {
+                    return Err(error.context(format!(
+                        "failed to save resolver evidence to `{}`: {capture_error:#}",
+                        directory.display()
+                    )));
+                }
+                return Err(error.context(format!(
+                    "resolver evidence saved to `{}`",
+                    directory.display()
+                )));
+            }
+            return Err(error);
+        }
+    };
     Ok(CheckResult {
         selection,
         checked: expected.checked,
     })
+}
+
+fn write_failure_artifacts(
+    directory: &Path,
+    document: &ScenarioDocument,
+    requirements: &str,
+    command: &Command,
+    output: &Output,
+    server: &PackseServer,
+) -> Result<()> {
+    if let Some(parent) = directory
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        fs_err::create_dir_all(parent)?;
+    }
+    fs_err::create_dir(directory)?;
+    fs_err::write(directory.join("scenario.toml"), document.to_toml()?)?;
+    fs_err::write(directory.join("requirements.in"), requirements)?;
+    fs_err::write(directory.join("stdout.txt"), &output.stdout)?;
+    fs_err::write(directory.join("stderr.txt"), &output.stderr)?;
+
+    let mut executable = fs_err::File::open(command.get_program())?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = executable.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    fs_err::write(
+        directory.join("command.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "program": command.get_program().to_string_lossy(),
+            "sha256": hex::encode(digest.finalize()),
+            "args": command.get_args().map(|arg| arg.to_string_lossy()).collect::<Vec<_>>(),
+            "status": output.status.code(),
+        }))?,
+    )?;
+    server.write_distributions(&directory.join("index"))?;
+    Ok(())
 }
 
 /// Check a universal project lock, its canonical round trip, and frozen requirements exports.
