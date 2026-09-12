@@ -838,7 +838,7 @@ impl NoSolutionError {
             display_tree(&tree, "Resolver derivation tree after reduction");
         }
 
-        let report = report_derivation_tree(&tree, &formatter);
+        let report = report_derivation_tree(&tree, &self.error, &formatter);
 
         let inherited_exclude_newer_ranges = FxHashMap::default();
         let mut hints = IndexSet::default();

@@ -1264,8 +1264,7 @@ werkzeug==3.0.1
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because flask>=3.0.2 depends on click>=8.1.3 and you require click==7.0.0, we can conclude that your requirements and flask>=3.0.2 are incompatible.
-             And because you require flask==3.0.2, we can conclude that your requirements are unsatisfiable.
+      cause: Because flask==3.0.2 depends on click>=8.1.3 and you require click==7.0.0 and flask==3.0.2, we can conclude that your requirements are unsatisfiable.
     "
     );
 
