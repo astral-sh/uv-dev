@@ -249,6 +249,7 @@ pub(crate) async fn metadata(
                     .with_environment(
                         &environment,
                         collected.packages.iter(),
+                        collected.selected_packages,
                         collected.installed_module_owners,
                     )
                     .with_module_owners(collected.module_owners);

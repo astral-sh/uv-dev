@@ -29,6 +29,7 @@ use crate::settings::{InstallerSettingsRef, ResolverSettings};
 
 pub(crate) struct CollectedEnvironment {
     pub(crate) packages: SitePackages,
+    pub(crate) selected_packages: BTreeMap<PackageName, String>,
     pub(crate) module_owners: BTreeMap<ModuleName, Vec<String>>,
     pub(crate) installed_module_owners: BTreeMap<ModuleName, Vec<String>>,
 }
@@ -111,6 +112,7 @@ pub(crate) async fn collect_environment(
     let owners = find_module_owners_in_environment(venv, &packages, package_ids.as_ref())?;
     Ok(CollectedEnvironment {
         packages,
+        selected_packages: package_ids.unwrap_or_default(),
         module_owners: owners
             .selected
             .into_iter()

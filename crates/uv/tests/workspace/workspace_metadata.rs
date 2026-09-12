@@ -273,6 +273,9 @@ import iniconfig
           "version": "3.12.[X]",
           "implementation": "cpython"
         },
+        "selected_packages": {
+          "iniconfig": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+        },
         "packages": {
           "installed+[CACHE_DIR]/environments-v2/script-[HASH]/[PYTHON-LIB]/site-packages/iniconfig-2.0.0.dist-info": {
             "name": "iniconfig",
@@ -484,7 +487,8 @@ fn workspace_metadata_script_includes_existing_environment() -> Result<()> {
             "path": "[CACHE_DIR]/environments-v2/script-[HASH]/[BIN]/[PYTHON]",
             "version": "3.12.[X]"
           },
-          "root": "[CACHE_DIR]/environments-v2/script-[HASH]"
+          "root": "[CACHE_DIR]/environments-v2/script-[HASH]",
+          "selected_packages": {}
         }
         "#);
     });
@@ -1124,6 +1128,7 @@ fn workspace_metadata_installed_packages_are_independent_of_lock() -> Result<()>
             "installed_module_owners": metadata["environment"]["module_owners"],
             "inspection_changed_environment": before != after,
             "locked_versions": locked_versions,
+            "selected_packages": metadata["environment"]["selected_packages"],
         }), @r#"
         {
           "inspection_changed_environment": false,
@@ -1155,7 +1160,10 @@ fn workspace_metadata_installed_packages_are_independent_of_lock() -> Result<()>
           },
           "locked_versions": [
             "0.1.0"
-          ]
+          ],
+          "selected_packages": {
+            "metadata-required": "metadata-required==0.1.0@path+[TEMP_DIR]/metadata_required-0.1.0-py3-none-any.whl"
+          }
         }
         "#);
     });
@@ -1253,7 +1261,11 @@ dependencies = [
               "path": "[VENV]/[BIN]/[PYTHON]",
               "version": "3.12.[X]"
             },
-            "root": "[VENV]/"
+            "root": "[VENV]/",
+            "selected_packages": {
+              "installed-owner": "installed-owner==0.1.0@path+[TEMP_DIR]/installed_owner-0.1.0-py3-none-any.whl",
+              "missing-owner": "missing-owner==0.1.0@path+[TEMP_DIR]/missing_owner-0.1.0-py3-none-any.whl"
+            }
           },
           "module_owners": {
             "installed_module": [
@@ -1338,6 +1350,11 @@ dependencies = [
           "path": "[VENV]/[BIN]/[PYTHON]",
           "version": "3.12.[X]",
           "implementation": "cpython"
+        },
+        "selected_packages": {
+          "gpu-a": "gpu-a==0.1.0@path+[TEMP_DIR]/gpu_a-0.1.0-py3-none-any.whl",
+          "gpu-b": "gpu-b==0.1.0@path+[TEMP_DIR]/gpu_b-0.1.0-py3-none-any.whl",
+          "typing-extensions": "typing-extensions==0.1.0@path+[TEMP_DIR]/typing_extensions-0.1.0-py3-none-any.whl"
         },
         "packages": {
           "installed+[SITE_PACKAGES]/gpu_a-0.1.0.dist-info": {
@@ -1586,6 +1603,14 @@ dependencies = [
         "#);
     });
 
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(metadata["environment"]["selected_packages"], @r#"
+        {
+          "module-owner": "module-owner==0.1.0@path+[TEMP_DIR]/py312/module_owner-0.1.0-py3-none-any.whl"
+        }
+        "#);
+    });
+
     Ok(())
 }
 
@@ -1633,6 +1658,8 @@ package = false
     };
 
     insta::assert_snapshot!(module_owners, @"<missing>");
+
+    insta::assert_json_snapshot!(metadata["environment"]["selected_packages"], @"{}");
 
     insta::with_settings!({ filters => context.filters() }, {
         insta::assert_json_snapshot!(metadata["environment"]["module_owners"], @r#"
