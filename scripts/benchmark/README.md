@@ -36,6 +36,19 @@ offline from the same lockfiles and cached package artifacts.
 Pass `--discovery` to also install the pinned Python 3.10 and 3.13 interpreters used by the Python
 discovery workloads.
 
+Use `--discovery-only` to prepare those interpreters without the package-environment fixtures. The
+existing `python_discovery` suite also searches one, two, and four real installations on `PATH`,
+with the requested version last. It reports untimed interpreter-query, cache-hit, and metadata-skip
+counts before measuring warm and cold discovery. When `CRITERION_HOME` is set, the counts are also
+saved in `python-discovery-probes.json` beside the Criterion measurements. Set `UV_BENCH_BINARY` to
+an absolute uv binary path to compare revisions against the same prepared interpreters; measured
+commands do not enable tracing.
+
+The `path_venv` cases create a fresh virtual environment through the same search paths. Project
+directory setup and removal are outside the timed command, while interpreter selection and virtual
+environment creation are measured together. Cold and warm refer to the interpreter-query cache, not
+the operating-system file cache.
+
 Run `python3 scripts/benchmark/prepare-python-archives.py` to prepare the host-native interpreter
 archives in `python-archives.json`. These records are copied from uv's pinned download metadata and
 retain their original URLs and SHA-256 values. The prepared files use uv's actual archive-cache
@@ -84,6 +97,14 @@ CodSpeed's runner currently supports Linux and macOS. Native Windows workloads u
 hash, and within-run and between-run variation. CI uploads these separately as
 `benchmarks-walltime-windows`; they are native walltime measurements, not CodSpeed uploads. Use
 `--binary` to compare a different optimized uv build with the same workloads.
+
+For a same-machine Windows comparison, dispatch `bench.yml` with `native-baseline-revision` and
+`native-candidate-revision`. Both inputs must be exact commit SHAs in the same repository. The
+workflow builds each revision with `profiling` in a separate target directory, requires identical
+Rust toolchains and Cargo profiles, and runs the PATH discovery and virtual-environment workloads
+against both binaries. Other benchmark jobs are not scheduled for this dispatch. The uploaded
+artifact includes `comparison-inputs.json`, each binary's metadata, raw samples, and untimed probe
+counts.
 
 Run `python3 scripts/benchmark/prepare-git.py` to prepare the Git sources in `git.json` under
 `.cache/bench-git`. These repositories retain upstream commit and tree objects for PyPA's sample
