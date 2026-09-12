@@ -1,0 +1,134 @@
+name: Import Rust caches
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      source-run:
+        description: Public uv CI run containing the caches
+        type: string
+      source-sha:
+        description: Public uv commit to import
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  plan:
+    if: ${{ github.repository == 'astral-sh/uv-dev' && github.ref == 'refs/heads/main' }}
+    runs-on: github-ubuntu-24.04-x86_64-2
+    timeout-minutes: 10
+    environment: automations
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    outputs:
+      run-id: ${{ steps.source.outputs.run-id }}
+      source-sha: ${{ inputs.source-sha || github.sha }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      has-entries: ${{ steps.plan.outputs.has-entries }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify source is in the mirror
+        id: ancestry
+        env:
+          SOURCE_SHA: ${{ inputs.source-sha || github.sha }}
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if git merge-base --is-ancestor "$SOURCE_SHA" HEAD 2>/dev/null; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: ./.github/actions/rust-cache-artifacts
+        id: source
+        if: ${{ steps.ancestry.outputs.present == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          mode: find
+          source-run: ${{ inputs.source-run }}
+          source-sha: ${{ inputs.source-sha || github.sha }}
+          directory: ${{ runner.temp }}/rust-cache-index
+      - name: Get public cache artifact token
+        id: token
+        if: ${{ steps.source.outputs.run-id != '' }}
+        uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repository: astral-sh/uv
+          permissions: |
+            actions: read
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: ${{ steps.source.outputs.run-id != '' }}
+        with:
+          github-token: ${{ steps.token.outputs.token }}
+          repository: astral-sh/uv
+          run-id: ${{ steps.source.outputs.run-id }}
+          name: rust-cache-index
+          path: ${{ runner.temp }}/rust-cache-index
+      - uses: ./.github/actions/rust-cache-artifacts
+        id: plan
+        if: ${{ steps.source.outputs.run-id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          mode: plan-import
+          source-run: ${{ steps.source.outputs.run-id }}
+          source-sha: ${{ inputs.source-sha || github.sha }}
+          directory: ${{ runner.temp }}/rust-cache-index
+
+  import:
+    needs: plan
+    if: ${{ needs.plan.outputs.has-entries == 'true' }}
+    runs-on: github-ubuntu-24.04-x86_64-2
+    timeout-minutes: 30
+    environment: automations
+    concurrency:
+      group: import-rust-cache-${{ matrix.artifact }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Get public cache artifact token
+        id: token
+        uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repository: astral-sh/uv
+          permissions: |
+            actions: read
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          github-token: ${{ steps.token.outputs.token }}
+          repository: astral-sh/uv
+          run-id: ${{ needs.plan.outputs.run-id }}
+          name: ${{ matrix.artifact }}
+          path: ${{ runner.temp }}/rust-cache-artifact
+      - uses: ./.github/actions/rust-cache-artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          mode: import
+          source-run: ${{ needs.plan.outputs.run-id }}
+          source-sha: ${{ needs.plan.outputs.source-sha }}
+          entry: ${{ toJSON(matrix) }}
+          directory: ${{ runner.temp }}/rust-cache-artifact
