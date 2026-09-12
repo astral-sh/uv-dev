@@ -67,15 +67,14 @@ impl ResolutionMetadata {
             .map(VersionSpecifiers::from);
         let provides_extra = headers
             .get_all_values("Provides-Extra")
-            .filter_map(
-                |provides_extra| match ExtraName::from_owned(provides_extra) {
-                    Ok(extra_name) => Some(extra_name),
-                    Err(err) => {
-                        warn!("Ignoring invalid extra: {err}");
-                        None
-                    }
-                },
-            )
+            .filter_map(|provides_extra| {
+                if let Ok(extra_name) = ExtraName::from_owned(provides_extra) {
+                    Some(extra_name)
+                } else {
+                    warn!("Ignoring invalid extra in metadata for `{name}`");
+                    None
+                }
+            })
             .collect::<Box<_>>();
         let dynamic = headers
             .get_all_values("Dynamic")
@@ -147,15 +146,14 @@ impl ResolutionMetadata {
             .map(VersionSpecifiers::from);
         let provides_extra = headers
             .get_all_values("Provides-Extra")
-            .filter_map(
-                |provides_extra| match ExtraName::from_owned(provides_extra) {
-                    Ok(extra_name) => Some(extra_name),
-                    Err(err) => {
-                        warn!("Ignoring invalid extra: {err}");
-                        None
-                    }
-                },
-            )
+            .filter_map(|provides_extra| {
+                if let Ok(extra_name) = ExtraName::from_owned(provides_extra) {
+                    Some(extra_name)
+                } else {
+                    warn!("Ignoring invalid extra in metadata for `{name}`");
+                    None
+                }
+            })
             .collect::<Box<_>>();
 
         Ok(Self {
