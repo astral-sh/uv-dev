@@ -1,9 +1,11 @@
+use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 use std::str::FromStr;
 use std::{fmt, iter, mem};
 
 use itertools::Itertools;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use toml_edit::{
@@ -41,6 +43,282 @@ fn index_locations_equal(existing: &str, incoming: &IndexUrl, root_dir: &Path) -
     }
 
     CanonicalUrl::new(existing.url().clone()) == CanonicalUrl::new(incoming.url().clone())
+}
+
+/// An index table and the parsed values used to match subsequent updates.
+struct IndexTable {
+    table: Table,
+    name: Option<String>,
+    canonical_url: Option<CanonicalUrl>,
+    default: bool,
+    path: bool,
+    position: Option<isize>,
+}
+
+impl IndexTable {
+    fn new(table: Table, root_dir: &Path, shift: isize) -> Self {
+        let name = table
+            .get("name")
+            .and_then(Item::as_str)
+            .map(ToOwned::to_owned);
+        let url = table
+            .get("url")
+            .and_then(Item::as_str)
+            .and_then(|url| IndexUrl::parse(url, Some(root_dir)).ok());
+        let canonical_url = url.as_ref().map(|url| CanonicalUrl::new(url.url().clone()));
+        let path = matches!(url, Some(IndexUrl::Path(_)));
+        let default = table
+            .get("default")
+            .and_then(Item::as_bool)
+            .unwrap_or(false);
+        let position = table.position().map(|position| position - shift);
+
+        Self {
+            table,
+            name,
+            canonical_url,
+            default,
+            path,
+            position,
+        }
+    }
+}
+
+/// The mutable index tables and lookups used to batch index updates.
+struct IndexTables {
+    tables: Vec<Option<IndexTable>>,
+    names: FxHashMap<String, Vec<usize>>,
+    urls: FxHashMap<CanonicalUrl, Vec<usize>>,
+    defaults: Vec<usize>,
+    paths: Vec<usize>,
+    positions: BTreeMap<isize, usize>,
+    shift: isize,
+}
+
+impl IndexTables {
+    fn new(tables: ArrayOfTables, root_dir: &Path) -> Self {
+        let mut indexes = Self {
+            tables: Vec::with_capacity(tables.len()),
+            names: FxHashMap::default(),
+            urls: FxHashMap::default(),
+            defaults: Vec::new(),
+            paths: Vec::new(),
+            positions: BTreeMap::new(),
+            shift: 0,
+        };
+
+        for table in tables {
+            indexes.push(IndexTable::new(table, root_dir, indexes.shift));
+        }
+
+        indexes
+    }
+
+    fn push(&mut self, table: IndexTable) {
+        let id = self.tables.len();
+        if let Some(name) = &table.name {
+            self.names.entry(name.clone()).or_default().push(id);
+        }
+        if let Some(url) = &table.canonical_url {
+            self.urls.entry(url.clone()).or_default().push(id);
+        }
+        if table.default {
+            self.defaults.push(id);
+        }
+        if table.path {
+            self.paths.push(id);
+        }
+        if let Some(position) = table.position {
+            *self.positions.entry(position).or_default() += 1;
+        }
+        self.tables.push(Some(table));
+    }
+
+    fn remove(&mut self, id: usize) -> Option<IndexTable> {
+        let table = self.tables.get_mut(id)?.take()?;
+        if let Some(position) = table.position
+            && let Some(count) = self.positions.get_mut(&position)
+        {
+            *count -= 1;
+            if *count == 0 {
+                self.positions.remove(&position);
+            }
+        }
+        Some(table)
+    }
+
+    fn add(&mut self, index: &Index, root_dir: &Path, size: usize) {
+        let mut replaced = FxHashSet::default();
+        if let Some(name) = index.name.as_deref()
+            && let Some(ids) = self.names.remove(name)
+        {
+            replaced.extend(ids.into_iter().filter(|id| self.tables[*id].is_some()));
+        }
+        if index.default {
+            replaced.extend(
+                mem::take(&mut self.defaults)
+                    .into_iter()
+                    .filter(|id| self.tables[*id].is_some()),
+            );
+        }
+
+        if matches!(index.url, IndexUrl::Path(_)) {
+            // Path indexes can refer to the same directory through different spellings or
+            // symlinks. Keep the filesystem-aware comparison for these relatively rare entries.
+            self.paths.retain(|id| self.tables[*id].is_some());
+            for id in &self.paths {
+                if self
+                    .tables
+                    .get(*id)
+                    .and_then(Option::as_ref)
+                    .and_then(|table| table.table.get("url"))
+                    .and_then(Item::as_str)
+                    .is_some_and(|url| index_locations_equal(url, &index.url, root_dir))
+                {
+                    replaced.insert(*id);
+                }
+            }
+        } else {
+            let url = CanonicalUrl::new(index.url.url().clone());
+            if let Some(ids) = self.urls.remove(&url) {
+                replaced.extend(ids.into_iter().filter(|id| self.tables[*id].is_some()));
+            }
+        }
+
+        // `add_index` reuses the first matching table, then removes all matching tables. IDs are
+        // assigned in array order, so the minimum ID retains the same comments and formatting.
+        let first = replaced.iter().min().copied();
+        let mut table = Table::new();
+        for id in replaced {
+            if let Some(replaced) = self.remove(id)
+                && first == Some(id)
+            {
+                table = replaced.table;
+            }
+        }
+
+        update_index_table(&mut table, index, root_dir);
+
+        // Each individual insertion moves the existing tables down one position. Track that
+        // shift once, instead of visiting every table for every inserted index.
+        if let Some(position) = self.positions.keys().next().copied() {
+            self.shift += 1;
+            table.set_position(Some(position + self.shift - 1));
+        } else {
+            let position = isize::try_from(size).expect("TOML table size fits in `isize`");
+            table.set_position(Some(position));
+        }
+
+        self.push(IndexTable::new(table, root_dir, self.shift));
+    }
+
+    fn into_array(self) -> ArrayOfTables {
+        self.tables
+            .into_iter()
+            .flatten()
+            .map(|mut table| {
+                table
+                    .table
+                    .set_position(table.position.map(|position| position + self.shift));
+                table.table
+            })
+            .collect()
+    }
+}
+
+fn update_index_table(table: &mut Table, index: &Index, root_dir: &Path) {
+    // If necessary, update the name.
+    if let Some(index) = index.name.as_deref()
+        && table
+            .get("name")
+            .and_then(Item::as_str)
+            .is_none_or(|name| name != index)
+    {
+        let mut formatted = Formatted::new(index.to_string());
+        if let Some(value) = table.get("name").and_then(Item::as_value) {
+            if let Some(prefix) = value.decor().prefix() {
+                formatted.decor_mut().set_prefix(prefix.clone());
+            }
+            if let Some(suffix) = value.decor().suffix() {
+                formatted.decor_mut().set_suffix(suffix.clone());
+            }
+        }
+        table.insert("name", Value::String(formatted).into());
+    }
+
+    let url = if let IndexUrl::Path(url) = &index.url
+        && let Ok(path) = url.to_file_path()
+        && let Ok(path) = try_relative_to_if(path, root_dir, !url.was_given_absolute())
+    {
+        PortablePath::from(&path).to_string()
+    } else {
+        index.url.without_credentials().to_string()
+    };
+    let existing_url = table.get("url").and_then(Item::as_str);
+
+    // Update the stored URL independently of whether the index location changed.
+    let url_needs_update = existing_url.is_none_or(|existing| existing != url);
+    let index_location_changed =
+        existing_url.is_none_or(|existing| !index_locations_equal(existing, &index.url, root_dir));
+
+    if url_needs_update {
+        let mut formatted = Formatted::new(url);
+        if let Some(value) = table.get("url").and_then(Item::as_value) {
+            if let Some(prefix) = value.decor().prefix() {
+                formatted.decor_mut().set_prefix(prefix.clone());
+            }
+            if let Some(suffix) = value.decor().suffix() {
+                formatted.decor_mut().set_suffix(suffix.clone());
+            }
+        }
+        table.insert("url", Value::String(formatted).into());
+    }
+
+    if index.default {
+        if !table
+            .get("default")
+            .and_then(Item::as_bool)
+            .is_some_and(|default| default)
+        {
+            let mut formatted = Formatted::new(true);
+            if let Some(value) = table.get("default").and_then(Item::as_value) {
+                if let Some(prefix) = value.decor().prefix() {
+                    formatted.decor_mut().set_prefix(prefix.clone());
+                }
+                if let Some(suffix) = value.decor().suffix() {
+                    formatted.decor_mut().set_suffix(suffix.clone());
+                }
+            }
+            table.insert("default", Value::Boolean(formatted).into());
+        }
+    }
+
+    if index_location_changed {
+        match index.format {
+            IndexFormat::Flat => {
+                if table
+                    .get("format")
+                    .and_then(Item::as_str)
+                    .is_none_or(|format| format != "flat")
+                {
+                    let mut formatted = Formatted::new("flat".to_string());
+                    if let Some(value) = table.get("format").and_then(Item::as_value) {
+                        if let Some(prefix) = value.decor().prefix() {
+                            formatted.decor_mut().set_prefix(prefix.clone());
+                        }
+                        if let Some(suffix) = value.decor().suffix() {
+                            formatted.decor_mut().set_suffix(suffix.clone());
+                        }
+                    }
+                    table.insert("format", Value::String(formatted).into());
+                }
+            }
+            IndexFormat::Simple => {
+                // Remove the format key if it exists (Simple is the default).
+                table.remove("format");
+            }
+        }
+    }
 }
 
 #[derive(Error, Debug)]
@@ -511,101 +789,7 @@ impl PyProjectTomlMut {
             .cloned()
             .unwrap_or_default();
 
-        // If necessary, update the name.
-        if let Some(index) = index.name.as_deref()
-            && table
-                .get("name")
-                .and_then(|name| name.as_str())
-                .is_none_or(|name| name != index)
-        {
-            let mut formatted = Formatted::new(index.to_string());
-            if let Some(value) = table.get("name").and_then(Item::as_value) {
-                if let Some(prefix) = value.decor().prefix() {
-                    formatted.decor_mut().set_prefix(prefix.clone());
-                }
-                if let Some(suffix) = value.decor().suffix() {
-                    formatted.decor_mut().set_suffix(suffix.clone());
-                }
-            }
-            table.insert("name", Value::String(formatted).into());
-        }
-
-        let url = if let IndexUrl::Path(url) = &index.url
-            && let Ok(path) = url.to_file_path()
-            && let Ok(path) = try_relative_to_if(path, root_dir, !url.was_given_absolute())
-        {
-            PortablePath::from(&path).to_string()
-        } else {
-            index.url.without_credentials().to_string()
-        };
-        let existing_url = table.get("url").and_then(|item| item.as_str());
-
-        // Update the stored URL independently of whether the index location changed.
-        let url_needs_update = existing_url.is_none_or(|existing| existing != url);
-        let index_location_changed = existing_url
-            .is_none_or(|existing| !index_locations_equal(existing, &index.url, root_dir));
-
-        // If necessary, update the URL.
-        if url_needs_update {
-            let mut formatted = Formatted::new(url);
-            if let Some(value) = table.get("url").and_then(Item::as_value) {
-                if let Some(prefix) = value.decor().prefix() {
-                    formatted.decor_mut().set_prefix(prefix.clone());
-                }
-                if let Some(suffix) = value.decor().suffix() {
-                    formatted.decor_mut().set_suffix(suffix.clone());
-                }
-            }
-            table.insert("url", Value::String(formatted).into());
-        }
-
-        // If necessary, update the default.
-        if index.default {
-            if !table
-                .get("default")
-                .and_then(Item::as_bool)
-                .is_some_and(|default| default)
-            {
-                let mut formatted = Formatted::new(true);
-                if let Some(value) = table.get("default").and_then(Item::as_value) {
-                    if let Some(prefix) = value.decor().prefix() {
-                        formatted.decor_mut().set_prefix(prefix.clone());
-                    }
-                    if let Some(suffix) = value.decor().suffix() {
-                        formatted.decor_mut().set_suffix(suffix.clone());
-                    }
-                }
-                table.insert("default", Value::Boolean(formatted).into());
-            }
-        }
-
-        // If the index location changed, sync the format to match the incoming index.
-        if index_location_changed {
-            match index.format {
-                IndexFormat::Flat => {
-                    if table
-                        .get("format")
-                        .and_then(Item::as_str)
-                        .is_none_or(|format| format != "flat")
-                    {
-                        let mut formatted = Formatted::new("flat".to_string());
-                        if let Some(value) = table.get("format").and_then(Item::as_value) {
-                            if let Some(prefix) = value.decor().prefix() {
-                                formatted.decor_mut().set_prefix(prefix.clone());
-                            }
-                            if let Some(suffix) = value.decor().suffix() {
-                                formatted.decor_mut().set_suffix(suffix.clone());
-                            }
-                        }
-                        table.insert("format", Value::String(formatted).into());
-                    }
-                }
-                IndexFormat::Simple => {
-                    // Remove the format key if it exists (Simple is the default).
-                    table.remove("format");
-                }
-            }
-        }
+        update_index_table(&mut table, index, root_dir);
 
         // Remove any replaced tables.
         existing.retain(|table| {
@@ -657,6 +841,39 @@ impl PyProjectTomlMut {
 
         // Push the item to the table.
         existing.push(table);
+
+        Ok(())
+    }
+
+    /// Add [`Index`] entries to `tool.uv.index` in priority order.
+    pub fn add_indexes(&mut self, indexes: &[&Index], root_dir: &Path) -> Result<(), Error> {
+        if indexes.is_empty() {
+            return Ok(());
+        }
+
+        let size = self.doc.len();
+        let size_after = size + usize::from(self.doc.get("tool").is_none());
+        let existing = self
+            .doc
+            .entry("tool")
+            .or_insert(implicit())
+            .as_table_mut()
+            .ok_or(Error::MalformedSources)?
+            .entry("uv")
+            .or_insert(implicit())
+            .as_table_mut()
+            .ok_or(Error::MalformedSources)?
+            .entry("index")
+            .or_insert(Item::ArrayOfTables(ArrayOfTables::new()))
+            .as_array_of_tables_mut()
+            .ok_or(Error::MalformedSources)?;
+
+        let mut tables = IndexTables::new(mem::take(existing), root_dir);
+        for (position, index) in indexes.iter().rev().enumerate() {
+            let size = if position == 0 { size } else { size_after };
+            tables.add(index, root_dir, size);
+        }
+        *existing = tables.into_array();
 
         Ok(())
     }
@@ -2003,7 +2220,9 @@ mod test {
     use std::path::Path;
     use std::str::FromStr;
     use toml_edit::DocumentMut;
-    use uv_distribution_types::Index;
+    #[cfg(unix)]
+    use uv_distribution_types::IndexUrl;
+    use uv_distribution_types::{Index, IndexFormat};
     use uv_normalize::{ExtraName, GroupName, PackageName};
     use uv_pep440::Version;
     use uv_pep508::{Requirement, RequirementOrigin};
@@ -2542,6 +2761,156 @@ format = "flat"
 name = "index"
 url = "https://pypi.org/simple"
 "#);
+    }
+
+    #[test]
+    fn add_indexes_preserves_cross_key_replacements_and_positions() -> Result<()> {
+        let toml = r#"
+[project]
+name = "project"
+
+[[tool.uv.index]]
+name = "a"
+url = "https://two.example/simple" # first table
+format = "flat"
+
+[tool.uv.sources]
+example = { index = "b" }
+
+[[tool.uv.index]]
+name = "b"
+url = "https://other.example/simple" # replaced table
+"#;
+
+        let indexes = [
+            Index::from_str("a=https://one.example/simple")?,
+            Index::from_str("b=https://two.example/simple")?,
+        ];
+        let references = indexes.iter().collect::<Vec<_>>();
+
+        let mut individual = PyProjectTomlMut::from_toml(toml, DependencyTarget::PyProjectToml)?;
+        for index in references.iter().rev() {
+            individual.add_index(index, Path::new("."))?;
+        }
+
+        let mut batched = PyProjectTomlMut::from_toml(toml, DependencyTarget::PyProjectToml)?;
+        batched.add_indexes(&references, Path::new("."))?;
+
+        assert_eq!(batched.to_string(), individual.to_string());
+        let serialized = batched.to_string();
+        assert!(serialized.contains("# first table"));
+        assert!(!serialized.contains("# replaced table"));
+        assert!(serialized.contains("[tool.uv.sources]"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn add_indexes_without_existing_tool_table() -> Result<()> {
+        let toml = "[project]\nname = \"project\"\n";
+        let indexes = [
+            Index::from_str("first=https://one.example/simple")?,
+            Index::from_str("second=https://two.example/simple")?,
+        ];
+        let references = indexes.iter().collect::<Vec<_>>();
+
+        let mut individual = PyProjectTomlMut::from_toml(toml, DependencyTarget::PyProjectToml)?;
+        for index in references.iter().rev() {
+            individual.add_index(index, Path::new("."))?;
+        }
+
+        let mut batched = PyProjectTomlMut::from_toml(toml, DependencyTarget::PyProjectToml)?;
+        batched.add_indexes(&references, Path::new("."))?;
+
+        assert_eq!(batched.to_string(), individual.to_string());
+
+        Ok(())
+    }
+
+    #[test]
+    fn add_indexes_preserves_duplicate_and_format_updates() -> Result<()> {
+        let toml = r#"
+[[tool.uv.index]]
+name = "legacy"
+url = "https://one.example/simple/" # retained table
+format = "flat"
+default = true
+
+[[tool.uv.index]]
+name = "other"
+url = "https://one.example/simple" # duplicate URL
+
+[[tool.uv.index]]
+name = "second-default"
+url = "https://two.example/simple" # duplicate default
+default = true
+"#;
+
+        let mut default = Index::from_str("https://user:password@one.example/simple")?;
+        default.default = true;
+        let mut moved = Index::from_str("legacy=https://three.example/flat")?;
+        moved.format = IndexFormat::Flat;
+        let indexes = [moved, default];
+        let references = indexes.iter().collect::<Vec<_>>();
+
+        let mut individual = PyProjectTomlMut::from_toml(toml, DependencyTarget::PyProjectToml)?;
+        for index in references.iter().rev() {
+            individual.add_index(index, Path::new("."))?;
+        }
+
+        let mut batched = PyProjectTomlMut::from_toml(toml, DependencyTarget::PyProjectToml)?;
+        batched.add_indexes(&references, Path::new("."))?;
+
+        assert_eq!(batched.to_string(), individual.to_string());
+        let serialized = batched.to_string();
+        assert!(serialized.contains("# retained table"));
+        assert!(!serialized.contains("# duplicate URL"));
+        assert!(!serialized.contains("# duplicate default"));
+        assert!(!serialized.contains("user:password"));
+        assert!(serialized.contains("format = \"flat\""));
+
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn add_indexes_preserves_symlink_and_missing_path_matching() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let links = root.path().join("links");
+        fs_err::create_dir_all(&links)?;
+        fs_err::os::unix::fs::symlink(&links, root.path().join("alias"))?;
+        fs_err::create_dir_all(links.join("simple"))?;
+
+        let toml = r#"
+[[tool.uv.index]]
+name = "existing"
+url = "./alias/simple" # symlink
+
+[[tool.uv.index]]
+name = "missing"
+url = "./alias/not-created" # missing child
+"#;
+
+        let indexes = [
+            Index::from_extra_index_url(IndexUrl::parse("./links/not-created", Some(root.path()))?),
+            Index::from_extra_index_url(IndexUrl::parse("./links/simple", Some(root.path()))?),
+        ];
+        let references = indexes.iter().collect::<Vec<_>>();
+
+        let mut individual = PyProjectTomlMut::from_toml(toml, DependencyTarget::PyProjectToml)?;
+        for index in references.iter().rev() {
+            individual.add_index(index, root.path())?;
+        }
+
+        let mut batched = PyProjectTomlMut::from_toml(toml, DependencyTarget::PyProjectToml)?;
+        batched.add_indexes(&references, root.path())?;
+
+        assert_eq!(batched.to_string(), individual.to_string());
+        let serialized = batched.to_string();
+        assert!(serialized.contains("# symlink"));
+        assert!(serialized.contains("# missing child"));
+
+        Ok(())
     }
 
     #[cfg(windows)]
