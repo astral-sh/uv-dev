@@ -23,6 +23,32 @@ package = "uv-pep508"
 [[doctest]]
 package = "uv-redacted"
 
+# Expose the shared HTTP header API to downstream Rust consumers.
+
+[[override]]
+lint = "hawk::unnecessary_public"
+crate = "uv_client"
+item = "httpcache::ETag::parse"
+kind = "inherent_method"
+level = "expect"
+reason = "intentionally exposed through the shared HTTP header API"
+
+[[override]]
+lint = "hawk::unnecessary_public"
+crate = "uv_client"
+item = "httpcache::ETag::as_bytes"
+kind = "inherent_method"
+level = "expect"
+reason = "intentionally exposed through the shared HTTP header API"
+
+[[override]]
+lint = "hawk::unnecessary_public"
+crate = "uv_client"
+item = "httpcache::ETag::is_weak"
+kind = "inherent_method"
+level = "expect"
+reason = "intentionally exposed through the shared HTTP header API"
+
 # Keep public APIs that are consumed by downstream Rust integrations.
 
 [[override]]
