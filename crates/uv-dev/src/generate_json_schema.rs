@@ -193,6 +193,10 @@ mod tests {
             definitions["PythonReport"]["properties"]["version"]["type"],
             "string"
         );
+        assert_eq!(
+            definitions["PythonReport"]["properties"]["key"]["type"],
+            "string"
+        );
 
         // Module names can contain non-ASCII identifiers, including combining characters.
         // Keep their object keys unrestricted rather than approximating Python's identifier rules.

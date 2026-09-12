@@ -299,6 +299,7 @@ fn workspace_metadata_ignores_unusable_environment() -> Result<()> {
 #[cfg(feature = "test-pypi")]
 fn workspace_metadata_script() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_filtered_python_keys()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin();
     let script = context.temp_dir.child("script.py");
@@ -332,7 +333,8 @@ import iniconfig
         "python": {
           "path": "[CACHE_DIR]/environments-v2/script-[HASH]/[BIN]/[PYTHON]",
           "version": "3.12.[X]",
-          "implementation": "cpython"
+          "implementation": "cpython",
+          "key": "cpython-3.12.[X]-[PLATFORM]"
         },
         "selected_packages": {
           "iniconfig": "iniconfig==2.0.0@registry+https://pypi.org/simple"
@@ -511,6 +513,7 @@ print("Hello, world!")
 #[test]
 fn workspace_metadata_script_includes_existing_environment() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_filtered_python_keys()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin();
     let script = context.temp_dir.child("script.py");
@@ -545,6 +548,7 @@ fn workspace_metadata_script_includes_existing_environment() -> Result<()> {
           "packages": {},
           "python": {
             "implementation": "cpython",
+            "key": "cpython-3.12.[X]-[PLATFORM]",
             "path": "[CACHE_DIR]/environments-v2/script-[HASH]/[BIN]/[PYTHON]",
             "version": "3.12.[X]"
           },
@@ -1235,6 +1239,7 @@ fn workspace_metadata_installed_packages_are_independent_of_lock() -> Result<()>
 #[test]
 fn workspace_metadata_includes_existing_environment() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_filtered_python_keys()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin();
 
@@ -1319,6 +1324,7 @@ dependencies = [
             },
             "python": {
               "implementation": "cpython",
+              "key": "cpython-3.12.[X]-[PLATFORM]",
               "path": "[VENV]/[BIN]/[PYTHON]",
               "version": "3.12.[X]"
             },
@@ -1347,6 +1353,7 @@ dependencies = [
 #[test]
 fn workspace_metadata_module_owners_from_locked_wheels() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_filtered_python_keys()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin();
 
@@ -1410,7 +1417,8 @@ dependencies = [
         "python": {
           "path": "[VENV]/[BIN]/[PYTHON]",
           "version": "3.12.[X]",
-          "implementation": "cpython"
+          "implementation": "cpython",
+          "key": "cpython-3.12.[X]-[PLATFORM]"
         },
         "selected_packages": {
           "gpu-a": "gpu-a==0.1.0@path+[TEMP_DIR]/gpu_a-0.1.0-py3-none-any.whl",
