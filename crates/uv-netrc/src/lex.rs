@@ -1,10 +1,9 @@
-use std::collections::VecDeque;
 use std::str::Chars;
 
 pub(crate) struct Lex<'a> {
     pub(crate) lineno: u32,
     instream: Chars<'a>,
-    pushback: VecDeque<String>,
+    pushback: Option<String>,
 }
 
 impl<'a> Lex<'a> {
@@ -12,7 +11,7 @@ impl<'a> Lex<'a> {
         Lex {
             lineno: 1,
             instream: content.chars(),
-            pushback: VecDeque::new(),
+            pushback: None,
         }
     }
 
@@ -36,9 +35,8 @@ impl<'a> Lex<'a> {
     }
 
     pub(crate) fn get_token(&mut self) -> String {
-        let p = self.pushback.pop_front();
-        if let Some(x) = p {
-            return x;
+        if let Some(token) = self.pushback.take() {
+            return token;
         }
         let mut token = String::new();
 
@@ -83,7 +81,27 @@ impl<'a> Lex<'a> {
         token
     }
 
-    pub(crate) fn push_token(&mut self, token: &str) {
-        self.pushback.push_back(token.to_owned());
+    pub(crate) fn push_token(&mut self, token: String) {
+        self.pushback = Some(token);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pushback_empty_token() {
+        let mut lexer = Lex::new("\"\"\nnext");
+        let token = lexer.get_token();
+        assert_eq!(token, "");
+        assert_eq!(lexer.lineno, 1);
+
+        lexer.push_token(token);
+        assert_eq!(lexer.get_token(), "");
+        assert_eq!(lexer.lineno, 1);
+
+        assert_eq!(lexer.get_token(), "next");
+        assert_eq!(lexer.lineno, 2);
     }
 }
