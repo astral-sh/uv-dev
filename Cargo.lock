@@ -6040,6 +6040,7 @@ dependencies = [
  "astral_async_zip",
  "axoupdater",
  "backon",
+ "bitflags 2.13.1",
  "byteorder",
  "bytes",
  "clap",
