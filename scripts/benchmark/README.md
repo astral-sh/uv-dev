@@ -63,6 +63,11 @@ uses the pinned managed interpreter so archive link handling is consistent acros
 contain the actual tracked files at pinned commits, including uv's own source tree, without a
 changing checkout or Git object database in the measured directory.
 
+Workspace-script discovery measures warm source trees and, on Linux, a second case that advises the
+kernel to discard candidate file data with `POSIX_FADV_DONTNEED` before each invocation. This does
+not evict directory entries or the executable, and the kernel may retain pages; treat it as an
+advisory file-data-cache workload rather than a guaranteed cold-filesystem measurement.
+
 Pass `--git-directory .cache/bench-git` to `serve-fixtures.py` to replay GitHub commit lookups and
 the exact `pyproject.toml` contents stored in these repositories. The private test endpoint
 overrides let source-metadata workloads use the normal GitHub fast path against that loopback
