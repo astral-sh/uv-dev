@@ -102,16 +102,22 @@ cargo build --package uv --bin uv
 cargo dev check-scenarios --uv target/debug/uv test/scenarios/backtracking/wrong-backtracking-basic.toml
 ```
 
-Use `--python-version` and `--python-platform` (`linux`, `macos`, or `windows`) to select a concrete
-marker environment. The checker verifies satisfiability and the exact reachable dependency closure,
-not a particular preferred version. It uses a closed-world local index and rejects unsupported
-policies, including pre-releases, yanked candidates, non-universal wheels, and non-additive extras.
-`--max-states` bounds the exhaustive search and fails explicitly when a graph is too large.
+Use `--python-version` and `--python-platform` (`linux`, `macos`, or `windows`) to select concrete
+marker environments. Comma-separated values check their Cartesian product, with a fresh cache for
+each fixed-environment projection. The checker verifies satisfiability and the exact reachable
+dependency closure, not a particular preferred version. It uses a closed-world local index and
+rejects unsupported policies, including pre-releases, yanked candidates, non-universal wheels, and
+non-additive extras. `--max-states` bounds the exhaustive search and fails explicitly when a graph
+is too large.
 
-Pass `--lock` to check a universal project lock, its canonical round trip, and a frozen requirements
-export in the selected environment. An unsatisfiable lock is only confirmed when that environment
-provides an unsatisfiable witness; a successful sample cannot prove the entire marker universe is
-satisfiable.
+Pass `--lock` to check one universal project lock, its canonical round trip, and a frozen
+requirements export in every selected environment. An unsatisfiable lock is only confirmed when one
+selected environment provides an unsatisfiable witness; successful samples cannot prove the entire
+marker universe is satisfiable.
+
+```shell
+cargo dev check-scenarios --uv target/debug/uv --lock --python-version 3.12,3.13,3.14 --python-platform linux,macos,windows test/scenarios/fork/basic.toml
+```
 
 For a reproducible set of generated graphs, provide a starting seed and an output directory:
 

@@ -21,13 +21,13 @@ pub(crate) struct Args {
     #[arg(long, value_name = "PATH")]
     uv: PathBuf,
 
-    /// The exact Python marker version to resolve for.
-    #[arg(long, default_value = "3.12")]
-    python_version: PythonVersion,
+    /// Exact Python marker versions to resolve for, separated by commas.
+    #[arg(long, value_delimiter = ',', default_value = "3.12")]
+    python_version: Vec<PythonVersion>,
 
-    /// A representative target platform: linux, macos, or windows.
-    #[arg(long, default_value = "linux")]
-    python_platform: ScenarioPlatform,
+    /// Representative target platforms: linux, macos, or windows, separated by commas.
+    #[arg(long, value_delimiter = ',', default_value = "linux")]
+    python_platform: Vec<ScenarioPlatform>,
 
     /// Reject graphs whose exhaustive search space exceeds this many selections.
     #[arg(long, default_value_t = 100_000)]
@@ -73,10 +73,8 @@ pub(crate) fn main(args: &Args) -> Result<()> {
     );
     let uv = fs_err::canonicalize(&args.uv)
         .with_context(|| format!("failed to find uv executable `{}`", args.uv.display()))?;
-    let target = ScenarioTarget {
-        python: args.python_version.clone(),
-        platform: args.python_platform,
-    };
+    let targets = ScenarioTarget::matrix(&args.python_version, &args.python_platform);
+    let target = targets.first().context("at least one target is required")?;
     // Use any installed patch release in this minor line. The resolver receives the exact marker
     // version separately, so the result does not depend on that interpreter's patch release.
     let interpreter = format!("{}.{}", target.python.major(), target.python.minor());
@@ -92,6 +90,13 @@ pub(crate) fn main(args: &Args) -> Result<()> {
             packages: args.packages.unwrap_or(3),
             versions: args.versions.unwrap_or(2),
         };
+        ensure!(
+            targets.iter().all(|other| {
+                other.python.major() == target.python.major()
+                    && other.python.minor() == target.python.minor()
+            }),
+            "generated graphs cover one Python minor line; use a scenario file for cross-minor projections"
+        );
         fs_err::create_dir_all(output_dir)?;
         let mut satisfiable = 0;
         let mut unsatisfiable = 0;
@@ -99,26 +104,18 @@ pub(crate) fn main(args: &Args) -> Result<()> {
             let seed = first_seed
                 .checked_add(u64::try_from(offset)?)
                 .context("the requested seed range overflows u64")?;
-            let document = generate_small_graph(seed, options, &target, args.max_states)?;
+            let document = generate_small_graph(seed, options, target, args.max_states)?;
             let scenario = document.scenario()?;
             let path = output_dir.join(format!("{}.toml", scenario.name));
             save_scenario_input(&path, &document.to_toml()?)?;
-            let failure_dir = (!args.lock).then(|| {
-                args.failure_dir
-                    .clone()
-                    .unwrap_or_else(|| output_dir.join(format!("{}.failure", scenario.name)))
-            });
-            let context = TestContext::new_with_versions_and_bin(&[&interpreter], uv.clone());
-            let result = check_case(&context, &document, &target, args, failure_dir.as_deref())
+            let result = check_case(&uv, &interpreter, &document, &targets, args)
                 .with_context(|| format!("generated scenario `{}` failed", path.display()))?;
-            if result.satisfiable {
-                satisfiable += 1;
-            } else {
-                unsatisfiable += 1;
-            }
+            satisfiable += result.satisfiable;
+            unsatisfiable += result.unsatisfiable;
         }
+        let kind = if args.lock { "locks" } else { "projections" };
         println!(
-            "Checked {cases} generated graphs: {satisfiable} satisfiable, {unsatisfiable} unsatisfiable"
+            "Checked {cases} generated graphs ({kind}: {satisfiable} satisfiable, {unsatisfiable} unsatisfiable)"
         );
         return Ok(());
     }
@@ -126,78 +123,100 @@ pub(crate) fn main(args: &Args) -> Result<()> {
     for path in &args.scenarios {
         let document = ScenarioDocument::from_path(path)?;
         let scenario = document.scenario()?;
-        let context = TestContext::new_with_versions_and_bin(&[&interpreter], uv.clone());
-        let result = check_case(
-            &context,
-            &document,
-            &target,
-            args,
-            args.failure_dir.as_deref(),
-        )
-        .with_context(|| format!("scenario `{}` failed", path.display()))?;
+        let result = check_case(&uv, &interpreter, &document, &targets, args)
+            .with_context(|| format!("scenario `{}` failed", path.display()))?;
         println!("{}: {}", scenario.name, result.description);
     }
     Ok(())
 }
 
 struct CaseResult {
-    satisfiable: bool,
+    satisfiable: usize,
+    unsatisfiable: usize,
     description: String,
 }
 
 fn check_case(
-    context: &TestContext,
+    uv: &Path,
+    interpreter: &str,
     document: &ScenarioDocument,
-    target: &ScenarioTarget,
+    targets: &[ScenarioTarget],
     args: &Args,
-    failure_dir: Option<&Path>,
 ) -> Result<CaseResult> {
     let scenario = document.scenario()?;
     if args.lock {
-        let result = check_lock_scenario(
-            context,
-            &scenario,
-            std::slice::from_ref(target),
-            args.max_states,
-        )?;
+        let context = TestContext::new_with_versions_and_bin(&[interpreter], uv.to_path_buf());
+        let result = check_lock_scenario(&context, &scenario, targets, args.max_states)?;
         Ok(match result {
             LockCheckResult::Satisfiable {
                 projections,
                 checked,
             } => CaseResult {
-                satisfiable: true,
+                satisfiable: 1,
+                unsatisfiable: 0,
                 description: format!(
                     "valid lock (projections: {projections}; oracle selections: {checked})"
                 ),
             },
             LockCheckResult::Unsatisfiable { witness, checked } => CaseResult {
-                satisfiable: false,
+                satisfiable: 0,
+                unsatisfiable: 1,
                 description: format!(
                     "unsatisfiable lock ({witness}; oracle selections: {checked})"
                 ),
             },
         })
     } else {
-        let result = if let Some(failure_dir) = failure_dir {
-            check_scenario_with_artifacts(context, document, target, args.max_states, failure_dir)?
-        } else {
-            check_scenario(context, &scenario, target, args.max_states)?
-        };
-        if let Some(selection) = result.selection {
-            Ok(CaseResult {
-                satisfiable: true,
-                description: format!(
+        let mut satisfiable = 0;
+        let mut unsatisfiable = 0;
+        let mut checked = 0;
+        let mut description = String::new();
+        for target in targets {
+            let failure_dir = args.failure_dir.clone().or_else(|| {
+                let output_dir = args.output_dir.as_ref()?;
+                let suffix = if targets.len() == 1 {
+                    String::new()
+                } else {
+                    format!("-py{}-{}", target.python, target.platform)
+                };
+                Some(output_dir.join(format!("{}{suffix}.failure", scenario.name)))
+            });
+            let context = TestContext::new_with_versions_and_bin(&[interpreter], uv.to_path_buf());
+            let result = if let Some(failure_dir) = failure_dir {
+                check_scenario_with_artifacts(
+                    &context,
+                    document,
+                    target,
+                    args.max_states,
+                    &failure_dir,
+                )
+            } else {
+                check_scenario(&context, &scenario, target, args.max_states)
+            }
+            .with_context(|| format!("projection for {target} failed"))?;
+            checked += result.checked;
+            if let Some(selection) = result.selection {
+                satisfiable += 1;
+                description = format!(
                     "satisfiable (selected packages: {}; oracle selections: {})",
                     selection.len(),
                     result.checked
-                ),
-            })
-        } else {
-            Ok(CaseResult {
-                satisfiable: false,
-                description: format!("unsatisfiable (oracle selections: {})", result.checked),
-            })
+                );
+            } else {
+                unsatisfiable += 1;
+                description = format!("unsatisfiable (oracle selections: {})", result.checked);
+            }
         }
+        if targets.len() > 1 {
+            description = format!(
+                "{satisfiable} satisfiable, {unsatisfiable} unsatisfiable projections (oracle selections: {checked})"
+            );
+        }
+        Ok(CaseResult {
+            satisfiable,
+            unsatisfiable,
+            description,
+        })
     }
 }
 

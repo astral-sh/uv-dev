@@ -71,13 +71,30 @@ impl fmt::Display for ScenarioPlatform {
 }
 
 /// A fully specified CPython environment, independent of the host running the check.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ScenarioTarget {
     pub python: PythonVersion,
     pub platform: ScenarioPlatform,
 }
 
 impl ScenarioTarget {
+    /// Construct a stable, deduplicated Cartesian product of Python versions and platforms.
+    pub fn matrix(versions: &[PythonVersion], platforms: &[ScenarioPlatform]) -> Vec<Self> {
+        let mut targets = Vec::new();
+        for python in versions {
+            for platform in platforms {
+                let target = Self {
+                    python: python.clone(),
+                    platform: *platform,
+                };
+                if !targets.contains(&target) {
+                    targets.push(target);
+                }
+            }
+        }
+        targets
+    }
+
     /// Construct the marker values used by both the oracle and the uv command.
     pub fn markers(&self) -> Result<MarkerEnvironment> {
         let base = MarkerEnvironment::try_from(MarkerEnvironmentBuilder {
@@ -565,6 +582,31 @@ pub fn parse_pins(contents: &str, environment: &MarkerEnvironment) -> Result<Sel
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn target_matrices_are_stable_and_deduplicated() {
+        let versions = ["3.12", "3.13", "3.12"]
+            .map(|version| PythonVersion::from_str(version).expect("valid Python version"));
+        let targets = ScenarioTarget::matrix(
+            &versions,
+            &[
+                ScenarioPlatform::Linux,
+                ScenarioPlatform::Windows,
+                ScenarioPlatform::Linux,
+            ],
+        );
+        insta::assert_snapshot!(
+            targets.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"),
+            @"
+        CPython 3.12 on x86_64-unknown-linux-gnu
+        CPython 3.12 on x86_64-pc-windows-msvc
+        CPython 3.13 on x86_64-unknown-linux-gnu
+        CPython 3.13 on x86_64-pc-windows-msvc
+        "
+        );
+        assert!(ScenarioTarget::matrix(&[], &[ScenarioPlatform::Linux]).is_empty());
+        assert!(ScenarioTarget::matrix(&versions, &[]).is_empty());
+    }
 
     #[test]
     fn rejects_overlapping_pins() -> Result<()> {
