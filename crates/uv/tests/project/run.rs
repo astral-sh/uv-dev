@@ -786,7 +786,7 @@ fn run_pep723_script_index() -> Result<()> {
         # /// script
         # requires-python = ">=3.11"
         # dependencies = [
-        #   "idna>=2",
+        #   "script-index-package>=2",
         # ]
         #
         # [[tool.uv.index]]
@@ -795,10 +795,10 @@ fn run_pep723_script_index() -> Result<()> {
         # explicit = true
         #
         # [tool.uv.sources]
-        # idna = {{ index = "test" }}
+        # script-index-package = {{ index = "test" }}
         # ///
 
-        import idna
+        import script_index_package
        "#,
         index.index_url(),
     })?;
@@ -809,7 +809,7 @@ fn run_pep723_script_index() -> Result<()> {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + idna==3.6
+     + script-index-package==2.0.0
     ");
 
     Ok(())
@@ -4412,7 +4412,7 @@ fn run_linked_environment_path() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["black"]
+        dependencies = ["linked-entrypoint"]
         "#,
     )?;
 
@@ -4424,15 +4424,10 @@ fn run_linked_environment_path() -> Result<()> {
         .env(EnvVars::UV_PROJECT_ENVIRONMENT, "target"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 7 packages in [TIME]
-    Prepared 6 packages in [TIME]
-    Installed 6 packages in [TIME]
-     + black==24.3.0
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + linked-entrypoint==1.0.0
     ");
 
     // `sys.prefix` and `sys.executable` should be from the `target` directory
@@ -4446,27 +4441,27 @@ fn run_linked_environment_path() -> Result<()> {
     [TEMP_DIR]/target/[BIN]/[PYTHON]
 
     ----- stderr -----
-    Resolved 7 packages in [TIME]
-    Checked 6 packages in [TIME]
+    Resolved 2 packages in [TIME]
+    Checked 1 package in [TIME]
     ");
 
     // And, similarly, the entrypoint should use `target`
-    let black_entrypoint = context.read("target/bin/black");
+    let linked_entrypoint = context.read("target/bin/linked-entrypoint");
     insta::with_settings!({
         filters => context.filters(),
     }, {
         assert_snapshot!(
-            black_entrypoint, @r#"
+            linked_entrypoint, @r#"
         #![TEMP_DIR]/target/[BIN]/[PYTHON]
         # -*- coding: utf-8 -*-
         import sys
-        from black import patched_main
+        from linked_entrypoint import main
         if __name__ == "__main__":
             if sys.argv[0].endswith("-script.pyw"):
                 sys.argv[0] = sys.argv[0][:-11]
             elif sys.argv[0].endswith(".exe"):
                 sys.argv[0] = sys.argv[0][:-4]
-            sys.exit(patched_main())
+            sys.exit(main())
         "#
         );
     });

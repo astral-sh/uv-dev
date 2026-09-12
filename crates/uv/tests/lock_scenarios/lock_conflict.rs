@@ -7278,7 +7278,7 @@ fn conditional_sources_keep_default_platform_specific_transitive_dependencies() 
 #[test]
 fn avoids_exponential_lock_file_growth() -> Result<()> {
     let cpu = uv_test::packse::PackseServer::new("packages/marker-growth-cpu.toml");
-    let cu124 = uv_test::packse::PackseServer::new("packages/marker-growth-cu124.toml");
+    let accelerator = uv_test::packse::PackseServer::new("packages/marker-growth-accelerator.toml");
     let context = uv_test::test_context!("3.12")
         .with_packse_index("packages/marker-growth-registry.toml")
         .with_exclude_newer("2025-02-06T00:00Z");
@@ -7287,45 +7287,43 @@ fn avoids_exponential_lock_file_growth() -> Result<()> {
         [project]
         name = "resolution-markers-for-days"
         version = "0.1.0"
-        description = "Add your description here"
-        readme = "README.md"
         requires-python = ">=3.12"
         dependencies = []
 
         [project.optional-dependencies]
         cpu = [
-            "growth-engine>=2.6.0"
+            "growth-engine>=1.0.0"
         ]
-        cu124 = [
-            "growth-engine>=2.6.0"
+        accelerator = [
+            "growth-engine>=1.0.0"
         ]
 
         [tool.uv]
         conflicts = [
             [
                 { extra = "cpu" },
-                { extra = "cu124" },
+                { extra = "accelerator" },
             ],
         ]
 
         [tool.uv.sources]
         growth-engine = [
-            { extra = "cpu", index = "pytorch-cpu" },
-            { extra = "cu124", index = "pytorch-cu124" },
+            { extra = "cpu", index = "engine-cpu" },
+            { extra = "accelerator", index = "engine-accelerator" },
         ]
 
         [[tool.uv.index]]
-        name = "pytorch-cpu"
+        name = "engine-cpu"
         url = "[CPU_INDEX]"
         explicit = true
 
         [[tool.uv.index]]
-        name = "pytorch-cu124"
-        url = "[CU124_INDEX]"
+        name = "engine-accelerator"
+        url = "[ACCELERATOR_INDEX]"
         explicit = true
     "#
     .replace("[CPU_INDEX]", &cpu.index_url())
-    .replace("[CU124_INDEX]", &cu124.index_url());
+    .replace("[ACCELERATOR_INDEX]", &accelerator.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&pyproject)?;
@@ -7333,7 +7331,7 @@ fn avoids_exponential_lock_file_growth() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 27 packages in [TIME]
+    Resolved 6 packages in [TIME]
     ");
 
     let lock = context.read("uv.lock");
@@ -7347,14 +7345,14 @@ fn avoids_exponential_lock_file_growth() -> Result<()> {
         revision = 3
         requires-python = ">=3.12"
         resolution-markers = [
-            "extra != 'extra-27-resolution-markers-for-days-cpu' and extra == 'extra-27-resolution-markers-for-days-cu124'",
-            "sys_platform != 'darwin' and extra == 'extra-27-resolution-markers-for-days-cpu' and extra != 'extra-27-resolution-markers-for-days-cu124'",
-            "sys_platform == 'darwin' and extra == 'extra-27-resolution-markers-for-days-cpu' and extra != 'extra-27-resolution-markers-for-days-cu124'",
-            "extra != 'extra-27-resolution-markers-for-days-cpu' and extra != 'extra-27-resolution-markers-for-days-cu124'",
+            "sys_platform != 'darwin' and extra != 'extra-27-resolution-markers-for-days-accelerator' and extra == 'extra-27-resolution-markers-for-days-cpu'",
+            "sys_platform == 'darwin' and extra != 'extra-27-resolution-markers-for-days-accelerator' and extra == 'extra-27-resolution-markers-for-days-cpu'",
+            "extra == 'extra-27-resolution-markers-for-days-accelerator' and extra != 'extra-27-resolution-markers-for-days-cpu'",
+            "extra != 'extra-27-resolution-markers-for-days-accelerator' and extra != 'extra-27-resolution-markers-for-days-cpu'",
         ]
         conflicts = [[
+            { package = "resolution-markers-for-days", extra = "accelerator" },
             { package = "resolution-markers-for-days", extra = "cpu" },
-            { package = "resolution-markers-for-days", extra = "cu124" },
         ]]
 
         [options]
@@ -7362,312 +7360,75 @@ fn avoids_exponential_lock_file_growth() -> Result<()> {
 
         [[package]]
         name = "growth-engine"
-        version = "2.6.0"
+        version = "1.0.0"
         source = { registry = "http://[LOCALHOST]/simple/" }
         resolution-markers = [
             "sys_platform == 'darwin'",
         ]
         dependencies = [
-            { name = "growth-filelock", marker = "sys_platform == 'darwin'" },
-            { name = "growth-fsspec", marker = "sys_platform == 'darwin'" },
-            { name = "growth-jinja2", marker = "sys_platform == 'darwin'" },
-            { name = "growth-networkx", marker = "sys_platform == 'darwin'" },
-            { name = "growth-setuptools", marker = "sys_platform == 'darwin'" },
-            { name = "growth-sympy", marker = "sys_platform == 'darwin'" },
-            { name = "growth-typing-extensions", marker = "sys_platform == 'darwin'" },
+            { name = "growth-shared", marker = "sys_platform == 'darwin'" },
         ]
         wheels = [
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0-cp312-none-macosx_11_0_arm64.whl", hash = "sha256:96a8c25718fe29975090f16fff626ecc195d2af8b64cbea091f8066198ea296a", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0-cp313-none-macosx_11_0_arm64.whl", hash = "sha256:78a423cb02542f852f47a85fc658d514955c0d8b2d968cb8c1697072ecb4fdb3", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0-cp312-none-macosx_11_0_arm64.whl", hash = "sha256:1dbe8e150388af5b005ed47a1db9c60a1b1cf95dadd54bffc68063ec3aa44677", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0-cp313-none-macosx_11_0_arm64.whl", hash = "sha256:5950c7323636ac947ddd2d193d58d24fab8186e346f1b2d427c7d972458e14b9", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
         name = "growth-engine"
-        version = "2.6.0+cpu"
+        version = "1.0.0+accelerator"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "growth-platform", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+            { name = "growth-shared" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+accelerator-cp312-cp312-linux_x86_64.whl", hash = "sha256:e76b3ad0c7237097f9601f5be75269c46b12fb794a6dcdb15f10bac0dfdcc286", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+accelerator-cp312-cp312-win_amd64.whl", hash = "sha256:f33d311f3335c1416f0d99d7a03a7fdb439f8b5b759054c938a12a083c2835a6", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+accelerator-cp313-cp313-linux_x86_64.whl", hash = "sha256:587a3169a3886406c4a44fdd8dfadf9841b63376e6a50b3a41b320b23b5aebfa", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+accelerator-cp313-cp313-win_amd64.whl", hash = "sha256:b6566ac4653d2698a86e69e23af18fc5b0ffb4a111c3acff2c1a04841ba59779", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+accelerator-cp313-cp313t-linux_x86_64.whl", hash = "sha256:eeccc5ed87260ee66be8727f3d3a2524bbc69193e50400f98903cefa0babd040", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "growth-engine"
+        version = "1.0.0+cpu"
         source = { registry = "http://[LOCALHOST]/simple/" }
         resolution-markers = [
             "sys_platform != 'darwin'",
         ]
         dependencies = [
-            { name = "growth-filelock", marker = "sys_platform != 'darwin'" },
-            { name = "growth-fsspec", marker = "sys_platform != 'darwin'" },
-            { name = "growth-jinja2", marker = "sys_platform != 'darwin'" },
-            { name = "growth-networkx", marker = "sys_platform != 'darwin'" },
-            { name = "growth-setuptools", marker = "sys_platform != 'darwin'" },
-            { name = "growth-sympy", marker = "sys_platform != 'darwin'" },
-            { name = "growth-typing-extensions", marker = "sys_platform != 'darwin'" },
+            { name = "growth-shared", marker = "sys_platform != 'darwin'" },
         ]
         wheels = [
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cpu-cp312-cp312-linux_x86_64.whl", hash = "sha256:f0bd0382024e2ac0dbbbdbfde7746c7e0faf74a9ac90e35bdb5152336553c111", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cpu-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:ebd644b1761c9dd4a8755b07d66b705be316acc49720a2052db86c91a9729c9c", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cpu-cp312-cp312-win_amd64.whl", hash = "sha256:32024c6b42944e75aa3fde7692b7cb3b6dad2d10d186a952d7ae584af9747d57", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cpu-cp313-cp313-linux_x86_64.whl", hash = "sha256:90a1733afd66d12dab21e69a8ef7ca9a16c01a605be1c2b9e4c16a9f06fab624", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cpu-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:553e24661806bc43daafaceb9464975e7e8048a2b3b6d9275e82d3a1eee87c92", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cpu-cp313-cp313-win_amd64.whl", hash = "sha256:419b7bee3fca480ed6d0e394216fbaeef8c86743b9b1f35d170e4abcb1aae370", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cpu-cp313-cp313t-linux_x86_64.whl", hash = "sha256:0ab1fcdfd38f63f88e4e51a9e813a0ce0e9676f05e2cf077d4676fb703d1bf36", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cpu-cp313-cp313t-manylinux_2_28_aarch64.whl", hash = "sha256:fe47c4209446cf4b7783c817fd55daab9b23f4c3321695bc5d15a741882ec75a", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+cpu-cp312-cp312-linux_x86_64.whl", hash = "sha256:0dc894bbb6436639af38d345b809f085826e35a23ee4f2c3654ce6575fb81703", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+cpu-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:9caeb15cb80bbec03c7e889b4051fc9e1c17ccf911e266a14684196b94357d58", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+cpu-cp312-cp312-win_amd64.whl", hash = "sha256:a567cd339a73385972cb16447f6cbc0eac38caebd5e7e29e1aaaab706569e1b9", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+cpu-cp313-cp313-linux_x86_64.whl", hash = "sha256:293ac2ba394eaf1d546e624b8b0ab962ced699f96e3f9e4c77093b58ce9e2595", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+cpu-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:f4017e0a06013fef61ce656a03d0191d1e6a0737e525ca72551f85ffe137c184", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+cpu-cp313-cp313-win_amd64.whl", hash = "sha256:f312151ba90854260e483487bd2eb5098853be2493effd7c5838abc646c75a7a", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+cpu-cp313-cp313t-linux_x86_64.whl", hash = "sha256:b62e42d05382c366e4ed36554dc7f3d8acfee2027073079b34523dd2e248e678", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+cpu-cp313-cp313t-manylinux_2_28_aarch64.whl", hash = "sha256:53e7e10f8e00b7c440bfa2a74f907f7d94ead9fb70c8962e7d7dcda4c511e1b7", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
-        name = "growth-engine"
-        version = "2.6.0+cu124"
+        name = "growth-platform"
+        version = "1.0.0"
         source = { registry = "http://[LOCALHOST]/simple/" }
         dependencies = [
-            { name = "growth-filelock" },
-            { name = "growth-fsspec" },
-            { name = "growth-jinja2" },
-            { name = "growth-networkx" },
-            { name = "growth-nvidia-cublas-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-nvidia-cuda-cupti-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-nvidia-cuda-nvrtc-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-nvidia-cuda-runtime-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-nvidia-cudnn-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-nvidia-cufft-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-nvidia-curand-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-nvidia-cusolver-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-nvidia-cusparse-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-nvidia-cusparselt-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-nvidia-nccl-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-nvidia-nvjitlink-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-nvidia-nvtx-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-setuptools" },
-            { name = "growth-sympy" },
-            { name = "growth-triton", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-typing-extensions" },
+            { name = "growth-shared" },
         ]
+        sdist = { url = "http://[LOCALHOST]/files/growth_platform-1.0.0.tar.gz", hash = "sha256:a0fae9743f831444ad827f7d8b4127519069bc00768719801dd06a9a6e6bb675", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cu124-cp312-cp312-linux_x86_64.whl", hash = "sha256:36f666d5ddcef79acdf7b9ce43edd7b9ccb7f1ac89a36a2172c8e2a0264ade6c", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cu124-cp312-cp312-win_amd64.whl", hash = "sha256:36c94e83374a2098cef68b8e2d632f9ccb26f4c8123465c41b264d9a51428c2b", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cu124-cp313-cp313-linux_x86_64.whl", hash = "sha256:0105d2e8c009afe607a3203c705e967a02ab14d00277b9e5084daadf7fb552d4", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cu124-cp313-cp313-win_amd64.whl", hash = "sha256:25c699aef7e4d160f74a4c54d1de9e8a85844c5c0f5510c93fd7fc4ee985ed2e", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cu124-cp313-cp313t-linux_x86_64.whl", hash = "sha256:894d4ab091ec070d96435917bdf7fb1da1d98ca49cb02439fb99933d92461b2f", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_platform-1.0.0-py3-none-any.whl", hash = "sha256:3f0838ef6aca9bd61f897bb686614ff4f1a2a5e6756233d152fff8133a0e9b4a", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
-        name = "growth-filelock"
-        version = "3.17.0"
+        name = "growth-shared"
+        version = "1.0.0"
         source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_filelock-3.17.0.tar.gz", hash = "sha256:1e1a922a0cda081005e61197f3354c980f9ca650269a650d78d337546cf749ee", upload-time = "2024-03-24T00:00:00Z" }
+        sdist = { url = "http://[LOCALHOST]/files/growth_shared-1.0.0.tar.gz", hash = "sha256:74a8b9d1dec2b1974e187b6f55dde707c1c7c0cb27ec2a0dd14b34e6bb1beaca", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "http://[LOCALHOST]/files/growth_filelock-3.17.0-py3-none-any.whl", hash = "sha256:2a3998021c278eeb6b5b8699625c31967d6ea0c55894956bd8ec0c2852951211", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-fsspec"
-        version = "2025.2.0"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_fsspec-2025.2.0.tar.gz", hash = "sha256:8c5c2243eb43c5a8bf59b478f5cc58e3a5ef4bb51a95f8ad035d8995c0cb5ad8", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_fsspec-2025.2.0-py3-none-any.whl", hash = "sha256:696954c3a486883c72f1505b4d32b1b85cab12dfa34b78b2159d026c02178f6e", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-jinja2"
-        version = "3.1.5"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        dependencies = [
-            { name = "growth-markupsafe" },
-        ]
-        sdist = { url = "http://[LOCALHOST]/files/growth_jinja2-3.1.5.tar.gz", hash = "sha256:d9fc1c65e805939a53c0afdfdd9683d25dd933fbe081ce473f197bc89268d4bc", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_jinja2-3.1.5-py3-none-any.whl", hash = "sha256:d497cfbb73c8578b409001c9b3c34f3c62e2c13cb76319bb8ab503f956381e01", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-markupsafe"
-        version = "3.0.2"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_markupsafe-3.0.2.tar.gz", hash = "sha256:b9646bebb2e466f8c9597cedb257b3f0e4bdf313f613f759a8700594d3261074", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_markupsafe-3.0.2-py3-none-any.whl", hash = "sha256:19852dcf57a19fbd42dc4825426f8660e3999907712bc2eac89818757640db6e", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-mpmath"
-        version = "1.3.0"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_mpmath-1.3.0.tar.gz", hash = "sha256:f2846406b35724885dbb886b70d87dc5b31d1f20defe9157a9cc40add1e1888b", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_mpmath-1.3.0-py3-none-any.whl", hash = "sha256:96486c46d6669f45f54b9850915534fa627b138f9f8d31ad3416e011b11501ec", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-networkx"
-        version = "3.4.2"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_networkx-3.4.2.tar.gz", hash = "sha256:2b39945e3bc15b3c9adf59d943d547cff96e70774a3a55ea7c3adccfbbb840cd", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_networkx-3.4.2-py3-none-any.whl", hash = "sha256:5a279b5af7574f358e17ffa4827e3ee3457864876fc4d0ae810d3952c5067733", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-cublas-cu12"
-        version = "12.4.5.8"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_cublas_cu12-12.4.5.8.tar.gz", hash = "sha256:7691c11b1fda56266e82b9c62454c479766bd826fd5827823c0b2f7b879d4771", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_cublas_cu12-12.4.5.8-py3-none-any.whl", hash = "sha256:345f9fc861eb0ed7dd307ff4ba627e4927be6306bcf7d8b6fea9c86fc589ab44", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-cuda-cupti-cu12"
-        version = "12.4.127"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_cuda_cupti_cu12-12.4.127.tar.gz", hash = "sha256:3e94836f0a24be6f638e865a998968e553d126f177a68e2de90df8177782aab0", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_cuda_cupti_cu12-12.4.127-py3-none-any.whl", hash = "sha256:7449c2204a5f09698ac3b08dc276c4e2805ea8d91c203a5dd8886172638cb5e3", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-cuda-nvrtc-cu12"
-        version = "12.4.127"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_cuda_nvrtc_cu12-12.4.127.tar.gz", hash = "sha256:acbf5d628a3f94c09768ed03f3ebb29bda7a3c97771b83156273d34e2f6d777e", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_cuda_nvrtc_cu12-12.4.127-py3-none-any.whl", hash = "sha256:acb38fdd41b98d7089947b8e442d0080b262cfd68baf26d98f6b06f753311968", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-cuda-runtime-cu12"
-        version = "12.4.127"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_cuda_runtime_cu12-12.4.127.tar.gz", hash = "sha256:671e70fbff2c859e75294e9a89efede6c6b34e907427ea121d276bff825ed7b1", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_cuda_runtime_cu12-12.4.127-py3-none-any.whl", hash = "sha256:e3262c1ffb651540ae7e976bafcbf1a9e4e01c5942561b0b1057539f7e3c179c", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-cudnn-cu12"
-        version = "9.1.0.70"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        dependencies = [
-            { name = "growth-nvidia-cublas-cu12" },
-        ]
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_cudnn_cu12-9.1.0.70.tar.gz", hash = "sha256:406ec73218dd97317967c2bac493d76f4f390a659231c6db255fdfdd85813248", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_cudnn_cu12-9.1.0.70-py3-none-any.whl", hash = "sha256:1fd769ce860e0b20edb5c4e5114edc9693e961faadd02929bde7552e03e30f1d", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-cufft-cu12"
-        version = "11.2.1.3"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        dependencies = [
-            { name = "growth-nvidia-nvjitlink-cu12" },
-        ]
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_cufft_cu12-11.2.1.3.tar.gz", hash = "sha256:9df96c33d9578535eea019f046c5caefd5e0cc9f2173b7533506c6e82bfef4a8", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_cufft_cu12-11.2.1.3-py3-none-any.whl", hash = "sha256:2ec7fab3dbd205335525d064e0f8f218efd6c2680cc1ca3249ec8ba0a23fd0da", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-curand-cu12"
-        version = "10.3.5.147"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_curand_cu12-10.3.5.147.tar.gz", hash = "sha256:86a72e3a65f1c9a4ddb2bade1c284e76a3dba3aaf24eba4e0f854c94ad2e8435", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_curand_cu12-10.3.5.147-py3-none-any.whl", hash = "sha256:c819b8e0be5dde260f4a1907c2305030830d385492173bf57a8e7a250b6d2ac9", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-cusolver-cu12"
-        version = "11.6.1.9"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        dependencies = [
-            { name = "growth-nvidia-cublas-cu12" },
-            { name = "growth-nvidia-cusparse-cu12" },
-            { name = "growth-nvidia-nvjitlink-cu12" },
-        ]
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_cusolver_cu12-11.6.1.9.tar.gz", hash = "sha256:fcaeea12714f69862a41aa770154caf7b2cd28f79509e150e1966739d3d83494", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_cusolver_cu12-11.6.1.9-py3-none-any.whl", hash = "sha256:d6a304880e6cecb9635f2f5eeef05fa6c0f94359d40901495b1d5d6707dabb64", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-cusparse-cu12"
-        version = "12.3.1.170"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        dependencies = [
-            { name = "growth-nvidia-nvjitlink-cu12" },
-        ]
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_cusparse_cu12-12.3.1.170.tar.gz", hash = "sha256:0c8539c34253e205bb4e46e9458b16e362dd51603ecaf9b061438142fd62e244", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_cusparse_cu12-12.3.1.170-py3-none-any.whl", hash = "sha256:4a6a742bdd483d84f978157f55bc74677df79fc680546694d6ac7aab64bdaff7", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-cusparselt-cu12"
-        version = "0.6.2"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_cusparselt_cu12-0.6.2.tar.gz", hash = "sha256:04ba07505e669b525285c5a6727e3061b6b59cd4c0175572d701db70f0a37616", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_cusparselt_cu12-0.6.2-py3-none-any.whl", hash = "sha256:cb017cf2ac2fbcb914676ce334114a69e4ec50016a449b0fdeedf868d19c8333", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-nccl-cu12"
-        version = "2.21.5"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_nccl_cu12-2.21.5.tar.gz", hash = "sha256:e2f51e84ab990a55a2750e8befeec63dfdc83c0a721dc0730b3c095d2cb107eb", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_nccl_cu12-2.21.5-py3-none-any.whl", hash = "sha256:e45d6431babc7e832a26f71fcb1c8a08818529abecd71cb9a76471a3c14a07c8", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-nvjitlink-cu12"
-        version = "12.4.127"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_nvjitlink_cu12-12.4.127.tar.gz", hash = "sha256:50daf134d6502093bc9894ecf56e8e115d398f978edb2f1422a0664c74976574", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_nvjitlink_cu12-12.4.127-py3-none-any.whl", hash = "sha256:e9bbf60768315188a199317a6267a89fefd1c21fbae1ed4de13ffa38233542ae", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-nvtx-cu12"
-        version = "12.4.127"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_nvtx_cu12-12.4.127.tar.gz", hash = "sha256:20efe9080b7ddf567ae7b4f163aa2551528230043a276990d083bd10ad5e49be", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_nvtx_cu12-12.4.127-py3-none-any.whl", hash = "sha256:233a0fc4d3c4056a4418759130154ccd90eaadb3ac030d0cb63281746a418e74", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-setuptools"
-        version = "75.8.0"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_setuptools-75.8.0.tar.gz", hash = "sha256:c6081c327dc7b9277f59d7c8841ad091f17ea46a612d4476bdeb79b1badb3391", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_setuptools-75.8.0-py3-none-any.whl", hash = "sha256:edb1b4f637a3d48196c9c7379d2eb239bccee1549f7a78b31decf280c7e36718", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-sympy"
-        version = "1.13.1"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        dependencies = [
-            { name = "growth-mpmath" },
-        ]
-        sdist = { url = "http://[LOCALHOST]/files/growth_sympy-1.13.1.tar.gz", hash = "sha256:bc2a29c7250402bbb830194bf94bb1a0c272f915ae31c9a7bb9e2a9980b72206", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_sympy-1.13.1-py3-none-any.whl", hash = "sha256:fe1e4dbf15926bd40a2f16f7ffd7fa8ea726d5a0682f8130be3e23114dca48a6", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-triton"
-        version = "3.2.0"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_triton-3.2.0.tar.gz", hash = "sha256:30e807f960d3b673c8cc6de9acb4849ba33ba396847092e33fd4f313acd19c71", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_triton-3.2.0-py3-none-any.whl", hash = "sha256:97d9ef8084039c1734f2a9e01be9c6f3c3c620f6bf8325c1abb92dcebf15417a", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-typing-extensions"
-        version = "4.12.2"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_typing_extensions-4.12.2.tar.gz", hash = "sha256:25bbfdc1e62d1d2f2d4b22006fd753c7934d0703c7e1c4316deeeb91eb7afdea", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_typing_extensions-4.12.2-py3-none-any.whl", hash = "sha256:6256ca08ae2bec12771d1c3aba988f38165c7b88c252368ac9647f1678bc6f29", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_shared-1.0.0-py3-none-any.whl", hash = "sha256:193e45013f72e5e7ea4ec49b4e897ec330ab989c88df775426e548819b38ac51", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
@@ -7676,36 +7437,33 @@ fn avoids_exponential_lock_file_growth() -> Result<()> {
         source = { virtual = "." }
 
         [package.optional-dependencies]
-        cpu = [
-            { name = "growth-engine", version = "2.6.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "(sys_platform == 'darwin' and extra == 'extra-27-resolution-markers-for-days-cpu') or (extra == 'extra-27-resolution-markers-for-days-cpu' and extra == 'extra-27-resolution-markers-for-days-cu124')" },
-            { name = "growth-engine", version = "2.6.0+cpu", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "(sys_platform != 'darwin' and extra == 'extra-27-resolution-markers-for-days-cpu') or (extra == 'extra-27-resolution-markers-for-days-cpu' and extra == 'extra-27-resolution-markers-for-days-cu124')" },
+        accelerator = [
+            { name = "growth-engine", version = "1.0.0+accelerator", source = { registry = "http://[LOCALHOST]/simple/" } },
         ]
-        cu124 = [
-            { name = "growth-engine", version = "2.6.0+cu124", source = { registry = "http://[LOCALHOST]/simple/" } },
+        cpu = [
+            { name = "growth-engine", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "(sys_platform == 'darwin' and extra == 'extra-27-resolution-markers-for-days-cpu') or (extra == 'extra-27-resolution-markers-for-days-accelerator' and extra == 'extra-27-resolution-markers-for-days-cpu')" },
+            { name = "growth-engine", version = "1.0.0+cpu", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "(sys_platform != 'darwin' and extra == 'extra-27-resolution-markers-for-days-cpu') or (extra == 'extra-27-resolution-markers-for-days-accelerator' and extra == 'extra-27-resolution-markers-for-days-cpu')" },
         ]
 
         [package.metadata]
         requires-dist = [
-            { name = "growth-engine", marker = "extra == 'cpu'", specifier = ">=2.6.0", index = "http://[LOCALHOST]/simple/", conflict = { package = "resolution-markers-for-days", extra = "cpu" } },
-            { name = "growth-engine", marker = "extra == 'cu124'", specifier = ">=2.6.0", index = "http://[LOCALHOST]/simple/", conflict = { package = "resolution-markers-for-days", extra = "cu124" } },
+            { name = "growth-engine", marker = "extra == 'accelerator'", specifier = ">=1.0.0", index = "http://[LOCALHOST]/simple/", conflict = { package = "resolution-markers-for-days", extra = "accelerator" } },
+            { name = "growth-engine", marker = "extra == 'cpu'", specifier = ">=1.0.0", index = "http://[LOCALHOST]/simple/", conflict = { package = "resolution-markers-for-days", extra = "cpu" } },
         ]
-        provides-extras = ["cpu", "cu124"]
+        provides-extras = ["cpu", "accelerator"]
         "#
         );
     });
 
-    // At this point, we twiddle something in the pyproject.toml
-    // to re-run a resolution using the existing lock file.
-    // Previously, this is where we would run into problems with
-    // the resolution markers seemingly growing at an exponential
-    // rate.
+    // Changing the project version forces resolution to consume the existing conflict
+    // markers. The inclusion and exclusion rules must not create impossible new forks.
     let pyproject = pyproject.replace(r#"version = "0.1.0""#, r#"version = "0.1.1""#);
     pyproject_toml.write_str(&pyproject)?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 27 packages in [TIME]
+    Resolved 6 packages in [TIME]
     Updated resolution-markers-for-days v0.1.0 -> v0.1.1
     ");
 
@@ -7720,14 +7478,14 @@ fn avoids_exponential_lock_file_growth() -> Result<()> {
         revision = 3
         requires-python = ">=3.12"
         resolution-markers = [
-            "extra != 'extra-27-resolution-markers-for-days-cpu' and extra == 'extra-27-resolution-markers-for-days-cu124'",
-            "sys_platform != 'darwin' and extra == 'extra-27-resolution-markers-for-days-cpu' and extra != 'extra-27-resolution-markers-for-days-cu124'",
-            "sys_platform == 'darwin' and extra == 'extra-27-resolution-markers-for-days-cpu' and extra != 'extra-27-resolution-markers-for-days-cu124'",
-            "extra != 'extra-27-resolution-markers-for-days-cpu' and extra != 'extra-27-resolution-markers-for-days-cu124'",
+            "sys_platform != 'darwin' and extra != 'extra-27-resolution-markers-for-days-accelerator' and extra == 'extra-27-resolution-markers-for-days-cpu'",
+            "sys_platform == 'darwin' and extra != 'extra-27-resolution-markers-for-days-accelerator' and extra == 'extra-27-resolution-markers-for-days-cpu'",
+            "extra == 'extra-27-resolution-markers-for-days-accelerator' and extra != 'extra-27-resolution-markers-for-days-cpu'",
+            "extra != 'extra-27-resolution-markers-for-days-accelerator' and extra != 'extra-27-resolution-markers-for-days-cpu'",
         ]
         conflicts = [[
+            { package = "resolution-markers-for-days", extra = "accelerator" },
             { package = "resolution-markers-for-days", extra = "cpu" },
-            { package = "resolution-markers-for-days", extra = "cu124" },
         ]]
 
         [options]
@@ -7735,312 +7493,75 @@ fn avoids_exponential_lock_file_growth() -> Result<()> {
 
         [[package]]
         name = "growth-engine"
-        version = "2.6.0"
+        version = "1.0.0"
         source = { registry = "http://[LOCALHOST]/simple/" }
         resolution-markers = [
             "sys_platform == 'darwin'",
         ]
         dependencies = [
-            { name = "growth-filelock", marker = "sys_platform == 'darwin'" },
-            { name = "growth-fsspec", marker = "sys_platform == 'darwin'" },
-            { name = "growth-jinja2", marker = "sys_platform == 'darwin'" },
-            { name = "growth-networkx", marker = "sys_platform == 'darwin'" },
-            { name = "growth-setuptools", marker = "sys_platform == 'darwin'" },
-            { name = "growth-sympy", marker = "sys_platform == 'darwin'" },
-            { name = "growth-typing-extensions", marker = "sys_platform == 'darwin'" },
+            { name = "growth-shared", marker = "sys_platform == 'darwin'" },
         ]
         wheels = [
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0-cp312-none-macosx_11_0_arm64.whl", hash = "sha256:96a8c25718fe29975090f16fff626ecc195d2af8b64cbea091f8066198ea296a", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0-cp313-none-macosx_11_0_arm64.whl", hash = "sha256:78a423cb02542f852f47a85fc658d514955c0d8b2d968cb8c1697072ecb4fdb3", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0-cp312-none-macosx_11_0_arm64.whl", hash = "sha256:1dbe8e150388af5b005ed47a1db9c60a1b1cf95dadd54bffc68063ec3aa44677", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0-cp313-none-macosx_11_0_arm64.whl", hash = "sha256:5950c7323636ac947ddd2d193d58d24fab8186e346f1b2d427c7d972458e14b9", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
         name = "growth-engine"
-        version = "2.6.0+cpu"
+        version = "1.0.0+accelerator"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "growth-platform", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+            { name = "growth-shared" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+accelerator-cp312-cp312-linux_x86_64.whl", hash = "sha256:e76b3ad0c7237097f9601f5be75269c46b12fb794a6dcdb15f10bac0dfdcc286", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+accelerator-cp312-cp312-win_amd64.whl", hash = "sha256:f33d311f3335c1416f0d99d7a03a7fdb439f8b5b759054c938a12a083c2835a6", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+accelerator-cp313-cp313-linux_x86_64.whl", hash = "sha256:587a3169a3886406c4a44fdd8dfadf9841b63376e6a50b3a41b320b23b5aebfa", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+accelerator-cp313-cp313-win_amd64.whl", hash = "sha256:b6566ac4653d2698a86e69e23af18fc5b0ffb4a111c3acff2c1a04841ba59779", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+accelerator-cp313-cp313t-linux_x86_64.whl", hash = "sha256:eeccc5ed87260ee66be8727f3d3a2524bbc69193e50400f98903cefa0babd040", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "growth-engine"
+        version = "1.0.0+cpu"
         source = { registry = "http://[LOCALHOST]/simple/" }
         resolution-markers = [
             "sys_platform != 'darwin'",
         ]
         dependencies = [
-            { name = "growth-filelock", marker = "sys_platform != 'darwin'" },
-            { name = "growth-fsspec", marker = "sys_platform != 'darwin'" },
-            { name = "growth-jinja2", marker = "sys_platform != 'darwin'" },
-            { name = "growth-networkx", marker = "sys_platform != 'darwin'" },
-            { name = "growth-setuptools", marker = "sys_platform != 'darwin'" },
-            { name = "growth-sympy", marker = "sys_platform != 'darwin'" },
-            { name = "growth-typing-extensions", marker = "sys_platform != 'darwin'" },
+            { name = "growth-shared", marker = "sys_platform != 'darwin'" },
         ]
         wheels = [
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cpu-cp312-cp312-linux_x86_64.whl", hash = "sha256:f0bd0382024e2ac0dbbbdbfde7746c7e0faf74a9ac90e35bdb5152336553c111", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cpu-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:ebd644b1761c9dd4a8755b07d66b705be316acc49720a2052db86c91a9729c9c", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cpu-cp312-cp312-win_amd64.whl", hash = "sha256:32024c6b42944e75aa3fde7692b7cb3b6dad2d10d186a952d7ae584af9747d57", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cpu-cp313-cp313-linux_x86_64.whl", hash = "sha256:90a1733afd66d12dab21e69a8ef7ca9a16c01a605be1c2b9e4c16a9f06fab624", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cpu-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:553e24661806bc43daafaceb9464975e7e8048a2b3b6d9275e82d3a1eee87c92", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cpu-cp313-cp313-win_amd64.whl", hash = "sha256:419b7bee3fca480ed6d0e394216fbaeef8c86743b9b1f35d170e4abcb1aae370", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cpu-cp313-cp313t-linux_x86_64.whl", hash = "sha256:0ab1fcdfd38f63f88e4e51a9e813a0ce0e9676f05e2cf077d4676fb703d1bf36", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cpu-cp313-cp313t-manylinux_2_28_aarch64.whl", hash = "sha256:fe47c4209446cf4b7783c817fd55daab9b23f4c3321695bc5d15a741882ec75a", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+cpu-cp312-cp312-linux_x86_64.whl", hash = "sha256:0dc894bbb6436639af38d345b809f085826e35a23ee4f2c3654ce6575fb81703", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+cpu-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:9caeb15cb80bbec03c7e889b4051fc9e1c17ccf911e266a14684196b94357d58", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+cpu-cp312-cp312-win_amd64.whl", hash = "sha256:a567cd339a73385972cb16447f6cbc0eac38caebd5e7e29e1aaaab706569e1b9", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+cpu-cp313-cp313-linux_x86_64.whl", hash = "sha256:293ac2ba394eaf1d546e624b8b0ab962ced699f96e3f9e4c77093b58ce9e2595", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+cpu-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:f4017e0a06013fef61ce656a03d0191d1e6a0737e525ca72551f85ffe137c184", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+cpu-cp313-cp313-win_amd64.whl", hash = "sha256:f312151ba90854260e483487bd2eb5098853be2493effd7c5838abc646c75a7a", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+cpu-cp313-cp313t-linux_x86_64.whl", hash = "sha256:b62e42d05382c366e4ed36554dc7f3d8acfee2027073079b34523dd2e248e678", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_engine-1.0.0+cpu-cp313-cp313t-manylinux_2_28_aarch64.whl", hash = "sha256:53e7e10f8e00b7c440bfa2a74f907f7d94ead9fb70c8962e7d7dcda4c511e1b7", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
-        name = "growth-engine"
-        version = "2.6.0+cu124"
+        name = "growth-platform"
+        version = "1.0.0"
         source = { registry = "http://[LOCALHOST]/simple/" }
         dependencies = [
-            { name = "growth-filelock" },
-            { name = "growth-fsspec" },
-            { name = "growth-jinja2" },
-            { name = "growth-networkx" },
-            { name = "growth-nvidia-cublas-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-nvidia-cuda-cupti-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-nvidia-cuda-nvrtc-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-nvidia-cuda-runtime-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-nvidia-cudnn-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-nvidia-cufft-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-nvidia-curand-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-nvidia-cusolver-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-nvidia-cusparse-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-nvidia-cusparselt-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-nvidia-nccl-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-nvidia-nvjitlink-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-nvidia-nvtx-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-setuptools" },
-            { name = "growth-sympy" },
-            { name = "growth-triton", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-            { name = "growth-typing-extensions" },
+            { name = "growth-shared" },
         ]
+        sdist = { url = "http://[LOCALHOST]/files/growth_platform-1.0.0.tar.gz", hash = "sha256:a0fae9743f831444ad827f7d8b4127519069bc00768719801dd06a9a6e6bb675", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cu124-cp312-cp312-linux_x86_64.whl", hash = "sha256:36f666d5ddcef79acdf7b9ce43edd7b9ccb7f1ac89a36a2172c8e2a0264ade6c", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cu124-cp312-cp312-win_amd64.whl", hash = "sha256:36c94e83374a2098cef68b8e2d632f9ccb26f4c8123465c41b264d9a51428c2b", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cu124-cp313-cp313-linux_x86_64.whl", hash = "sha256:0105d2e8c009afe607a3203c705e967a02ab14d00277b9e5084daadf7fb552d4", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cu124-cp313-cp313-win_amd64.whl", hash = "sha256:25c699aef7e4d160f74a4c54d1de9e8a85844c5c0f5510c93fd7fc4ee985ed2e", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/growth_engine-2.6.0+cu124-cp313-cp313t-linux_x86_64.whl", hash = "sha256:894d4ab091ec070d96435917bdf7fb1da1d98ca49cb02439fb99933d92461b2f", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_platform-1.0.0-py3-none-any.whl", hash = "sha256:3f0838ef6aca9bd61f897bb686614ff4f1a2a5e6756233d152fff8133a0e9b4a", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
-        name = "growth-filelock"
-        version = "3.17.0"
+        name = "growth-shared"
+        version = "1.0.0"
         source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_filelock-3.17.0.tar.gz", hash = "sha256:1e1a922a0cda081005e61197f3354c980f9ca650269a650d78d337546cf749ee", upload-time = "2024-03-24T00:00:00Z" }
+        sdist = { url = "http://[LOCALHOST]/files/growth_shared-1.0.0.tar.gz", hash = "sha256:74a8b9d1dec2b1974e187b6f55dde707c1c7c0cb27ec2a0dd14b34e6bb1beaca", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "http://[LOCALHOST]/files/growth_filelock-3.17.0-py3-none-any.whl", hash = "sha256:2a3998021c278eeb6b5b8699625c31967d6ea0c55894956bd8ec0c2852951211", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-fsspec"
-        version = "2025.2.0"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_fsspec-2025.2.0.tar.gz", hash = "sha256:8c5c2243eb43c5a8bf59b478f5cc58e3a5ef4bb51a95f8ad035d8995c0cb5ad8", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_fsspec-2025.2.0-py3-none-any.whl", hash = "sha256:696954c3a486883c72f1505b4d32b1b85cab12dfa34b78b2159d026c02178f6e", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-jinja2"
-        version = "3.1.5"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        dependencies = [
-            { name = "growth-markupsafe" },
-        ]
-        sdist = { url = "http://[LOCALHOST]/files/growth_jinja2-3.1.5.tar.gz", hash = "sha256:d9fc1c65e805939a53c0afdfdd9683d25dd933fbe081ce473f197bc89268d4bc", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_jinja2-3.1.5-py3-none-any.whl", hash = "sha256:d497cfbb73c8578b409001c9b3c34f3c62e2c13cb76319bb8ab503f956381e01", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-markupsafe"
-        version = "3.0.2"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_markupsafe-3.0.2.tar.gz", hash = "sha256:b9646bebb2e466f8c9597cedb257b3f0e4bdf313f613f759a8700594d3261074", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_markupsafe-3.0.2-py3-none-any.whl", hash = "sha256:19852dcf57a19fbd42dc4825426f8660e3999907712bc2eac89818757640db6e", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-mpmath"
-        version = "1.3.0"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_mpmath-1.3.0.tar.gz", hash = "sha256:f2846406b35724885dbb886b70d87dc5b31d1f20defe9157a9cc40add1e1888b", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_mpmath-1.3.0-py3-none-any.whl", hash = "sha256:96486c46d6669f45f54b9850915534fa627b138f9f8d31ad3416e011b11501ec", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-networkx"
-        version = "3.4.2"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_networkx-3.4.2.tar.gz", hash = "sha256:2b39945e3bc15b3c9adf59d943d547cff96e70774a3a55ea7c3adccfbbb840cd", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_networkx-3.4.2-py3-none-any.whl", hash = "sha256:5a279b5af7574f358e17ffa4827e3ee3457864876fc4d0ae810d3952c5067733", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-cublas-cu12"
-        version = "12.4.5.8"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_cublas_cu12-12.4.5.8.tar.gz", hash = "sha256:7691c11b1fda56266e82b9c62454c479766bd826fd5827823c0b2f7b879d4771", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_cublas_cu12-12.4.5.8-py3-none-any.whl", hash = "sha256:345f9fc861eb0ed7dd307ff4ba627e4927be6306bcf7d8b6fea9c86fc589ab44", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-cuda-cupti-cu12"
-        version = "12.4.127"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_cuda_cupti_cu12-12.4.127.tar.gz", hash = "sha256:3e94836f0a24be6f638e865a998968e553d126f177a68e2de90df8177782aab0", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_cuda_cupti_cu12-12.4.127-py3-none-any.whl", hash = "sha256:7449c2204a5f09698ac3b08dc276c4e2805ea8d91c203a5dd8886172638cb5e3", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-cuda-nvrtc-cu12"
-        version = "12.4.127"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_cuda_nvrtc_cu12-12.4.127.tar.gz", hash = "sha256:acbf5d628a3f94c09768ed03f3ebb29bda7a3c97771b83156273d34e2f6d777e", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_cuda_nvrtc_cu12-12.4.127-py3-none-any.whl", hash = "sha256:acb38fdd41b98d7089947b8e442d0080b262cfd68baf26d98f6b06f753311968", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-cuda-runtime-cu12"
-        version = "12.4.127"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_cuda_runtime_cu12-12.4.127.tar.gz", hash = "sha256:671e70fbff2c859e75294e9a89efede6c6b34e907427ea121d276bff825ed7b1", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_cuda_runtime_cu12-12.4.127-py3-none-any.whl", hash = "sha256:e3262c1ffb651540ae7e976bafcbf1a9e4e01c5942561b0b1057539f7e3c179c", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-cudnn-cu12"
-        version = "9.1.0.70"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        dependencies = [
-            { name = "growth-nvidia-cublas-cu12" },
-        ]
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_cudnn_cu12-9.1.0.70.tar.gz", hash = "sha256:406ec73218dd97317967c2bac493d76f4f390a659231c6db255fdfdd85813248", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_cudnn_cu12-9.1.0.70-py3-none-any.whl", hash = "sha256:1fd769ce860e0b20edb5c4e5114edc9693e961faadd02929bde7552e03e30f1d", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-cufft-cu12"
-        version = "11.2.1.3"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        dependencies = [
-            { name = "growth-nvidia-nvjitlink-cu12" },
-        ]
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_cufft_cu12-11.2.1.3.tar.gz", hash = "sha256:9df96c33d9578535eea019f046c5caefd5e0cc9f2173b7533506c6e82bfef4a8", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_cufft_cu12-11.2.1.3-py3-none-any.whl", hash = "sha256:2ec7fab3dbd205335525d064e0f8f218efd6c2680cc1ca3249ec8ba0a23fd0da", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-curand-cu12"
-        version = "10.3.5.147"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_curand_cu12-10.3.5.147.tar.gz", hash = "sha256:86a72e3a65f1c9a4ddb2bade1c284e76a3dba3aaf24eba4e0f854c94ad2e8435", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_curand_cu12-10.3.5.147-py3-none-any.whl", hash = "sha256:c819b8e0be5dde260f4a1907c2305030830d385492173bf57a8e7a250b6d2ac9", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-cusolver-cu12"
-        version = "11.6.1.9"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        dependencies = [
-            { name = "growth-nvidia-cublas-cu12" },
-            { name = "growth-nvidia-cusparse-cu12" },
-            { name = "growth-nvidia-nvjitlink-cu12" },
-        ]
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_cusolver_cu12-11.6.1.9.tar.gz", hash = "sha256:fcaeea12714f69862a41aa770154caf7b2cd28f79509e150e1966739d3d83494", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_cusolver_cu12-11.6.1.9-py3-none-any.whl", hash = "sha256:d6a304880e6cecb9635f2f5eeef05fa6c0f94359d40901495b1d5d6707dabb64", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-cusparse-cu12"
-        version = "12.3.1.170"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        dependencies = [
-            { name = "growth-nvidia-nvjitlink-cu12" },
-        ]
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_cusparse_cu12-12.3.1.170.tar.gz", hash = "sha256:0c8539c34253e205bb4e46e9458b16e362dd51603ecaf9b061438142fd62e244", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_cusparse_cu12-12.3.1.170-py3-none-any.whl", hash = "sha256:4a6a742bdd483d84f978157f55bc74677df79fc680546694d6ac7aab64bdaff7", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-cusparselt-cu12"
-        version = "0.6.2"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_cusparselt_cu12-0.6.2.tar.gz", hash = "sha256:04ba07505e669b525285c5a6727e3061b6b59cd4c0175572d701db70f0a37616", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_cusparselt_cu12-0.6.2-py3-none-any.whl", hash = "sha256:cb017cf2ac2fbcb914676ce334114a69e4ec50016a449b0fdeedf868d19c8333", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-nccl-cu12"
-        version = "2.21.5"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_nccl_cu12-2.21.5.tar.gz", hash = "sha256:e2f51e84ab990a55a2750e8befeec63dfdc83c0a721dc0730b3c095d2cb107eb", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_nccl_cu12-2.21.5-py3-none-any.whl", hash = "sha256:e45d6431babc7e832a26f71fcb1c8a08818529abecd71cb9a76471a3c14a07c8", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-nvjitlink-cu12"
-        version = "12.4.127"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_nvjitlink_cu12-12.4.127.tar.gz", hash = "sha256:50daf134d6502093bc9894ecf56e8e115d398f978edb2f1422a0664c74976574", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_nvjitlink_cu12-12.4.127-py3-none-any.whl", hash = "sha256:e9bbf60768315188a199317a6267a89fefd1c21fbae1ed4de13ffa38233542ae", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-nvidia-nvtx-cu12"
-        version = "12.4.127"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_nvidia_nvtx_cu12-12.4.127.tar.gz", hash = "sha256:20efe9080b7ddf567ae7b4f163aa2551528230043a276990d083bd10ad5e49be", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_nvidia_nvtx_cu12-12.4.127-py3-none-any.whl", hash = "sha256:233a0fc4d3c4056a4418759130154ccd90eaadb3ac030d0cb63281746a418e74", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-setuptools"
-        version = "75.8.0"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_setuptools-75.8.0.tar.gz", hash = "sha256:c6081c327dc7b9277f59d7c8841ad091f17ea46a612d4476bdeb79b1badb3391", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_setuptools-75.8.0-py3-none-any.whl", hash = "sha256:edb1b4f637a3d48196c9c7379d2eb239bccee1549f7a78b31decf280c7e36718", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-sympy"
-        version = "1.13.1"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        dependencies = [
-            { name = "growth-mpmath" },
-        ]
-        sdist = { url = "http://[LOCALHOST]/files/growth_sympy-1.13.1.tar.gz", hash = "sha256:bc2a29c7250402bbb830194bf94bb1a0c272f915ae31c9a7bb9e2a9980b72206", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_sympy-1.13.1-py3-none-any.whl", hash = "sha256:fe1e4dbf15926bd40a2f16f7ffd7fa8ea726d5a0682f8130be3e23114dca48a6", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-triton"
-        version = "3.2.0"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_triton-3.2.0.tar.gz", hash = "sha256:30e807f960d3b673c8cc6de9acb4849ba33ba396847092e33fd4f313acd19c71", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_triton-3.2.0-py3-none-any.whl", hash = "sha256:97d9ef8084039c1734f2a9e01be9c6f3c3c620f6bf8325c1abb92dcebf15417a", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "growth-typing-extensions"
-        version = "4.12.2"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/growth_typing_extensions-4.12.2.tar.gz", hash = "sha256:25bbfdc1e62d1d2f2d4b22006fd753c7934d0703c7e1c4316deeeb91eb7afdea", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/growth_typing_extensions-4.12.2-py3-none-any.whl", hash = "sha256:6256ca08ae2bec12771d1c3aba988f38165c7b88c252368ac9647f1678bc6f29", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/growth_shared-1.0.0-py3-none-any.whl", hash = "sha256:193e45013f72e5e7ea4ec49b4e897ec330ab989c88df775426e548819b38ac51", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
@@ -8049,20 +7570,20 @@ fn avoids_exponential_lock_file_growth() -> Result<()> {
         source = { virtual = "." }
 
         [package.optional-dependencies]
-        cpu = [
-            { name = "growth-engine", version = "2.6.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "(sys_platform == 'darwin' and extra == 'extra-27-resolution-markers-for-days-cpu') or (extra == 'extra-27-resolution-markers-for-days-cpu' and extra == 'extra-27-resolution-markers-for-days-cu124')" },
-            { name = "growth-engine", version = "2.6.0+cpu", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "(sys_platform != 'darwin' and extra == 'extra-27-resolution-markers-for-days-cpu') or (extra == 'extra-27-resolution-markers-for-days-cpu' and extra == 'extra-27-resolution-markers-for-days-cu124')" },
+        accelerator = [
+            { name = "growth-engine", version = "1.0.0+accelerator", source = { registry = "http://[LOCALHOST]/simple/" } },
         ]
-        cu124 = [
-            { name = "growth-engine", version = "2.6.0+cu124", source = { registry = "http://[LOCALHOST]/simple/" } },
+        cpu = [
+            { name = "growth-engine", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "(sys_platform == 'darwin' and extra == 'extra-27-resolution-markers-for-days-cpu') or (extra == 'extra-27-resolution-markers-for-days-accelerator' and extra == 'extra-27-resolution-markers-for-days-cpu')" },
+            { name = "growth-engine", version = "1.0.0+cpu", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "(sys_platform != 'darwin' and extra == 'extra-27-resolution-markers-for-days-cpu') or (extra == 'extra-27-resolution-markers-for-days-accelerator' and extra == 'extra-27-resolution-markers-for-days-cpu')" },
         ]
 
         [package.metadata]
         requires-dist = [
-            { name = "growth-engine", marker = "extra == 'cpu'", specifier = ">=2.6.0", index = "http://[LOCALHOST]/simple/", conflict = { package = "resolution-markers-for-days", extra = "cpu" } },
-            { name = "growth-engine", marker = "extra == 'cu124'", specifier = ">=2.6.0", index = "http://[LOCALHOST]/simple/", conflict = { package = "resolution-markers-for-days", extra = "cu124" } },
+            { name = "growth-engine", marker = "extra == 'accelerator'", specifier = ">=1.0.0", index = "http://[LOCALHOST]/simple/", conflict = { package = "resolution-markers-for-days", extra = "accelerator" } },
+            { name = "growth-engine", marker = "extra == 'cpu'", specifier = ">=1.0.0", index = "http://[LOCALHOST]/simple/", conflict = { package = "resolution-markers-for-days", extra = "cpu" } },
         ]
-        provides-extras = ["cpu", "cu124"]
+        provides-extras = ["cpu", "accelerator"]
         "#
         );
     });
