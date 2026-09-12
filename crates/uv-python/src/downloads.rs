@@ -1871,6 +1871,7 @@ async fn read_url(
 mod tests {
     use std::assert_matches;
     use std::collections::HashSet;
+    use std::sync::Mutex;
 
     use crate::PythonVariant;
     use crate::implementation::LenientImplementationName;
@@ -1923,6 +1924,93 @@ mod tests {
 
         assert!(matches!(error, Error::HashMismatch { .. }));
         assert!(!cached_archive.exists());
+    }
+
+    #[test]
+    fn hash_mismatch_keeps_a_replaced_cached_archive() -> anyhow::Result<()> {
+        struct ReplaceCachedArchive {
+            replacement: PathBuf,
+            target: PathBuf,
+            result: Mutex<Option<io::Result<()>>>,
+        }
+
+        impl Reporter for ReplaceCachedArchive {
+            fn on_request_start(
+                &self,
+                _direction: Direction,
+                _name: &PythonInstallationKey,
+                _size: Option<u64>,
+            ) -> usize {
+                0
+            }
+
+            fn on_request_progress(&self, _id: usize, _inc: u64) {}
+
+            fn on_request_complete(&self, direction: Direction, _id: usize) {
+                if direction == Direction::Extract {
+                    // The extraction reader still owns the original file. Replace its directory
+                    // entry before the digest is compared, as another cache publisher could do.
+                    *self.result.lock().expect("replacement result lock") =
+                        Some(fs_err::rename(&self.replacement, &self.target));
+                }
+            }
+        }
+
+        let _preview = uv_preview::test::with_features(&[]);
+        let temp_dir = tempfile::tempdir()?;
+        let cache_dir = temp_dir.path().join("cache");
+        let installation_dir = temp_dir.path().join("installations");
+        let scratch_dir = temp_dir.path().join("scratch");
+        for directory in [&cache_dir, &installation_dir, &scratch_dir] {
+            fs_err::create_dir_all(directory)?;
+        }
+
+        let replacement_contents = [0; 2048];
+        let mut hasher = Hasher::from(HashAlgorithm::Sha256);
+        hasher.update(&replacement_contents);
+        let expected = HashDigest::from(hasher).digest.to_string();
+        let cached_archive = cache_dir.join(format!("{}-python.tar", &expected[..9]));
+        fs_err::write(&cached_archive, [0; 1024])?;
+        let replacement = cache_dir.join("replacement.tar");
+        fs_err::write(&replacement, replacement_contents)?;
+        let reporter = ReplaceCachedArchive {
+            replacement,
+            target: cached_archive.clone(),
+            result: Mutex::new(None),
+        };
+
+        let url = DisplaySafeUrl::parse("file:///missing/python.tar")?;
+        let mut download = cpython_download_for_url("file:///missing/python.tar");
+        download.sha256 = Some(Cow::Owned(expected));
+        let client = BaseClientBuilder::default().build()?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let error = temp_env::with_var(
+            EnvVars::UV_PYTHON_CACHE_DIR,
+            Some(cache_dir.as_path()),
+            || {
+                runtime.block_on(download.fetch_from_url(
+                    url,
+                    &client,
+                    &installation_dir,
+                    &scratch_dir,
+                    false,
+                    Some(&reporter),
+                ))
+            },
+        )
+        .expect_err("the original cached archive has the wrong hash");
+
+        reporter
+            .result
+            .into_inner()
+            .expect("replacement result lock")
+            .expect("extraction must replace the cached archive")?;
+        assert_matches!(error, Error::HashMismatch { .. });
+        assert_eq!(fs_err::read(&cached_archive)?, replacement_contents);
+        assert!(!installation_dir.join(download.key().to_string()).exists());
+        Ok(())
     }
 
     /// Parse a request with all of its fields.
