@@ -84,7 +84,7 @@ environment or lockfile.
 
 The [JSON Schema](../../reference/internals/sync.schema.json) is generated from the report types
 with `cargo dev generate-json-schema --target sync`. The format is in preview and may change without
-warning.
+warning. Pass `--preview-features json-output` to suppress the preview warning.
 
 ### Editable installation
 

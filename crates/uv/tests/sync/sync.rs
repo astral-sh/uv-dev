@@ -837,6 +837,54 @@ fn multiple_packages() -> Result<()> {
 }
 
 #[test]
+fn sync_json_preview_warning() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "sync-preview-warning"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+        "#})?;
+    context.lock().arg("--offline").assert().success();
+
+    let warning = "The `--output-format json` option is experimental";
+    let cases: &[(&[&str], bool)] = &[
+        (&[], true),
+        (&["--preview-features", "json-output"], false),
+        (&["--preview"], false),
+        (&["--no-preview"], true),
+        (&["--preview-features", "pylock"], true),
+        (&["--quiet"], false),
+    ];
+    for &(arguments, should_warn) in cases {
+        let output = context
+            .sync()
+            .args(["--offline", "--frozen", "--output-format", "json"])
+            .args(arguments)
+            .assert()
+            .success();
+        parse_sync_report(&output.get_output().stdout)?;
+        let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+        assert_eq!(
+            stderr.contains(warning),
+            should_warn,
+            "{arguments:?}: {stderr}"
+        );
+    }
+
+    let text = context
+        .sync()
+        .args(["--offline", "--frozen", "--preview-features", "json-output"])
+        .assert()
+        .success();
+    assert!(!String::from_utf8_lossy(&text.get_output().stderr).contains(warning));
+    Ok(())
+}
+
+#[test]
 fn sync_json_python_key() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context
@@ -903,6 +951,7 @@ fn sync_json() -> Result<()> {
     )?;
 
     sync_json_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "json-output"])
         .arg("--output-format").arg("json"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
@@ -953,6 +1002,7 @@ fn sync_json() -> Result<()> {
     assert!(context.temp_dir.child("uv.lock").exists());
 
     sync_json_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "json-output"])
         .arg("--frozen")
         .arg("--output-format").arg("json"), @r#"
     exit_code: 0 (success)
@@ -993,6 +1043,7 @@ fn sync_json() -> Result<()> {
     "#);
 
     sync_json_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "json-output"])
         .arg("--locked")
         .arg("--output-format").arg("json"), @r#"
     exit_code: 0 (success)
@@ -1046,6 +1097,7 @@ fn sync_json() -> Result<()> {
     )?;
 
     sync_json_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "json-output"])
         .arg("--locked")
         .arg("--output-format").arg("json"), @"
     exit_code: 1 (failure)
@@ -1058,6 +1110,7 @@ fn sync_json() -> Result<()> {
 
     // Test that JSON output is shown even with --quiet flag
     sync_json_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "json-output"])
         .arg("--quiet")
         .arg("--frozen")
         .arg("--output-format").arg("json"), @r#"
@@ -1117,6 +1170,7 @@ fn sync_json_check_outdated_environment() -> Result<()> {
     )?;
 
     sync_json_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "json-output"])
         .arg("--check")
         .arg("--output-format").arg("json"), @r#"
     exit_code: 1 (failure)
@@ -1190,6 +1244,7 @@ fn sync_dry_json() -> Result<()> {
 
     // Running `uv sync` should report intent to create the environment and lockfile
     sync_json_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "json-output"])
         .arg("--output-format").arg("json")
         .arg("--dry-run"), @r#"
     exit_code: 0 (success)
@@ -7401,6 +7456,7 @@ fn sync_active_script_environment_json() -> Result<()> {
 
     // Running `uv sync --script` with `VIRTUAL_ENV` should warn
     sync_json_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "json-output"])
         .arg("--script").arg("script.py")
         .arg("--output-format").arg("json")
         .env(EnvVars::VIRTUAL_ENV, "foo"), @r#"
@@ -7464,6 +7520,7 @@ fn sync_active_script_environment_json() -> Result<()> {
 
     // Using `--active` should create the environment
     sync_json_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "json-output"])
         .arg("--script").arg("script.py")
         .arg("--output-format").arg("json")
         .env(EnvVars::VIRTUAL_ENV, "foo").arg("--active"), @r#"
@@ -7534,6 +7591,7 @@ fn sync_active_script_environment_json() -> Result<()> {
 
     // Requesting another Python version will invalidate the environment
     sync_json_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "json-output"])
         .arg("--script").arg("script.py")
         .arg("--output-format").arg("json")
         .env(EnvVars::VIRTUAL_ENV, "foo")
