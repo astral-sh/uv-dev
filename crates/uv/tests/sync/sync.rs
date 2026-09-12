@@ -837,6 +837,54 @@ fn multiple_packages() -> Result<()> {
 }
 
 #[test]
+fn sync_json_preview_warning() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "sync-preview-warning"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+        "#})?;
+    context.lock().arg("--offline").assert().success();
+
+    let warning = "The `--output-format json` option is experimental";
+    let cases: &[(&[&str], bool)] = &[
+        (&[], true),
+        (&["--preview-features", "json-output"], false),
+        (&["--preview"], false),
+        (&["--no-preview"], true),
+        (&["--preview-features", "pylock"], true),
+        (&["--quiet"], false),
+    ];
+    for &(arguments, should_warn) in cases {
+        let output = context
+            .sync()
+            .args(["--offline", "--frozen", "--output-format", "json"])
+            .args(arguments)
+            .assert()
+            .success();
+        parse_sync_report(&output.get_output().stdout)?;
+        let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+        assert_eq!(
+            stderr.contains(warning),
+            should_warn,
+            "{arguments:?}: {stderr}"
+        );
+    }
+
+    let text = context
+        .sync()
+        .args(["--offline", "--frozen", "--preview-features", "json-output"])
+        .assert()
+        .success();
+    assert!(!String::from_utf8_lossy(&text.get_output().stderr).contains(warning));
+    Ok(())
+}
+
+#[test]
 fn sync_json_python_key() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context
