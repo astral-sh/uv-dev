@@ -43,6 +43,7 @@ ignore = { workspace = true }
 itertools = { workspace = true }
 rustc-hash = { workspace = true }
 schemars = { workspace = true, optional = true }
+self_cell = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 tokio = { workspace = true }

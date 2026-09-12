@@ -36,6 +36,10 @@ use uv_pypi_types::{
 use uv_redacted::DisplaySafeUrl;
 use uv_toml::deserialize_unique_map;
 
+pub use source::PyProjectTomlSource;
+
+mod source;
+
 #[derive(Error, Debug)]
 pub enum PyprojectTomlError {
     #[error(transparent)]
