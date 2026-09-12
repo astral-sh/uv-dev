@@ -231,10 +231,14 @@ impl InstallerMetadataTestContext {
         Ok(fs::read_to_string(self.build_log.path())?)
     }
 
-    fn assert_repaired(&self, flavor: &str) -> Result<()> {
+    fn assert_repaired(&self, flavor: &str, allow_missing_cache: bool) -> Result<()> {
         for sidecar in SIDECARS {
-            let value: serde_json::Value =
-                serde_json::from_slice(&fs::read(self.sidecar(sidecar))?)?;
+            let path = self.sidecar(sidecar);
+            if sidecar == "uv_cache.json" && allow_missing_cache && !path.try_exists()? {
+                // Registry-indexed built wheels can have empty cache information.
+                continue;
+            }
+            let value: serde_json::Value = serde_json::from_slice(&fs::read(path)?)?;
             assert!(value.is_object());
             if sidecar == "uv_build.json" {
                 assert_eq!(value["config_settings"]["flavor"], flavor);
@@ -352,7 +356,7 @@ fn malformed_build_metadata_rechecks_direct_url_hashes() -> Result<()> {
         .success()
         .stderr(predicate::str::contains("Installed 1 package"));
     context.assert_flavor("beta");
-    context.assert_repaired("beta")?;
+    context.assert_repaired("beta", false)?;
     Ok(())
 }
 
@@ -383,7 +387,7 @@ fn malformed_registry_metadata_rechecks_hashes() -> Result<()> {
                 .success()
                 .stderr(predicate::str::contains("Installed 1 package"));
             context.assert_flavor(flavor);
-            context.assert_repaired(flavor)?;
+            context.assert_repaired(flavor, sidecar == "uv_cache.json")?;
 
             let builds = context.builds()?;
             context
