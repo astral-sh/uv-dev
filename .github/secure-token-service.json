@@ -121,7 +121,12 @@
       "environment": "automations",
       "caller_workflow": "sync-uv-dev.yml",
       "on": ["push", "workflow_dispatch"],
-      "permissions": { "contents": "write", "workflows": "write" },
+      "permissions": {
+        "actions": "write",
+        "contents": "write",
+        "pull_requests": "read",
+        "workflows": "write"
+      },
       "target": "uv-dev"
     },
     {
