@@ -1224,6 +1224,68 @@ fn workspace_metadata_installed_packages_are_independent_of_lock() -> Result<()>
 }
 
 #[test]
+fn workspace_metadata_ignores_malformed_installed_direct_url() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = context
+        .temp_dir
+        .child("metadata_origin-0.1.0-py3-none-any.whl");
+    write_wheel(
+        wheel.path(),
+        "metadata-origin",
+        "metadata_origin-0.1.0",
+        &[("origin_module.py", "")],
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "metadata-root"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = []
+        "#})?;
+    context.lock().arg("--offline").assert().success();
+    context
+        .pip_install()
+        .arg("--no-index")
+        .arg(wheel.path())
+        .assert()
+        .success();
+
+    let direct_url = context
+        .site_packages()
+        .join("metadata_origin-0.1.0.dist-info/direct_url.json");
+    fs_err::write(&direct_url, "invalid")?;
+
+    let assert = context
+        .workspace_metadata()
+        .arg("--frozen")
+        .arg("--offline")
+        .assert()
+        .success();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert_eq!(
+        stderr
+            .matches("Ignoring invalid `direct_url.json` for `metadata-origin`")
+            .count(),
+        1
+    );
+    let metadata = parse_metadata(&assert.get_output().stdout)?;
+    let packages = metadata["environment"]["packages"]
+        .as_object()
+        .context("missing installed package inventory")?;
+    let package = packages
+        .values()
+        .find(|package| package["name"] == "metadata-origin")
+        .context("missing installed distribution")?;
+    assert_eq!(package["version"], "0.1.0");
+    assert!(package.get("direct_url").is_none());
+    assert_eq!(fs_err::read_to_string(&direct_url)?, "invalid");
+    Ok(())
+}
+
+#[test]
 fn workspace_metadata_includes_existing_environment() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_python_keys()

@@ -90,8 +90,7 @@ fn list_ignores_malformed_direct_url() -> Result<()> {
     dist_info.child("direct_url.json").write_str("invalid")?;
 
     uv_snapshot!(context.pip_list(), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     Package Version
     ------- -------
@@ -102,8 +101,7 @@ fn list_ignores_malformed_direct_url() -> Result<()> {
     "
     );
     uv_snapshot!(context.pip_freeze(), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     project==1.0.0
 
@@ -112,8 +110,7 @@ fn list_ignores_malformed_direct_url() -> Result<()> {
     "
     );
     uv_snapshot!(context.filters(), context.pip_show().arg("project"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     Name: project
     Version: 1.0.0
@@ -126,10 +123,7 @@ fn list_ignores_malformed_direct_url() -> Result<()> {
     "
     );
     uv_snapshot!(context.pip_check(), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     warning: Ignoring invalid `direct_url.json` for `project`: expected value at line 1 column 1
     Checked 1 package in [TIME]
@@ -160,10 +154,7 @@ fn install_warns_once_for_each_malformed_direct_url() -> Result<()> {
     uv_snapshot!(context.filters(), context.pip_install()
         .arg(context.workspace_root.join("test/links/ok-1.0.0-py3-none-any.whl"))
         .arg("--strict"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     warning: Ignoring invalid `direct_url.json` for `first`: expected value at line 1 column 1
     warning: Ignoring invalid `direct_url.json` for `second`: expected value at line 1 column 1
