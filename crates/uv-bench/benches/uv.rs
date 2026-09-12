@@ -19,6 +19,7 @@ use tar_codec::{ArchiveBuilder as _, EntryMetadata, TarEncoder};
 use tokio_util::compat::FuturesAsyncWriteCompatExt;
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, Connectivity, RegistryClientBuilder};
+use uv_configuration::DependencyGroupsWithDefaults;
 use uv_distribution_filename::{SourceDistExtension, WheelFilename};
 use uv_distribution_types::Requirement;
 use uv_extract::dirhash::UnhashedFile;
@@ -26,7 +27,7 @@ use uv_install_wheel::{InstallState, Layout, LinkMode};
 use uv_preview::{MaybePreviewFeature, Preview, PreviewFeature};
 use uv_pypi_types::Scheme;
 use uv_python::PythonEnvironment;
-use uv_resolver::Manifest;
+use uv_resolver::{Lock, Manifest, PackageMap, TreeDisplay};
 
 const MANY_FILES_WHEEL_FILENAME: &str = "manyfiles-0.0.0-py3-none-any.whl";
 const MANY_FILES_WHEEL_FILE_COUNT: usize = 10_000;
@@ -352,6 +353,65 @@ fn criterion_with_preview() -> Criterion<WallTime> {
     Criterion::default()
 }
 
+fn create_tree_lock(branching: usize, package_count: usize) -> Lock {
+    let mut data = String::new();
+    data.push_str("version = 1\nrevision = 3\nrequires-python = \">=3.12\"\n");
+
+    for index in 0..package_count {
+        let name = format!("tree-package-{index:05}");
+        write!(
+            data,
+            "\n[[package]]\nname = \"{name}\"\nversion = \"1.0.0\"\n"
+        )
+        .expect("Writing to a string cannot fail");
+        if index == 0 {
+            data.push_str("source = { editable = \".\" }\n");
+        } else {
+            data.push_str("source = { registry = \"https://pypi.org/simple\" }\n");
+        }
+
+        let first_child = branching * index + 1;
+        if first_child >= package_count {
+            continue;
+        }
+        data.push_str("dependencies = [\n");
+        for child in first_child..(first_child + branching).min(package_count) {
+            writeln!(data, "    {{ name = \"tree-package-{child:05}\" }},")
+                .expect("Writing to a string cannot fail");
+        }
+        data.push_str("]\n");
+    }
+
+    toml::from_str(&data).expect("Generated tree lock should be valid")
+}
+
+fn render_lock_tree(c: &mut Criterion<WallTime>) {
+    for (name, branching, package_count) in [
+        ("render_lock_tree_chain", 1, 256),
+        ("render_lock_tree_wide", 2, 8_191),
+    ] {
+        let lock = create_tree_lock(branching, package_count);
+        let latest = PackageMap::default();
+        let groups = DependencyGroupsWithDefaults::none();
+        let tree = TreeDisplay::new(
+            &lock,
+            None,
+            &latest,
+            255,
+            &[],
+            &[],
+            &groups,
+            false,
+            false,
+            false,
+        );
+
+        c.bench_function(name, |benchmark| {
+            benchmark.iter(|| black_box(tree.to_string()));
+        });
+    }
+}
+
 criterion_group! {
     name = uv;
     config = criterion_with_preview();
@@ -361,6 +421,7 @@ criterion_group! {
         unzip_wheel_many_files,
         prepare_wheel_many_files,
         install_wheel_many_files,
+        render_lock_tree,
         resolve_warm_jupyter,
         resolve_warm_jupyter_universal,
         resolve_warm_airflow
