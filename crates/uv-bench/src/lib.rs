@@ -216,39 +216,59 @@ impl Drop for FixtureServer {
     }
 }
 
-/// A frozen Prefect runtime environment, installed from the prepared package cache.
+/// A real, frozen dependency graph and the arguments that select its workload.
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct EnvironmentFixture {
+    name: String,
+    project: String,
+    python: String,
+    sync_args: Vec<String>,
+}
+
+/// Small, medium, and large package graphs, measured with the same Python version.
+fn environment_fixtures() -> Vec<EnvironmentFixture> {
+    serde_json::from_str(include_str!("../../../scripts/benchmark/environments.json"))
+        .expect("Invalid environment fixture manifest")
+}
+
+/// A frozen project environment, installed from the prepared package cache.
 pub struct PreparedEnvironment {
     directory: tempfile::TempDir,
     python: PathBuf,
+    fixture: EnvironmentFixture,
 }
 
 impl PreparedEnvironment {
     /// Install the real runtime dependency graph without building the Prefect checkout.
     pub fn prefect() -> Self {
+        let mut fixture = environment_fixtures()
+            .into_iter()
+            .find(|fixture| fixture.name == "prefect")
+            .expect("Missing Prefect environment fixture");
+        "3.11.13".clone_into(&mut fixture.python);
+        Self::from_fixture(&fixture)
+    }
+
+    /// Install a selected frozen graph without building its project checkout.
+    fn from_fixture(fixture: &EnvironmentFixture) -> Self {
         let directory = tempfile::tempdir().expect("Failed to create project directory");
         fs_err::copy(
-            fixture_path("prefect.pyproject.toml"),
+            fixture_path(&format!("{}.pyproject.toml", fixture.project)),
             directory.path().join("pyproject.toml"),
         )
         .expect("Failed to copy project metadata");
         fs_err::copy(
-            fixture_path("prefect.lock"),
+            fixture_path(&format!("{}.lock", fixture.project)),
             directory.path().join("uv.lock"),
         )
         .expect("Failed to copy project lockfile");
         let mut environment = Self {
             directory,
             python: PathBuf::new(),
+            fixture: fixture.clone(),
         };
-        run_command(environment.command().args([
-            "sync",
-            "--frozen",
-            "--no-default-groups",
-            "--no-install-project",
-            "--managed-python",
-            "--python",
-            "3.11.13",
-        ]));
+        run_command(&mut environment.sync_command());
         let output = environment
             .command()
             .args(["python", "find"])
@@ -270,6 +290,23 @@ impl PreparedEnvironment {
             "Python must belong to the benchmark environment"
         );
         environment
+    }
+
+    /// Reconcile exactly the dependency groups used to prepare this environment.
+    fn sync_command(&self) -> Command {
+        let mut command = self.command();
+        command
+            .args([
+                "sync",
+                "--frozen",
+                "--no-default-groups",
+                "--no-install-project",
+                "--managed-python",
+                "--python",
+            ])
+            .arg(&self.fixture.python)
+            .args(&self.fixture.sync_args);
+        command
     }
 
     /// Return an offline command using this project and the pinned managed interpreter.
