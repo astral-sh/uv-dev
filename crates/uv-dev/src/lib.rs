@@ -19,6 +19,7 @@ use crate::generate_preview_features_reference::Args as GeneratePreviewFeaturesR
 use crate::generate_scenarios::Args as GenerateScenarioTestsArgs;
 use crate::generate_sysconfig_mappings::Args as GenerateSysconfigMetadataArgs;
 use crate::list_packages::ListPackagesArgs;
+use crate::minimize_scenario::Args as MinimizeScenarioArgs;
 #[cfg(feature = "render")]
 use crate::render_benchmarks::RenderBenchmarksArgs;
 use crate::validate_zip::ValidateZipArgs;
@@ -37,6 +38,7 @@ mod generate_preview_features_reference;
 mod generate_scenarios;
 mod generate_sysconfig_mappings;
 mod list_packages;
+mod minimize_scenario;
 mod render_benchmarks;
 mod validate_zip;
 mod wheel_metadata;
@@ -47,6 +49,8 @@ const ROOT_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../");
 enum Cli {
     /// Check small Packse scenarios against an exhaustive resolver oracle.
     CheckScenarios(CheckScenariosArgs),
+    /// Reduce a fixed-environment resolver counterexample to a replayable Packse fixture.
+    MinimizeScenario(MinimizeScenarioArgs),
     /// Display the metadata for a `.whl` at a given URL.
     WheelMetadata(WheelMetadataArgs),
     /// Validate that a `.whl` or `.zip` file at a given URL is a valid ZIP file.
@@ -85,7 +89,7 @@ pub async fn run() -> Result<()> {
     let cli = Cli::parse();
     // Scenario checks reuse the test harness, which scopes preview state while discovering its
     // Python interpreters. That state cannot be installed after normal process initialization.
-    if !matches!(&cli, Cli::CheckScenarios(_)) {
+    if !matches!(&cli, Cli::CheckScenarios(_) | Cli::MinimizeScenario(_)) {
         uv_preview::set(uv_preview::Preview::default())?;
         uv_preview::finalize()?;
     }
@@ -93,6 +97,7 @@ pub async fn run() -> Result<()> {
     let environment = EnvironmentOptions::new()?;
     match cli {
         Cli::CheckScenarios(args) => check_scenarios::main(&args)?,
+        Cli::MinimizeScenario(args) => minimize_scenario::main(&args)?,
         Cli::WheelMetadata(args) => wheel_metadata::wheel_metadata(args, environment).await?,
         Cli::ValidateZip(args) => validate_zip::validate_zip(args, environment).await?,
         Cli::Compile(args) => compile::compile(args).await?,
@@ -173,5 +178,14 @@ mod tests {
         ];
         assert!(Cli::try_parse_from(arguments).is_ok());
         assert!(Cli::try_parse_from(arguments.into_iter().chain(["--lock"])).is_err());
+    }
+
+    #[test]
+    fn scenario_reducer_requires_a_replay_destination() {
+        let arguments = ["uv-dev", "minimize-scenario", "--uv", "uv", "scenario.toml"];
+        assert!(Cli::try_parse_from(arguments).is_err());
+        assert!(
+            Cli::try_parse_from(arguments.into_iter().chain(["--output", "reduced.toml"])).is_ok()
+        );
     }
 }

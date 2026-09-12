@@ -112,6 +112,39 @@ pub struct CheckResult {
     pub checked: usize,
 }
 
+/// A semantic contradiction between uv's fixed-environment output and the independent oracle.
+///
+/// Setup errors, unsupported inputs, exhausted search bounds, and subprocess failures without a
+/// resolver conclusion are deliberately not assigned a kind. Reducers must not mistake those
+/// failures for a preserved resolver counterexample.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScenarioFailureKind {
+    FalseSatisfiable,
+    FalseUnsatisfiable,
+    InvalidPins,
+    InvalidClosure,
+}
+
+impl ScenarioFailureKind {
+    /// Return the semantic failure carried by a checker error, if any.
+    pub fn from_error(error: &anyhow::Error) -> Option<Self> {
+        error.downcast_ref::<Self>().copied()
+    }
+}
+
+impl fmt::Display for ScenarioFailureKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::FalseSatisfiable => "uv accepted an unsatisfiable graph",
+            Self::FalseUnsatisfiable => "uv rejected a satisfiable graph",
+            Self::InvalidPins => "uv returned invalid fixed-environment pins",
+            Self::InvalidClosure => "uv returned an invalid dependency closure",
+        })
+    }
+}
+
+impl std::error::Error for ScenarioFailureKind {}
+
 /// The result of checking a universal lockfile and its concrete projections.
 #[derive(Debug)]
 pub enum LockCheckResult {
@@ -467,22 +500,26 @@ fn compare_output(
 ) -> Result<Option<Selection>> {
     let stderr = String::from_utf8_lossy(&output.stderr);
     if output.status.success() {
-        let selection = parse_pins(std::str::from_utf8(&output.stdout)?, environment)?;
-        ensure!(
-            expected.is_some(),
-            "uv found a solution for an unsatisfiable scenario: {selection:?}"
-        );
-        oracle.validate(&selection).with_context(|| {
-            format!(
-                "uv returned an invalid dependency closure: {selection:?}\n{}",
-                String::from_utf8_lossy(&output.stdout)
-            )
-        })?;
+        let requirements =
+            std::str::from_utf8(&output.stdout).context(ScenarioFailureKind::InvalidPins)?;
+        let selection =
+            parse_pins(requirements, environment).context(ScenarioFailureKind::InvalidPins)?;
+        if expected.is_none() {
+            return Err(
+                anyhow::anyhow!("uv selected {selection:?}:\n{requirements}")
+                    .context(ScenarioFailureKind::FalseSatisfiable),
+            );
+        }
+        oracle
+            .validate(&selection)
+            .with_context(|| format!("uv selected {selection:?}:\n{requirements}"))
+            .context(ScenarioFailureKind::InvalidClosure)?;
         Ok(Some(selection))
     } else {
         ensure_no_solution(output, "uv pip compile")?;
         if let Some(solution) = expected {
-            bail!("uv reported no solution, but the oracle found {solution:?}:\n{stderr}");
+            return Err(anyhow::anyhow!("the oracle found {solution:?}:\n{stderr}")
+                .context(ScenarioFailureKind::FalseUnsatisfiable));
         }
         Ok(None)
     }
