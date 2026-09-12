@@ -508,6 +508,7 @@ impl ToolLock {
             &client,
             &build_dispatch,
             concurrency.downloads_semaphore.clone(),
+            concurrency.source_preparation.clone(),
         );
 
         let requires_python =

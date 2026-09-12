@@ -342,6 +342,7 @@ impl BuildContext for BuildDispatch<'_> {
                 self.client,
                 self,
                 self.concurrency.downloads_semaphore.clone(),
+                self.concurrency.source_preparation.clone(),
             )
             .with_build_stack(build_stack),
         )
@@ -375,6 +376,7 @@ impl BuildContext for BuildDispatch<'_> {
                 self.client,
                 self,
                 self.concurrency.downloads_semaphore.clone(),
+                self.concurrency.source_preparation.clone(),
             )
             .with_build_stack(build_stack),
         )?;
@@ -471,6 +473,7 @@ impl BuildContext for BuildDispatch<'_> {
                     self.client,
                     self,
                     self.concurrency.downloads_semaphore.clone(),
+                    self.concurrency.source_preparation.clone(),
                 )
                 .with_build_stack(build_stack),
             );
@@ -544,6 +547,10 @@ impl BuildContext for BuildDispatch<'_> {
                 VersionOrUrlRef::Version(version) => Some(version),
                 VersionOrUrlRef::Url(_) => None,
             });
+
+        // Build requirements need admission at a deeper level even when the source has no
+        // distribution identity yet, such as an unnamed URL with dynamic metadata.
+        build_stack.enter_source_preparation();
 
         // Push the current distribution onto the build stack, to prevent cyclic dependencies.
         if let Some(dist) = dist {

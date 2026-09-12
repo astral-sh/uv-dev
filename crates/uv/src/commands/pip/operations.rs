@@ -158,6 +158,7 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
                         client,
                         build_dispatch,
                         concurrency.downloads_semaphore.clone(),
+                        concurrency.source_preparation.clone(),
                     ),
                 )
                 .with_reporter(Arc::new(ResolverReporter::from(printer)))
@@ -176,6 +177,7 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
                     client,
                     build_dispatch,
                     concurrency.downloads_semaphore.clone(),
+                    concurrency.source_preparation.clone(),
                 ),
             )
             .with_reporter(Arc::new(ResolverReporter::from(printer)))
@@ -294,6 +296,7 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
                         client,
                         build_dispatch,
                         concurrency.downloads_semaphore.clone(),
+                        concurrency.source_preparation.clone(),
                     ),
                 )
                 .with_reporter(Arc::new(ResolverReporter::from(printer)))
@@ -337,6 +340,7 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
                     client,
                     build_dispatch,
                     concurrency.downloads_semaphore.clone(),
+                    concurrency.source_preparation.clone(),
                 ),
             )
             .with_reporter(Arc::new(ResolverReporter::from(printer)))
@@ -391,6 +395,7 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
                 client,
                 build_dispatch,
                 concurrency.downloads_semaphore.clone(),
+                concurrency.source_preparation.clone(),
             ),
         )?
         .with_reporter(Arc::new(reporter));
@@ -1066,6 +1071,7 @@ async fn execute_plan(
                 client,
                 build_dispatch,
                 concurrency.downloads_semaphore.clone(),
+                concurrency.source_preparation.clone(),
             ),
         )
         .with_reporter(Arc::new(
