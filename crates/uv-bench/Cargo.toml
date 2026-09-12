@@ -38,6 +38,11 @@ name = "uv_pypi_types"
 path = "benches/uv_pypi_types.rs"
 harness = false
 
+[[bench]]
+name = "marker_environment"
+path = "benches/marker_environment.rs"
+harness = false
+
 [dev-dependencies]
 uv = { workspace = true }
 uv-cache = { workspace = true }
