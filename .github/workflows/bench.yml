@@ -19,6 +19,8 @@ env:
 jobs:
   benchmarks-walltime-build:
     name: "walltime build"
+    outputs:
+      matrix: ${{ steps.shards.outputs.matrix }}
     # codspeed-macro doesn't support Ubuntu 24.04 yet
     runs-on: depot-ubuntu-22.04-arm-4
     # uv-dev benchmarks pull requests but imports its main-branch measurements from uv.
@@ -57,6 +59,10 @@ jobs:
       - name: "Build benchmarks"
         run: cargo codspeed build -m walltime --profile profiling -p uv-bench --bench uv --bench workspace_discovery
 
+      - name: "Plan bounded walltime runs"
+        id: shards
+        run: python3 scripts/benchmark/walltime-shards.py plan
+
       - name: "Create artifact archive"
         run: tar -cvf benchmarks-walltime.tar target/codspeed target/debug/uv .cache
 
@@ -68,10 +74,14 @@ jobs:
           retention-days: 1
 
   benchmarks-walltime-run:
-    name: "walltime on aarch64 linux"
+    name: "walltime on aarch64 linux (${{ matrix.index }}/${{ matrix.total }})"
     runs-on: codspeed-macro
     needs: benchmarks-walltime-build
-    timeout-minutes: 180
+    if: ${{ needs.benchmarks-walltime-build.result == 'success' }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.benchmarks-walltime-build.outputs.matrix) }}
     permissions:
       contents: read
       id-token: write # for codspeed authentication
@@ -101,12 +111,12 @@ jobs:
         id: profiles
         # Only public main pushes produce reusable baseline profiles.
         if: ${{ github.repository == 'astral-sh/uv' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        run: ./target/debug/uv run --script scripts/codspeed-profiles.py start "$RUNNER_TEMP/codspeed-walltime" walltime >> "$GITHUB_OUTPUT"
+        run: ./target/debug/uv run --script scripts/codspeed-profiles.py start "$RUNNER_TEMP/codspeed-walltime" walltime-${{ matrix.index }} >> "$GITHUB_OUTPUT"
 
       - name: "Run benchmarks"
         uses: CodSpeedHQ/action@4296e51e7041e24dadb86d1d6e8b9320d223dbe8 # v5.0.3
         with:
-          run: cargo codspeed run
+          run: python3 scripts/benchmark/walltime-shards.py run ${{ matrix.index }}
           mode: walltime
           upload-url: ${{ steps.profiles.outputs.upload-url }}
 
@@ -118,7 +128,7 @@ jobs:
         if: ${{ steps.profiles.outcome == 'success' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: codspeed-profiles-walltime
+          name: codspeed-profiles-walltime-${{ matrix.index }}
           path: |
             ${{ runner.temp }}/codspeed-walltime/metadata.json
             ${{ runner.temp }}/codspeed-walltime/profile.tar
