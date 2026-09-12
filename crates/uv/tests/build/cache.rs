@@ -617,6 +617,59 @@ fn prune_ci_removes_installed_archive_file_objects() -> Result<()> {
     Ok(())
 }
 
+/// Refreshing a local wheel must rebuild an archive omitted by an incomplete cache restore.
+#[test]
+fn refresh_local_wheel_recovers_missing_archive() -> Result<()> {
+    for content_addressed_cache in [false, true] {
+        let context = uv_test::test_context!("3.12");
+        let wheel = binary_payload_wheel(&context)?;
+        let mut install = context.pip_install();
+        install.arg(&wheel);
+        if content_addressed_cache {
+            install.args(["--preview-features", "content-addressed-cache"]);
+        }
+
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), install, @"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Resolved 1 package in [TIME]
+            Prepared 1 package in [TIME]
+            Installed 1 package in [TIME]
+             + binary-payload==0.1.0 (from file://[TEMP_DIR]/binary_payload-0.1.0-py3-none-any.whl)
+            ");
+        }
+
+        // Retain the local wheel and its revision pointer while dropping the extracted archive.
+        fs_err::remove_dir_all(context.cache_dir.child("archive-v0"))?;
+        let mut reinstall = context.pip_install();
+        reinstall.arg(&wheel).args(["--reinstall", "--refresh"]);
+        if content_addressed_cache {
+            reinstall.args(["--preview-features", "content-addressed-cache"]);
+        }
+
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), reinstall, @"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Resolved 1 package in [TIME]
+            Prepared 1 package in [TIME]
+            Uninstalled 1 package in [TIME]
+            Installed 1 package in [TIME]
+             ~ binary-payload==0.1.0 (from file://[TEMP_DIR]/binary_payload-0.1.0-py3-none-any.whl)
+            ");
+        }
+
+        assert!(!context.cache_files(CacheBucket::Archive)?.is_empty());
+        context
+            .assert_command("from binary_payload import module; print(module.VALUE, end='')")
+            .success()
+            .stdout("not binary");
+    }
+
+    Ok(())
+}
+
 /// Requires `UV_INTERNAL__TEST_ALT_FS`.
 #[test]
 fn binary_payload_copy_fallback_uses_archive_file_store() -> Result<()> {
