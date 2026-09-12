@@ -10,9 +10,10 @@ use uv_python::PythonVersion;
 use uv_test::TestContext;
 use uv_test::packse::check::{
     LockCheckResult, ScenarioPlatform, ScenarioTarget, check_lock_scenario, check_scenario,
+    check_scenario_with_artifacts,
 };
 use uv_test::packse::generate::{SmallGraphOptions, generate_small_graph};
-use uv_test::packse::scenario::Scenario;
+use uv_test::packse::scenario::ScenarioDocument;
 
 #[derive(clap::Args)]
 pub(crate) struct Args {
@@ -35,6 +36,10 @@ pub(crate) struct Args {
     /// Check a universal project lock and its frozen export instead of `pip compile`.
     #[arg(long)]
     lock: bool,
+
+    /// Save a failed fixed-environment command and its served wheels in a new directory.
+    #[arg(long, conflicts_with = "lock", value_name = "DIR")]
+    failure_dir: Option<PathBuf>,
 
     /// Generate small graphs beginning at this seed instead of reading scenario files.
     #[arg(long, conflicts_with = "scenarios", requires = "output_dir")]
@@ -98,8 +103,13 @@ pub(crate) fn main(args: &Args) -> Result<()> {
             let scenario = document.scenario()?;
             let path = output_dir.join(format!("{}.toml", scenario.name));
             save_generated_input(&path, &document.to_toml()?)?;
+            let failure_dir = (!args.lock).then(|| {
+                args.failure_dir
+                    .clone()
+                    .unwrap_or_else(|| output_dir.join(format!("{}.failure", scenario.name)))
+            });
             let context = TestContext::new_with_versions_and_bin(&[&interpreter], uv.clone());
-            let result = check_case(&context, &scenario, &target, args)
+            let result = check_case(&context, &document, &target, args, failure_dir.as_deref())
                 .with_context(|| format!("generated scenario `{}` failed", path.display()))?;
             if result.satisfiable {
                 satisfiable += 1;
@@ -114,10 +124,17 @@ pub(crate) fn main(args: &Args) -> Result<()> {
     }
 
     for path in &args.scenarios {
-        let scenario = Scenario::from_path(path)?;
+        let document = ScenarioDocument::from_path(path)?;
+        let scenario = document.scenario()?;
         let context = TestContext::new_with_versions_and_bin(&[&interpreter], uv.clone());
-        let result = check_case(&context, &scenario, &target, args)
-            .with_context(|| format!("scenario `{}` failed", path.display()))?;
+        let result = check_case(
+            &context,
+            &document,
+            &target,
+            args,
+            args.failure_dir.as_deref(),
+        )
+        .with_context(|| format!("scenario `{}` failed", path.display()))?;
         println!("{}: {}", scenario.name, result.description);
     }
     Ok(())
@@ -130,14 +147,16 @@ struct CaseResult {
 
 fn check_case(
     context: &TestContext,
-    scenario: &Scenario,
+    document: &ScenarioDocument,
     target: &ScenarioTarget,
     args: &Args,
+    failure_dir: Option<&Path>,
 ) -> Result<CaseResult> {
+    let scenario = document.scenario()?;
     if args.lock {
         let result = check_lock_scenario(
             context,
-            scenario,
+            &scenario,
             std::slice::from_ref(target),
             args.max_states,
         )?;
@@ -159,7 +178,11 @@ fn check_case(
             },
         })
     } else {
-        let result = check_scenario(context, scenario, target, args.max_states)?;
+        let result = if let Some(failure_dir) = failure_dir {
+            check_scenario_with_artifacts(context, document, target, args.max_states, failure_dir)?
+        } else {
+            check_scenario(context, &scenario, target, args.max_states)?
+        };
         if let Some(selection) = result.selection {
             Ok(CaseResult {
                 satisfiable: true,

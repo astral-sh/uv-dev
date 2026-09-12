@@ -159,4 +159,19 @@ mod tests {
             .is_ok()
         );
     }
+
+    #[test]
+    fn scenario_checker_captures_fixed_environment_failures() {
+        let arguments = [
+            "uv-dev",
+            "check-scenarios",
+            "--uv",
+            "uv",
+            "--failure-dir",
+            "failure",
+            "scenario.toml",
+        ];
+        assert!(Cli::try_parse_from(arguments).is_ok());
+        assert!(Cli::try_parse_from(arguments.into_iter().chain(["--lock"])).is_err());
+    }
 }

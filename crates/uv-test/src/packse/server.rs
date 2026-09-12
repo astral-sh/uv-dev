@@ -12,6 +12,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use anyhow::{Context, ensure};
 use serde_json::json;
 use wiremock::{
     Mock, MockServer, Request, ResponseTemplate,
@@ -146,6 +147,47 @@ impl PackseServer {
             .values()
             .flat_map(|package| package.dists.iter())
             .map(|dist| (dist.filename.as_str(), dist.sha256.as_str()))
+    }
+
+    /// Save the exact advertised distribution bytes and their source URLs for a replay.
+    ///
+    /// The destination must not exist. This avoids mixing artifacts from different scenarios,
+    /// which may publish the same package names and versions with different metadata.
+    pub fn write_distributions(&self, directory: &Path) -> anyhow::Result<()> {
+        fs_err::create_dir(directory)?;
+        let files_dir = directory.join("files");
+        fs_err::create_dir(&files_dir)?;
+
+        let mut files = self.files().collect::<Vec<_>>();
+        files.sort_unstable();
+        let mut manifest = Vec::with_capacity(files.len());
+        for (filename, expected_hash) in files {
+            let bytes = self
+                .index
+                .files
+                .get(filename)
+                .with_context(|| format!("advertised distribution `{filename}` has no bytes"))?
+                .bytes()?;
+            let actual_hash = sha256_hex(&bytes);
+            ensure!(
+                actual_hash == expected_hash,
+                "advertised hash for `{filename}` does not match the served bytes"
+            );
+            fs_err::write(files_dir.join(filename), &bytes)?;
+            manifest.push(json!({
+                "filename": filename,
+                "url": self.file_url(filename),
+                "sha256": actual_hash,
+            }));
+        }
+        fs_err::write(
+            directory.join("index.json"),
+            serde_json::to_vec_pretty(&json!({
+                "index-url": self.index_url(),
+                "files": manifest,
+            }))?,
+        )?;
+        Ok(())
     }
 }
 
@@ -494,6 +536,51 @@ sdist = false
                 .status(),
             StatusCode::NOT_FOUND
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn captured_distributions_match_the_served_bytes() -> Result<()> {
+        let scenario = toml::from_str::<Scenario>(
+            r#"
+name = "captured-distributions"
+[root]
+requires = ["a"]
+[expected]
+satisfiable = true
+[packages.a.versions."1.0.0"]
+requires = ["b"]
+sdist = false
+[packages.b.versions."1.0.0"]
+sdist = false
+"#,
+        )?;
+        let server = PackseServer::from_scenario_without_build_dependencies(&scenario);
+        let temporary = tempfile::tempdir()?;
+        let directory = temporary.path().join("index");
+        server.write_distributions(&directory)?;
+
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs_err::read(directory.join("index.json"))?)?;
+        assert_eq!(manifest["index-url"], server.index_url());
+        assert_eq!(manifest["files"].as_array().map(Vec::len), Some(2));
+        for (filename, expected_hash) in server.files() {
+            let served = reqwest::get(server.file_url(filename))
+                .await?
+                .error_for_status()?
+                .bytes()
+                .await?;
+            assert_eq!(
+                fs_err::read(directory.join("files").join(filename))?,
+                served
+            );
+            assert!(manifest["files"].as_array().is_some_and(|files| {
+                files
+                    .iter()
+                    .any(|file| file["filename"] == filename && file["sha256"] == expected_hash)
+            }));
+        }
+        assert!(server.write_distributions(&directory).is_err());
         Ok(())
     }
 
