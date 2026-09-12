@@ -378,6 +378,20 @@ enum ErrorCode {
     Network,
 }
 
+impl ErrorCode {
+    fn message(self) -> &'static str {
+        match self {
+            Self::EvaluationFailed => "Lock operation failed",
+            Self::MetadataUnavailable => "Package metadata is unavailable",
+            Self::OfflineCacheMiss => "Required data is not available in the cache",
+            Self::Authentication => "Authentication failed",
+            Self::AccessDenied => "Access was denied",
+            Self::Http => "An HTTP request failed",
+            Self::Network => "A network request failed",
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct ErrorReport {
     code: ErrorCode,
@@ -385,9 +399,7 @@ struct ErrorReport {
     package: Option<PackageName>,
     #[serde(skip_serializing_if = "Option::is_none")]
     http_status: Option<u16>,
-    message: String,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    causes: Vec<String>,
+    message: &'static str,
 }
 
 impl ErrorReport {
@@ -396,16 +408,17 @@ impl ErrorReport {
             code: ErrorCode::EvaluationFailed,
             package: None,
             http_status: None,
-            message: plain(error),
-            causes: Vec::new(),
+            message: ErrorCode::EvaluationFailed.message(),
         };
         report.classify(error);
+        // Human error chains can include unparsed requirements and URLs. Keep that source text
+        // on stderr; the JSON report exposes only typed classification and fixed messages.
         let mut source = error.source();
         while let Some(error) = source {
-            report.causes.push(plain(error));
             report.classify(error);
             source = error.source();
         }
+        report.message = report.code.message();
         report
     }
 
@@ -426,6 +439,7 @@ impl ErrorReport {
                 report.code = ErrorCode::MetadataUnavailable;
             }
         }
+        report.message = report.code.message();
         report
     }
 
@@ -496,7 +510,7 @@ impl ErrorReport {
     }
 }
 
-/// Error and requirement displays can contain terminal styling even when stdout is redirected.
+/// Typed reason values can contain terminal styling even when stdout is redirected.
 fn plain(value: impl Display) -> String {
     strip_str(&value.to_string()).to_string()
 }
