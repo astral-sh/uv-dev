@@ -682,8 +682,10 @@ impl Scheme {
         if let Some(("git", transport)) = s.split_once('+') {
             return Some(Self::Git(transport.into()));
         }
+        if s.eq_ignore_ascii_case("file") {
+            return Some(Self::File);
+        }
         match s {
-            "file" => Some(Self::File),
             "bzr+http" => Some(Self::BzrHttp),
             "bzr+https" => Some(Self::BzrHttps),
             "bzr+ssh" => Some(Self::BzrSsh),
@@ -762,6 +764,7 @@ mod tests {
             Some(("https", "//example.com"))
         );
         assert_eq!(split_scheme("https:"), Some(("https", "")));
+        assert_eq!(Scheme::parse("FiLe"), Some(Scheme::File));
     }
 
     #[test]
