@@ -24,6 +24,10 @@ offline from the same lockfiles and cached package artifacts.
 Pass `--discovery` to also install the pinned Python 3.10 and 3.13 interpreters used by the Python
 discovery workloads.
 
+Pass `--project-caches` to also prepare a separate cache for each frozen environment. Cache
+maintenance workloads copy these caches and reconstruct their environments before timing, retaining
+the real cache layout and links between installed files and cached wheel contents.
+
 Network workloads use `serve-fixtures.py` with the pinned Python 3.11 interpreter. It serves the
 prepared wheels, their actual core metadata, and Simple API listings derived from those wheels or an
 immutable lockfile. The server binds an ephemeral loopback port and applies a fixed 20 ms request
@@ -42,6 +46,10 @@ filesystem operations, subprocesses, network requests, and concurrency effects. 
 outside the measured region, control external services, and inspect the timing distribution and
 run-to-run noise before relying on a benchmark to detect regressions. An ablation should produce a
 repeatable effect that is meaningfully larger than the observed noise.
+
+Register walltime targets in `.github/workflows/bench.yml`. Expensive filesystem and whole-command
+targets use `common::walltime_criterion()` to bound sampling cost; adjust that policy only after
+checking the resulting distributions.
 
 ## Getting Started
 
