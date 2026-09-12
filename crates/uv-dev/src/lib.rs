@@ -238,4 +238,24 @@ mod tests {
             Cli::try_parse_from(arguments.into_iter().chain(["--output", "reduced.toml"])).is_ok()
         );
     }
+
+    #[test]
+    fn scenario_reducer_accepts_lock_projection_matrices() {
+        let arguments = [
+            "uv-dev",
+            "minimize-scenario",
+            "--uv",
+            "uv",
+            "--output",
+            "reduced.toml",
+            "--python-version",
+            "3.12,3.13",
+            "--python-platform",
+            "linux,windows",
+            "--project-selections",
+            "scenario.toml",
+        ];
+        assert!(Cli::try_parse_from(arguments).is_err());
+        assert!(Cli::try_parse_from(arguments.into_iter().chain(["--lock"])).is_ok());
+    }
 }
