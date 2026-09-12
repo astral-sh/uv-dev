@@ -149,7 +149,7 @@ fn source_quote(
 fn url_end(text: &str, authority_start: usize, quote: Option<SourceQuote>) -> usize {
     let mut escaped = false;
     for (index, character) in text[authority_start..].char_indices() {
-        if character.is_whitespace() || matches!(character, '<' | '>' | '`') {
+        if character.is_whitespace() || (quote.is_none() && matches!(character, '<' | '>' | '`')) {
             return authority_start + index;
         }
         if escaped {
@@ -415,6 +415,18 @@ mod tests {
         assert!(
             components(r#"url = "https://example.invalid/safe", note = "user:secret@host""#)
                 .is_empty(),
+        );
+    }
+
+    #[test]
+    fn source_url_quoted_markup_delimiters() {
+        assert_eq!(
+            components(r#"url = "https://user:pa<ss>`word@example.invalid/simple?sig=si<gn>`ed""#,),
+            ["pa<ss>`word", "si<gn>`ed"],
+        );
+        assert_eq!(
+            components("<https://user:secret@example.invalid/?sig=signed>"),
+            ["secret", "signed"],
         );
     }
 
