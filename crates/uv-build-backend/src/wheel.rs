@@ -27,7 +27,8 @@ use uv_warnings::warn_user_once;
 use crate::metadata::DEFAULT_EXCLUDES;
 use crate::{
     BuildBackendSettings, DirectoryWriter, Error, FileList, ListWriter, PyProjectToml,
-    error_on_venv, find_roots, write_directory_once, write_file_with_directories,
+    error_on_venv, find_roots, relative_entry_path, write_directory_once,
+    write_file_with_directories,
 };
 
 // Files at or below this size are buffered and written with `write_entry_whole`,
@@ -174,14 +175,8 @@ fn write_wheel(
 
             // We only want to take the module root, but since excludes start at the source tree root,
             // we strip higher than we iterate.
-            let match_path = entry
-                .path()
-                .strip_prefix(source_tree)
-                .expect("walkdir starts with root");
-            let entry_path = entry
-                .path()
-                .strip_prefix(&src_root)
-                .expect("walkdir starts with root");
+            let match_path = relative_entry_path(&entry, source_tree);
+            let entry_path = relative_entry_path(&entry, &src_root);
             if exclude_matcher.is_match(match_path) {
                 trace!("Excluding from module: {}", match_path.user_display());
                 continue;
@@ -595,11 +590,7 @@ fn wheel_subdir_from_globs(
         .sort_by_file_name()
         .into_iter()
         .filter_entry(|entry| {
-            // TODO(konsti): This should be prettier.
-            let relative = entry
-                .path()
-                .strip_prefix(src)
-                .expect("walkdir starts with root");
+            let relative = relative_entry_path(entry, src);
 
             // Fast path: Don't descend into a directory that can't be included.
             matcher.match_directory(relative) && !is_excluded(entry.path())
@@ -617,11 +608,7 @@ fn wheel_subdir_from_globs(
             continue;
         }
 
-        // TODO(konsti): This should be prettier.
-        let relative = entry
-            .path()
-            .strip_prefix(src)
-            .expect("walkdir starts with root");
+        let relative = relative_entry_path(&entry, src);
 
         if !matcher.match_path(relative) || is_excluded(entry.path()) {
             trace!("Excluding {}: {}", globs_field, relative.user_display());
