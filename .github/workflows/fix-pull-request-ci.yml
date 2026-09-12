@@ -1,0 +1,539 @@
+name: Fix pull request CI failures
+
+on:
+  workflow_dispatch:
+    inputs:
+      run:
+        description: "The failed uv-dev CI run ID"
+        required: true
+        type: string
+      head_sha:
+        description: "The failed pull request head SHA"
+        required: true
+        type: string
+      pull_request:
+        description: "The uv-dev pull request number"
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: fix-pull-request-ci-${{ inputs.pull_request }}
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    name: Inspect failed pull request CI
+    if: github.repository == 'astral-sh/uv-dev'
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      actions: read # inspect the failed CI run and its snapshot artifacts
+      contents: read
+      pull-requests: read # verify the pull request still owns the failed head
+    outputs:
+      repairable: ${{ steps.inspect.outputs.repairable }}
+      snapshots: ${{ steps.inspect.outputs.snapshots }}
+      base-ref: ${{ steps.inspect.outputs.base_ref }}
+      head-ref: ${{ steps.inspect.outputs.head_ref }}
+    steps:
+      - name: Inspect failed CI run and pull request
+        id: inspect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
+          RUN_ID: ${{ inputs.run }}
+        run: |
+          if ! [[ "$RUN_ID" =~ ^[1-9][0-9]*$ ]] ||
+            ! [[ "$PULL_REQUEST_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+            ! [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "The dispatched pull request context is invalid." >&2
+            exit 1
+          fi
+
+          run_file="$RUNNER_TEMP/pull-request-ci-run.json"
+          pull_request_file="$RUNNER_TEMP/pull-request.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" > "$run_file"
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER" > "$pull_request_file"
+
+          if ! jq --exit-status \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --argjson repository_id "$GITHUB_REPOSITORY_ID" \
+            --arg head_sha "$HEAD_SHA" \
+            --argjson pull_request "$PULL_REQUEST_NUMBER" \
+            '
+              .event == "pull_request"
+              and .conclusion == "failure"
+              and .path == ".github/workflows/ci.yml"
+              and .repository.full_name == $repository
+              and .repository.id == $repository_id
+              and .head_repository.full_name == $repository
+              and .head_repository.id == $repository_id
+              and .head_sha == $head_sha
+              and any(.pull_requests[]; .number == $pull_request)
+            ' "$run_file" > /dev/null; then
+            echo "The CI run does not match the trusted uv-dev pull request context." >&2
+            exit 1
+          fi
+
+          if ! jq --exit-status \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --argjson repository_id "$GITHUB_REPOSITORY_ID" \
+            --arg head_sha "$HEAD_SHA" \
+            --arg head_ref "$(jq --raw-output '.head_branch' "$run_file")" \
+            '
+              .state == "open"
+              and .base.repo.full_name == $repository
+              and .base.repo.id == $repository_id
+              and .head.repo.full_name == $repository
+              and .head.repo.id == $repository_id
+              and .head.ref == $head_ref
+              and .head.sha == $head_sha
+            ' "$pull_request_file" > /dev/null; then
+            echo "The pull request is no longer open at the expected uv-dev head." >&2
+            exit 1
+          fi
+
+          head_subject="$(
+            gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA" \
+              --jq '.commit.message | split("\n")[0]'
+          )"
+          if [ "$head_subject" = "Fix pull request CI failures" ]; then
+            echo "The previous automated repair did not resolve CI; refusing to retry."
+            echo "repairable=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          gh run view "$RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json jobs \
+            > "$RUNNER_TEMP/pull-request-ci-jobs.json"
+          mechanical_failures="$(jq '
+            [
+              .jobs[]
+              | select(.conclusion == "failure")
+              | select(
+                  (.name | startswith("check-fmt /"))
+                  or (.name | startswith("check-lint /"))
+                  or (.name | startswith("check-generated-files /"))
+                  or (.name | startswith("check-lock /"))
+                )
+            ] | length
+          ' "$RUNNER_TEMP/pull-request-ci-jobs.json")"
+
+          snapshot_artifacts="$(
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts" \
+              --paginate \
+              --jq '.artifacts[] | select(.expired == false and (.name | startswith("pending-snapshots-"))) | .name'
+          )"
+          if [ -n "$snapshot_artifacts" ]; then
+            echo "snapshots=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "snapshots=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [ "$mechanical_failures" -eq 0 ] && [ -z "$snapshot_artifacts" ]; then
+            echo "The failed CI run contains no automatically repairable checks."
+            echo "repairable=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          {
+            echo "repairable=true"
+            echo "base_ref=$(jq --raw-output '.base.ref' "$pull_request_file")"
+            echo "head_ref=$(jq --raw-output '.head.ref' "$pull_request_file")"
+          } >> "$GITHUB_OUTPUT"
+
+  repair:
+    name: Repair pull request CI
+    needs: inspect
+    if: needs.inspect.outputs.repairable == 'true'
+    runs-on: ubuntu-latest
+    environment: automations
+    timeout-minutes: 45
+    permissions:
+      actions: read # download failed logs and pending snapshot artifacts
+      contents: read
+      pull-requests: read # provide read-only pull request context to Codex
+    outputs:
+      created: ${{ steps.commit.outputs.created }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: false
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          save-if: false
+
+      - name: Install snapshot tools
+        if: needs.inspect.outputs.snapshots == 'true'
+        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9 # v2.84.0
+        with:
+          tool: cargo-insta,cargo-nextest
+
+      - name: Prepare trusted repair context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ needs.inspect.outputs.head-ref }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          RUN_ID: ${{ inputs.run }}
+          SNAPSHOTS: ${{ needs.inspect.outputs.snapshots }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/codex-home"
+          cp agents/codex/config.toml "$RUNNER_TEMP/codex-home/config.toml"
+          cp agents/prompts/fix-pull-request-ci.md "$RUNNER_TEMP/fix-pull-request-ci.md"
+          cp agents/schemas/pull-request-ci-repair.json "$RUNNER_TEMP/pull-request-ci-repair.json"
+
+          gh run view "$RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json databaseId,event,conclusion,headBranch,headSha,url,jobs \
+            > "$RUNNER_TEMP/pull-request-ci-run.json"
+          gh run view "$RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --log-failed \
+            > "$RUNNER_TEMP/pull-request-ci-failed.log"
+
+          snapshot_directory="$RUNNER_TEMP/pull-request-ci-snapshots"
+          mkdir -p "$snapshot_directory"
+          if [ "$SNAPSHOTS" = "true" ]; then
+            artifacts_directory="$RUNNER_TEMP/pull-request-ci-artifacts"
+            gh run download "$RUN_ID" \
+              --repo "$GITHUB_REPOSITORY" \
+              --pattern 'pending-snapshots-*' \
+              --dir "$artifacts_directory"
+
+            for artifact_directory in "$artifacts_directory"/pending-snapshots-*/; do
+              if [ ! -d "$artifact_directory" ]; then
+                continue
+              fi
+
+              while IFS= read -r -d '' snapshot; do
+                relative_path="${snapshot#"$artifact_directory"}"
+                destination="$snapshot_directory/$relative_path"
+                mkdir -p "$(dirname "$destination")"
+
+                if [ ! -e "$destination" ]; then
+                  cp "$snapshot" "$destination"
+                  continue
+                fi
+                if cmp -s "$destination" "$snapshot"; then
+                  continue
+                fi
+
+                case "$relative_path" in
+                  *.pending-snap)
+                    if ! jq --slurp '
+                      group_by(.line)
+                      | map(
+                          (map(select(.new != null))) as $updates
+                          | if ($updates | map(.new) | unique | length) > 1 then
+                              error("Conflicting pending snapshots for the same source line")
+                            else
+                              ($updates[0] // .[0])
+                            end
+                        )
+                      | .[]
+                    ' "$destination" "$snapshot" > "$destination.merged"; then
+                      echo "Pending snapshots disagree across CI platforms: $relative_path" >&2
+                      exit 1
+                    fi
+                    mv "$destination.merged" "$destination"
+                    ;;
+                  *)
+                    echo "Snapshot artifacts disagree across CI platforms: $relative_path" >&2
+                    exit 1
+                    ;;
+                esac
+              done < <(find "$artifact_directory" -type f -print0)
+            done
+          fi
+
+          git -c core.hooksPath=/dev/null fetch \
+            --no-tags "https://github.com/$GITHUB_REPOSITORY.git" "refs/heads/$HEAD_REF"
+          current_head="$(git rev-parse 'FETCH_HEAD^{commit}')"
+          if [ "$current_head" != "$HEAD_SHA" ]; then
+            echo "The pull request head changed; refusing to repair a stale revision." >&2
+            exit 1
+          fi
+
+          git checkout --detach "$HEAD_SHA"
+          git config user.name "astral-automations-bot[bot]"
+          git config user.email "305554984+astral-automations-bot[bot]@users.noreply.github.com"
+
+      - name: Enable Linux user namespaces for bubblewrap
+        run: |
+          current_userns="$(sysctl -n kernel.unprivileged_userns_clone 2>/dev/null || true)"
+          if [ -n "$current_userns" ] && [ "$current_userns" != "1" ]; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+
+          current_apparmor="$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || true)"
+          if [ -n "$current_apparmor" ] && [ "$current_apparmor" != "0" ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
+      - name: Repair failed CI checks
+        id: repair
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1
+        env:
+          CI_REPAIR_BASE_REF: ${{ needs.inspect.outputs.base-ref }}
+          CI_REPAIR_HEAD_SHA: ${{ inputs.head_sha }}
+          CI_REPAIR_LOG_FILE: ${{ runner.temp }}/pull-request-ci-failed.log
+          CI_REPAIR_PULL_REQUEST: ${{ inputs.pull_request }}
+          CI_REPAIR_RUN_FILE: ${{ runner.temp }}/pull-request-ci-run.json
+          CI_REPAIR_RUN_ID: ${{ inputs.run }}
+          CI_REPAIR_SNAPSHOT_DIR: ${{ runner.temp }}/pull-request-ci-snapshots
+          GH_TOKEN: ${{ github.token }}
+          TMPDIR: ${{ runner.temp }}
+          UV_CACHE_DIR: ${{ runner.temp }}/uv-ci-repair-cache
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          model: gpt-5.6-sol
+          codex-home: "${{ runner.temp }}/codex-home"
+          permission-profile: "pull-request-ci-repair"
+          safety-strategy: drop-sudo
+          allow-bot-users: "astral-automations-bot[bot]"
+          prompt-file: "${{ runner.temp }}/fix-pull-request-ci.md"
+          output-schema-file: "${{ runner.temp }}/pull-request-ci-repair.json"
+
+      - name: Upload Codex thread
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-thread-pull-request-ci-${{ inputs.pull_request }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/codex-home/sessions
+          if-no-files-found: warn
+
+      - name: Verify and commit the repair
+        id: commit
+        env:
+          HEAD_SHA: ${{ inputs.head_sha }}
+          REPAIR_RESULT: ${{ steps.repair.outputs.final-message }}
+        run: |
+          printf '%s\n' "$REPAIR_RESULT" > "$RUNNER_TEMP/pull-request-ci-result.json"
+          outcome="$(jq --raw-output '.outcome' "$RUNNER_TEMP/pull-request-ci-result.json")"
+
+          if [ "$outcome" = "not_fixed" ]; then
+            if [ -n "$(git status --porcelain)" ]; then
+              echo "Codex reported no repair but modified the checkout." >&2
+              exit 1
+            fi
+            echo "created=false" >> "$GITHUB_OUTPUT"
+            jq --raw-output '.summary' "$RUNNER_TEMP/pull-request-ci-result.json" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if [ "$outcome" != "fixed" ] ||
+            ! jq --exit-status '.validation | length > 0' \
+              "$RUNNER_TEMP/pull-request-ci-result.json" > /dev/null; then
+            echo "The repair outcome is invalid or was not verified." >&2
+            exit 1
+          fi
+
+          git -c core.hooksPath=/dev/null add --all
+          if git diff --cached --quiet; then
+            echo "Codex reported a repair, but the checkout is unchanged." >&2
+            exit 1
+          fi
+
+          changed_files=0
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              .github/workflows/*|.github/actions/*|.github/automations-dispatch.json|agents/codex/*|agents/prompts/*|agents/schemas/*)
+                echo "The repair changes a protected automation file: $path" >&2
+                exit 1
+                ;;
+            esac
+            changed_files=$((changed_files + 1))
+          done < <(git diff --cached --name-only -z)
+
+          if [ "$changed_files" -gt 100 ]; then
+            echo "The repair changes too many files: $changed_files" >&2
+            exit 1
+          fi
+
+          if git diff --cached --raw | grep -Eq '^:[0-7]+ (120000|160000) '; then
+            echo "The repair introduces a symbolic link or Git submodule." >&2
+            exit 1
+          fi
+
+          changed_lines="$(git diff --cached --numstat | awk '
+            $1 == "-" || $2 == "-" { invalid = 1 }
+            { total += $1 + $2 }
+            END { if (invalid) exit 1; print total + 0 }
+          ')"
+          if [ "$changed_lines" -gt 10000 ]; then
+            echo "The repair changes too many lines: $changed_lines" >&2
+            exit 1
+          fi
+
+          git diff --cached --check
+          git -c core.hooksPath=/dev/null commit --message "Fix pull request CI failures"
+          if [ "$(git rev-parse 'HEAD^')" != "$HEAD_SHA" ]; then
+            echo "The repair commit does not extend the verified pull request head." >&2
+            exit 1
+          fi
+
+          git -c core.hooksPath=/dev/null bundle create \
+            "$RUNNER_TEMP/pull-request-ci-repair.bundle" "$HEAD_SHA..HEAD"
+          echo "created=true" >> "$GITHUB_OUTPUT"
+          {
+            jq --raw-output '.summary' "$RUNNER_TEMP/pull-request-ci-result.json"
+            echo
+            jq --raw-output '.validation[] | "- " + .' "$RUNNER_TEMP/pull-request-ci-result.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload repaired pull request
+        if: steps.commit.outputs.created == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: repaired-pull-request-${{ inputs.pull_request }}-${{ inputs.head_sha }}
+          path: ${{ runner.temp }}/pull-request-ci-repair.bundle
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  push:
+    name: Push repaired pull request
+    needs:
+      - inspect
+      - repair
+    if: needs.repair.outputs.created == 'true'
+    runs-on: ubuntu-slim
+    environment: automations
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write # exchange an OIDC token for narrowly scoped branch access
+      pull-requests: read # revalidate the pull request before publishing
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download repaired pull request
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: repaired-pull-request-${{ inputs.pull_request }}-${{ inputs.head_sha }}
+          path: ${{ runner.temp }}/repaired-pull-request
+
+      - name: Verify repaired pull request
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+          HEAD_REF: ${{ needs.inspect.outputs.head-ref }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
+        run: |
+          pull_request="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER")"
+          if ! jq --exit-status \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --argjson repository_id "$GITHUB_REPOSITORY_ID" \
+            --arg head_ref "$HEAD_REF" \
+            --arg head_sha "$HEAD_SHA" \
+            '
+              .state == "open"
+              and .base.repo.full_name == $repository
+              and .base.repo.id == $repository_id
+              and .head.repo.full_name == $repository
+              and .head.repo.id == $repository_id
+              and .head.ref == $head_ref
+              and .head.sha == $head_sha
+            ' <<< "$pull_request" > /dev/null; then
+            echo "The pull request changed; refusing to publish the repair." >&2
+            exit 1
+          fi
+
+          git -c core.hooksPath=/dev/null fetch \
+            --no-tags "https://github.com/$GITHUB_REPOSITORY.git" "refs/heads/$HEAD_REF"
+          if [ "$(git rev-parse 'FETCH_HEAD^{commit}')" != "$HEAD_SHA" ]; then
+            echo "The pull request branch changed; refusing to publish the repair." >&2
+            exit 1
+          fi
+
+          bundle="$RUNNER_TEMP/repaired-pull-request/pull-request-ci-repair.bundle"
+          git -c core.hooksPath=/dev/null bundle verify "$bundle"
+          git -c core.hooksPath=/dev/null fetch --no-tags "$bundle" HEAD
+          repaired_head="$(git rev-parse 'FETCH_HEAD^{commit}')"
+
+          if [ "$(git rev-parse "$repaired_head^")" != "$HEAD_SHA" ]; then
+            echo "The repair does not extend the verified pull request head." >&2
+            exit 1
+          fi
+
+          if [ "$(git show --no-patch --format=%s "$repaired_head")" != "Fix pull request CI failures" ] ||
+            [ "$(git show --no-patch --format=%ae "$repaired_head")" != "305554984+astral-automations-bot[bot]@users.noreply.github.com" ]; then
+            echo "The repair commit has an unexpected subject or author." >&2
+            exit 1
+          fi
+
+          changed_files=0
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              .github/workflows/*|.github/actions/*|.github/automations-dispatch.json|agents/codex/*|agents/prompts/*|agents/schemas/*)
+                echo "The repair changes a protected automation file: $path" >&2
+                exit 1
+                ;;
+            esac
+            changed_files=$((changed_files + 1))
+          done < <(git diff --name-only -z "$HEAD_SHA" "$repaired_head")
+
+          if [ "$changed_files" -eq 0 ] || [ "$changed_files" -gt 100 ]; then
+            echo "The repair contains an unexpected number of changed files." >&2
+            exit 1
+          fi
+
+          if git diff --raw "$HEAD_SHA" "$repaired_head" | grep -Eq '^:[0-7]+ (120000|160000) '; then
+            echo "The repair introduces a symbolic link or Git submodule." >&2
+            exit 1
+          fi
+
+          changed_lines="$(git diff --numstat "$HEAD_SHA" "$repaired_head" | awk '
+            $1 == "-" || $2 == "-" { invalid = 1 }
+            { total += $1 + $2 }
+            END { if (invalid) exit 1; print total + 0 }
+          ')"
+          if [ "$changed_lines" -gt 10000 ]; then
+            echo "The repair changes too many lines: $changed_lines" >&2
+            exit 1
+          fi
+
+          git diff --check "$HEAD_SHA" "$repaired_head"
+          echo "head_sha=$repaired_head" >> "$GITHUB_OUTPUT"
+
+      - name: Get uv-dev write token
+        id: token
+        uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repository: astral-sh/uv-dev
+          permissions: |
+            contents: write
+
+      - name: Push repaired pull request
+        env:
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          HEAD_REF: ${{ needs.inspect.outputs.head-ref }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          REPAIRED_HEAD: ${{ steps.verify.outputs.head_sha }}
+        run: |
+          git -c core.hooksPath=/dev/null push \
+            --force-with-lease="refs/heads/$HEAD_REF:$HEAD_SHA" \
+            "https://x-access-token:${GH_TOKEN}@github.com/astral-sh/uv-dev.git" \
+            "${REPAIRED_HEAD}:refs/heads/$HEAD_REF"
