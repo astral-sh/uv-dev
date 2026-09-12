@@ -166,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn scenario_checker_captures_fixed_environment_failures() {
+    fn scenario_checker_captures_resolver_failures() {
         let arguments = [
             "uv-dev",
             "check-scenarios",
@@ -177,7 +177,7 @@ mod tests {
             "scenario.toml",
         ];
         assert!(Cli::try_parse_from(arguments).is_ok());
-        assert!(Cli::try_parse_from(arguments.into_iter().chain(["--lock"])).is_err());
+        assert!(Cli::try_parse_from(arguments.into_iter().chain(["--lock"])).is_ok());
     }
 
     #[test]

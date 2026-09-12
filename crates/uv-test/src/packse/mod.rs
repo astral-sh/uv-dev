@@ -5,6 +5,7 @@
 //! Each test gets its own server instance, so package names need no prefix mangling.
 
 pub mod check;
+mod evidence;
 pub mod generate;
 pub mod minimize;
 pub mod oracle;

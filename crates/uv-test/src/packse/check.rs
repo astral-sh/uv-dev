@@ -1,13 +1,12 @@
 //! Execute finite Packse scenarios against a real uv binary.
 
 use std::fmt;
-use std::io::{ErrorKind, Read};
-use std::path::Path;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::str::FromStr;
 
 use anyhow::{Context, Result, bail, ensure};
-use sha2::{Digest, Sha256};
 
 use uv_configuration::TargetTriple;
 use uv_pep440::Operator;
@@ -18,7 +17,8 @@ use uv_static::EnvVars;
 use crate::TestContext;
 
 use super::PackseServer;
-use super::oracle::{ScenarioOracle, Selection};
+use super::evidence::{self, LockTrace};
+use super::oracle::{ScenarioOracle, SearchResult, Selection};
 use super::project::project_name;
 use super::scenario::{Scenario, ScenarioDocument};
 
@@ -162,6 +162,38 @@ impl fmt::Display for ScenarioFailureKind {
 
 impl std::error::Error for ScenarioFailureKind {}
 
+/// A demonstrated contradiction in a universal lockfile or one of its concrete exports.
+///
+/// A universal no-solution result without an unsatisfiable sampled environment remains
+/// unclassified: successful samples do not prove that the entire marker universe is satisfiable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LockScenarioFailureKind {
+    FalseSatisfiable,
+    InvalidPins,
+    InvalidClosure,
+    ChangedLockfile,
+}
+
+impl LockScenarioFailureKind {
+    /// Return a demonstrated lockfile failure, if one is carried by the error.
+    pub fn from_error(error: &anyhow::Error) -> Option<Self> {
+        error.downcast_ref::<Self>().copied()
+    }
+}
+
+impl fmt::Display for LockScenarioFailureKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::FalseSatisfiable => "uv locked an unsatisfiable graph",
+            Self::InvalidPins => "uv returned invalid lockfile export pins",
+            Self::InvalidClosure => "uv returned an invalid lockfile dependency closure",
+            Self::ChangedLockfile => "uv changed a lockfile during a read-only check",
+        })
+    }
+}
+
+impl std::error::Error for LockScenarioFailureKind {}
+
 /// The result of checking a universal lockfile and its concrete projections.
 #[derive(Debug)]
 pub enum LockCheckResult {
@@ -290,37 +322,10 @@ fn write_failure_artifacts(
     output: &Output,
     server: &PackseServer,
 ) -> Result<()> {
-    if let Some(parent) = directory
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-    {
-        fs_err::create_dir_all(parent)?;
-    }
-    fs_err::create_dir(directory)?;
+    evidence::create_directory(directory)?;
     fs_err::write(directory.join("scenario.toml"), document.to_toml()?)?;
     fs_err::write(directory.join("requirements.in"), requirements)?;
-    fs_err::write(directory.join("stdout.txt"), &output.stdout)?;
-    fs_err::write(directory.join("stderr.txt"), &output.stderr)?;
-
-    let mut executable = fs_err::File::open(command.get_program())?;
-    let mut digest = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let read = executable.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        digest.update(&buffer[..read]);
-    }
-    fs_err::write(
-        directory.join("command.json"),
-        serde_json::to_vec_pretty(&serde_json::json!({
-            "program": command.get_program().to_string_lossy(),
-            "sha256": hex::encode(digest.finalize()),
-            "args": command.get_args().map(|arg| arg.to_string_lossy()).collect::<Vec<_>>(),
-            "status": output.status.code(),
-        }))?,
-    )?;
+    evidence::write_command(directory, command, output)?;
     server.write_distributions(&directory.join("index"))?;
     Ok(())
 }
@@ -336,6 +341,41 @@ pub fn check_lock_scenario(
     targets: &[ScenarioTarget],
     max_states: usize,
 ) -> Result<LockCheckResult> {
+    check_lock_scenario_inner(context, scenario, targets, max_states, None)
+}
+
+/// Check a universal lock and retain every command, resulting lockfile, and served distribution
+/// when a comparison fails. The evidence directory must not already exist.
+pub fn check_lock_scenario_with_artifacts(
+    context: &TestContext,
+    document: &ScenarioDocument,
+    targets: &[ScenarioTarget],
+    max_states: usize,
+    failure_dir: &Path,
+) -> Result<LockCheckResult> {
+    let scenario = document.scenario()?;
+    check_lock_scenario_inner(
+        context,
+        &scenario,
+        targets,
+        max_states,
+        Some((failure_dir, document)),
+    )
+}
+
+struct LockProjection<'a> {
+    target: &'a ScenarioTarget,
+    environment: MarkerEnvironment,
+    search: SearchResult,
+}
+
+fn check_lock_scenario_inner(
+    context: &TestContext,
+    scenario: &Scenario,
+    targets: &[ScenarioTarget],
+    max_states: usize,
+    artifacts: Option<(&Path, &ScenarioDocument)>,
+) -> Result<LockCheckResult> {
     ensure!(
         !targets.is_empty(),
         "at least one lock projection is required"
@@ -350,7 +390,11 @@ pub fn check_lock_scenario(
         let oracle = ScenarioOracle::new(scenario, &environment)?;
         let search = oracle.find_solution(max_states)?;
         checked += search.checked;
-        searches.push((target, environment, search));
+        searches.push(LockProjection {
+            target,
+            environment,
+            search,
+        });
     }
 
     let server = PackseServer::from_scenario_without_build_dependencies(scenario);
@@ -363,28 +407,25 @@ pub fn check_lock_scenario(
             "dependencies": scenario.root.requires.iter().map(ToString::to_string).collect::<Vec<_>>(),
         }
     });
-    fs_err::write(
-        context.temp_dir.join("pyproject.toml"),
-        toml::to_string(&project)?,
-    )?;
-    let lock_path = context.temp_dir.join("uv.lock");
-    if let Err(error) = fs_err::remove_file(&lock_path)
-        && error.kind() != ErrorKind::NotFound
-    {
-        return Err(error.into());
-    }
+    let mut run = LockRun::new(context, scenario, &server, toml::to_string(&project)?)?;
+    let result = check_lock_scenario_run(&mut run, &searches, checked);
+    run.finish(result, targets, artifacts)
+}
 
-    let output = lock_command(context, scenario, &server)
-        .output()
-        .context("failed to run uv lock")?;
+fn check_lock_scenario_run(
+    run: &mut LockRun<'_>,
+    searches: &[LockProjection<'_>],
+    checked: usize,
+) -> Result<LockCheckResult> {
+    let output = run.resolve()?;
     if !output.status.success() {
         ensure_no_solution(&output, "uv lock")?;
-        if let Some((target, _, _)) = searches
+        if let Some(projection) = searches
             .iter()
-            .find(|(_, _, search)| search.solution.is_none())
+            .find(|projection| projection.search.solution.is_none())
         {
             return Ok(LockCheckResult::Unsatisfiable {
-                witness: (*target).clone(),
+                witness: (*projection.target).clone(),
                 checked,
             });
         }
@@ -394,65 +435,169 @@ pub fn check_lock_scenario(
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    let lock = fs_err::read(&lock_path)?;
-
-    let output = lock_command(context, scenario, &server)
-        .arg("--locked")
-        .arg("--offline")
-        .output()
-        .context("failed to check the existing lockfile")?;
-    ensure_success(&output, "uv lock --locked --offline")?;
-    ensure!(
-        fs_err::read(&lock_path)? == lock,
-        "uv lock --locked changed the lockfile"
-    );
-
-    let output = lock_command(context, scenario, &server)
-        .arg("--check")
-        .arg("--refresh")
-        .arg("--preview-features")
-        .arg("lockfile-format-check")
-        .output()
-        .context("failed to check the canonical lockfile round trip")?;
-    ensure_success(&output, "uv lock --check --refresh")?;
-    ensure!(
-        fs_err::read(&lock_path)? == lock,
-        "uv lock --check changed the lockfile"
-    );
-
-    let output = context
-        .export()
-        .arg("--no-config")
-        .arg("--frozen")
-        .arg("--offline")
-        .arg("--no-emit-project")
-        .arg("--no-hashes")
-        .arg("--no-header")
-        .arg("--no-annotate")
-        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
-        .output()
-        .context("failed to export the frozen lockfile")?;
+    let lock = run.check_round_trip()?;
+    let output = run.run_command("export", run.export_command())?;
     ensure_success(&output, "uv export --frozen --offline")?;
-    let requirements = std::str::from_utf8(&output.stdout)?;
-    for (target, environment, search) in &searches {
-        ensure!(
-            search.solution.is_some(),
-            "uv lock succeeded, but its {target} projection is unsatisfiable"
-        );
-        let selection = parse_pins(requirements, environment)
-            .with_context(|| format!("invalid lock export for {target}"))?;
-        ScenarioOracle::new(scenario, environment)?
+    let requirements =
+        std::str::from_utf8(&output.stdout).context(LockScenarioFailureKind::InvalidPins)?;
+    for projection in searches {
+        let target = projection.target;
+        if projection.search.solution.is_none() {
+            return Err(anyhow::anyhow!(
+                "uv lock succeeded, but its {target} projection is unsatisfiable"
+            )
+            .context(LockScenarioFailureKind::FalseSatisfiable));
+        }
+        let selection = parse_pins(requirements, &projection.environment)
+            .with_context(|| format!("invalid lock export for {target}"))
+            .context(LockScenarioFailureKind::InvalidPins)?;
+        ScenarioOracle::new(run.scenario, &projection.environment)?
             .validate(&selection)
-            .with_context(|| format!("invalid lock dependency closure for {target}"))?;
+            .with_context(|| format!("invalid lock dependency closure for {target}: {selection:?}"))
+            .context(LockScenarioFailureKind::InvalidClosure)?;
     }
-    ensure!(
-        fs_err::read(&lock_path)? == lock,
-        "frozen export changed the lockfile"
-    );
+    run.ensure_unchanged(&lock, "frozen export")?;
     Ok(LockCheckResult::Satisfiable {
         projections: searches.len(),
         checked,
     })
+}
+
+struct LockRun<'a> {
+    context: &'a TestContext,
+    scenario: &'a Scenario,
+    server: &'a PackseServer,
+    pyproject: String,
+    lock_path: PathBuf,
+    trace: LockTrace,
+}
+
+impl<'a> LockRun<'a> {
+    fn new(
+        context: &'a TestContext,
+        scenario: &'a Scenario,
+        server: &'a PackseServer,
+        pyproject: String,
+    ) -> Result<Self> {
+        fs_err::write(context.temp_dir.join("pyproject.toml"), &pyproject)?;
+        let lock_path = context.temp_dir.join("uv.lock");
+        if let Err(error) = fs_err::remove_file(&lock_path)
+            && error.kind() != ErrorKind::NotFound
+        {
+            return Err(error.into());
+        }
+        Ok(Self {
+            context,
+            scenario,
+            server,
+            pyproject,
+            lock_path,
+            trace: LockTrace::default(),
+        })
+    }
+
+    fn run_command(&mut self, label: &'static str, command: Command) -> Result<Output> {
+        self.trace.run(label, command, &self.lock_path)
+    }
+
+    fn resolve(&mut self) -> Result<Output> {
+        self.run_command(
+            "lock",
+            lock_command(self.context, self.scenario, self.server),
+        )
+    }
+
+    fn check_round_trip(&mut self) -> Result<Vec<u8>> {
+        let lock = fs_err::read(&self.lock_path)?;
+        let mut command = lock_command(self.context, self.scenario, self.server);
+        command.arg("--locked").arg("--offline");
+        let output = self.run_command("locked-offline", command)?;
+        ensure_success(&output, "uv lock --locked --offline")?;
+        self.ensure_unchanged(&lock, "uv lock --locked")?;
+
+        let mut command = lock_command(self.context, self.scenario, self.server);
+        command
+            .arg("--check")
+            .arg("--refresh")
+            .arg("--preview-features")
+            .arg("lockfile-format-check");
+        let output = self.run_command("canonical-check", command)?;
+        ensure_success(&output, "uv lock --check --refresh")?;
+        self.ensure_unchanged(&lock, "uv lock --check")?;
+        Ok(lock)
+    }
+
+    fn export_command(&self) -> Command {
+        let mut command = self.context.export();
+        command
+            .arg("--no-config")
+            .arg("--frozen")
+            .arg("--offline")
+            .arg("--no-emit-project")
+            .arg("--no-hashes")
+            .arg("--no-header")
+            .arg("--no-annotate")
+            .env_remove(EnvVars::UV_EXCLUDE_NEWER);
+        command
+    }
+
+    fn ensure_unchanged(&self, expected: &[u8], command: &str) -> Result<()> {
+        if fs_err::read(&self.lock_path)? != expected {
+            return Err(anyhow::anyhow!("{command} changed the lockfile")
+                .context(LockScenarioFailureKind::ChangedLockfile));
+        }
+        Ok(())
+    }
+
+    fn finish<T>(
+        &self,
+        result: Result<T>,
+        targets: &[ScenarioTarget],
+        artifacts: Option<(&Path, &ScenarioDocument)>,
+    ) -> Result<T> {
+        let error = match result {
+            Ok(value) => return Ok(value),
+            Err(error) => error,
+        };
+        if let Some((directory, document)) = artifacts
+            && !self.trace.is_empty()
+        {
+            if let Err(capture_error) = self.write_artifacts(directory, document, targets, &error) {
+                return Err(error.context(format!(
+                    "failed to save lock evidence to `{}`: {capture_error:#}",
+                    directory.display()
+                )));
+            }
+            return Err(error.context(format!("lock evidence saved to `{}`", directory.display())));
+        }
+        Err(error)
+    }
+
+    fn write_artifacts(
+        &self,
+        directory: &Path,
+        document: &ScenarioDocument,
+        targets: &[ScenarioTarget],
+        error: &anyhow::Error,
+    ) -> Result<()> {
+        evidence::create_directory(directory)?;
+        fs_err::write(directory.join("scenario.toml"), document.to_toml()?)?;
+        fs_err::write(directory.join("pyproject.toml"), &self.pyproject)?;
+        fs_err::write(
+            directory.join("failure.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "kind": LockScenarioFailureKind::from_error(error).map(|kind| kind.to_string()),
+                "error": format!("{error:#}"),
+                "targets": targets.iter().map(|target| serde_json::json!({
+                    "python": target.python.to_string(),
+                    "platform": target.platform.as_str(),
+                })).collect::<Vec<_>>(),
+            }))?,
+        )?;
+        self.trace.write(directory)?;
+        self.server.write_distributions(&directory.join("index"))?;
+        Ok(())
+    }
 }
 
 fn target_environment(scenario: &Scenario, target: &ScenarioTarget) -> Result<MarkerEnvironment> {

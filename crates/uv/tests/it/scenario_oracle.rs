@@ -4,10 +4,11 @@ use anyhow::{Context, Result};
 
 use uv_python::PythonVersion;
 use uv_test::packse::check::{
-    LockCheckResult, ScenarioPlatform, ScenarioTarget, check_lock_scenario, check_scenario,
+    LockCheckResult, LockScenarioFailureKind, ScenarioPlatform, ScenarioTarget,
+    check_lock_scenario, check_lock_scenario_with_artifacts, check_scenario,
 };
 use uv_test::packse::generate::{SmallGraphOptions, generate_marker_graph, generate_small_graph};
-use uv_test::packse::scenario::Scenario;
+use uv_test::packse::scenario::{Scenario, ScenarioDocument};
 
 #[test]
 fn fixed_scenarios_match_the_exhaustive_oracle() -> Result<()> {
@@ -131,6 +132,76 @@ fn universal_locks_match_their_concrete_projections() -> Result<()> {
         ),
     ]
     "#);
+    Ok(())
+}
+
+#[test]
+fn captures_unsampled_universal_conflicts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let target = ScenarioTarget {
+        python: PythonVersion::from_str("3.12").expect("valid Python version"),
+        platform: ScenarioPlatform::Linux,
+    };
+    let document = ScenarioDocument::from_path(
+        &context
+            .workspace_root
+            .join("test/scenarios/fork/conflict-in-fork.toml"),
+    )?;
+    let directory = context.temp_dir.join("failure");
+    let error = check_lock_scenario_with_artifacts(
+        &context,
+        &document,
+        std::slice::from_ref(&target),
+        100_000,
+        &directory,
+    )
+    .expect_err("the Linux projection does not witness the other platform's conflict");
+    assert!(format!("{error:#}").contains("requested projections are satisfiable"));
+    assert_eq!(LockScenarioFailureKind::from_error(&error), None);
+
+    let failure: serde_json::Value =
+        serde_json::from_slice(&fs_err::read(directory.join("failure.json"))?)?;
+    assert!(failure["kind"].is_null());
+    assert_eq!(failure["targets"][0]["python"], "3.12");
+    let command: serde_json::Value = serde_json::from_slice(&fs_err::read(
+        directory.join("commands/01-lock/command.json"),
+    )?)?;
+    assert_eq!(command["status"], 1);
+    assert_eq!(command["sha256"].as_str().expect("binary digest").len(), 64);
+    assert!(directory.join("pyproject.toml").is_file());
+    let index: serde_json::Value =
+        serde_json::from_slice(&fs_err::read(directory.join("index/index.json"))?)?;
+    for file in index["files"].as_array().expect("served distributions") {
+        assert!(
+            directory
+                .join("index/files")
+                .join(file["filename"].as_str().expect("distribution filename"))
+                .is_file()
+        );
+    }
+    let original = fs_err::read(directory.join("scenario.toml"))?;
+    let error = check_lock_scenario_with_artifacts(
+        &context,
+        &document,
+        std::slice::from_ref(&target),
+        100_000,
+        &directory,
+    )
+    .expect_err("evidence directories cannot be replaced");
+    assert!(format!("{error:#}").contains("failed to save lock evidence"));
+    assert_eq!(fs_err::read(directory.join("scenario.toml"))?, original);
+
+    let document = ScenarioDocument::from_path(
+        &context
+            .workspace_root
+            .join("test/scenarios/fork/conflict-unsatisfiable.toml"),
+    )?;
+    let matched = context.temp_dir.join("matched");
+    assert!(matches!(
+        check_lock_scenario_with_artifacts(&context, &document, &[target], 100_000, &matched,)?,
+        LockCheckResult::Unsatisfiable { .. }
+    ));
+    assert!(!matched.exists());
     Ok(())
 }
 
