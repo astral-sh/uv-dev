@@ -242,6 +242,52 @@ fn prune_stale_symlink() -> Result<()> {
     Ok(())
 }
 
+/// A dangling archive entry must not prevent the remaining cache from being pruned.
+#[cfg(unix)]
+#[test]
+fn prune_dangling_archive_symlink() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_file_counts()
+        .with_filtered_sizes_and_units();
+
+    let archive = context.cache_dir.child("archive-v0");
+    archive.create_dir_all()?;
+    let dangling = archive.child("dangling");
+    fs_err::os::unix::fs::symlink("missing", &dangling)?;
+
+    let retained = archive.child("retained");
+    retained.child("payload.txt").write_str("retained")?;
+    let wheel = context
+        .cache_dir
+        .child("wheels-v6")
+        .child("pypi")
+        .child("demo");
+    wheel.create_dir_all()?;
+    fs_err::os::unix::fs::symlink(&retained, wheel.child("retained"))?;
+
+    let orphan = archive.child("orphan");
+    orphan.child("payload.txt").write_str("orphan")?;
+    let external = context.temp_dir.child("external");
+    external.child("payload.txt").write_str("external")?;
+    let external_link = archive.child("external");
+    fs_err::os::unix::fs::symlink(&external, &external_link)?;
+
+    uv_snapshot!(context.filters(), context.prune(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Pruning cache at: [CACHE_DIR]/
+    Removed [N] files ([SIZE])
+    ");
+
+    assert!(fs_err::symlink_metadata(&dangling).is_err());
+    assert!(retained.child("payload.txt").is_file());
+    assert!(!orphan.exists());
+    assert!(fs_err::symlink_metadata(&external_link).is_err());
+    assert_eq!(fs_err::read(external.child("payload.txt"))?, b"external");
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn prune_force() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filtered_counts();
