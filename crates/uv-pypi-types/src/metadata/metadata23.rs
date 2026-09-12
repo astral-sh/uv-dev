@@ -220,7 +220,10 @@ impl Metadata23 {
     /// ```
     pub fn core_metadata_format(&self) -> String {
         fn write_str(writer: &mut String, key: &str, value: impl Display) {
-            let value = value.to_string();
+            // Rust's `str::lines` only splits LF and CRLF, while Python's `compat32` email parser
+            // also splits a bare CR. Normalize it before folding so a value cannot introduce a
+            // second header, while preserving legitimate multiline fields like `License`.
+            let value = value.to_string().replace("\r\n", "\n").replace('\r', "\n");
             let mut lines = value.lines();
             if let Some(line) = lines.next() {
                 let _ = writeln!(writer, "{key}: {line}");
