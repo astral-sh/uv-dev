@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
@@ -11,6 +12,66 @@ use url::Url;
 
 use uv_static::EnvVars;
 use uv_test::{copy_dir_ignore, uv_snapshot};
+
+static METADATA_SCHEMA: LazyLock<std::result::Result<jsonschema::Validator, String>> =
+    LazyLock::new(|| {
+        let schema: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../docs/reference/internals/metadata.schema.json"
+        ))
+        .map_err(|error| error.to_string())?;
+        jsonschema::draft7::options()
+            .should_validate_formats(true)
+            .build(&schema)
+            .map_err(|error| error.to_string())
+    });
+
+fn parse_metadata(contents: &[u8]) -> Result<serde_json::Value> {
+    let metadata = serde_json::from_slice(contents)?;
+    let validator = METADATA_SCHEMA
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!("invalid workspace metadata schema: {error}"))?;
+    let errors = validator
+        .iter_errors(&metadata)
+        .map(|error| format!("{}: {error}", error.instance_path()))
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        errors.is_empty(),
+        "workspace metadata violates its schema:\n{}",
+        errors.join("\n")
+    );
+    Ok(metadata)
+}
+
+macro_rules! metadata_snapshot {
+    ($($args:tt)*) => {{
+        let output = uv_snapshot!($($args)*);
+        if output.status.success() && !output.stdout.is_empty() {
+            let result = parse_metadata(&output.stdout);
+            assert!(result.is_ok(), "workspace metadata schema mismatch: {result:?}");
+        }
+        output
+    }};
+}
+
+#[test]
+fn workspace_metadata_schema_rejects_invalid_output() -> Result<()> {
+    let mut metadata = serde_json::json!({
+        "schema": {"version": "preview"},
+        "workspace_root": "/workspace",
+        "requires_python": ">=3.12",
+        "conflicts": {"sets": []},
+    });
+    parse_metadata(&serde_json::to_vec(&metadata)?)?;
+
+    metadata["schema"]["version"] = serde_json::json!(1);
+    assert!(parse_metadata(&serde_json::to_vec(&metadata)?).is_err());
+
+    metadata["schema"]["version"] = serde_json::json!("preview");
+    metadata["module_owners"] = serde_json::json!({"café": [{"package_id": 1}]});
+    assert!(parse_metadata(&serde_json::to_vec(&metadata)?).is_err());
+
+    Ok(())
+}
 
 fn write_wheel(
     path: &Path,
@@ -79,7 +140,7 @@ fn workspace_metadata_simple() {
 
     let workspace = context.temp_dir.child("foo");
 
-    uv_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace), @r#"
+    metadata_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
@@ -137,7 +198,7 @@ fn workspace_metadata_quiet() {
 
     let workspace = context.temp_dir.child("foo");
 
-    uv_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace).arg("--quiet"), @r#"
+    metadata_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace).arg("--quiet"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
@@ -187,7 +248,7 @@ fn workspace_metadata_extra_quiet() {
 
     let workspace = context.temp_dir.child("foo");
 
-    uv_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace).arg("--quiet").arg("--quiet"), @r"
+    metadata_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace).arg("--quiet").arg("--quiet"), @r"
     exit_code: 0 (success)
     ");
 }
@@ -251,7 +312,7 @@ import iniconfig
 "#,
     )?;
 
-    uv_snapshot!(
+    metadata_snapshot!(
         context.filters(),
         context
             .workspace_metadata()
@@ -405,7 +466,7 @@ print("Hello, world!")
 "#,
     )?;
 
-    uv_snapshot!(
+    metadata_snapshot!(
         context.filters(),
         context
             .workspace_metadata()
@@ -475,7 +536,7 @@ fn workspace_metadata_script_includes_existing_environment() -> Result<()> {
         .arg(script.path())
         .assert()
         .success();
-    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    let metadata: serde_json::Value = parse_metadata(&assert.get_output().stdout)?;
 
     insta::with_settings!({ filters => context.filters() }, {
         insta::assert_json_snapshot!(metadata["environment"], @r#"
@@ -545,7 +606,7 @@ fn workspace_metadata_script_exact_sync_removes_extraneous_packages() -> Result<
         .env(EnvVars::VIRTUAL_ENV, context.venv.path())
         .assert()
         .success();
-    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    let metadata: serde_json::Value = parse_metadata(&assert.get_output().stdout)?;
 
     insta::assert_json_snapshot!(serde_json::json!({
         "extraneous_installed": context
@@ -631,7 +692,7 @@ fn workspace_metadata_script_dependency_edges() -> Result<()> {
         .arg(script.path())
         .assert()
         .success();
-    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    let metadata: serde_json::Value = parse_metadata(&assert.get_output().stdout)?;
 
     let resolution = metadata["resolution"]
         .as_object()
@@ -730,7 +791,7 @@ dependencies = [
         .current_dir(&project)
         .assert()
         .success();
-    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    let metadata: serde_json::Value = parse_metadata(&assert.get_output().stdout)?;
     let resolution = metadata["resolution"]
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("metadata resolution was not an object"))?;
@@ -774,7 +835,7 @@ fn workspace_metadata_sync_centralized_environment() -> Result<()> {
         .arg("workspace-metadata,centralized-project-envs")
         .assert()
         .success();
-    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    let metadata: serde_json::Value = parse_metadata(&assert.get_output().stdout)?;
     let target = fs_err::read_link(context.temp_dir.child(".venv").path())?;
 
     assert_eq!(
@@ -792,7 +853,7 @@ fn workspace_metadata_sync_centralized_environment() -> Result<()> {
         .arg("workspace-metadata,centralized-project-envs")
         .assert()
         .success();
-    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    let metadata: serde_json::Value = parse_metadata(&assert.get_output().stdout)?;
 
     assert_eq!(
         metadata["environment"]["root"].as_str().map(Path::new),
@@ -838,7 +899,7 @@ fn workspace_metadata_sync_active_environment() -> Result<()> {
         .env(EnvVars::VIRTUAL_ENV, active.path())
         .assert()
         .success();
-    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    let metadata: serde_json::Value = parse_metadata(&assert.get_output().stdout)?;
 
     assert_eq!(
         metadata["environment"]["root"].as_str().map(Path::new),
@@ -851,7 +912,7 @@ fn workspace_metadata_sync_active_environment() -> Result<()> {
         .env(EnvVars::VIRTUAL_ENV, active.path())
         .assert()
         .success();
-    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    let metadata: serde_json::Value = parse_metadata(&assert.get_output().stdout)?;
 
     assert_eq!(
         metadata["environment"]["root"].as_str().map(Path::new),
@@ -865,7 +926,7 @@ fn workspace_metadata_sync_active_environment() -> Result<()> {
 fn workspace_metadata_exact_requires_sync() {
     let context = uv_test::test_context!("3.12");
 
-    uv_snapshot!(context.filters(), context.workspace_metadata().arg("--exact"), @r"
+    metadata_snapshot!(context.filters(), context.workspace_metadata().arg("--exact"), @r"
     exit_code: 2 (failure)
     ----- stderr -----
     error: the following required arguments were not provided:
@@ -926,7 +987,7 @@ fn workspace_metadata_exact_sync_removes_extraneous_packages() -> Result<()> {
         .arg("--sync")
         .assert()
         .success();
-    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    let metadata: serde_json::Value = parse_metadata(&assert.get_output().stdout)?;
     let extraneous_installed = context
         .pip_show()
         .arg("metadata-extra")
@@ -979,7 +1040,7 @@ fn workspace_metadata_exact_sync_removes_extraneous_packages() -> Result<()> {
         .arg("--exact")
         .assert()
         .success();
-    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    let metadata: serde_json::Value = parse_metadata(&assert.get_output().stdout)?;
     let extraneous_installed = context
         .pip_show()
         .arg("metadata-extra")
@@ -1094,7 +1155,7 @@ fn workspace_metadata_installed_packages_are_independent_of_lock() -> Result<()>
         .arg("--frozen")
         .assert()
         .success();
-    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    let metadata: serde_json::Value = parse_metadata(&assert.get_output().stdout)?;
     let packages = metadata["environment"]["packages"]
         .as_object()
         .context("missing installed package inventory")?;
@@ -1232,7 +1293,7 @@ dependencies = [
         .arg("--frozen")
         .assert()
         .success();
-    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    let metadata: serde_json::Value = parse_metadata(&assert.get_output().stdout)?;
 
     insta::with_settings!({ filters => context.filters() }, {
         insta::assert_json_snapshot!(serde_json::json!({
@@ -1336,7 +1397,7 @@ dependencies = [
     let mut filters = context.filters();
     filters.push((r#""sha256": "[0-9a-f]{64}""#, r#""sha256": "[SHA256]""#));
 
-    uv_snapshot!(filters, context.workspace_metadata().arg("--sync"), @r#"
+    metadata_snapshot!(filters, context.workspace_metadata().arg("--sync"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
@@ -1588,7 +1649,7 @@ dependencies = [
         .arg("--sync")
         .assert()
         .success();
-    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    let metadata: serde_json::Value = parse_metadata(&assert.get_output().stdout)?;
     let module_owners = serde_json::to_string_pretty(&metadata["module_owners"])?;
 
     insta::with_settings!({ filters => context.filters() }, {
@@ -1650,7 +1711,7 @@ package = false
         .arg("--sync")
         .assert()
         .success();
-    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    let metadata: serde_json::Value = parse_metadata(&assert.get_output().stdout)?;
     let module_owners = if let Some(module_owners) = metadata.get("module_owners") {
         serde_json::to_string_pretty(module_owners)?
     } else {
@@ -1703,7 +1764,7 @@ dependencies = [
     context.lock().assert().success();
     fs_err::remove_file(gpu_a.path())?;
 
-    uv_snapshot!(context.filters(), context.workspace_metadata().arg("--frozen").arg("--sync"), @r#"
+    metadata_snapshot!(context.filters(), context.workspace_metadata().arg("--frozen").arg("--sync"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
@@ -1729,7 +1790,7 @@ fn workspace_metadata_root_workspace() -> Result<()> {
         &workspace,
     )?;
 
-    uv_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace), @r#"
+    metadata_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
@@ -1906,7 +1967,7 @@ fn workspace_metadata_virtual_workspace() -> Result<()> {
         "",
     ));
 
-    uv_snapshot!(filters, context.workspace_metadata().current_dir(&workspace), @r#"
+    metadata_snapshot!(filters, context.workspace_metadata().current_dir(&workspace), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
@@ -2146,7 +2207,7 @@ fn workspace_metadata_from_member() -> Result<()> {
 
     let member_dir = workspace.join("packages").join("bird-feeder");
 
-    uv_snapshot!(context.filters(), context.workspace_metadata().current_dir(&member_dir), @r#"
+    metadata_snapshot!(context.filters(), context.workspace_metadata().current_dir(&member_dir), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
@@ -2328,7 +2389,7 @@ fn workspace_metadata_multiple_members() {
         .assert()
         .success();
 
-    uv_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace_root), @r#"
+    metadata_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace_root), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
@@ -2414,7 +2475,7 @@ fn workspace_metadata_single_project() {
 
     let project = context.temp_dir.child("my-project");
 
-    uv_snapshot!(context.filters(), context.workspace_metadata().current_dir(&project), @r#"
+    metadata_snapshot!(context.filters(), context.workspace_metadata().current_dir(&project), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
@@ -2477,7 +2538,7 @@ fn workspace_metadata_with_excluded() -> Result<()> {
         &workspace,
     )?;
 
-    uv_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace), @r#"
+    metadata_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
@@ -2576,7 +2637,7 @@ fn workspace_metadata_group_only() -> Result<()> {
         &workspace,
     )?;
 
-    uv_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace), @r#"
+    metadata_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
@@ -2664,7 +2725,7 @@ fn workspace_metadata_group_only() -> Result<()> {
         .current_dir(&workspace)
         .assert()
         .success();
-    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    let metadata: serde_json::Value = parse_metadata(&assert.get_output().stdout)?;
     let module_owners = serde_json::to_string_pretty(&metadata["module_owners"])?;
 
     insta::assert_snapshot!(module_owners, @r#"
@@ -2700,7 +2761,7 @@ fn workspace_metadata_group_only() -> Result<()> {
 fn workspace_metadata_no_project() {
     let context = uv_test::test_context!("3.12");
 
-    uv_snapshot!(context.filters(), context.workspace_metadata(), @"
+    metadata_snapshot!(context.filters(), context.workspace_metadata(), @"
     exit_code: 2 (failure)
     ----- stderr -----
     warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
@@ -2723,7 +2784,7 @@ fn workspace_metadata_various_dependency_rainbow() -> Result<()> {
         &workspace,
     )?;
 
-    uv_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace), @r#"
+    metadata_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
