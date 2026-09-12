@@ -38,6 +38,11 @@ impl From<&PythonEnvironment> for EnvironmentReport {
 }
 
 impl EnvironmentReport {
+    /// Return the Python interpreter for the environment.
+    pub(crate) fn python(&self) -> &PythonReport {
+        &self.python
+    }
+
     /// Return the path to the environment.
     pub(crate) fn path(&self) -> &Path {
         self.path.as_ref()

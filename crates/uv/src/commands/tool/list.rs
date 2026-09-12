@@ -1,26 +1,30 @@
-use std::fmt::Write;
+use std::fmt::{self, Write};
 
 use anyhow::Result;
 use futures::StreamExt;
 use itertools::Itertools;
 use owo_colors::OwoColorize;
 use rustc_hash::FxHashMap;
+use serde::Serialize;
 
 use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
+use uv_cli::ToolListFormat;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::Concurrency;
 use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{IndexCapabilities, RequiresPython};
-use uv_fs::Simplified;
+use uv_fs::{PortablePathBuf, Simplified};
 use uv_normalize::PackageName;
-use uv_python::LenientImplementationName;
+use uv_pep440::Version;
+use uv_preview::{Preview, PreviewFeature};
 use uv_settings::{Combine, ResolverInstallerOptions};
 use uv_tool::InstalledTools;
 use uv_warnings::warn_user;
 
 use crate::commands::ExitStatus;
 use crate::commands::pip::latest::LatestClient;
+use crate::commands::report::{EnvironmentReport, SchemaReport};
 use crate::commands::reporters::LatestVersionReporter;
 use crate::printer::Printer;
 use crate::settings::ResolverInstallerSettings;
@@ -51,17 +55,155 @@ bitflags::bitflags! {
     }
 }
 
+#[derive(Debug, Serialize)]
+struct CommandReport {
+    name: String,
+    path: PortablePathBuf,
+}
+
+impl fmt::Display for CommandReport {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        cfg_select! {
+            windows => {
+                write!(
+                    formatter,
+                    "{} ({})",
+                    self.name,
+                    self.path.as_ref().simplified_display().to_string().replace('/', "\\")
+                )
+            },
+            unix => {
+                write!(formatter, "{} ({})", self.name, self.path.as_ref().simplified_display())
+            },
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct ToolReport {
+    name: PackageName,
+    version: Version,
+    latest_version: Option<Version>,
+    #[serde(flatten)]
+    environment: EnvironmentReport,
+    commands: Vec<CommandReport>,
+    extras: Vec<String>,
+    version_specifiers: String,
+    with: Vec<String>,
+}
+
+#[derive(Debug, Default, Serialize)]
+struct ToolListReport {
+    schema: SchemaReport,
+    tools: Vec<ToolReport>,
+}
+
+impl ToolListReport {
+    fn render(
+        &self,
+        format: ToolListFormat,
+        output: ToolListOutput,
+        printer: Printer,
+    ) -> Result<()> {
+        match format {
+            ToolListFormat::Text => self.render_text(output, printer),
+            ToolListFormat::Json => {
+                writeln!(printer.stdout(), "{}", serde_json::to_string_pretty(self)?)?;
+                Ok(())
+            }
+        }
+    }
+
+    fn render_text(&self, output: ToolListOutput, printer: Printer) -> Result<()> {
+        for tool in &self.tools {
+            let name = &tool.name;
+            let version = &tool.version;
+
+            let version_specifier = if output.contains(ToolListOutput::VERSION_SPECIFIERS)
+                && !tool.version_specifiers.is_empty()
+            {
+                format!(" [required: {}]", tool.version_specifiers)
+            } else {
+                String::new()
+            };
+
+            let extra_requirements =
+                if output.contains(ToolListOutput::EXTRAS) && !tool.extras.is_empty() {
+                    format!(" [extras: {}]", tool.extras.join(", "))
+                } else {
+                    String::new()
+                };
+
+            let python_version = if output.contains(ToolListOutput::PYTHON) {
+                let python = tool.environment.python();
+                format!(
+                    " [{} {}]",
+                    python.implementation().pretty(),
+                    python.version()
+                )
+            } else {
+                String::new()
+            };
+
+            let with_requirements =
+                if output.contains(ToolListOutput::WITH) && !tool.with.is_empty() {
+                    format!(" [with: {}]", tool.with.join(", "))
+                } else {
+                    String::new()
+                };
+
+            let latest_version = tool
+                .latest_version
+                .as_ref()
+                .map(|version| format!(" [latest: {version}]"))
+                .unwrap_or_default();
+
+            let heading = format!(
+                "{name} v{version}{version_specifier}{extra_requirements}{with_requirements}{python_version}{latest_version}"
+            );
+            if output.contains(ToolListOutput::PATHS) {
+                writeln!(
+                    printer.stdout(),
+                    "{} ({})",
+                    heading.bold(),
+                    tool.environment.path().simplified_display().cyan(),
+                )?;
+            } else {
+                writeln!(printer.stdout(), "{}", heading.bold())?;
+            }
+
+            for command in &tool.commands {
+                if output.contains(ToolListOutput::PATHS) {
+                    writeln!(printer.stdout(), "- {}", command.to_string().cyan())?;
+                } else {
+                    writeln!(printer.stdout(), "- {}", command.name)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 /// List installed tools.
 pub(crate) async fn list(
     output: ToolListOutput,
     mode: ToolListMode,
+    output_format: ToolListFormat,
     args: ResolverInstallerOptions,
     filesystem: ResolverInstallerOptions,
     client_builder: BaseClientBuilder<'_>,
     concurrency: Concurrency,
     cache: &Cache,
     printer: Printer,
+    preview: Preview,
 ) -> Result<ExitStatus> {
+    if output_format == ToolListFormat::Json && !preview.is_enabled(PreviewFeature::JsonOutput) {
+        warn_user!(
+            "The `--output-format json` option is experimental and the schema may change without warning. Pass `--preview-features {}` to disable this warning.",
+            PreviewFeature::JsonOutput
+        );
+    }
+
     let installed_tools = InstalledTools::from_settings()?;
     let _lock = match installed_tools.lock().await {
         Ok(lock) => lock,
@@ -70,8 +212,7 @@ pub(crate) async fn list(
                 .as_io_error()
                 .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound) =>
         {
-            writeln!(printer.stderr(), "No tools installed")?;
-            return Ok(ExitStatus::Success);
+            return render_no_tools(output_format, printer);
         }
         Err(err) => return Err(err.into()),
     };
@@ -80,14 +221,12 @@ pub(crate) async fn list(
     tools.sort_by_key(|(name, _)| name.clone());
 
     if tools.is_empty() {
-        writeln!(printer.stderr(), "No tools installed")?;
-        return Ok(ExitStatus::Success);
+        return render_no_tools(output_format, printer);
     }
 
-    // Collect valid tools (skip invalid ones) before checking for outdated versions.
+    // Collect valid tools before checking for outdated versions.
     let mut valid_tools = Vec::new();
     for (name, tool) in tools {
-        // Skip invalid tools
         let Ok(tool) = tool else {
             warn_user!(
                 "Ignoring malformed tool `{name}` (run `{}` to remove)",
@@ -96,7 +235,6 @@ pub(crate) async fn list(
             continue;
         };
 
-        // Get the tool environment
         let tool_env = match installed_tools.get_environment(&name, cache) {
             Ok(Some(env)) => env,
             Ok(None) => {
@@ -106,26 +244,25 @@ pub(crate) async fn list(
                 );
                 continue;
             }
-            Err(e) => {
+            Err(error) => {
                 warn_user!(
-                    "{e} (run `{}` to reinstall)",
+                    "{error} (run `{}` to reinstall)",
                     format!("uv tool install {name} --reinstall").green()
                 );
                 continue;
             }
         };
 
-        // Get the tool version
         let version = match tool_env.version() {
             Ok(version) => version,
-            Err(e) => {
-                if let uv_tool::Error::EnvironmentError(e) = e {
+            Err(error) => {
+                if let uv_tool::Error::EnvironmentError(error) = error {
                     warn_user!(
-                        "{e} (run `{}` to reinstall)",
+                        "{error} (run `{}` to reinstall)",
                         format!("uv tool install {name} --reinstall").green()
                     );
                 } else {
-                    writeln!(printer.stderr(), "{e}")?;
+                    writeln!(printer.stderr(), "{error}")?;
                 }
                 continue;
             }
@@ -142,7 +279,6 @@ pub(crate) async fn list(
 
         let reporter = LatestVersionReporter::from(printer).with_length(valid_tools.len() as u64);
 
-        // Fetch the latest version for each tool.
         let mut fetches = futures::stream::iter(&valid_tools)
             .map(|(name, tool, tool_env, _version)| {
                 let client_builder = client_builder.clone();
@@ -204,120 +340,79 @@ pub(crate) async fn list(
         FxHashMap::default()
     };
 
-    for (name, tool, tool_env, version) in valid_tools {
-        // If `--outdated` is set, skip tools that are up-to-date.
-        if mode == ToolListMode::Outdated {
-            let is_outdated = latest
+    let tools = valid_tools
+        .into_iter()
+        .filter_map(|(name, tool, tool_env, version)| {
+            let latest_version = latest
                 .get(&name)
                 .and_then(Option::as_ref)
-                .is_some_and(|filename| filename.version() > &version);
-            if !is_outdated {
-                continue;
+                .map(|filename| filename.version().clone());
+            if mode == ToolListMode::Outdated
+                && latest_version
+                    .as_ref()
+                    .is_none_or(|latest_version| latest_version <= &version)
+            {
+                return None;
             }
-        }
 
-        let version_specifier = output
-            .contains(ToolListOutput::VERSION_SPECIFIERS)
-            .then(|| {
-                tool.requirements()
-                    .iter()
-                    .filter(|req| req.name == name)
-                    .map(|req| req.source.to_string())
-                    .filter(|s| !s.is_empty())
-                    .peekable()
+            let commands = tool
+                .entrypoints()
+                .iter()
+                .map(|entrypoint| CommandReport {
+                    name: entrypoint.name.clone(),
+                    path: entrypoint.install_path.as_path().into(),
+                })
+                .collect();
+            let extras = tool
+                .requirements()
+                .iter()
+                .filter(|requirement| requirement.name == name)
+                .flat_map(|requirement| requirement.extras.iter())
+                .map(ToString::to_string)
+                .collect();
+            let version_specifiers = tool
+                .requirements()
+                .iter()
+                .filter(|requirement| requirement.name == name)
+                .map(|requirement| requirement.source.to_string())
+                .filter(|specifier| !specifier.is_empty())
+                .join(", ");
+            let with = tool
+                .requirements()
+                .iter()
+                .filter(|requirement| requirement.name != name)
+                .map(|requirement| format!("{}{}", requirement.name, requirement.source))
+                .collect();
+            let environment = EnvironmentReport::from(tool_env.environment())
+                .with_path(installed_tools.tool_dir(&name).as_path().into());
+
+            Some(ToolReport {
+                name,
+                version,
+                latest_version,
+                environment,
+                commands,
+                extras,
+                version_specifiers,
+                with,
             })
-            .take_if(|specifiers| specifiers.peek().is_some())
-            .map(|mut specifiers| {
-                let specifiers = specifiers.join(", ");
-                format!(" [required: {specifiers}]")
-            })
-            .unwrap_or_default();
+        })
+        .collect();
 
-        let extra_requirements = output
-            .contains(ToolListOutput::EXTRAS)
-            .then(|| {
-                tool.requirements()
-                    .iter()
-                    .filter(|req| req.name == name)
-                    .flat_map(|req| req.extras.iter()) // Flatten the extras from all matching requirements
-                    .peekable()
-            })
-            .take_if(|extras| extras.peek().is_some())
-            .map(|extras| {
-                let extras_str = extras.map(ToString::to_string).join(", ");
-                format!(" [extras: {extras_str}]")
-            })
-            .unwrap_or_default();
+    let report = ToolListReport {
+        schema: SchemaReport::default(),
+        tools,
+    };
+    report.render(output_format, output, printer)?;
+    Ok(ExitStatus::Success)
+}
 
-        let python_version = if output.contains(ToolListOutput::PYTHON) {
-            let interpreter = tool_env.environment().interpreter();
-            let implementation = LenientImplementationName::from(interpreter.implementation_name());
-            format!(
-                " [{} {}]",
-                implementation.pretty(),
-                interpreter.python_full_version()
-            )
-        } else {
-            String::new()
-        };
-
-        let with_requirements = output
-            .contains(ToolListOutput::WITH)
-            .then(|| {
-                tool.requirements()
-                    .iter()
-                    .filter(|req| req.name != name)
-                    .peekable()
-            })
-            .take_if(|requirements| requirements.peek().is_some())
-            .map(|requirements| {
-                let requirements = requirements
-                    .map(|req| format!("{}{}", req.name, req.source))
-                    .join(", ");
-                format!(" [with: {requirements}]")
-            })
-            .unwrap_or_default();
-
-        let latest_version = if mode == ToolListMode::Outdated {
-            latest
-                .get(&name)
-                .and_then(Option::as_ref)
-                .map(|filename| format!(" [latest: {}]", filename.version()))
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
-
-        if output.contains(ToolListOutput::PATHS) {
-            writeln!(
-                printer.stdout(),
-                "{} ({})",
-                format!(
-                    "{name} v{version}{version_specifier}{extra_requirements}{with_requirements}{python_version}{latest_version}"
-                )
-                .bold(),
-                installed_tools.tool_dir(&name).simplified_display().cyan(),
-            )?;
-        } else {
-            writeln!(
-                printer.stdout(),
-                "{}",
-                format!(
-                    "{name} v{version}{version_specifier}{extra_requirements}{with_requirements}{python_version}{latest_version}"
-                )
-                .bold()
-            )?;
-        }
-
-        // Output tool entrypoints
-        for entrypoint in tool.entrypoints() {
-            if output.contains(ToolListOutput::PATHS) {
-                writeln!(printer.stdout(), "- {}", entrypoint.to_string().cyan())?;
-            } else {
-                writeln!(printer.stdout(), "- {}", entrypoint.name)?;
-            }
+fn render_no_tools(format: ToolListFormat, printer: Printer) -> Result<ExitStatus> {
+    match format {
+        ToolListFormat::Text => writeln!(printer.stderr(), "No tools installed")?,
+        ToolListFormat::Json => {
+            ToolListReport::default().render(format, ToolListOutput::empty(), printer)?;
         }
     }
-
     Ok(ExitStatus::Success)
 }

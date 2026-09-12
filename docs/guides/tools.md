@@ -233,6 +233,22 @@ Multiple related executables can be installed together in the same tool environm
 $ uv tool install --with-executables-from ansible-core,ansible-lint ansible
 ```
 
+## Listing installed tools
+
+Use `uv tool list` to see installed tools and the commands they provide. Add `--show-paths` to
+include their installation locations, or `--outdated` to show only tools with available updates.
+
+For machine-readable output:
+
+```console
+$ uv tool list --output-format json --preview-features json-output
+```
+
+The JSON report includes each tool's environment, Python interpreter, commands, and recorded
+installation requirements. It includes all details regardless of the `--show-*` flags. The
+interpreter's `key` uses the same format as `uv python list`. The schema is in preview and may
+change without warning.
+
 ## Upgrading tools
 
 To upgrade a tool, use `uv tool upgrade`:

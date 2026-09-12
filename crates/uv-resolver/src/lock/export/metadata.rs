@@ -214,6 +214,16 @@ impl From<&Interpreter> for PythonReport {
 }
 
 impl PythonReport {
+    /// Return the full Python version.
+    pub fn version(&self) -> &StringVersion {
+        &self.version
+    }
+
+    /// Return the Python implementation name.
+    pub fn implementation(&self) -> &LenientImplementationName {
+        &self.implementation
+    }
+
     /// Return the path to the Python executable.
     pub fn path(&self) -> &Path {
         self.path.as_ref()
