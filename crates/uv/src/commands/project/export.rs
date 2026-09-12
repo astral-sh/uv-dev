@@ -1,4 +1,3 @@
-use std::env;
 use std::ffi::OsStr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -498,7 +497,7 @@ pub(crate) async fn export(
 
 /// Format the uv command used to generate the output file.
 fn cmd() -> String {
-    let args = env::args_os()
+    let args = crate::invocation::args()
         .skip(1)
         .map(|arg| arg.to_string_lossy().to_string())
         .scan(None, move |skip_next, arg| {

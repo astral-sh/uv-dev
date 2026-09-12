@@ -62,6 +62,8 @@ use crate::settings::{
 
 pub(crate) mod child;
 pub mod commands;
+mod invocation;
+use invocation::run_with_args;
 #[cfg(not(feature = "self-update"))]
 mod install_source;
 mod logging;
@@ -3021,6 +3023,7 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
+    let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
     #[cfg(windows)]
     uv_windows::install_unhandled_exception_handler();
 
@@ -3037,7 +3040,7 @@ where
 
     // `std::env::args` is not `Send` so we parse before passing to our runtime
     // https://github.com/rust-lang/rust/pull/48005
-    let cli = match Cli::try_parse_from(args) {
+    let cli = match Cli::try_parse_from(args.iter().cloned()) {
         Ok(cli) => cli,
         Err(mut err) => {
             suggest_subcommand(&mut err);
@@ -3062,7 +3065,11 @@ where
             .build()
             .expect("Failed building the Runtime");
         // Box the large main future to avoid stack overflows.
-        let result = runtime.block_on(Box::pin(run(cli, GlobalInitialization::Initialize)));
+        let result = runtime.block_on(Box::pin(run_with_args(
+            cli,
+            GlobalInitialization::Initialize,
+            args,
+        )));
         // Avoid waiting for pending tasks to complete.
         //
         // The resolver may have kicked off HTTP requests during resolution that

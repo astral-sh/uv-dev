@@ -1,5 +1,4 @@
 use std::collections::BTreeSet;
-use std::env;
 use std::ffi::OsStr;
 use std::io::Write;
 use std::path::Path;
@@ -807,7 +806,7 @@ fn cmd(
     if let Some(cmd_str) = custom_compile_command {
         return cmd_str;
     }
-    let args = env::args_os()
+    let args = crate::invocation::args()
         .skip(1)
         .map(|arg| arg.to_string_lossy().to_string())
         .scan(None, move |skip_next, arg| {
