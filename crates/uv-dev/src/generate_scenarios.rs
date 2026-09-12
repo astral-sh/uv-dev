@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use anstream::println;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use clap::ValueEnum;
 use itertools::Itertools;
 use pretty_assertions::StrComparison;
@@ -308,6 +308,13 @@ fn update_snapshots(template: TemplateKind) -> Result<()> {
 }
 
 fn render(template: TemplateKind, cases: &[&ScenarioCase]) -> Result<String> {
+    for case in cases {
+        ensure!(
+            !case.scenario.root.has_project_dependencies(),
+            "scenario `{}` requires the project-selection checker; set `testgen.disable = true` to exclude it from generated command templates",
+            case.scenario.name
+        );
+    }
     let mut output = String::new();
     match template {
         TemplateKind::Install => render_install(&mut output, cases)?,
@@ -929,8 +936,10 @@ fn requirement_specifiers(requirement: &Requirement) -> Option<&uv_pep440::Versi
 
 #[cfg(test)]
 mod tests {
+    use uv_test::packse::scenario::ScenarioDocument;
+
     use super::{
-        TemplateKind, check_generated_file, compile_requirements, load_scenarios,
+        ScenarioCase, TemplateKind, check_generated_file, compile_requirements, load_scenarios,
         load_scenarios_from, module_name, render, scenarios_for_template,
     };
 
@@ -966,6 +975,22 @@ mod tests {
                 .find(|line| line.starts_with("#![cfg"))
                 .expect("scenario suite should contain a feature gate");
             assert_eq!(gate, expected_gate);
+        }
+    }
+
+    #[test]
+    fn command_templates_reject_project_selection_metadata() {
+        let case = ScenarioCase {
+            scenario: "name = 'project-selection'\n[root]\n[root.optional_dependencies]\ndocs = ['a']\n[expected]\nsatisfiable = true"
+                .parse::<ScenarioDocument>()
+                .expect("valid project document")
+                .scenario()
+                .expect("valid project scenario"),
+            path: "project-selection.toml".to_string(),
+        };
+        for template in TemplateKind::ALL {
+            let error = render(template, &[&case]).expect_err("project metadata is not rendered");
+            assert!(error.to_string().contains("project-selection checker"));
         }
     }
 
