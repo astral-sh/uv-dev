@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use glob::Pattern;
-use rustc_hash::{FxBuildHasher, FxHashSet};
+use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use serde::de::SeqAccess;
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
@@ -255,6 +255,7 @@ pub struct Tool {
 ///
 /// This custom deserializer function checks for:
 /// - Duplicate index names
+/// - Index names that map to the same credential environment variables
 /// - Multiple indexes marked as default
 fn deserialize_index_vec<'de, D>(deserializer: D) -> Result<Option<Vec<Index>>, D::Error>
 where
@@ -263,12 +264,19 @@ where
     let indexes = Option::<Vec<Index>>::deserialize(deserializer)?;
     if let Some(indexes) = indexes.as_ref() {
         let mut seen_names = FxHashSet::with_capacity_and_hasher(indexes.len(), FxBuildHasher);
+        let mut seen_env_names = FxHashMap::with_capacity_and_hasher(indexes.len(), FxBuildHasher);
         let mut seen_default = false;
         for index in indexes {
             if let Some(name) = index.name.as_ref() {
                 if !seen_names.insert(name) {
                     return Err(serde::de::Error::custom(format!(
                         "duplicate index name `{name}`"
+                    )));
+                }
+                let env_name = name.to_env_var();
+                if let Some(existing) = seen_env_names.insert(env_name.clone(), name) {
+                    return Err(serde::de::Error::custom(format!(
+                        "index names `{existing}` and `{name}` map to the same credential environment variables `UV_INDEX_{env_name}_USERNAME` and `UV_INDEX_{env_name}_PASSWORD`"
                     )));
                 }
             }
