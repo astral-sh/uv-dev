@@ -314,7 +314,15 @@ pub(crate) async fn audit_lock(
                 let client = CachedClient::new(base_client);
                 let service = osv::Osv::new(client, service_url, concurrency, cache.clone());
                 trace!("Auditing {n} dependencies against OSV", n = auditable.len());
-                service.query_batch(&dependencies, osv::Filter::All).await
+                let mut findings = Vec::new();
+                for dependency in &dependencies {
+                    findings.extend(
+                        service
+                            .query_batch(std::slice::from_ref(dependency), osv::Filter::All)
+                            .await?,
+                    );
+                }
+                Ok::<_, osv::Error>(findings)
             }
         }
     };
