@@ -9096,6 +9096,46 @@ fn build_system_requires_path() -> Result<()> {
 }
 
 #[test]
+#[cfg(unix)]
+fn sync_broken_interpreter_symlink_chain() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names();
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+
+    // Follow relative and absolute links, including a relative target outside the environment.
+    let bin = venv_bin_path(context.temp_dir.join(".venv"));
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    fs_err::remove_file(bin.join("python"))?;
+    fs_err::os::unix::fs::symlink("../../links/intermediate", bin.join("python"))?;
+    fs_err::os::unix::fs::symlink(links.join("other"), links.join("intermediate"))?;
+    fs_err::os::unix::fs::symlink("missing-python", links.join("other"))?;
+
+    uv_snapshot!(context.filters(), context.sync(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Ignoring existing virtual environment linked to non-existent Python interpreter: .venv/[BIN]/[PYTHON] -> links/missing-python
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+
+    Ok(())
+}
+
+#[test]
 fn sync_invalid_environment() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
         .with_filtered_virtualenv_bin()
