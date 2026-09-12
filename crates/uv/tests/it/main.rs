@@ -21,6 +21,8 @@ mod network;
 #[cfg(feature = "test-pypi")]
 mod publish;
 
+mod publish_progress;
+
 #[cfg(unix)]
 mod resource_limits;
 

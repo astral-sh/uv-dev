@@ -250,7 +250,12 @@ async fn publish_file(
         return Ok(());
     }
 
-    let uploaded = session.upload(prepared, reporter).await?;
+    let uploaded = session.upload(prepared, reporter.clone()).await;
+    reporter.finish_upload(match &uploaded {
+        Ok(UploadOutcome::Uploaded) => true,
+        Ok(UploadOutcome::AlreadyExists) | Err(_) => false,
+    });
+    let uploaded = uploaded?;
     info!("Upload succeeded");
 
     match uploaded {
