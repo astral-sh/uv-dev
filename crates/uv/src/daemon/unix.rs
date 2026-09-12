@@ -24,7 +24,7 @@ use fs_err::os::unix::fs::OpenOptionsExt;
 use fs_err::{self as fs, File, OpenOptions};
 use nix::errno::Errno;
 use nix::libc;
-use nix::poll::{PollFd, PollFlags, poll};
+use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use nix::sys::signal::{self, SaFlags, SigAction, SigHandler, SigSet, Signal};
 use nix::sys::socket::{ControlMessage, ControlMessageOwned, MsgFlags, recvmsg, sendmsg};
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
@@ -42,7 +42,9 @@ use uv_resolver::Lock;
 use super::Bootstrap;
 
 mod context;
+mod reaper;
 use context::ProcessContext;
+use reaper::ChildNotifications;
 
 const SERVER_ARG: &str = "--internal-daemon-server";
 const MAX_FRAME: usize = 128 * 1024 * 1024;
@@ -359,11 +361,6 @@ fn status(
 #[allow(unsafe_code)]
 fn serve(paths: Paths) -> Result<Bootstrap> {
     paths.initialize()?;
-    // Ignoring SIGCHLD survives exec and can make the kernel reap workers before waitpid sees
-    // them. The server owns its children; each worker restores the caller's dispositions.
-    let child_action = SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty());
-    // SAFETY: This installs the default disposition before the server creates any workers.
-    unsafe { signal::sigaction(Signal::SIGCHLD, &child_action) }?;
     let lock_file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -384,6 +381,7 @@ fn serve(paths: Paths) -> Result<Bootstrap> {
     }
     let listener = UnixListener::bind(&paths.socket)?;
     listener.set_nonblocking(true)?;
+    let notifications = ChildNotifications::install()?;
     Lock::enable_process_cache();
     let mut children = BTreeMap::new();
     let mut stop_waiters = Vec::new();
@@ -391,6 +389,9 @@ fn serve(paths: Paths) -> Result<Bootstrap> {
     let mut hits = 0;
     let mut last_activity = Instant::now();
     loop {
+        // Drain before reaping: a child that exits after waitpid reports StillAlive must leave
+        // a readable notification for the following poll, even if SIGCHLDs were coalesced.
+        notifications.drain()?;
         loop {
             let (pid, code) = match waitpid(None, Some(WaitPidFlag::WNOHANG)) {
                 Ok(WaitStatus::Exited(pid, code)) => (pid, u8::try_from(code).unwrap_or(1)),
@@ -407,7 +408,7 @@ fn serve(paths: Paths) -> Result<Bootstrap> {
             }
         }
         if children.is_empty()
-            && (!stop_waiters.is_empty() || last_activity.elapsed() > IDLE_TIMEOUT)
+            && (!stop_waiters.is_empty() || last_activity.elapsed() >= IDLE_TIMEOUT)
         {
             let response = Response::Status(status(&children, completed, hits, true)?);
             for mut stream in stop_waiters {
@@ -416,14 +417,47 @@ fn serve(paths: Paths) -> Result<Bootstrap> {
             fs::remove_file(&paths.socket)?;
             return Ok(Bootstrap::Exit(ExitCode::SUCCESS));
         }
-        if let Err(error) = poll(
-            &mut [PollFd::new(listener.as_fd(), PollFlags::POLLIN)],
-            10_u16,
-        ) {
+        let timeout = if children.is_empty() {
+            // Round up so a final fractional millisecond cannot become a zero-timeout loop.
+            PollTimeout::try_from(
+                IDLE_TIMEOUT
+                    .saturating_sub(last_activity.elapsed())
+                    .as_millis()
+                    .saturating_add(1),
+            )?
+        } else {
+            PollTimeout::NONE
+        };
+        let mut poll_fds = [
+            PollFd::new(listener.as_fd(), PollFlags::POLLIN),
+            PollFd::new(notifications.as_fd(), PollFlags::POLLIN),
+        ];
+        if let Err(error) = poll(&mut poll_fds, timeout) {
             if error == Errno::EINTR {
                 continue;
             }
-            return Err(error).context("Failed polling daemon listener");
+            return Err(error).context("Failed polling daemon events");
+        }
+        let [listener_poll, notification_poll] = poll_fds;
+        let listener_events = listener_poll
+            .revents()
+            .context("Unknown daemon listener poll event")?;
+        let notification_events = notification_poll
+            .revents()
+            .context("Unknown child-notification poll event")?;
+        let failed = PollFlags::POLLERR | PollFlags::POLLHUP | PollFlags::POLLNVAL;
+        ensure!(
+            !listener_events.intersects(failed),
+            "Daemon listener failed"
+        );
+        ensure!(
+            !notification_events.intersects(failed),
+            "Daemon child-notification pipe failed"
+        );
+        if notification_events.contains(PollFlags::POLLIN)
+            || !listener_events.contains(PollFlags::POLLIN)
+        {
+            continue;
         }
         let (mut stream, _) = match listener.accept() {
             Ok(connection) => connection,
@@ -510,6 +544,9 @@ fn serve(paths: Paths) -> Result<Bootstrap> {
                         children.insert(child.as_raw(), stream);
                     }
                     Ok(ForkResult::Child) => {
+                        // Disarm the copied handler before its pipe descriptors can be reused.
+                        // prepare_worker then restores the requesting client's signal state.
+                        drop(notifications);
                         // Closing these inherited descriptors must not explicitly unlock the
                         // shared lock-file description or unlink the parent's socket.
                         drop(children);
