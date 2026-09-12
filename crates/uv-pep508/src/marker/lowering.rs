@@ -59,6 +59,12 @@ pub enum CanonicalMarkerValueString {
     PlatformVersion,
     /// `implementation_name`
     ImplementationName,
+    /// `implementation_version`
+    ImplementationVersion,
+    /// `python_full_version`
+    PythonFullVersion,
+    /// `python_version`
+    PythonVersion,
 }
 
 impl CanonicalMarkerValueString {
@@ -76,6 +82,7 @@ impl From<MarkerValueString> for CanonicalMarkerValueString {
     fn from(value: MarkerValueString) -> Self {
         match value {
             MarkerValueString::ImplementationName => Self::ImplementationName,
+            MarkerValueString::ImplementationVersion => Self::ImplementationVersion,
             MarkerValueString::OsName => Self::OsName,
             MarkerValueString::OsNameDeprecated => Self::OsName,
             MarkerValueString::PlatformMachine => Self::PlatformMachine,
@@ -89,6 +96,8 @@ impl From<MarkerValueString> for CanonicalMarkerValueString {
             MarkerValueString::PlatformSystem => Self::PlatformSystem,
             MarkerValueString::PlatformVersion => Self::PlatformVersion,
             MarkerValueString::PlatformVersionDeprecated => Self::PlatformVersion,
+            MarkerValueString::PythonFullVersion => Self::PythonFullVersion,
+            MarkerValueString::PythonVersion => Self::PythonVersion,
             MarkerValueString::SysPlatform => Self::SysPlatform,
             MarkerValueString::SysPlatformDeprecated => Self::SysPlatform,
         }
@@ -99,6 +108,7 @@ impl From<CanonicalMarkerValueString> for MarkerValueString {
     fn from(value: CanonicalMarkerValueString) -> Self {
         match value {
             CanonicalMarkerValueString::ImplementationName => Self::ImplementationName,
+            CanonicalMarkerValueString::ImplementationVersion => Self::ImplementationVersion,
             CanonicalMarkerValueString::OsName => Self::OsName,
             CanonicalMarkerValueString::PlatformMachine => Self::PlatformMachine,
             CanonicalMarkerValueString::PlatformPythonImplementation => {
@@ -107,6 +117,8 @@ impl From<CanonicalMarkerValueString> for MarkerValueString {
             CanonicalMarkerValueString::PlatformRelease => Self::PlatformRelease,
             CanonicalMarkerValueString::PlatformSystem => Self::PlatformSystem,
             CanonicalMarkerValueString::PlatformVersion => Self::PlatformVersion,
+            CanonicalMarkerValueString::PythonFullVersion => Self::PythonFullVersion,
+            CanonicalMarkerValueString::PythonVersion => Self::PythonVersion,
             CanonicalMarkerValueString::SysPlatform => Self::SysPlatform,
         }
     }
@@ -117,12 +129,15 @@ impl Display for CanonicalMarkerValueString {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ImplementationName => f.write_str("implementation_name"),
+            Self::ImplementationVersion => f.write_str("implementation_version"),
             Self::OsName => f.write_str("os_name"),
             Self::PlatformMachine => f.write_str("platform_machine"),
             Self::PlatformPythonImplementation => f.write_str("platform_python_implementation"),
             Self::PlatformRelease => f.write_str("platform_release"),
             Self::PlatformSystem => f.write_str("platform_system"),
             Self::PlatformVersion => f.write_str("platform_version"),
+            Self::PythonFullVersion => f.write_str("python_full_version"),
+            Self::PythonVersion => f.write_str("python_version"),
             Self::SysPlatform => f.write_str("sys_platform"),
         }
     }

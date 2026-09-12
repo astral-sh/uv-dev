@@ -44,6 +44,9 @@ impl MarkerEnvironment {
     pub fn get_string(&self, key: CanonicalMarkerValueString) -> &str {
         match key {
             CanonicalMarkerValueString::ImplementationName => self.implementation_name(),
+            CanonicalMarkerValueString::ImplementationVersion => {
+                &self.implementation_version().string
+            }
             CanonicalMarkerValueString::OsName => self.os_name(),
             CanonicalMarkerValueString::PlatformMachine => self.platform_machine(),
             CanonicalMarkerValueString::PlatformPythonImplementation => {
@@ -52,6 +55,8 @@ impl MarkerEnvironment {
             CanonicalMarkerValueString::PlatformRelease => self.platform_release(),
             CanonicalMarkerValueString::PlatformSystem => self.platform_system(),
             CanonicalMarkerValueString::PlatformVersion => self.platform_version(),
+            CanonicalMarkerValueString::PythonFullVersion => &self.python_full_version().string,
+            CanonicalMarkerValueString::PythonVersion => &self.python_version().string,
             CanonicalMarkerValueString::SysPlatform => self.sys_platform(),
         }
     }
