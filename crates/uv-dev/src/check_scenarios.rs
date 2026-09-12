@@ -10,9 +10,11 @@ use uv_python::PythonVersion;
 use uv_test::TestContext;
 use uv_test::packse::check::{
     LockCheckResult, ScenarioPlatform, ScenarioTarget, check_lock_scenario,
-    check_lock_scenario_with_artifacts, check_scenario, check_scenario_with_artifacts,
+    check_lock_scenario_with_artifacts, check_project_lock_scenario,
+    check_project_lock_scenario_with_artifacts, check_scenario, check_scenario_with_artifacts,
 };
 use uv_test::packse::generate::{SmallGraphOptions, generate_marker_graph, generate_small_graph};
+use uv_test::packse::project::ScenarioProject;
 use uv_test::packse::scenario::ScenarioDocument;
 
 #[derive(clap::Args)]
@@ -36,6 +38,10 @@ pub(crate) struct Args {
     /// Check a universal project lock and its frozen export instead of `pip compile`.
     #[arg(long)]
     lock: bool,
+
+    /// Check explicit project-extra and dependency-group exports from the universal lock.
+    #[arg(long, requires = "lock")]
+    project_selections: bool,
 
     /// Save failed resolver commands and their served wheels in a new directory.
     #[arg(long, value_name = "DIR")]
@@ -164,17 +170,39 @@ fn check_case(
                 .as_ref()
                 .map(|directory| directory.join(format!("{}.lock.failure", scenario.name)))
         });
-        let result = if let Some(failure_dir) = failure_dir {
-            check_lock_scenario_with_artifacts(
+        let selections = args
+            .project_selections
+            .then(|| ScenarioProject::new(&scenario).map(|project| project.selection_matrix()))
+            .transpose()?;
+        let result = match (selections.as_deref(), failure_dir.as_deref()) {
+            (Some(selections), Some(failure_dir)) => check_project_lock_scenario_with_artifacts(
+                &context,
+                document,
+                targets,
+                selections,
+                args.max_states,
+                failure_dir,
+            ),
+            (Some(selections), None) => check_project_lock_scenario(
+                &context,
+                &scenario,
+                targets,
+                selections,
+                args.max_states,
+            ),
+            (None, Some(failure_dir)) => check_lock_scenario_with_artifacts(
                 &context,
                 document,
                 targets,
                 args.max_states,
-                &failure_dir,
-            )
-        } else {
-            check_lock_scenario(&context, &scenario, targets, args.max_states)
+                failure_dir,
+            ),
+            (None, None) => check_lock_scenario(&context, &scenario, targets, args.max_states),
         }?;
+        let exports = selections
+            .as_ref()
+            .map(|selections| format!("project exports: {}; ", selections.len()))
+            .unwrap_or_default();
         Ok(match result {
             LockCheckResult::Satisfiable {
                 projections,
@@ -183,7 +211,7 @@ fn check_case(
                 satisfiable: 1,
                 unsatisfiable: 0,
                 description: format!(
-                    "valid lock (projections: {projections}; oracle selections: {checked})"
+                    "valid lock ({exports}projections: {projections}; oracle selections: {checked})"
                 ),
             },
             LockCheckResult::Unsatisfiable { witness, checked } => CaseResult {

@@ -122,6 +122,18 @@ marker universe is satisfiable.
 cargo dev check-scenarios --uv target/debug/uv --lock --python-version 3.12,3.13,3.14 --python-platform linux,macos,windows test/scenarios/fork/basic.toml
 ```
 
+Add `--project-selections` for project optional dependencies and PEP 735 dependency groups. The
+universal lock is checked against all roots together. Frozen exports disable default groups and
+cover the base project, individual and combined extras, individual and combined groups, groups-only
+selections, and all roots together. This is a bounded selection matrix, not every possible subset.
+Group includes remain in the temporary project so uv's expansion is checked against the oracle's
+independent expansion. Project self-references, `extra` markers on project or group requirements,
+and conflict declarations are not modeled.
+
+```shell
+cargo dev check-scenarios --uv target/debug/uv --lock --project-selections --python-version 3.12,3.13 --python-platform linux,macos,windows test/scenarios/project/selection-projections.toml
+```
+
 For a reproducible set of generated graphs, provide a starting seed and an output directory:
 
 ```shell

@@ -1,0 +1,27 @@
+name = "project-combined-roots-conflict"
+description = "A universal project lock must satisfy optional dependencies and groups together."
+
+[root]
+requires_python = ">=3.12,<3.13"
+requires = ["base"]
+
+[root.optional_dependencies]
+legacy = ["dep==1"]
+
+[root.dependency_groups]
+dev = ["dep==2"]
+
+[expected]
+satisfiable = false
+
+[testgen]
+disable = true
+
+[packages.base.versions."1"]
+sdist = false
+
+[packages.dep.versions."1"]
+sdist = false
+
+[packages.dep.versions."2"]
+sdist = false
