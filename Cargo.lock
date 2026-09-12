@@ -6068,8 +6068,10 @@ version = "0.0.80"
 dependencies = [
  "anyhow",
  "astral_async_zip",
+ "base64 0.22.1",
  "clap",
  "codspeed-criterion-compat",
+ "csv",
  "flate2",
  "fs-err",
  "futures",
