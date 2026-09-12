@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -19,6 +20,11 @@ use uv_static::EnvVars;
 const SHOW_HIDDEN_COMMANDS: &[&str] = &["generate-shell-completion"];
 
 pub(crate) fn help(query: &[String], printer: Printer, no_pager: bool) -> Result<ExitStatus> {
+    let query = match query {
+        [command] if command == "uvx" => Cow::Owned(vec!["tool".to_string(), "run".to_string()]),
+        _ => Cow::Borrowed(query),
+    };
+
     let mut uv: clap::Command = SHOW_HIDDEN_COMMANDS
         .iter()
         .fold(Cli::command(), |uv, &name| {
@@ -29,7 +35,7 @@ pub(crate) fn help(query: &[String], printer: Printer, no_pager: bool) -> Result
     // will be missing all of the propagated options.
     uv.build();
 
-    let command = find_command(query, &uv).map_err(|(unmatched, nearest)| {
+    let command = find_command(&query, &uv).map_err(|(unmatched, nearest)| {
         let missing = if unmatched.len() == query.len() {
             format!("`{}` for `uv`", query.join(" "))
         } else {
