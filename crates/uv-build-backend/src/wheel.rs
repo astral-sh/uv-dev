@@ -455,6 +455,18 @@ struct RecordEntry {
     size: u64,
 }
 
+impl RecordEntry {
+    /// Create a `RECORD` entry for in-memory file contents.
+    fn from_bytes(path: &str, bytes: &[u8]) -> Self {
+        let hash = base64.encode(Sha256::new().chain_update(bytes).finalize());
+        Self {
+            path: path.to_string(),
+            hash,
+            size: bytes.len() as u64,
+        }
+    }
+}
+
 /// Read the input file and write it both to the hasher and the target file.
 ///
 /// We're implementing this tee-ing manually since there is no sync `InspectReader` or std tee
@@ -890,12 +902,7 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> DirectoryWriter for ZipDirectoryWriter<W
         let entry = Self::entry(path, self.compression, Self::REGULAR_FILE_MODE);
         block_on(self.writer.write_entry_whole(entry, bytes))?;
 
-        let hash = base64.encode(Sha256::new().chain_update(bytes).finalize());
-        self.record.push(RecordEntry {
-            path: path.to_string(),
-            hash,
-            size: bytes.len() as u64,
-        });
+        self.record.push(RecordEntry::from_bytes(path, bytes));
 
         Ok(())
     }
@@ -923,12 +930,7 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> DirectoryWriter for ZipDirectoryWriter<W
             let entry = Self::entry(path, self.compression, mode);
             block_on(self.writer.write_entry_whole(entry, &bytes))?;
 
-            let hash = base64.encode(Sha256::new().chain_update(&bytes).finalize());
-            self.record.push(RecordEntry {
-                path: path.to_string(),
-                hash,
-                size: bytes.len() as u64,
-            });
+            self.record.push(RecordEntry::from_bytes(path, &bytes));
         } else {
             let mut reader = BufReader::new(File::open(file)?);
             let mut writer = self.new_writer(path, executable_bit)?;
@@ -993,12 +995,7 @@ impl FilesystemWriter {
 impl DirectoryWriter for FilesystemWriter {
     fn write_bytes(&mut self, path: &str, bytes: &[u8]) -> Result<(), Error> {
         trace!("Adding {}", path);
-        let hash = base64.encode(Sha256::new().chain_update(bytes).finalize());
-        self.record.push(RecordEntry {
-            path: path.to_string(),
-            hash,
-            size: bytes.len() as u64,
-        });
+        self.record.push(RecordEntry::from_bytes(path, bytes));
 
         Ok(fs_err::write(self.root.join(path), bytes)?)
     }
@@ -1079,6 +1076,60 @@ mod test {
         built_by_uv/__init__.py,sha256=ifhp5To6AGGlLAIz5kQtTXLegKii00BtnqC_05fteGU,37
         built_by_uv-0.1.0/RECORD,,
         ");
+    }
+
+    #[test]
+    fn test_record_entry_from_bytes() -> Result<(), Error> {
+        let record = vec![
+            RecordEntry::from_bytes("empty.bin", b""),
+            RecordEntry::from_bytes("abc.txt", b"abc"),
+            RecordEntry::from_bytes("nested/data.bin", b"\0\xff\r\n"),
+        ];
+        let mut writer = Vec::new();
+        write_record(&mut writer, "example-1.0.dist-info", record)?;
+
+        assert_snapshot!(String::from_utf8(writer).expect("RECORD is UTF-8"), @"
+        empty.bin,sha256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU,0
+        abc.txt,sha256=ungWv48Bz-pBQUDeXa4iI7ADYaOWF3qctBD_YfIAFa0,3
+        nested/data.bin,sha256=6UifN_swUenvodyRYATXJ057Y5deMglwiUcmfyOTqb4,4
+        example-1.0.dist-info/RECORD,,
+        ");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_record_entry_from_bytes_matches_streaming() -> Result<(), Error> {
+        let multi_buffer: Vec<u8> = (0..=u8::MAX)
+            .cycle()
+            .take(ZIP_STREAM_BUFFER_SIZE + 17)
+            .collect();
+        let inputs: &[&[u8]] = &[b"", b"abc", b"\0\xff\r\n", &multi_buffer];
+
+        for &bytes in inputs {
+            let path = "pkg/data.bin";
+            let buffered = RecordEntry::from_bytes(path, bytes);
+            let mut reader = bytes;
+            let mut copied = Vec::new();
+            let streamed = write_hashed(path, &mut reader, &mut copied)?;
+            assert_eq!(copied.as_slice(), bytes);
+
+            let mut buffered_record = Vec::new();
+            write_record(
+                &mut buffered_record,
+                "example-1.0.dist-info",
+                vec![buffered],
+            )?;
+            let mut streamed_record = Vec::new();
+            write_record(
+                &mut streamed_record,
+                "example-1.0.dist-info",
+                vec![streamed],
+            )?;
+            assert_eq!(buffered_record, streamed_record);
+        }
+
+        Ok(())
     }
 
     /// Snapshot all files from the prepare metadata hook.
