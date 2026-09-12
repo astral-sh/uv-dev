@@ -18,6 +18,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--uv", type=Path, default=root / "target/profiling/uv")
     parser.add_argument("--discovery", action="store_true")
+    parser.add_argument("--project-caches", action="store_true")
     args = parser.parse_args()
     cache = root / ".cache"
     fixtures = cache / "bench-fixtures"
@@ -27,21 +28,37 @@ def main() -> None:
         if not name.startswith("UV_") and name not in {"VIRTUAL_ENV", "CONDA_PREFIX"}
     }
     environment["UV_PYTHON_INSTALL_DIR"] = str(cache / "bench-python")
-    command = [str(args.uv.resolve()), "--no-config", "--cache-dir", str(cache)]
+    command = [str(args.uv.resolve()), "--no-config"]
     workloads = json.loads((root / "scripts/benchmark/environments.json").read_text())
     versions = sorted({PYTHON, *(workload["python"] for workload in workloads)})
     if args.discovery:
         versions = sorted({*versions, "3.10.18", "3.13.4"})
     subprocess.run(
-        [*command, "python", "install", "--no-bin", "--no-registry", *versions],
+        [
+            *command,
+            "--cache-dir",
+            str(cache),
+            "python",
+            "install",
+            "--no-bin",
+            "--no-registry",
+            *versions,
+        ],
         env=environment,
         check=True,
     )
     environment["UV_PYTHON_DOWNLOADS"] = "never"
     temporary_root = root / "target"
     temporary_root.mkdir(exist_ok=True)
-    workloads.append({"project": "prefect", "python": PYTHON, "sync-args": []})
-    for workload in workloads:
+    selected = [(workload, cache) for workload in workloads]
+    selected.append(({"project": "prefect", "python": PYTHON, "sync-args": []}, cache))
+    if args.project_caches:
+        for workload in workloads:
+            project_cache = cache / "bench-caches" / workload["name"]
+            if project_cache.exists():
+                shutil.rmtree(project_cache)
+            selected.append((workload, project_cache))
+    for workload, project_cache in selected:
         with tempfile.TemporaryDirectory(
             prefix="bench-project-", dir=temporary_root
         ) as temporary:
@@ -54,6 +71,8 @@ def main() -> None:
             subprocess.run(
                 [
                     *command,
+                    "--cache-dir",
+                    str(project_cache),
                     "--project",
                     str(project),
                     "sync",
