@@ -10,35 +10,9 @@ use criterion::{
     measurement::WallTime,
 };
 use uv_bench::{
-    EnvironmentFixture, PreparedEnvironment, environment_fixtures, is_codspeed_simulation,
-    run_command, uv_command_with_cache,
+    EnvironmentFixture, PreparedEnvironment, copy_cache, environment_fixtures,
+    is_codspeed_simulation, run_command, uv_command_with_cache,
 };
-
-fn copy_cache(source: &Path, destination: &Path) -> std::io::Result<()> {
-    fs_err::create_dir_all(destination)?;
-    for entry in fs_err::read_dir(source)? {
-        let entry = entry?;
-        let target = destination.join(entry.file_name());
-        let file_type = entry.file_type()?;
-        if file_type.is_symlink() {
-            let link = fs_err::read_link(entry.path())?;
-            assert!(link.is_relative(), "Cache links must be relocatable");
-            #[cfg(unix)]
-            fs_err::os::unix::fs::symlink(link, target)?;
-            #[cfg(windows)]
-            if fs_err::metadata(entry.path())?.is_dir() {
-                fs_err::os::windows::fs::symlink_dir(link, target)?;
-            } else {
-                fs_err::os::windows::fs::symlink_file(link, target)?;
-            }
-        } else if file_type.is_dir() {
-            copy_cache(&entry.path(), &target)?;
-        } else {
-            fs_err::copy(entry.path(), target)?;
-        }
-    }
-    Ok(())
-}
 
 struct PackageCache {
     // Keep an installed environment alive so cached wheel files have real installation links.
