@@ -65,7 +65,9 @@ fn unzip_inner(
     target: &Path,
     hash_contents: bool,
 ) -> Result<UnzipOutput, Error> {
-    // Parse the central directory once, then clone the archive reader per Rayon job so
+    let (reader, _) = reader.into_parts();
+
+    // Parse the central directory once, then clone the archive reader per entry so
     // extraction stays parallel for already-downloaded wheels. AllowStdIo adapts synchronous
     // file I/O to async_zip; extraction itself runs on blocking and Rayon threads.
     let archive = block_on(ZipFileReader::new(AllowStdIo::new(
@@ -79,25 +81,22 @@ fn unzip_inner(
     let skip_validation = insecure_no_validate();
     // Initialize the threadpool with the user settings.
     initialize_rayon_once();
-    // Reuse each reader's buffer across entries instead of allocating it for every file.
-    let extracted = (0..archive.file().entries().len())
-        .into_par_iter()
-        .map_init(
-            || archive.clone(),
-            |archive, file_number| {
-                extract_entry(
-                    archive,
-                    file_number,
-                    target,
-                    &directories,
-                    skip_validation,
-                    hash_contents,
-                )
-            },
-        );
+    let extract = |file_number| {
+        let mut archive = archive.clone();
+        extract_entry(
+            &mut archive,
+            file_number,
+            target,
+            &directories,
+            skip_validation,
+            hash_contents,
+        )
+    };
 
     if !hash_contents {
-        let files = extracted
+        let files = (0..archive.file().entries().len())
+            .into_par_iter()
+            .map(extract)
             .filter_map(|result| match result {
                 Ok(Some(ExtractedEntry::File { path, size, .. })) => {
                     Some(Ok(UnhashedFile::new(path.into_path_buf(), size)))
@@ -109,7 +108,9 @@ fn unzip_inner(
         return Ok(UnzipOutput::Unhashed(files));
     }
 
-    let extracted = extracted
+    let extracted = (0..archive.file().entries().len())
+        .into_par_iter()
+        .map(extract)
         // Filter out skipped dangerous paths, then collect files and directory candidates.
         .filter_map(Result::transpose)
         .collect::<Result<Vec<_>, Error>>()?;
