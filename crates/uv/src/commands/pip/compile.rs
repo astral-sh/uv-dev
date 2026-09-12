@@ -118,7 +118,7 @@ pub(crate) async fn pip_compile(
     annotation_style: AnnotationStyle,
     link_mode: LinkMode,
     mut python: Option<String>,
-    system: bool,
+    environment_preference: EnvironmentPreference,
     python_preference: PythonPreference,
     concurrency: Concurrency,
     quiet: bool,
@@ -282,8 +282,7 @@ pub(crate) async fn pip_compile(
     }
 
     // Find an interpreter to use for building distributions
-    let environment_preference = EnvironmentPreference::from_system_flag(system, false);
-    let python_preference = python_preference.with_system_flag(system);
+    let python_preference = python_preference.with_environment_preference(environment_preference);
     let reporter = PythonDownloadReporter::single(printer);
     let interpreter = if let Some(python) = python.as_ref() {
         let request = PythonRequest::parse(python);

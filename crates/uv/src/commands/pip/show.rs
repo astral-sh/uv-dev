@@ -27,7 +27,7 @@ pub(crate) fn pip_show(
     strict: bool,
     dependency_metadata: &DependencyMetadata,
     python: Option<&str>,
-    system: bool,
+    environment_preference: EnvironmentPreference,
     target: Option<Target>,
     prefix: Option<Prefix>,
     files: bool,
@@ -49,8 +49,8 @@ pub(crate) fn pip_show(
     // Detect the current Python interpreter.
     let environment = PythonEnvironment::find(
         &python.map(PythonRequest::parse).unwrap_or_default(),
-        EnvironmentPreference::from_system_flag(system, false),
-        PythonPreference::default().with_system_flag(system),
+        environment_preference,
+        PythonPreference::default().with_environment_preference(environment_preference),
         cache,
     )?;
 
