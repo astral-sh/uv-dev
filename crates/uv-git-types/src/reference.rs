@@ -59,14 +59,7 @@ impl GitReference {
 
     /// Converts the [`GitReference`] to a `str` that can be used as a revision.
     pub fn as_rev(&self) -> &str {
-        match self {
-            Self::Tag(rev) => rev,
-            Self::Branch(rev) => rev,
-            Self::BranchOrTag(rev) => rev,
-            Self::BranchOrTagOrCommit(rev) => rev,
-            Self::NamedRef(rev) => rev,
-            Self::DefaultBranch => "HEAD",
-        }
+        self.as_str().unwrap_or("HEAD")
     }
 
     /// Converts the [`GitReference`] to a percent-encoded revision string for use in a URL.
@@ -94,7 +87,7 @@ impl GitReference {
 
 impl Display for GitReference {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str().unwrap_or("HEAD"))
+        write!(f, "{}", self.as_rev())
     }
 }
 
