@@ -2561,6 +2561,80 @@ fn version_get_frozen_workspace_without_python() -> Result<()> {
     Ok(())
 }
 
+/// Edit a root package after complete workspace discovery without resolving dependencies.
+#[test]
+fn version_set_frozen_root_package() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.version()
+        .arg("--no-daemon")
+        .arg("--offline")
+        .arg("--package").arg("project")
+        .arg("--bump").arg("patch")
+        .arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project 0.1.0 => 0.1.1
+    ");
+
+    assert_snapshot!(fs_err::read_to_string(&pyproject_toml)?, @r#"
+    [project]
+    name = "project"
+    version = "0.1.1"
+    requires-python = ">=3.12"
+    "#);
+
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.1"
+        requires-python = ">=3.12"
+
+        [tool.uv.workspace]
+        members = ["child"]
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "child"
+            version = "1.0.0"
+            requires-python = ">=3.12"
+        "#})?;
+
+    uv_snapshot!(context.filters(), context.version()
+        .arg("--no-daemon")
+        .arg("--offline")
+        .arg("--package").arg("project")
+        .arg("--bump").arg("patch")
+        .arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project 0.1.1 => 0.1.2
+    ");
+
+    uv_snapshot!(context.filters(), context.version()
+        .arg("--no-daemon")
+        .arg("--offline")
+        .arg("--package").arg("child")
+        .arg("--bump").arg("patch")
+        .arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    child 1.0.0 => 1.0.1
+    ");
+
+    Ok(())
+}
+
 /// Edit the version of a workspace member
 ///
 /// Also check that --locked/--frozen/--no-sync do what they say
