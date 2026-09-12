@@ -22,6 +22,26 @@ pub enum UnavailableReason {
     Version(UnavailableVersion),
 }
 
+impl UnavailableReason {
+    /// Whether metadata could not be read, rather than proving a candidate absent or incompatible.
+    pub(crate) fn is_metadata_failure(&self) -> bool {
+        match self {
+            Self::Package(package) => package.is_metadata_failure(),
+            Self::Version(version) => match version {
+                UnavailableVersion::UnsatisfiableDependency(_)
+                | UnavailableVersion::IncompatibleSelfDependency(_)
+                | UnavailableVersion::IncompatibleDist(_) => false,
+                UnavailableVersion::InvalidMetadata
+                | UnavailableVersion::InconsistentMetadata
+                | UnavailableVersion::InvalidStructure
+                | UnavailableVersion::Offline
+                | UnavailableVersion::RequiresPython(_)
+                | UnavailableVersion::Network(_) => true,
+            },
+        }
+    }
+}
+
 impl Display for UnavailableReason {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -249,6 +269,17 @@ pub enum UnavailablePackage {
 }
 
 impl UnavailablePackage {
+    /// Whether the package's absence is caused by a metadata or network failure.
+    pub(crate) fn is_metadata_failure(&self) -> bool {
+        match self {
+            Self::NoIndex | Self::NotFound => false,
+            Self::Offline
+            | Self::InvalidMetadata(_)
+            | Self::InvalidStructure(_)
+            | Self::Network(_) => true,
+        }
+    }
+
     fn message(&self) -> Cow<'static, str> {
         match self {
             Self::NoIndex => Cow::Borrowed("not found in the provided package locations"),

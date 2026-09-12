@@ -43,7 +43,9 @@ use uv_warnings::warn_user_once;
 
 use crate::candidate_selector::{Candidate, CandidateDist, CandidateSelector};
 use crate::dependency_provider::UvDependencyProvider;
-use crate::error::{NoSolutionError, ResolveError, derivation_tree_packages};
+use crate::error::{
+    ErrorTree, NoSolutionError, ResolveError, derivation_tree_packages, drop_derivation_tree,
+};
 use crate::fork_indexes::ForkIndexes;
 use crate::fork_strategy::ForkStrategy;
 use crate::fork_urls::ForkUrls;
@@ -65,7 +67,8 @@ use crate::resolver::batch_prefetch::BatchPrefetcher;
 use crate::resolver::derivation::DerivationChainBuilder;
 pub use crate::resolver::environment::ResolverEnvironment;
 use crate::resolver::environment::{
-    ForkingPossibility, fork_version_by_marker, fork_version_by_python_requirement,
+    ForkingPossibility, fork_on_no_solution, fork_version_by_marker,
+    fork_version_by_python_requirement,
 };
 pub(crate) use crate::resolver::fork_map::{ForkMap, ForkSet};
 pub use crate::resolver::index::InMemoryIndex;
@@ -339,28 +342,16 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             self.index.clone(),
             request_sink.clone(),
         );
-        let state = ForkState::new(
+        let initial_state = ForkState::new(
             pubgrub,
             self.env.clone(),
             self.python_requirement.clone(),
             prefetcher,
         );
         let mut preferences = self.preferences.clone();
-        let mut forked_states = self.env.initial_forked_states(state)?;
+        let mut forked_states = self.env.initial_forked_states(initial_state.clone())?;
 
-        // Apply the same Python-bound scheduling used for dependency-created forks. Since states
-        // are popped from the end of the stack, sort lower Python bounds last for `fewest` and
-        // higher Python bounds last for `requires-python`. There's no `cmp_upper_bounds` tiebreak
-        // here: it counts upper-bounded specifiers among a fork's dependencies, which an initial
-        // state doesn't have yet.
-        match (self.options.fork_strategy, self.options.resolution_mode) {
-            (ForkStrategy::Fewest, _) | (_, ResolutionMode::Lowest) => {
-                forked_states.sort_by(|a, b| cmp_requires_python(&a.env, &b.env).reverse());
-            }
-            (ForkStrategy::RequiresPython, _) => {
-                forked_states.sort_by(|a, b| cmp_requires_python(&a.env, &b.env));
-            }
-        }
+        self.sort_root_fork_states(&mut forked_states);
         let mut resolutions = vec![];
 
         'FORK: while let Some(mut state) = forked_states.pop() {
@@ -381,7 +372,14 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                         let result = state.pubgrub.unit_propagation(state.next);
                         match result {
                             Err(err) => {
-                                // If unit propagation failed, there is no solution.
+                                if let Some(children) =
+                                    self.restart_failed_fork(&initial_state, &state, &err)
+                                {
+                                    forked_states.extend(children);
+                                    drop_derivation_tree(err);
+                                    continue 'FORK;
+                                }
+                                // No strict environment partition separates the proof's markers.
                                 return Err(self.convert_no_solution_err(
                                     err,
                                     state.fork_urls,
@@ -867,6 +865,48 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             self.selector.resolution_strategy(),
             self.options.clone(),
         )
+    }
+
+    /// Order fresh root states using the Python-bound policy of dependency-created forks.
+    fn sort_root_fork_states(&self, states: &mut [ForkState]) {
+        // States are popped from the end of the stack, so lower Python bounds are last for
+        // `fewest` and higher bounds are last for `requires-python`. There is no upper-bound
+        // tiebreak: fresh root states have not visited their dependencies yet.
+        match (self.options.fork_strategy, self.options.resolution_mode) {
+            (ForkStrategy::Fewest, _) | (_, ResolutionMode::Lowest) => {
+                states.sort_by(|a, b| cmp_requires_python(&a.env, &b.env).reverse());
+            }
+            (ForkStrategy::RequiresPython, _) => {
+                states.sort_by(|a, b| cmp_requires_python(&a.env, &b.env));
+            }
+        }
+    }
+
+    /// Restart a failed conservative approximation in two strictly narrower environments.
+    fn restart_failed_fork(
+        &self,
+        initial: &ForkState,
+        failed: &ForkState,
+        error: &ErrorTree,
+    ) -> Option<[ForkState; 2]> {
+        let (with_marker, without_marker) = {
+            let unavailable_packages = self.unavailable_packages.pin();
+            let incomplete_packages = self.incomplete_packages.pin();
+            fork_on_no_solution(&failed.env, &failed.python_requirement, error, |name| {
+                unavailable_packages
+                    .get(name)
+                    .is_some_and(UnavailablePackage::is_metadata_failure)
+                    || incomplete_packages.contains_key(name)
+            })
+        }?;
+        debug!("Retrying failed universal resolution as {with_marker} and {without_marker}");
+
+        // The failed approximation may have learned incompatibilities that are invalid in either
+        // child. Restart from the root so dependencies, source selections, and solver caches are
+        // all reconstructed for the narrowed environment.
+        let mut children = [with_marker, without_marker].map(|env| initial.clone().with_env(env));
+        self.sort_root_fork_states(&mut children);
+        Some(children)
     }
 
     /// Convert the dependency [`Fork`]s into [`ForkState`]s.

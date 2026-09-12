@@ -1,16 +1,16 @@
 name = "fork-non-local-fork-marker-direct"
 description = '''
 This is like `non-local-fork-marker-transitive`, but the marker expressions are
-placed on sibling dependency specifications. However, the actual dependency on
-`c` is indirect, and thus, there's no fork detected by the universal resolver.
-This in turn results in an unresolvable conflict on `c`.
+placed on sibling dependency specifications. The actual dependency on `c` is
+indirect, so eager dependency forking cannot see the conflict. Retrying the
+failed approximation with the disjoint root markers yields a valid resolution.
 '''
 
 [resolver_options]
 universal = true
 
 [expected]
-satisfiable = false
+satisfiable = true
 
 [root]
 requires = [
