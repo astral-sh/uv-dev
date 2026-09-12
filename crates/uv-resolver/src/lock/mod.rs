@@ -7773,7 +7773,9 @@ fn simplify_dependency_marker(
         SimplifiedMarkerTree::new(requires_python, parent.pep508()).as_simplified_marker_tree();
     let marker =
         SimplifiedMarkerTree::new(requires_python, marker.combined()).as_simplified_marker_tree();
-    let marker = marker.restrict(parent);
+    // A fork can retain an edge where its parent is unreachable. Restriction may choose any value
+    // outside its assumption, so normalize those regions before deriving the serialized marker.
+    let marker = marker.and(parent).restrict(parent);
 
     // Retain the resolution environment internally. The lockfile writer removes it from the wire
     // marker, and the reader restores it, keeping freshly resolved and deserialized locks equal.
