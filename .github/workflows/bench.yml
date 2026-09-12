@@ -71,6 +71,9 @@ jobs:
           --no-config --offline run --no-project --managed-python --python 3.12.11
           scripts/benchmark/prepare-sources.py
 
+      - name: "Build the current Python build-backend wheel"
+        run: python3 scripts/benchmark/prepare-build-backend.py
+
       - name: "Prime tool-environment fixtures"
         run: python3 scripts/benchmark/prepare-tools.py --individual-caches
 
