@@ -361,10 +361,10 @@ impl Display for Requirement {
                     write!(f, "@{reference}")?;
                 }
                 if let Some(subdirectory) = subdirectory {
-                    writeln!(f, "#subdirectory={}", subdirectory.display())?;
+                    write!(f, "#subdirectory={}", subdirectory.display())?;
                 }
                 if git.lfs().enabled() {
-                    writeln!(
+                    write!(
                         f,
                         "{}lfs=true",
                         if subdirectory.is_some() { "&" } else { "#" }
@@ -385,7 +385,6 @@ impl Display for Requirement {
                 if git.lfs().enabled() {
                     write!(f, "&lfs=true")?;
                 }
-                writeln!(f)?;
             }
             RequirementSource::Path { url, .. } => {
                 write!(f, " @ {url}")?;
@@ -831,10 +830,10 @@ impl Display for RequirementSource {
                     write!(f, "@{reference}")?;
                 }
                 if let Some(subdirectory) = subdirectory {
-                    writeln!(f, "#subdirectory={}", subdirectory.display())?;
+                    write!(f, "#subdirectory={}", subdirectory.display())?;
                 }
                 if git.lfs().enabled() {
-                    writeln!(
+                    write!(
                         f,
                         "{}lfs=true",
                         if subdirectory.is_some() { "&" } else { "#" }
@@ -855,7 +854,6 @@ impl Display for RequirementSource {
                 if git.lfs().enabled() {
                     write!(f, "&lfs=true")?;
                 }
-                writeln!(f)?;
             }
             Self::Path { url, .. } => {
                 write!(f, "{url}")?;
@@ -1263,28 +1261,46 @@ mod tests {
     }
 
     #[test]
-    fn display_git_path_lfs() {
-        let source: RequirementSource = toml::from_str(
-            r#"git = "https://github.com/astral-sh/archive-in-git-test?lfs=true&path=archives%2Finiconfig-2.0.0-py3-none-any.whl""#,
-        )
-        .unwrap();
+    fn display_git_requirements_inline() {
+        for (query, suffix) in [
+            ("", ""),
+            ("?branch=feature", "@feature"),
+            ("?subdirectory=python", "#subdirectory=python"),
+            ("?lfs=true", "#lfs=true"),
+            (
+                "?subdirectory=python&lfs=true",
+                "#subdirectory=python&lfs=true",
+            ),
+            (
+                "?path=archives%2Finiconfig-2.0.0-py3-none-any.whl",
+                "#path=archives/iniconfig-2.0.0-py3-none-any.whl",
+            ),
+            (
+                "?lfs=true&path=archives%2Finiconfig-2.0.0-py3-none-any.whl",
+                "#path=archives/iniconfig-2.0.0-py3-none-any.whl&lfs=true",
+            ),
+        ] {
+            let source: RequirementSource = toml::from_str(&format!(
+                r#"git = "https://github.com/astral-sh/archive-in-git-test{query}""#,
+            ))
+            .unwrap();
+            let expected = format!("git+https://github.com/astral-sh/archive-in-git-test{suffix}");
 
-        assert_eq!(
-            source.to_string(),
-            " git+https://github.com/astral-sh/archive-in-git-test#path=archives/iniconfig-2.0.0-py3-none-any.whl&lfs=true\n"
-        );
+            assert_eq!(source.to_string(), format!(" {expected}"), "{query}");
 
-        let requirement = Requirement {
-            name: "iniconfig".parse().unwrap(),
-            extras: Box::new([]),
-            groups: Box::new([]),
-            marker: MarkerTree::TRUE,
-            source,
-            origin: None,
-        };
-        assert_eq!(
-            requirement.to_string(),
-            "iniconfig @ git+https://github.com/astral-sh/archive-in-git-test#path=archives/iniconfig-2.0.0-py3-none-any.whl&lfs=true\n"
-        );
+            let requirement = Requirement {
+                name: "iniconfig".parse().unwrap(),
+                extras: Box::new([]),
+                groups: Box::new([]),
+                marker: "sys_platform == 'linux'".parse().unwrap(),
+                source,
+                origin: None,
+            };
+            assert_eq!(
+                requirement.to_string(),
+                format!("iniconfig @ {expected} ; sys_platform == 'linux'"),
+                "{query}",
+            );
+        }
     }
 }
