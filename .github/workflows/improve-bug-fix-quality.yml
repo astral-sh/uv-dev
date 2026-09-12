@@ -1,0 +1,476 @@
+# Improve bug-fix automation when independent evaluations expose recurring weaknesses.
+name: "improve-bug-fix-quality"
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 9 * * *"
+
+permissions: {}
+
+concurrency:
+  group: improve-bug-fix-quality
+  cancel-in-progress: false
+
+jobs:
+  analyze:
+    if: github.repository == 'astral-sh/uv'
+    runs-on: ubuntu-latest
+    environment: automations
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      created: ${{ steps.commit.outputs.created }}
+      result: ${{ steps.commit.outputs.result }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: "Collect independent bug-fix evaluations"
+        id: collect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+          MAX_ISSUE_CONTEXTS: "100"
+          MIN_EVALUATIONS: "5"
+          MIN_RECURRENCES: "2"
+        run: |
+          branch="automations/improve-bug-fix-quality"
+          gh pr list \
+            --repo astral-sh/uv-dev \
+            --head "$branch" \
+            --state open \
+            --json number,url,baseRefName,headRefName,author \
+            --limit 2 \
+            > "$RUNNER_TEMP/quality-improvement-pull-requests.json"
+          if ! jq --exit-status --arg head_ref "$branch" '
+            length <= 1
+            and all(
+              .baseRefName == "main"
+              and .headRefName == $head_ref
+              and .author.is_bot == true
+              and .author.login == "app/astral-automations-bot"
+            )
+          ' "$RUNNER_TEMP/quality-improvement-pull-requests.json" > /dev/null; then
+            echo "An unexpected pull request already claims the improvement branch." >&2
+            exit 1
+          fi
+
+          if jq --exit-status 'length > 0' \
+            "$RUNNER_TEMP/quality-improvement-pull-requests.json" > /dev/null; then
+            pull_request="$(jq --raw-output '.[0].url' \
+              "$RUNNER_TEMP/quality-improvement-pull-requests.json")"
+            printf 'An automation improvement is already awaiting review: %s\n' \
+              "$pull_request" >> "$GITHUB_STEP_SUMMARY"
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git -c core.hooksPath=/dev/null init --quiet "$RUNNER_TEMP/issue-contexts"
+          cd "$RUNNER_TEMP/issue-contexts"
+          git -c core.hooksPath=/dev/null remote add origin \
+            https://github.com/astral-sh/uv-dev.git
+
+          git -c core.hooksPath=/dev/null ls-remote --heads origin 'refs/heads/issue/*' |
+            awk '$2 ~ /^refs\/heads\/issue\/[1-9][0-9]*$/ {
+              sub("refs/heads/issue/", "", $2)
+              print $2
+            }' |
+            sort --numeric-sort --reverse |
+            sed -n "1,${MAX_ISSUE_CONTEXTS}p" > "$RUNNER_TEMP/issue-numbers.txt"
+
+          references=()
+          while IFS= read -r issue_number; do
+            references+=(
+              "refs/heads/issue/$issue_number:refs/remotes/origin/issue/$issue_number"
+            )
+          done < "$RUNNER_TEMP/issue-numbers.txt"
+
+          if [ "${#references[@]}" -eq 0 ]; then
+            echo "No persisted issue contexts are available." >> "$GITHUB_STEP_SUMMARY"
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git -c core.hooksPath=/dev/null fetch --quiet --no-tags --depth 1 \
+            origin "${references[@]}"
+          : > "$RUNNER_TEMP/bug-fix-quality-evaluations.jsonl"
+
+          while IFS= read -r issue_number; do
+            revision="$(git rev-parse "refs/remotes/origin/issue/$issue_number")"
+            if ! git cat-file -e "$revision:evaluation.json" 2> /dev/null ||
+              ! git cat-file -e "$revision:issue.json" 2> /dev/null ||
+              ! git cat-file -e "$revision:fix.json" 2> /dev/null; then
+              continue
+            fi
+
+            git show "$revision:evaluation.json" > "$RUNNER_TEMP/evaluation.json"
+            git show "$revision:issue.json" > "$RUNNER_TEMP/evaluation-issue.json"
+            git show "$revision:fix.json" > "$RUNNER_TEMP/evaluation-fix.json"
+
+            if ! jq --exit-status \
+              --argjson issue_number "$issue_number" \
+              --slurpfile issue "$RUNNER_TEMP/evaluation-issue.json" \
+              --slurpfile fix "$RUNNER_TEMP/evaluation-fix.json" '
+                $issue[0].number == $issue_number
+                and $fix[0].outcome == "fixed"
+                and $fix[0].pull_request == .pull_request
+                and (.head_sha | type == "string" and test("^[0-9a-f]{40}$"))
+                and (.score | type == "number" and . >= 0 and . <= 10)
+                and (.verdict | IN("pass", "needs_attention", "fail"))
+                and (.rubric | type == "array" and length == 5)
+                and ([.rubric[].criterion] | sort) ==
+                  (["correctness", "issue_understanding", "maintainability", "regression_coverage", "scope"] | sort)
+                and ([.rubric[].score] | add) == .score
+              ' "$RUNNER_TEMP/evaluation.json" > /dev/null; then
+              echo "Skipping invalid quality evaluation for issue #$issue_number."
+              continue
+            fi
+
+            jq --compact-output \
+              --slurpfile issue "$RUNNER_TEMP/evaluation-issue.json" \
+              --slurpfile fix "$RUNNER_TEMP/evaluation-fix.json" '
+                {
+                  issue_number: $issue[0].number,
+                  issue_title: $issue[0].title,
+                  issue_url: ($issue[0].url // null),
+                  fix_summary: $fix[0].summary,
+                  evaluation: .
+                }
+              ' "$RUNNER_TEMP/evaluation.json" \
+              >> "$RUNNER_TEMP/bug-fix-quality-evaluations.jsonl"
+          done < "$RUNNER_TEMP/issue-numbers.txt"
+
+          jq --slurp --argjson minimum "$MIN_RECURRENCES" '
+            . as $evaluations
+            | {
+                evaluations: $evaluations,
+                trends: (
+                  [
+                    $evaluations[] as $evaluation
+                    | $evaluation.evaluation.rubric[]
+                    | select(.score < 2)
+                    | {
+                        criterion,
+                        score,
+                        evidence,
+                        issue_number: $evaluation.issue_number
+                      }
+                  ]
+                  | group_by(.criterion)
+                  | map({
+                      criterion: .[0].criterion,
+                      issue_numbers: (map(.issue_number) | unique),
+                      occurrences: (map(.issue_number) | unique | length),
+                      average_score: (map(.score) | add / length),
+                      evidence: map({issue_number, score, evidence})
+                    })
+                  | map(select(.occurrences >= $minimum))
+                  | sort_by(-.occurrences, .criterion)
+                )
+              }
+          ' "$RUNNER_TEMP/bug-fix-quality-evaluations.jsonl" \
+            > "$RUNNER_TEMP/bug-fix-quality-evaluations.json"
+
+          evaluation_count="$(jq '.evaluations | length' \
+            "$RUNNER_TEMP/bug-fix-quality-evaluations.json")"
+          trend_count="$(jq '.trends | length' \
+            "$RUNNER_TEMP/bug-fix-quality-evaluations.json")"
+          {
+            printf '%s\n\n' '### Bug-fix quality trends'
+            printf 'Evaluations: %s\n\n' "$evaluation_count"
+            printf '%s\n' '```json'
+            jq '.trends' "$RUNNER_TEMP/bug-fix-quality-evaluations.json"
+            printf '%s\n' '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$evaluation_count" -lt "$MIN_EVALUATIONS" ] ||
+            [ "$trend_count" -eq 0 ]; then
+            echo "No sufficiently supported recurring quality problem was found."
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
+
+      - name: "Prepare trusted improvement prompt"
+        if: steps.collect.outputs.eligible == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/codex-home"
+          cp agents/codex/config.toml "$RUNNER_TEMP/codex-home/config.toml"
+          cp agents/prompts/improve-bug-fix-quality.md \
+            "$RUNNER_TEMP/improve-bug-fix-quality.md"
+          cp agents/schemas/improve-bug-fix-quality.json \
+            "$RUNNER_TEMP/improve-bug-fix-quality.json"
+
+      - name: "Improve recurring bug-fix weaknesses"
+        id: improve
+        if: steps.collect.outputs.eligible == 'true'
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TMPDIR: ${{ runner.temp }}
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          codex-version: "0.146.0"
+          codex-home: "${{ runner.temp }}/codex-home"
+          effort: high
+          permission-profile: "improve-bug-fix-quality"
+          safety-strategy: drop-sudo
+          allow-users: "*"
+          prompt-file: "${{ runner.temp }}/improve-bug-fix-quality.md"
+          output-schema-file: "${{ runner.temp }}/improve-bug-fix-quality.json"
+
+      - name: "Upload Codex thread"
+        if: always() && steps.collect.outputs.eligible == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-thread-improve-bug-fix-quality-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/codex-home/sessions
+          if-no-files-found: warn
+
+      - name: "Commit verified automation improvement"
+        id: commit
+        if: steps.collect.outputs.eligible == 'true'
+        env:
+          IMPROVEMENT_RESULT: ${{ steps.improve.outputs.final-message }}
+        run: |
+          printf '%s\n' "$IMPROVEMENT_RESULT" \
+            > "$RUNNER_TEMP/bug-fix-quality-improvement.json"
+          if ! jq --exit-status \
+            --slurpfile evidence "$RUNNER_TEMP/bug-fix-quality-evaluations.json" '
+              (.summary | type == "string" and length > 0)
+              and (
+                if .outcome == "improved" then
+                  (.patterns | length > 0)
+                  and all(.patterns[]; . as $pattern
+                    | ($pattern.issue_numbers | unique | length) >= 2
+                    and any($evidence[0].trends[]; . as $trend
+                      | $trend.criterion == $pattern.criterion
+                      and all($pattern.issue_numbers[]; . as $issue_number
+                        | ($trend.issue_numbers | index($issue_number)) != null
+                      )
+                    )
+                  )
+                elif .outcome == "no_change" then
+                  (.patterns | length == 0)
+                else
+                  false
+                end
+              )
+            ' "$RUNNER_TEMP/bug-fix-quality-improvement.json" > /dev/null; then
+            echo "The improvement is not supported by recurring independent evaluations." >&2
+            exit 1
+          fi
+
+          outcome="$(jq --raw-output '.outcome' \
+            "$RUNNER_TEMP/bug-fix-quality-improvement.json")"
+          if [ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]; then
+            echo "The automation improvement changed the trusted base revision." >&2
+            exit 1
+          fi
+
+          if [ -z "$(git status --porcelain)" ]; then
+            if [ "$outcome" != "no_change" ]; then
+              echo "Codex reported an improvement, but the checkout is unchanged." >&2
+              exit 1
+            fi
+            jq --raw-output '.summary' \
+              "$RUNNER_TEMP/bug-fix-quality-improvement.json" >> "$GITHUB_STEP_SUMMARY"
+            echo "created=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$outcome" != "improved" ]; then
+            echo "Codex changed the checkout without reporting a verified improvement." >&2
+            exit 1
+          fi
+
+          git -c core.hooksPath=/dev/null add -A
+          changed_files=0
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              agents/prompts/triage-issue.md|agents/prompts/reproduce-bug.md|\
+                agents/prompts/create-bug-test.md|agents/prompts/fix-reproduced-bug.md) ;;
+              *)
+                echo "The automation improvement changes a protected file: $path" >&2
+                exit 1
+                ;;
+            esac
+            changed_files=$((changed_files + 1))
+          done < <(git diff --cached --name-only -z "$GITHUB_SHA")
+
+          if [ "$changed_files" -eq 0 ] || [ "$changed_files" -gt 4 ]; then
+            echo "The automation improvement exceeds its allowed prompt scope." >&2
+            exit 1
+          fi
+
+          if git diff --cached --raw "$GITHUB_SHA" |
+            grep -Eq '^:[0-7]+ (120000|160000) '; then
+            echo "The improvement introduces a symbolic link or Git submodule." >&2
+            exit 1
+          fi
+
+          git diff --cached --check "$GITHUB_SHA"
+          git \
+            -c core.hooksPath=/dev/null \
+            -c user.name="astral-automations-bot[bot]" \
+            -c user.email="305554984+astral-automations-bot[bot]@users.noreply.github.com" \
+            commit --message "Improve automated bug-fix quality"
+          git -c core.hooksPath=/dev/null bundle create \
+            "$RUNNER_TEMP/bug-fix-quality-improvement.bundle" "$GITHUB_SHA..HEAD"
+
+          {
+            echo "created=true"
+            jq --raw-output '"result=\(tojson)"' \
+              "$RUNNER_TEMP/bug-fix-quality-improvement.json"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: "Upload verified automation improvement"
+        id: upload
+        if: steps.commit.outputs.created == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bug-fix-quality-improvement-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/bug-fix-quality-improvement.bundle
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  publish:
+    needs: analyze
+    if: needs.analyze.outputs.created == 'true'
+    runs-on: ubuntu-slim
+    environment: automations
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write # for the uv-dev automation credential broker
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: "Download verified automation improvement"
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.analyze.outputs.artifact-id }}
+          path: ${{ runner.temp }}/quality-improvement
+
+      - name: "Verify automation improvement"
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+        run: |
+          bundle="$RUNNER_TEMP/quality-improvement/bug-fix-quality-improvement.bundle"
+          git -c core.hooksPath=/dev/null bundle verify "$bundle"
+          git -c core.hooksPath=/dev/null fetch --no-tags "$bundle" HEAD
+          improved_head="$(git rev-parse 'FETCH_HEAD^{commit}')"
+          if [ "$(git rev-parse "$improved_head^")" != "$GITHUB_SHA" ] ||
+            [ "$(git show --no-patch --format=%s "$improved_head")" != \
+              "Improve automated bug-fix quality" ] ||
+            [ "$(git show --no-patch --format=%ae "$improved_head")" != \
+              "305554984+astral-automations-bot[bot]@users.noreply.github.com" ]; then
+            echo "The improvement does not extend the trusted workflow revision." >&2
+            exit 1
+          fi
+
+          changed_files=0
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              agents/prompts/triage-issue.md|agents/prompts/reproduce-bug.md|\
+                agents/prompts/create-bug-test.md|agents/prompts/fix-reproduced-bug.md) ;;
+              *)
+                echo "The automation improvement changes a protected file: $path" >&2
+                exit 1
+                ;;
+            esac
+            changed_files=$((changed_files + 1))
+          done < <(git diff --name-only -z "$GITHUB_SHA" "$improved_head")
+
+          if [ "$changed_files" -eq 0 ] || [ "$changed_files" -gt 4 ]; then
+            echo "The automation improvement exceeds its allowed prompt scope." >&2
+            exit 1
+          fi
+
+          if git diff --raw "$GITHUB_SHA" "$improved_head" |
+            grep -Eq '^:[0-7]+ (120000|160000) '; then
+            echo "The improvement introduces a symbolic link or Git submodule." >&2
+            exit 1
+          fi
+
+          git diff --check "$GITHUB_SHA" "$improved_head"
+          branch="automations/improve-bug-fix-quality"
+          gh pr list \
+            --repo astral-sh/uv-dev \
+            --head "$branch" \
+            --state open \
+            --json number,url \
+            --limit 1 \
+            > "$RUNNER_TEMP/quality-improvement-pull-requests.json"
+          if jq --exit-status 'length > 0' \
+            "$RUNNER_TEMP/quality-improvement-pull-requests.json" > /dev/null; then
+            echo "An automation improvement is already awaiting review."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          existing_head="$(git ls-remote --heads \
+            https://github.com/astral-sh/uv-dev.git "refs/heads/$branch" | cut -f 1)"
+          if [ -n "$existing_head" ]; then
+            echo "The automation improvement branch already exists; refusing to replace it."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          {
+            echo "publish=true"
+            echo "head_sha=$improved_head"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: "Get uv-dev token"
+        if: steps.verify.outputs.publish == 'true'
+        id: token
+        uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repository: astral-sh/uv-dev
+          permissions: |
+            contents: write
+            pull_requests: write
+
+      - name: "Open draft automation improvement"
+        if: steps.verify.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+          IMPROVED_HEAD_SHA: ${{ steps.verify.outputs.head_sha }}
+          IMPROVEMENT_RESULT: ${{ needs.analyze.outputs.result }}
+        run: |
+          branch="automations/improve-bug-fix-quality"
+          summary="$(jq --raw-output '.summary' <<< "$IMPROVEMENT_RESULT")"
+          git -c core.hooksPath=/dev/null push \
+            "https://x-access-token:${GH_TOKEN}@github.com/astral-sh/uv-dev.git" \
+            "$IMPROVED_HEAD_SHA:refs/heads/$branch"
+          pull_request="$(
+            gh pr create \
+              --repo astral-sh/uv-dev \
+              --base main \
+              --head "$branch" \
+              --draft \
+              --title "Improve automated bug-fix quality" \
+              --body "$summary"
+          )"
+          printf 'Draft automation improvement: %s\n' "$pull_request" \
+            >> "$GITHUB_STEP_SUMMARY"
