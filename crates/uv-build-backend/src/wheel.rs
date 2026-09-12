@@ -30,11 +30,8 @@ use crate::{
     error_on_venv, find_roots, write_directory_once, write_file_with_directories,
 };
 
-// Files at or below this size are buffered and written with `write_entry_whole`,
-// which was fastest in wheel-writer benchmarks because it can write final ZIP
-// headers without per-chunk async writes. The 16 MiB limit keeps typical source
-// files on that fast path without buffering very large data files wholesale.
-const WHOLE_FILE_ZIP_ENTRY_LIMIT: u64 = 16 * 1024 * 1024;
+// Empty files use `write_entry_whole`; all nonempty files use the streaming path.
+const WHOLE_FILE_ZIP_ENTRY_LIMIT: u64 = 0;
 // Buffer size for the large-file streaming fallback. 128 KiB was enough to cut
 // down read/write loop overhead compared to the 8 KiB default while remaining a
 // small fixed allocation for entries that are too large for `write_entry_whole`.
@@ -918,7 +915,7 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> DirectoryWriter for ZipDirectoryWriter<W
             Self::REGULAR_FILE_MODE
         };
 
-        if metadata.len() <= WHOLE_FILE_ZIP_ENTRY_LIMIT {
+        if metadata.len() == WHOLE_FILE_ZIP_ENTRY_LIMIT {
             let bytes = fs_err::read(file)?;
             let entry = Self::entry(path, self.compression, mode);
             block_on(self.writer.write_entry_whole(entry, &bytes))?;
