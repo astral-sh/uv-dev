@@ -34,9 +34,7 @@ use uv_test::archive::write_tar_gz;
 #[cfg(feature = "test-git")]
 use uv_test::decode_token;
 use uv_test::find_links::FindLinksServer;
-#[cfg(windows)]
-use uv_test::packse::generate_wheel_with_files;
-use uv_test::packse::{PackseServer, generate_wheel};
+use uv_test::packse::{PackseServer, generate_wheel, generate_wheel_with_files};
 use uv_test::{
     DEFAULT_PYTHON_VERSION, TestContext, apply_filters, download_to_disk, get_bin, uv_snapshot,
     venv_bin_path,
@@ -14212,6 +14210,66 @@ async fn bogus_redirect() -> Result<()> {
     error: The index returned metadata for the wrong package: expected distribution for sniffio, got distribution for anyio
     "
     );
+
+    Ok(())
+}
+
+#[test]
+fn warn_hyphenated_script_module_names() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"script-targets".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[(
+            "script_targets-1.0.0.dist-info/entry_points.txt",
+            indoc! {"
+                [console_scripts]
+                hello'console = uv-docker-example:hello
+                dotted = package.module:main
+                combining = package.a\u{301}:main
+
+                [gui_scripts]
+                hello-gui = α\u{200d}-β:hello
+            "},
+        )],
+    );
+    let wheel_path = context.temp_dir.child(filename);
+    wheel_path.write_binary(&wheel)?;
+
+    let output = uv_snapshot!(context.filters(), context.pip_install().arg("--no-index").arg(wheel_path.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    warning: The entry point `hello\\'console` has an invalid module name `uv-docker-example` (hyphens are not allowed). The generated script will fail to run.
+    warning: The entry point `hello-gui` has an invalid module name `α/u{200d}-β` (hyphens are not allowed). The generated script will fail to run.
+    Installed 1 package in [TIME]
+     + script-targets==1.0.0 (from file://[TEMP_DIR]/script_targets-1.0.0-py3-none-any.whl)
+    ");
+
+    // The default Windows-path filter rewrites `\u` to `/u`. Check the unfiltered warnings too,
+    // so the escaping of externally supplied names is covered exactly.
+    let stderr = String::from_utf8(output.stderr)?;
+    let warnings = stderr
+        .lines()
+        .filter(|line| line.starts_with("warning: "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_snapshot!(warnings, @r"
+    warning: The entry point `hello\'console` has an invalid module name `uv-docker-example` (hyphens are not allowed). The generated script will fail to run.
+    warning: The entry point `hello-gui` has an invalid module name `α\u{200d}-β` (hyphens are not allowed). The generated script will fail to run.
+    ");
+
+    for name in ["hello'console", "dotted", "combining", "hello-gui"] {
+        let script = venv_bin_path(&context.venv)
+            .join(name)
+            .with_extension(std::env::consts::EXE_EXTENSION);
+        assert!(script.is_file(), "{}", script.display());
+    }
 
     Ok(())
 }
