@@ -12,6 +12,7 @@ use uv_distribution_types::{DistributionMetadata, IncompatibleWheel, Name, Prior
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_platform_tags::Tags;
+use uv_pypi_types::SupportedEnvironments;
 use uv_types::InstalledPackagesProvider;
 
 use crate::preferences::{Entry, PreferenceSource, Preferences};
@@ -22,11 +23,11 @@ use crate::version_map::{VersionMap, VersionMapDistHandle};
 use crate::{Exclusions, Manifest, Options, ResolverEnvironment};
 
 #[derive(Debug, Clone)]
-#[expect(clippy::struct_field_names)]
 pub(crate) struct CandidateSelector {
     resolution_strategy: ResolutionStrategy,
     prerelease_strategy: PrereleaseStrategy,
     index_strategy: IndexStrategy,
+    required_environments: SupportedEnvironments,
 }
 
 impl CandidateSelector {
@@ -50,6 +51,7 @@ impl CandidateSelector {
                 options.dependency_mode,
             ),
             index_strategy: options.index_strategy,
+            required_environments: options.required_environments.clone(),
         }
     }
 
@@ -113,6 +115,17 @@ impl CandidateSelector {
             env,
             tags,
         ) {
+            if !self.supports_required_environments(preferred.dist(), env)
+                && let Some(candidate) =
+                    self.select_no_preference(package_name, range, version_maps, env)
+            {
+                debug!(
+                    "Ignoring preference {} {} in favor of {} with wheels for the required environments",
+                    preferred.name, preferred.version, candidate.version
+                );
+                return Some(candidate);
+            }
+
             trace!("Using preference {} {}", preferred.name, preferred.version);
             return Some(preferred);
         }
@@ -509,6 +522,40 @@ impl CandidateSelector {
         prerelease_candidates: PrereleaseCandidates,
         env: &ResolverEnvironment,
     ) -> Option<Candidate<'a>> {
+        if !self.required_environments.is_empty()
+            && let Some(candidate) = self.select_no_preference_inner(
+                package_name,
+                range,
+                version_maps,
+                prerelease_candidates,
+                env,
+                true,
+            )
+        {
+            return Some(candidate);
+        }
+
+        self.select_no_preference_inner(
+            package_name,
+            range,
+            version_maps,
+            prerelease_candidates,
+            env,
+            false,
+        )
+    }
+
+    /// Select a candidate without checking for version preferences, optionally requiring matching
+    /// wheels for the required environments.
+    fn select_no_preference_inner<'a>(
+        &'a self,
+        package_name: &'a PackageName,
+        range: &Range<Version>,
+        version_maps: &'a [VersionMap],
+        prerelease_candidates: PrereleaseCandidates,
+        env: &ResolverEnvironment,
+        require_wheels: bool,
+    ) -> Option<Candidate<'a>> {
         trace!(
             "Selecting candidate for {package_name} with range {range} with {} remote versions",
             version_maps.iter().map(VersionMap::len).sum::<usize>(),
@@ -541,6 +588,7 @@ impl CandidateSelector {
                     range,
                     prerelease_candidates,
                     highest,
+                    require_wheels.then_some((&self.required_environments, env)),
                 )
             } else {
                 Self::select_candidate(
@@ -566,6 +614,7 @@ impl CandidateSelector {
                     range,
                     prerelease_candidates,
                     highest,
+                    require_wheels.then_some((&self.required_environments, env)),
                 )
             }
         } else {
@@ -577,6 +626,7 @@ impl CandidateSelector {
                         range,
                         prerelease_candidates,
                         highest,
+                        require_wheels.then_some((&self.required_environments, env)),
                     )
                 })
             } else {
@@ -587,6 +637,7 @@ impl CandidateSelector {
                         range,
                         prerelease_candidates,
                         highest,
+                        require_wheels.then_some((&self.required_environments, env)),
                     )
                 })
             }
@@ -624,6 +675,7 @@ impl CandidateSelector {
         range: &Range<Version>,
         prerelease_candidates: PrereleaseCandidates,
         highest: bool,
+        required_environments: Option<(&SupportedEnvironments, &ResolverEnvironment)>,
     ) -> Option<Candidate<'a>> {
         let segments = range.iter();
         let segments = if highest {
@@ -665,6 +717,14 @@ impl CandidateSelector {
                 let Some(dist) = maybe_dist.prioritized_dist() else {
                     continue;
                 };
+                if required_environments.is_some_and(|(required_environments, env)| {
+                    required_environments.iter().copied().any(|marker| {
+                        env.included_by_marker(marker)
+                            && dist.implied_wheel_markers().is_disjoint(marker)
+                    })
+                }) {
+                    continue;
+                }
                 trace!(
                     "Found candidate for package {package_name} with range {range} after {steps} steps: {version} version"
                 );
@@ -733,6 +793,23 @@ impl CandidateSelector {
             "Exhausted all candidates for package {package_name} with range {range} after {steps} steps"
         );
         None
+    }
+
+    /// Return whether the candidate has compatible wheels for every applicable required
+    /// environment.
+    fn supports_required_environments(
+        &self,
+        dist: &CandidateDist,
+        env: &ResolverEnvironment,
+    ) -> bool {
+        let Some(dist) = dist.prioritized() else {
+            return true;
+        };
+        let wheel_markers = dist.implied_wheel_markers();
+        self.required_environments
+            .iter()
+            .copied()
+            .all(|marker| !env.included_by_marker(marker) || !wheel_markers.is_disjoint(marker))
     }
 }
 
