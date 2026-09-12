@@ -848,11 +848,13 @@ impl PyProjectToml {
         }
 
         // Reconcile any structured license metadata against the deprecated license classifiers.
+        let mut has_license_classifiers = false;
         for classifier in self.project.classifiers.iter().flatten() {
             let classifier = classifier.as_str();
             // Warn on `License :: ` classifiers.
             // We don't produce a hard failure here, per PEP 639.
             if classifier.starts_with("License :: ") {
+                has_license_classifiers = true;
                 warn_user_once!(
                     "Found license classifier `{classifier}`. License classifiers are ambiguous and deprecated per PEP 639; projects should use `project.license` and `project.license-files` instead."
                 );
@@ -860,6 +862,15 @@ impl PyProjectToml {
                 // TODO: Produce a hard error here if the project also has
                 // structured license metadata, per PEP 639.
             }
+        }
+
+        if has_license_classifiers
+            && (self.project.license_files.is_some()
+                || matches!(self.project.license, Some(License::Spdx(_))))
+        {
+            warn_user_once!(
+                "`project.classifiers` contains license classifiers alongside `project.license` or `project.license-files`. Remove the deprecated `License ::` classifiers from `project.classifiers`."
+            );
         }
 
         Ok((license, license_expression, license_files))
