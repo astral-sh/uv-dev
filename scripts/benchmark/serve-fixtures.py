@@ -33,6 +33,7 @@ class Fixtures:
     ) -> None:
         self.files: dict[str, Path] = {}
         self.metadata: dict[str, bytes] = {}
+        self.requirements: dict[str, bytes] = {}
         self.vulnerabilities: dict[str, dict] = {}
         self.osv_queries: dict[tuple[str, str], list[str]] = {}
         self.git_commits: dict[tuple[str, str, str], bytes] = {}
@@ -94,6 +95,8 @@ class Fixtures:
         for item in json.loads(manifest.read_text()):
             filename = item["filename"]
             path = directory / filename
+            if requirements_path := item.get("requirements-path"):
+                self.requirements[requirements_path] = path.read_bytes()
             if queries := item.get("osv-queries"):
                 record = json.loads(path.read_text())
                 self.vulnerabilities[record["id"]] = record
@@ -230,7 +233,12 @@ class Handler(BaseHTTPRequestHandler):
             self.server.counts[f"{self.command} {path}"] += 1
         time.sleep(self.server.delay)
         parts = path.strip("/").split("/")
-        if (
+        if parts[0] == "requirements":
+            content = self.server.fixtures.requirements.get("/".join(parts[1:]))
+            if content is not None:
+                self.respond(content, "text/plain", head=head)
+                return
+        elif (
             len(parts) >= 6
             and parts[:2] == ["github", "repos"]
             and parts[4] == "commits"

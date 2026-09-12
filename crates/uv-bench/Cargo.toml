@@ -99,6 +99,11 @@ path = "benches/source_requirements.rs"
 harness = false
 
 [[bench]]
+name = "requirements_includes"
+path = "benches/requirements_includes.rs"
+harness = false
+
+[[bench]]
 name = "core_metadata"
 path = "benches/core_metadata.rs"
 harness = false
