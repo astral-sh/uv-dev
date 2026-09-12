@@ -1837,13 +1837,13 @@ fn workspace_metadata_reports_legacy_installed_requirements() -> Result<()> {
     ] {
         fs_err::write(
             path,
-            formatdoc! {r#"
+            formatdoc! {r"
                 Metadata-Version: 2.1
                 Name: {name}
                 Version: 1.0.0
                 Requires-Dist: metadata-base >=1
                 Provides-Extra: Legacy
-            "#},
+            "},
         )?;
     }
 
@@ -1944,13 +1944,13 @@ fn workspace_metadata_legacy_discovery_omits_invalid_values() -> Result<()> {
         ),
     ];
     let contents = |name: &str, version: &str| {
-        formatdoc! {r#"
+        formatdoc! {r"
             Metadata-Version: 2.1
             Name: {name}
             Version: {version}
             Requires-Dist: metadata-base >=1
             Provides-Extra: Legacy
-        "#}
+        "}
     };
     for (name, path, _, _) in &entries {
         fs_err::write(path, contents(name, "1.0.0"))?;
