@@ -907,7 +907,9 @@ impl Display for MetadataSource {
             }
             | Self::Git { git: url }
             | Self::Direct { url, .. } => {
-                write!(f, "{}+{}", self.name(), url)
+                // This is part of an opaque serialized node ID, not a diagnostic. Preserve the
+                // raw URL so redaction cannot merge distinct package identities.
+                write!(f, "{}+{}", self.name(), url.as_ref())
             }
             Self::Registry {
                 registry: MetadataRegistrySource::Path(path),
