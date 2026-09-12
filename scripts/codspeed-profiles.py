@@ -44,6 +44,7 @@ EXECUTORS = {
     "simulation": "valgrind",
     "walltime": "walltime",
     "walltime-macos": "walltime",
+    "walltime-release": "walltime",
 } | {mode: "walltime" for mode in WALLTIME_SHARDS}
 ARTIFACTS = {mode: f"codspeed-profiles-{mode}" for mode in EXECUTORS}
 REQUIRED_MODES = {"simulation", "walltime"}
@@ -51,6 +52,7 @@ SOURCE_JOBS = {
     "simulation": "bench / simulated",
     "walltime": "bench / walltime on aarch64 linux",
     "walltime-macos": "bench / walltime on macos",
+    "walltime-release": "bench / release walltime on aarch64 linux",
 }
 
 

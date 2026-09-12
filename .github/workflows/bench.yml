@@ -248,6 +248,120 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  benchmarks-release-build:
+    name: "release walltime build"
+    runs-on: depot-ubuntu-22.04-arm-4
+    if: ${{ github.repository == 'astral-sh/uv' || (github.repository == 'astral-sh/uv-dev' && github.ref != 'refs/heads/main') }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13.4"
+          architecture: arm64
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ inputs.save-rust-cache == 'true' }}
+
+      - name: "Install Rust profiling tools"
+        run: rustup component add llvm-tools-preview
+
+      - name: "Install release Cargo extensions"
+        run: scripts/install-cargo-extensions.sh
+
+      - name: "Install codspeed"
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
+        with:
+          tool: cargo-codspeed
+
+      - name: "Build paired release binaries"
+        env:
+          CARGO: ${{ github.workspace }}/scripts/cargo.sh
+        run: python scripts/benchmark/prepare-release-binaries.py
+
+      - name: "Prepare benchmark Python"
+        run: UV_PYTHON_INSTALL_DIR=.cache/bench-python ./.cache/bench-release/pgo/uv --no-config python install --no-bin --no-registry 3.11.13
+
+      - name: "Prime application resolutions"
+        run: python scripts/benchmark/prepare-incremental-locks.py --uv .cache/bench-release/pgo/uv
+
+      - name: "Build benchmarks"
+        run: cargo codspeed build -m walltime --profile profiling -p uv-bench --bench release_runtime
+
+      - name: "Create artifact archive"
+        run: tar -cvf benchmarks-release.tar target/codspeed .cache/bench-release .cache/bench-incremental-locks .cache/bench-python
+
+      - name: "Upload benchmark artifacts"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: benchmarks-release
+          path: benchmarks-release.tar
+          retention-days: 1
+
+  benchmarks-release-run:
+    name: "release walltime on aarch64 linux"
+    runs-on: codspeed-macro
+    needs: benchmarks-release-build
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: "Install codspeed"
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
+        with:
+          tool: cargo-codspeed
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: benchmarks-release
+
+      - name: "Extract artifact archive"
+        run: tar -xvf benchmarks-release.tar
+
+      - name: "Retain benchmark profiles"
+        id: profiles
+        if: ${{ github.repository == 'astral-sh/uv' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: >-
+          UV_PYTHON_INSTALL_DIR=.cache/bench-python ./.cache/bench-release/pgo/uv
+          --no-config --offline run --no-project --managed-python --python 3.11.13
+          --script scripts/codspeed-profiles.py start "$RUNNER_TEMP/codspeed-walltime-release"
+          walltime-release >> "$GITHUB_OUTPUT"
+
+      - name: "Run benchmarks"
+        uses: CodSpeedHQ/action@4296e51e7041e24dadb86d1d6e8b9320d223dbe8 # v5.0.3
+        with:
+          run: cargo codspeed run
+          mode: walltime
+          upload-url: ${{ steps.profiles.outputs.upload-url }}
+
+      - name: "Finish profile capture"
+        if: ${{ always() && steps.profiles.outcome == 'success' }}
+        run: >-
+          UV_PYTHON_INSTALL_DIR=.cache/bench-python ./.cache/bench-release/pgo/uv
+          --no-config --offline run --no-project --managed-python --python 3.11.13
+          --script scripts/codspeed-profiles.py finish "$RUNNER_TEMP/codspeed-walltime-release"
+
+      - name: "Upload benchmark profiles"
+        if: ${{ steps.profiles.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codspeed-profiles-walltime-release
+          path: |
+            ${{ runner.temp }}/codspeed-walltime-release/metadata.json
+            ${{ runner.temp }}/codspeed-walltime-release/profile.tar
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 30
+
   benchmarks-windows:
     name: "native walltime on windows"
     runs-on: namespace-profile-windows-2022-x86-64-16x32
