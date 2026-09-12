@@ -1,7 +1,7 @@
 use std::fmt::{self, Display, Formatter};
 use std::path::PathBuf;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use toml_edit::{Array, Item, Table, Value, value};
 
 use uv_configuration::ExcludeDependency;
@@ -169,6 +169,20 @@ fn each_element_on_its_line_array(elements: impl Iterator<Item = impl Into<Value
     array
 }
 
+/// Serialize an array, placing multiple elements on separate lines.
+fn serialize_array(
+    elements: impl Iterator<Item = impl Serialize>,
+) -> Result<Array, toml_edit::ser::Error> {
+    let elements = elements
+        .map(|element| element.serialize(toml_edit::ser::ValueSerializer::new()))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(match elements.len() {
+        0 | 1 => Array::from_iter(elements),
+        _ => each_element_on_its_line_array(elements.into_iter()),
+    })
+}
+
 impl Tool {
     /// Create a new `Tool`.
     pub fn new(
@@ -206,113 +220,32 @@ impl Tool {
         let mut table = Table::new();
 
         if !self.requirements.is_empty() {
-            table.insert("requirements", {
-                let requirements = self
-                    .requirements
-                    .iter()
-                    .map(|requirement| {
-                        serde::Serialize::serialize(
-                            &requirement,
-                            toml_edit::ser::ValueSerializer::new(),
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                let requirements = match requirements.as_slice() {
-                    [] => Array::new(),
-                    [requirement] => Array::from_iter([requirement]),
-                    requirements => each_element_on_its_line_array(requirements.iter()),
-                };
-                value(requirements)
-            });
+            table.insert(
+                "requirements",
+                value(serialize_array(self.requirements.iter())?),
+            );
         }
 
         if !self.constraints.is_empty() {
-            table.insert("constraints", {
-                let constraints = self
-                    .constraints
-                    .iter()
-                    .map(|constraint| {
-                        serde::Serialize::serialize(
-                            &constraint,
-                            toml_edit::ser::ValueSerializer::new(),
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                let constraints = match constraints.as_slice() {
-                    [] => Array::new(),
-                    [constraint] => Array::from_iter([constraint]),
-                    constraints => each_element_on_its_line_array(constraints.iter()),
-                };
-                value(constraints)
-            });
+            table.insert(
+                "constraints",
+                value(serialize_array(self.constraints.iter())?),
+            );
         }
 
         if !self.overrides.is_empty() {
-            table.insert("overrides", {
-                let overrides = self
-                    .overrides
-                    .iter()
-                    .map(|r#override| {
-                        serde::Serialize::serialize(
-                            &r#override,
-                            toml_edit::ser::ValueSerializer::new(),
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                let overrides = match overrides.as_slice() {
-                    [] => Array::new(),
-                    [r#override] => Array::from_iter([r#override]),
-                    overrides => each_element_on_its_line_array(overrides.iter()),
-                };
-                value(overrides)
-            });
+            table.insert("overrides", value(serialize_array(self.overrides.iter())?));
         }
 
         if !self.excludes.is_empty() {
-            table.insert("excludes", {
-                let excludes = self
-                    .excludes
-                    .iter()
-                    .map(|r#exclude| {
-                        serde::Serialize::serialize(
-                            &r#exclude,
-                            toml_edit::ser::ValueSerializer::new(),
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                let excludes = match excludes.as_slice() {
-                    [] => Array::new(),
-                    [r#exclude] => Array::from_iter([r#exclude]),
-                    excludes => each_element_on_its_line_array(excludes.iter()),
-                };
-                value(excludes)
-            });
+            table.insert("excludes", value(serialize_array(self.excludes.iter())?));
         }
 
         if !self.build_constraints.is_empty() {
-            table.insert("build-constraint-dependencies", {
-                let build_constraints = self
-                    .build_constraints
-                    .iter()
-                    .map(|r#build_constraint| {
-                        serde::Serialize::serialize(
-                            &r#build_constraint,
-                            toml_edit::ser::ValueSerializer::new(),
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                let build_constraints = match build_constraints.as_slice() {
-                    [] => Array::new(),
-                    [r#build_constraint] => Array::from_iter([r#build_constraint]),
-                    build_constraints => each_element_on_its_line_array(build_constraints.iter()),
-                };
-                value(build_constraints)
-            });
+            table.insert(
+                "build-constraint-dependencies",
+                value(serialize_array(self.build_constraints.iter())?),
+            );
         }
 
         if let Some(ref python) = self.python {
@@ -410,5 +343,152 @@ impl ToolEntrypoint {
             table.insert("from", value(from));
         }
         table
+    }
+}
+
+#[cfg(test)]
+mod receipt_array_tests {
+    use std::cell::RefCell;
+    use std::error::Error;
+
+    use serde::{Serialize, Serializer};
+
+    use crate::receipt::ToolReceipt;
+
+    use super::serialize_array;
+
+    fn assert_receipt(input: &str, expected: &str) -> Result<(), Box<dyn Error>> {
+        let receipt = ToolReceipt::from_string(input.to_owned())?;
+        let actual = receipt.to_toml()?;
+        assert_eq!(actual, expected);
+        assert_eq!(ToolReceipt::from_string(actual)?.to_toml()?, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn empty_receipt_arrays_are_omitted() -> Result<(), Box<dyn Error>> {
+        assert_receipt(
+            r#"[tool]
+requirements = []
+constraints = []
+overrides = []
+excludes = []
+build-constraint-dependencies = []
+entrypoints = [{ name = "demo", install-path = "bin/demo" }]
+"#,
+            r#"[tool]
+entrypoints = [
+    { name = "demo", install-path = "bin/demo" },
+]
+"#,
+        )
+    }
+
+    #[test]
+    fn singleton_receipt_arrays_stay_inline() -> Result<(), Box<dyn Error>> {
+        assert_receipt(
+            r#"[tool]
+requirements = ["alpha==1"]
+constraints = [{ name = "beta", specifier = ">=2" }]
+overrides = [{ name = "gamma", specifier = "==3" }]
+excludes = ["delta"]
+build-constraint-dependencies = [{ name = "epsilon", specifier = "<4" }]
+entrypoints = [{ name = "demo", install-path = "bin/demo" }]
+"#,
+            r#"[tool]
+requirements = [{ name = "alpha", specifier = "==1" }]
+constraints = [{ name = "beta", specifier = ">=2" }]
+overrides = [{ name = "gamma", specifier = "==3" }]
+excludes = ["delta"]
+build-constraint-dependencies = [{ name = "epsilon", specifier = "<4" }]
+entrypoints = [
+    { name = "demo", install-path = "bin/demo" },
+]
+"#,
+        )
+    }
+
+    #[test]
+    fn receipt_arrays_preserve_order_and_duplicates() -> Result<(), Box<dyn Error>> {
+        assert_receipt(
+            r#"[tool]
+requirements = [{ name = "beta" }, { name = "alpha" }, { name = "beta" }]
+constraints = [{ name = "beta" }, { name = "alpha" }, { name = "beta" }]
+overrides = [{ name = "beta" }, { name = "alpha" }, { name = "beta" }]
+excludes = ["beta", "alpha", "beta"]
+build-constraint-dependencies = [{ name = "beta" }, { name = "alpha" }, { name = "beta" }]
+entrypoints = [{ name = "demo", install-path = "bin/demo" }]
+"#,
+            r#"[tool]
+requirements = [
+    { name = "beta" },
+    { name = "alpha" },
+    { name = "beta" },
+]
+constraints = [
+    { name = "beta" },
+    { name = "alpha" },
+    { name = "beta" },
+]
+overrides = [
+    { name = "beta" },
+    { name = "alpha" },
+    { name = "beta" },
+]
+excludes = [
+    "beta",
+    "alpha",
+    "beta",
+]
+build-constraint-dependencies = [
+    { name = "beta" },
+    { name = "alpha" },
+    { name = "beta" },
+]
+entrypoints = [
+    { name = "demo", install-path = "bin/demo" },
+]
+"#,
+        )
+    }
+
+    struct FallibleElement<'a> {
+        index: usize,
+        calls: &'a RefCell<Vec<usize>>,
+    }
+
+    impl Serialize for FallibleElement<'_> {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            self.calls.borrow_mut().push(self.index);
+            match self.index {
+                0 => serializer.serialize_str("first"),
+                1 => Err(<S::Error as serde::ser::Error>::custom("first error")),
+                _ => Err(<S::Error as serde::ser::Error>::custom("later error")),
+            }
+        }
+    }
+
+    #[test]
+    fn serialization_stops_at_the_first_error() {
+        let calls = RefCell::new(Vec::new());
+        let elements = (0..3).map(|index| FallibleElement {
+            index,
+            calls: &calls,
+        });
+        let error = serialize_array(elements).expect_err("the second element fails");
+        assert_eq!(error.to_string(), "first error");
+        assert_eq!(*calls.borrow(), [0, 1]);
+    }
+
+    #[test]
+    fn empty_serialization_is_inline() -> Result<(), Box<dyn Error>> {
+        assert_eq!(
+            serialize_array(std::iter::empty::<&str>())?.to_string(),
+            "[]"
+        );
+        Ok(())
     }
 }
