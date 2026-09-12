@@ -82,6 +82,31 @@ fn version_get_json() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn version_get_jsonl() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "myproject"
+        version = "1.10.31"
+        requires-python = ">=3.12"
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.version()
+        .arg("--output-format").arg("jsonl")
+        .arg("--preview-features").arg("jsonl"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"type":"result","package_name":"myproject","version":"1.10.31","commit_info":null}
+    "#
+    );
+
+    Ok(())
+}
+
 // Print the version (--short)
 #[test]
 fn version_get_short() -> Result<()> {

@@ -941,6 +941,346 @@ fn sync_json() -> Result<()> {
 }
 
 #[test]
+fn sync_jsonl() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--output-format").arg("jsonl")
+        .arg("--preview-features").arg("jsonl"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"type":"progress","phase":"resolve","status":"started"}
+    {"type":"progress","phase":"resolve","status":"updated","name":"project","version":"0.1.0"}
+    {"type":"progress","phase":"resolve","status":"updated","name":"iniconfig","version":"2.0.0"}
+    {"type":"progress","phase":"resolve","status":"completed"}
+    {"type":"progress","phase":"prepare","status":"started","total":1}
+    {"type":"progress","phase":"download","status":"started","id":1,"name":"iniconfig","total":5892}
+    {"type":"progress","phase":"download","status":"updated","id":1,"completed":5892,"total":5892}
+    {"type":"progress","phase":"download","status":"completed","id":1,"name":"iniconfig","completed":5892,"total":5892}
+    {"type":"progress","phase":"prepare","status":"updated","name":"iniconfig==2.0.0","completed":1,"total":1}
+    {"type":"progress","phase":"prepare","status":"completed","completed":1,"total":1}
+    {"type":"progress","phase":"install","status":"started","total":1}
+    {"type":"progress","phase":"install","status":"updated","name":"iniconfig==2.0.0","completed":1,"total":1}
+    {"type":"progress","phase":"install","status":"completed","completed":1,"total":1}
+    {"type":"result","schema":{"version":"preview"},"target":"project","project":{"path":"[TEMP_DIR]/","workspace":{"path":"[TEMP_DIR]/"}},"sync":{"environment":{"path":"[VENV]/","python":{"path":"[VENV]/[BIN]/[PYTHON]","version":"3.12.[X]","implementation":"cpython"}},"action":"check","changes":[{"name":"iniconfig","version":"2.0.0","action":"installed"}]},"lock":{"path":"[TEMP_DIR]/uv.lock","action":"create"},"dry_run":false}
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    "#
+    );
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--frozen")
+        .arg("--output-format").arg("jsonl"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"type":"result","schema":{"version":"preview"},"target":"project","project":{"path":"[TEMP_DIR]/","workspace":{"path":"[TEMP_DIR]/"}},"sync":{"environment":{"path":"[VENV]/","python":{"path":"[VENV]/[BIN]/[PYTHON]","version":"3.12.[X]","implementation":"cpython"}},"action":"check","changes":[]},"lock":{"path":"[TEMP_DIR]/uv.lock","action":"use"},"dry_run":false}
+
+    ----- stderr -----
+    warning: The JSONL output format is experimental and the schema may change without warning. Pass `--preview-features jsonl` to disable this warning.
+    Checked 1 package in [TIME]
+    "#
+    );
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--quiet")
+        .arg("--frozen")
+        .arg("--output-format").arg("jsonl")
+        .arg("--preview-features").arg("jsonl"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"type":"result","schema":{"version":"preview"},"target":"project","project":{"path":"[TEMP_DIR]/","workspace":{"path":"[TEMP_DIR]/"}},"sync":{"environment":{"path":"[VENV]/","python":{"path":"[VENV]/[BIN]/[PYTHON]","version":"3.12.[X]","implementation":"cpython"}},"action":"check","changes":[]},"lock":{"path":"[TEMP_DIR]/uv.lock","action":"use"},"dry_run":false}
+    "#
+    );
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--no-progress")
+        .arg("--frozen")
+        .arg("--output-format").arg("jsonl")
+        .arg("--preview-features").arg("jsonl"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"type":"result","schema":{"version":"preview"},"target":"project","project":{"path":"[TEMP_DIR]/","workspace":{"path":"[TEMP_DIR]/"}},"sync":{"environment":{"path":"[VENV]/","python":{"path":"[VENV]/[BIN]/[PYTHON]","version":"3.12.[X]","implementation":"cpython"}},"action":"check","changes":[]},"lock":{"path":"[TEMP_DIR]/uv.lock","action":"use"},"dry_run":false}
+
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    "#
+    );
+
+    Ok(())
+}
+
+/// Concurrent downloads retain distinct, stable IDs and report every installed package.
+#[test]
+fn sync_jsonl_concurrent_download_and_install_events() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig", "sniffio"]
+        "#,
+    )?;
+
+    let output = context
+        .sync()
+        .arg("--output-format")
+        .arg("jsonl")
+        .arg("--preview-features")
+        .arg("jsonl")
+        .output()?;
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout)?;
+    let items = stdout
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    let Some((report, progress)) = items.split_last() else {
+        anyhow::bail!("expected JSONL progress and a final sync report");
+    };
+
+    let mut downloads = progress
+        .iter()
+        .filter(|event| event["phase"] == "download" && event["status"] == "started")
+        .map(|started| {
+            let id = started["id"]
+                .as_u64()
+                .ok_or_else(|| anyhow!("download started without an operation ID"))?;
+            let completed = progress
+                .iter()
+                .find(|event| {
+                    event["phase"] == "download"
+                        && event["status"] == "completed"
+                        && event["id"] == id
+                })
+                .ok_or_else(|| anyhow!("download {id} completed without a matching event"))?;
+
+            let mut previous = 0;
+            for update in progress.iter().filter(|event| {
+                event["phase"] == "download" && event["status"] == "updated" && event["id"] == id
+            }) {
+                let current = update["completed"]
+                    .as_u64()
+                    .ok_or_else(|| anyhow!("download {id} updated without a completed count"))?;
+                assert!(current > previous);
+                assert_eq!(update["total"], started["total"]);
+                previous = current;
+            }
+
+            assert_eq!(completed["completed"], started["total"]);
+            Ok((
+                id,
+                json!({
+                    "name": started["name"],
+                    "completed": completed["completed"],
+                    "total": started["total"],
+                }),
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut download_ids = downloads.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+    download_ids.sort_unstable();
+    download_ids.dedup();
+    assert_eq!(download_ids.len(), downloads.len());
+
+    downloads.sort_by(|(_, left), (_, right)| left["name"].as_str().cmp(&right["name"].as_str()));
+    let downloads = downloads
+        .into_iter()
+        .map(|(_, download)| download)
+        .collect::<Vec<_>>();
+    insta::assert_json_snapshot!(downloads, @r#"
+    [
+      {
+        "completed": 5892,
+        "name": "iniconfig",
+        "total": 5892
+      },
+      {
+        "completed": 10235,
+        "name": "sniffio",
+        "total": 10235
+      }
+    ]
+    "#);
+
+    let mut installed = progress
+        .iter()
+        .filter(|event| event["phase"] == "install" && event["status"] == "updated")
+        .filter_map(|event| event["name"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    installed.sort();
+    insta::assert_json_snapshot!(installed, @r#"
+    [
+      "iniconfig==2.0.0",
+      "sniffio==1.3.1"
+    ]
+    "#);
+
+    assert_eq!(report["type"], "result");
+    assert_eq!(report["sync"]["changes"].as_array().map(Vec::len), Some(2));
+
+    Ok(())
+}
+
+/// A Git dependency exposes correlated checkout and source-build progress events.
+#[test]
+#[cfg(feature = "test-git")]
+fn sync_jsonl_git_checkout_and_build_events() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let repository = context.temp_dir.child("repository");
+    repository.child("src/example").create_dir_all()?;
+    repository.child("src/example/__init__.py").touch()?;
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+            [project]
+            name = "example"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [build-system]
+            requires = ["uv_build>=0.7,<10000"]
+            build-backend = "uv_build"
+        "#})?;
+
+    Command::new("git")
+        .arg("init")
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .arg("add")
+        .arg(".")
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .arg("-c")
+        .arg("user.name=Example")
+        .arg("-c")
+        .arg("user.email=example@example.com")
+        .arg("commit")
+        .arg("-m")
+        .arg("Initial commit")
+        .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
+        .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
+        .assert()
+        .success();
+
+    let repository_url = Url::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["example"]
+
+            [tool.uv.sources]
+            example = {{ git = "{repository_url}" }}
+        "#})?;
+
+    let output = context
+        .sync()
+        .arg("--output-format")
+        .arg("jsonl")
+        .arg("--preview-features")
+        .arg("jsonl")
+        .output()?;
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout)?;
+    let events = stdout
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut operations = events
+        .iter()
+        .filter(|event| event["phase"] == "checkout" || event["phase"] == "build")
+        .map(|event| {
+            json!({
+                "phase": event["phase"],
+                "status": event["status"],
+                "id": event["id"],
+                "named": event.get("name").is_some(),
+                "source": event.get("url").is_some(),
+                "revision": event.get("revision").is_some(),
+            })
+        })
+        .collect::<Vec<_>>();
+    operations.sort_by(|left, right| {
+        left["id"]
+            .as_u64()
+            .cmp(&right["id"].as_u64())
+            .then_with(|| right["status"].as_str().cmp(&left["status"].as_str()))
+    });
+
+    insta::assert_json_snapshot!(operations, @r#"
+    [
+      {
+        "id": 1,
+        "named": false,
+        "phase": "checkout",
+        "revision": true,
+        "source": true,
+        "status": "started"
+      },
+      {
+        "id": 1,
+        "named": false,
+        "phase": "checkout",
+        "revision": true,
+        "source": true,
+        "status": "completed"
+      },
+      {
+        "id": 2,
+        "named": true,
+        "phase": "build",
+        "revision": false,
+        "source": false,
+        "status": "started"
+      },
+      {
+        "id": 2,
+        "named": true,
+        "phase": "build",
+        "revision": false,
+        "source": false,
+        "status": "completed"
+      }
+    ]
+    "#);
+
+    Ok(())
+}
+
+#[test]
 fn sync_json_check_outdated_environment() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_python_names()
