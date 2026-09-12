@@ -3932,6 +3932,71 @@ fn only_binary_editable_setup_py() {
     );
 }
 
+fn copy_setup_requires_package(context: &TestContext) -> Result<PathBuf> {
+    let fixture = context
+        .workspace_root
+        .join("test/packages/setuptools_setup_requires");
+    let project = context.temp_dir.join("project");
+    fs::create_dir_all(project.join("setuptools_setup_requires"))?;
+
+    // Do not copy generated setuptools metadata from another test run.
+    for file in ["setup.py", "setuptools_setup_requires/__init__.py"] {
+        fs::copy(fixture.join(file), project.join(file))?;
+    }
+
+    Ok(project)
+}
+
+/// Install dynamic `setup_requires` before preparing metadata with the legacy backend.
+#[test]
+fn install_setup_requires() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = copy_setup_requires_package(&context)?;
+    context.assert_not_installed("iniconfig");
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(&project), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + setuptools-setup-requires==0.1.0 (from file://[TEMP_DIR]/project)
+    ");
+
+    context
+        .assert_command("import setuptools_setup_requires")
+        .success();
+    context.assert_not_installed("iniconfig");
+
+    Ok(())
+}
+
+/// Editable builds also need dynamic `setup_requires` before preparing metadata.
+#[test]
+fn install_editable_setup_requires() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = copy_setup_requires_package(&context)?;
+    context.assert_not_installed("iniconfig");
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--editable")
+        .arg(&project), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + setuptools-setup-requires==0.1.0 (from file://[TEMP_DIR]/project)
+    ");
+
+    context
+        .assert_command("import setuptools_setup_requires")
+        .success();
+    context.assert_not_installed("iniconfig");
+
+    Ok(())
+}
+
 /// We should not recommend `--prerelease=allow` in source distribution build failures, since we
 /// don't propagate the `--prerelease` flag to the source distribution build regardless.
 #[test]
