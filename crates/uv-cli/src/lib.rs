@@ -7339,8 +7339,8 @@ pub struct PackageBuildIsolationArgs {
 #[derive(Args)]
 #[group(skip)]
 pub struct ReinstallArgs {
-    /// Reinstall all packages, regardless of whether they're already installed. Implies
-    /// `--refresh`.
+    /// Reinstall all packages selected by this command, including any selected dependencies,
+    /// regardless of whether they're already installed. Implies `--refresh`.
     #[arg(
         long,
         alias = "force-reinstall",
