@@ -569,6 +569,19 @@ impl<'a> BaseClientBuilder<'a> {
             CertificateSource::WebPki
         };
 
+        #[cfg(target_os = "macos")]
+        let custom_certs = if custom_certs.is_none() && self.system_certs {
+            Some(
+                rustls_native_certs::load_native_certs()
+                    .certs
+                    .into_iter()
+                    .filter_map(|certificate| Certificate::from_der(certificate.as_ref()).ok())
+                    .collect(),
+            )
+        } else {
+            custom_certs
+        };
+
         // Create a secure client that validates certificates.
         let raw_client = self.create_client(
             &user_agent_string,
