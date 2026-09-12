@@ -972,6 +972,14 @@ fn parse_requirement_and_hashes(
     let start = s.cursor();
     // Termination: s.eat() eventually becomes None
     let (end, has_hashes) = loop {
+        // Ordinary requirement text cannot end the entry. Advance to a character that can start
+        // a line ending, wrapped line, hash option, or whitespace-separated comment.
+        let remaining = s.after().as_bytes();
+        let offset = remaining
+            .iter()
+            .position(|&byte| matches!(byte, b'\n' | b'\r' | b' ' | b'\t' | b'\\'))
+            .unwrap_or(remaining.len());
+        s.jump(s.cursor() + offset);
         let end = s.cursor();
 
         //  We look for the end of the line ...
