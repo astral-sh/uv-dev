@@ -4571,7 +4571,7 @@ fn pep_751_wheel_url() -> Result<()> {
     [[packages]]
     name = "anyio"
     version = "4.3.0"
-    archive = { url = "http://[LOCALHOST]/files/anyio-4.3.0-py3-none-any.whl", hashes = { sha256 = "d45ad6f8b7c5dc28dcd823aaaa10a05700dfbd6be65d664cf77d1fe5173df133" } }
+    archive = { url = "http://[LOCALHOST]/files/anyio-4.3.0-py3-none-any.whl", hashes = { sha256 = "aca456c48994e57be94175d5ba92d80093abc0954e5ebb4309ce3c24df461cde" } }
 
     [[packages]]
     name = "idna"
@@ -4627,7 +4627,7 @@ fn pep_751_sdist_url() -> Result<()> {
     [[packages]]
     name = "anyio"
     version = "4.3.0"
-    archive = { url = "http://[LOCALHOST]/files/anyio-4.3.0.tar.gz", hashes = { sha256 = "82d6b014ddc10530bb4346d4845795541a8972ef57d148e7018c65b64bf1f9f6" } }
+    archive = { url = "http://[LOCALHOST]/files/anyio-4.3.0.tar.gz", hashes = { sha256 = "4a075e37e757a23e482891520cda6a8e2d83fd27b3df126e98ec50051ff2edb3" } }
 
     [[packages]]
     name = "idna"

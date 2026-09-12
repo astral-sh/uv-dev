@@ -1369,31 +1369,18 @@ fn lock_wheel_url() -> Result<()> {
             { name = "sniffio" },
         ]
         wheels = [
-            { url = "http://[LOCALHOST]/files/anyio-4.3.0-py3-none-any.whl", hash = "sha256:d45ad6f8b7c5dc28dcd823aaaa10a05700dfbd6be65d664cf77d1fe5173df133" },
+            { url = "http://[LOCALHOST]/files/anyio-4.3.0-py3-none-any.whl", hash = "sha256:aca456c48994e57be94175d5ba92d80093abc0954e5ebb4309ce3c24df461cde" },
         ]
 
         [package.metadata]
         requires-dist = [
-            { name = "anyio", extras = ["trio"], marker = "extra == 'test'" },
-            { name = "coverage", extras = ["toml"], marker = "extra == 'test'", specifier = ">=7" },
             { name = "exceptiongroup", marker = "python_full_version < '3.11'", specifier = ">=1.0.2" },
-            { name = "exceptiongroup", marker = "extra == 'test'", specifier = ">=1.2.0" },
-            { name = "hypothesis", marker = "extra == 'test'", specifier = ">=4.0" },
             { name = "idna", specifier = ">=2.8" },
-            { name = "packaging", marker = "extra == 'doc'" },
-            { name = "psutil", marker = "extra == 'test'", specifier = ">=5.9" },
-            { name = "pytest", marker = "extra == 'test'", specifier = ">=7.0" },
-            { name = "pytest-mock", marker = "extra == 'test'", specifier = ">=3.6.1" },
             { name = "sniffio", specifier = ">=1.1" },
-            { name = "sphinx", marker = "extra == 'doc'", specifier = ">=7" },
-            { name = "sphinx-autodoc-typehints", marker = "extra == 'doc'", specifier = ">=1.2.0" },
-            { name = "sphinx-rtd-theme", marker = "extra == 'doc'" },
             { name = "trio", marker = "extra == 'trio'", specifier = ">=0.23" },
-            { name = "trustme", marker = "extra == 'test'" },
             { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.1" },
-            { name = "uvloop", marker = "platform_python_implementation == 'CPython' and sys_platform != 'win32' and extra == 'test'", specifier = ">=0.17" },
         ]
-        provides-extras = ["doc", "test", "trio"]
+        provides-extras = ["trio"]
 
         [[package]]
         name = "idna"
@@ -39141,8 +39128,8 @@ fn lock_supported_environment_wheel_only_package_requires_compatible_wheels() ->
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies for split (markers: sys_platform == 'linux')
-      cause: Because pywin32<=305 has no wheels with a matching Python version tag (e.g., `cp312`) and only the following versions of pywin32 are available:
-                 pywin32<=305
+      cause: Because pywin32==305 has no wheels with a matching Python version tag (e.g., `cp312`) and only the following versions of pywin32 are available:
+                 pywin32==305
                  pywin32>=306
              we can conclude that pywin32<306 cannot be used.
              And because pywin32>=306 has no Linux-compatible wheels and your project depends on pywin32, we can conclude that your project's requirements are unsatisfiable.

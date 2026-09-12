@@ -1,0 +1,19 @@
+name = "marker-growth-accelerator"
+description = "Platform-specific local version for repeated conflict resolution."
+
+[root]
+
+[expected]
+satisfiable = true
+
+[packages.growth-engine.versions."1.0.0+accelerator"]
+requires_python = ">=3.12"
+requires = [
+  "growth-shared==1.0.0",
+  "growth-platform==1.0.0; platform_machine == 'x86_64' and sys_platform == 'linux'",
+]
+sdist = false
+wheel_tags = ["cp312-cp312-linux_x86_64", "cp312-cp312-win_amd64", "cp313-cp313-linux_x86_64", "cp313-cp313-win_amd64", "cp313-cp313t-linux_x86_64"]
+
+[testgen]
+disable = true
