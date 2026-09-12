@@ -414,7 +414,7 @@ pub(crate) struct SourcePosition {
 
 pub(crate) struct SourceWindowView<'a> {
     /// The original decoded bytes, used to resolve annotation and edit coordinates.
-    pub(crate) text: &'a str,
+    text: &'a str,
     pub(crate) line_start: usize,
     pub(crate) annotations: Vec<SourceAnnotationView<'a>>,
     redactions: Vec<Range<usize>>,
