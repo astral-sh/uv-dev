@@ -111,6 +111,129 @@ fn show_invalid_extra_warning_omits_source() -> Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug)]
+enum LegacyMetadataLayout {
+    File,
+    Directory,
+    Editable,
+}
+
+fn legacy_metadata_warning_fixture(
+    context: &uv_test::TestContext,
+    layout: LegacyMetadataLayout,
+) -> Result<PathBuf> {
+    let metadata_path = match layout {
+        LegacyMetadataLayout::File => context.site_packages().join("legacy_warning.egg-info"),
+        LegacyMetadataLayout::Directory => {
+            let egg_info = context.site_packages().join("legacy_warning.egg-info");
+            fs_err::create_dir_all(&egg_info)?;
+            egg_info.join("PKG-INFO")
+        }
+        LegacyMetadataLayout::Editable => {
+            let source = context.temp_dir.join("legacy-source");
+            let egg_info = source.join("legacy_warning.egg-info");
+            fs_err::create_dir_all(&egg_info)?;
+            fs_err::write(
+                context.site_packages().join("legacy-warning.egg-link"),
+                format!("{}\n", source.display()),
+            )?;
+            egg_info.join("PKG-INFO")
+        }
+    };
+    fs_err::write(
+        &metadata_path,
+        "Metadata-Version: 1.1\nName: legacy-warning\nVersion: 1.0.0\n",
+    )?;
+    let assert = context.pip_show().arg("legacy-warning").assert().success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    assert!(stdout.contains("Name: legacy-warning"));
+    assert!(stdout.contains("Version: 1.0.0"));
+    Ok(metadata_path)
+}
+
+#[test]
+fn show_invalid_legacy_metadata_name_omits_source() -> Result<()> {
+    let mut leaked_layouts = Vec::new();
+    for layout in [
+        LegacyMetadataLayout::File,
+        LegacyMetadataLayout::Directory,
+        LegacyMetadataLayout::Editable,
+    ] {
+        let context = uv_test::test_context!("3.12");
+        let metadata_path = legacy_metadata_warning_fixture(&context, layout)?;
+        let metadata = "Metadata-Version: 1.1\nName: https://user:legacy-secret@example.com/private.whl?sig=signature-secret\nVersion: 1.0.0\n";
+        fs_err::write(&metadata_path, metadata)?;
+
+        let assert = context
+            .pip_show()
+            .arg("legacy-warning")
+            .env(EnvVars::RUST_LOG, "warn")
+            .assert()
+            .code(1);
+        let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+        let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+        assert!(stderr.contains("Failed to parse metadata"));
+        assert!(stderr.contains("legacy_warning.egg-info"));
+        if [&stdout, &stderr]
+            .iter()
+            .any(|output| output.contains("legacy-secret") || output.contains("signature-secret"))
+        {
+            leaked_layouts.push(layout);
+        } else {
+            assert!(stderr.contains("invalid `Name` field"));
+        }
+        assert_eq!(fs_err::read_to_string(&metadata_path)?, metadata);
+    }
+    assert!(
+        leaked_layouts.is_empty(),
+        "raw legacy metadata leaked for {leaked_layouts:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn show_invalid_legacy_metadata_version_omits_source() -> Result<()> {
+    let mut leaked_layouts = Vec::new();
+    for layout in [
+        LegacyMetadataLayout::File,
+        LegacyMetadataLayout::Directory,
+        LegacyMetadataLayout::Editable,
+    ] {
+        let context = uv_test::test_context!("3.12");
+        let metadata_path = legacy_metadata_warning_fixture(&context, layout)?;
+        let metadata = "Metadata-Version: 1.1\nName: legacy-warning\nVersion: 1.0.0https://user:legacy-secret@example.com/private.whl?sig=signature-secret\n";
+        fs_err::write(&metadata_path, metadata)?;
+
+        let assert = context
+            .pip_show()
+            .arg("legacy-warning")
+            .env(EnvVars::RUST_LOG, "warn")
+            .assert()
+            .code(2);
+        let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+        let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+        assert!(
+            stderr.contains("legacy_warning.egg-info")
+                || stderr.contains("legacy-warning.egg-link")
+        );
+        if [&stdout, &stderr]
+            .iter()
+            .any(|output| output.contains("legacy-secret") || output.contains("signature-secret"))
+        {
+            leaked_layouts.push(layout);
+        } else {
+            assert!(stderr.contains("legacy_warning.egg-info"));
+            assert!(stderr.contains("Invalid `Version` field in installed metadata"));
+        }
+        assert_eq!(fs_err::read_to_string(&metadata_path)?, metadata);
+    }
+    assert!(
+        leaked_layouts.is_empty(),
+        "raw legacy metadata leaked for {leaked_layouts:?}"
+    );
+    Ok(())
+}
+
 #[test]
 #[cfg(feature = "test-pypi")]
 fn show_requires_multiple() -> Result<()> {
