@@ -510,8 +510,11 @@ impl<'a> IndexLocations {
 
     /// Return the hash algorithm required for distributions resolved from a given index.
     pub fn hash_algorithm_for(&self, url: &IndexUrl) -> Option<HashAlgorithm> {
-        self.index_for_url(url)
-            .and_then(|index| index.hash_algorithm.map(HashAlgorithm::from))
+        // An earlier CLI index can point at the same URL without carrying the hash policy
+        // configured for a later named index. Preserve the first explicit requirement.
+        self.configured_indexes()
+            .filter(|index| is_same_index(index.url(), url))
+            .find_map(|index| index.hash_algorithm.map(HashAlgorithm::from))
     }
 
     /// Return the `exclude-newer` setting for a given index, if the index is configured.
@@ -623,7 +626,7 @@ mod tests {
     use std::error::Error;
 
     use super::*;
-    use crate::{IndexCacheControl, IndexFormat, IndexName};
+    use crate::{IndexCacheControl, IndexFormat, IndexHashAlgorithm, IndexName};
     use http::HeaderValue;
 
     fn index_urls<'a>(indexes: impl IntoIterator<Item = &'a Index>) -> Vec<&'a str> {
@@ -714,6 +717,53 @@ mod tests {
                 "https://explicit.example.com/simple",
                 "https://default.example.com/simple",
             ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn index_hash_policy_uses_later_configured_requirement() -> Result<(), Box<dyn Error>> {
+        let command_line = Index::from_str("https://index.example.com/simple/")?;
+        let named = Index::from_str("first=https://index.example.com/simple")?;
+
+        let mut configured = Index::from_str("configured=https://index.example.com/simple")?;
+        configured.hash_algorithm = Some(IndexHashAlgorithm::Sha256);
+        let configured_url = configured.url().clone();
+
+        let mut conflicting = Index::from_str("conflicting=https://index.example.com/simple")?;
+        conflicting.hash_algorithm = Some(IndexHashAlgorithm::Sha512);
+
+        let locations = IndexLocations::new(
+            vec![command_line, named, configured, conflicting],
+            vec![],
+            false,
+        );
+
+        assert_eq!(
+            locations.hash_algorithm_for(&configured_url),
+            Some(HashAlgorithm::Sha256)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn index_hash_policy_ignores_shadowed_names() -> Result<(), Box<dyn Error>> {
+        let first = Index::from_str("shared=https://first.example.com/simple")?;
+
+        let mut shadowed = Index::from_str("shared=https://index.example.com/simple")?;
+        shadowed.hash_algorithm = Some(IndexHashAlgorithm::Sha512);
+
+        let mut active = Index::from_str("active=https://index.example.com/simple")?;
+        active.hash_algorithm = Some(IndexHashAlgorithm::Sha256);
+        let active_url = active.url().clone();
+
+        let locations = IndexLocations::new(vec![first, shadowed, active], vec![], false);
+
+        assert_eq!(
+            locations.hash_algorithm_for(&active_url),
+            Some(HashAlgorithm::Sha256)
         );
 
         Ok(())
