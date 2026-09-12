@@ -8,7 +8,7 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileWriteStr, PathChild};
 use indoc::indoc;
 
-use uv_fs::{PortablePathBuf, write_atomic_sync};
+use uv_fs::{PortablePathBuf, Simplified, write_atomic_sync};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_static::EnvVars;
@@ -385,7 +385,7 @@ fn pip_check_json_omits_invalid_metadata_values() -> Result<()> {
             serde_json::json!([{
                 "package": "diag-values",
                 "kind": "metadata_unavailable",
-                "path": PortablePathBuf::from(package.as_path()).to_string(),
+                "path": PortablePathBuf::from(package.simplified()).to_string(),
             }])
         );
         for output in [&invalid.get_output().stdout, &invalid.get_output().stderr] {
@@ -419,7 +419,7 @@ fn pip_check_json_omits_invalid_metadata_values() -> Result<()> {
         serde_json::json!([{
             "package": "diag-values",
             "kind": "tags_unavailable",
-            "path": PortablePathBuf::from(package.as_path()).to_string(),
+            "path": PortablePathBuf::from(package.simplified()).to_string(),
         }])
     );
     for output in [&invalid.get_output().stdout, &invalid.get_output().stderr] {
