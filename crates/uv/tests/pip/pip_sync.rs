@@ -1995,6 +1995,33 @@ fn reinstall_package() -> Result<()> {
     context.assert_command("import markupsafe").success();
     context.assert_command("import tomli").success();
 
+    // Multiple normalized and duplicate selections should reinstall each matching package once.
+    uv_snapshot!(context.pip_sync()
+        .arg("requirements.txt")
+        .arg("--reinstall-package")
+        .arg("Tomli")
+        .arg("--reinstall-package")
+        .arg("MarkupSafe")
+        .arg("--reinstall-package")
+        .arg("tomli")
+        .arg("--strict"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Uninstalled 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     ~ markupsafe==2.1.3
+     ~ tomli==2.0.1
+    "
+    );
+
+    context.assert_command("import markupsafe").success();
+    context.assert_command("import tomli").success();
+
     // Re-run the installation with `--reinstall`.
     uv_snapshot!(context.pip_sync()
         .arg("requirements.txt")
