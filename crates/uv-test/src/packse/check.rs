@@ -10,7 +10,6 @@ use anyhow::{Context, Result, bail, ensure};
 use sha2::{Digest, Sha256};
 
 use uv_configuration::TargetTriple;
-use uv_normalize::PackageName;
 use uv_pep440::Operator;
 use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder, Requirement, VersionOrUrl};
 use uv_python::PythonVersion;
@@ -20,6 +19,7 @@ use crate::TestContext;
 
 use super::PackseServer;
 use super::oracle::{ScenarioOracle, Selection};
+use super::project::project_name;
 use super::scenario::{Scenario, ScenarioDocument};
 
 /// A representative platform for fixed-environment resolver checks.
@@ -354,10 +354,7 @@ pub fn check_lock_scenario(
     }
 
     let server = PackseServer::from_scenario_without_build_dependencies(scenario);
-    let mut root_name = PackageName::from_str("uv-scenario-root")?;
-    while scenario.packages.contains_key(&root_name) {
-        root_name = PackageName::from_str(&format!("{root_name}-root"))?;
-    }
+    let root_name = project_name(scenario)?;
     let project = serde_json::json!({
         "project": {
             "name": root_name,

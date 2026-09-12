@@ -31,6 +31,7 @@ pub struct SearchResult {
 pub struct ScenarioOracle<'a> {
     scenario: &'a Scenario,
     environment: &'a MarkerEnvironment,
+    root_requirements: Vec<Requirement>,
 }
 
 impl<'a> ScenarioOracle<'a> {
@@ -41,6 +42,18 @@ impl<'a> ScenarioOracle<'a> {
     /// Dependency `Requires-Python` is interpreted as a lower bound, as documented by uv.
     pub fn new(scenario: &'a Scenario, environment: &'a MarkerEnvironment) -> Result<Self> {
         ensure!(
+            !scenario.root.has_project_dependencies(),
+            "the scenario oracle requires an explicit project selection for optional dependencies or groups"
+        );
+        Self::with_root_requirements(scenario, environment, scenario.root.requires.clone())
+    }
+
+    pub(super) fn with_root_requirements(
+        scenario: &'a Scenario,
+        environment: &'a MarkerEnvironment,
+        root_requirements: Vec<Requirement>,
+    ) -> Result<Self> {
+        ensure!(
             scenario.resolver_options.no_binary.is_empty(),
             "the scenario oracle does not model source-build requirements"
         );
@@ -49,7 +62,7 @@ impl<'a> ScenarioOracle<'a> {
             "the scenario oracle checks one environment at a time"
         );
 
-        for requirement in &scenario.root.requires {
+        for requirement in &root_requirements {
             validate_requirement(requirement)?;
         }
         for (name, package) in &scenario.packages {
@@ -90,6 +103,7 @@ impl<'a> ScenarioOracle<'a> {
         Ok(Self {
             scenario,
             environment,
+            root_requirements,
         })
     }
 
@@ -108,7 +122,7 @@ impl<'a> ScenarioOracle<'a> {
         );
 
         let mut active: BTreeMap<PackageName, BTreeSet<ExtraName>> = BTreeMap::new();
-        for requirement in &self.scenario.root.requires {
+        for requirement in &self.root_requirements {
             if requirement.evaluate_markers(self.environment, &[]) {
                 self.activate(requirement, selection, &mut active)?;
             }
@@ -281,7 +295,7 @@ fn dependency_supports_python(specifiers: Option<&VersionSpecifiers>, python: &V
     }
 }
 
-fn validate_requirement(requirement: &Requirement) -> Result<()> {
+pub(super) fn validate_requirement(requirement: &Requirement) -> Result<()> {
     ensure!(
         !matches!(requirement.version_or_url, Some(VersionOrUrl::Url(_))),
         "the scenario oracle does not model direct URLs: {requirement}"

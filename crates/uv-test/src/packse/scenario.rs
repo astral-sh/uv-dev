@@ -16,6 +16,7 @@ use uv_distribution_filename::WheelFilename;
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::{MarkerTree, Requirement};
+use uv_pypi_types::DependencyGroups;
 use uv_python::PythonVersion;
 
 /// A complete packse scenario definition.
@@ -70,6 +71,8 @@ impl Scenario {
             root: RootPackage {
                 requires_python: None,
                 requires: Vec::new(),
+                optional_dependencies: BTreeMap::new(),
+                dependency_groups: None,
             },
             expected: Expected {
                 satisfiable: true,
@@ -253,6 +256,32 @@ pub struct RootPackage {
     /// Top-level requirements.
     #[serde(default)]
     pub requires: Vec<Requirement>,
+
+    /// Project optional dependencies, rendered as `[project.optional-dependencies]`.
+    #[serde(default, deserialize_with = "deserialize_root_optional_dependencies")]
+    pub optional_dependencies: BTreeMap<ExtraName, Vec<Requirement>>,
+
+    /// PEP 735 project dependency groups, including `include-group` entries.
+    #[serde(default)]
+    pub dependency_groups: Option<DependencyGroups>,
+}
+
+impl RootPackage {
+    /// Whether selecting project extras or dependency groups can change the root requirements.
+    pub fn has_project_dependencies(&self) -> bool {
+        !self.optional_dependencies.is_empty() || self.dependency_groups.is_some()
+    }
+}
+
+fn deserialize_root_optional_dependencies<'de, D>(
+    deserializer: D,
+) -> Result<BTreeMap<ExtraName, Vec<Requirement>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    uv_toml::deserialize_unique_map(deserializer, |key: &ExtraName| {
+        format!("duplicate normalized extra name `{key}`")
+    })
 }
 
 /// Expected resolution outcome.
