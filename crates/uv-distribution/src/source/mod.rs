@@ -1754,11 +1754,12 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
     pub(crate) async fn source_tree_requires_dist(
         &self,
         path: &Path,
-        pyproject_toml: &PyProjectToml,
+        _pyproject_toml: &PyProjectToml,
         credentials_cache: &CredentialsCache,
     ) -> Result<Option<RequiresDist>, Error> {
         // Attempt to read static metadata from the `pyproject.toml`.
-        match uv_pypi_types::RequiresDist::from_pyproject_toml(pyproject_toml.clone()) {
+        let pyproject_toml = read_pyproject_toml(path, None).await?;
+        match uv_pypi_types::RequiresDist::from_pyproject_toml(pyproject_toml) {
             Ok(requires_dist) => {
                 debug!("Found static `requires-dist` for: {}", path.display());
                 let requires_dist = RequiresDist::from_project_maybe_workspace(
