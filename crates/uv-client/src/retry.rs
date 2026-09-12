@@ -5,6 +5,7 @@ use std::{io, iter};
 use http::status::StatusCode;
 use itertools::Itertools;
 use reqwest::Response;
+use reqwest_middleware::RequestBuilder;
 use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::{
     RetryPolicy, Retryable, RetryableStrategy, default_on_request_error, default_on_request_success,
@@ -15,7 +16,7 @@ use url::Url;
 
 use uv_redacted::DisplaySafeUrl;
 
-use crate::{RequestBuilder, WrappedReqwestError};
+use crate::WrappedReqwestError;
 
 /// An extension over [`DefaultRetryableStrategy`] that logs transient request failures and
 /// adds additional retry cases.
@@ -89,10 +90,7 @@ impl RetryState {
     }
 
     /// Send a request and count any retries performed by the middleware.
-    pub async fn send(
-        &mut self,
-        request: RequestBuilder<'_>,
-    ) -> reqwest_middleware::Result<Response> {
+    pub async fn send(&mut self, request: RequestBuilder) -> reqwest_middleware::Result<Response> {
         let result = request.send().await;
         self.record_request_retries(result.as_ref());
         result
