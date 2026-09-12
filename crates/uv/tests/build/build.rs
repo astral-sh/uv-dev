@@ -2592,6 +2592,121 @@ fn build_name_mismatch() -> Result<()> {
     Ok(())
 }
 
+/// A backend must not return a wheel whose metadata disagrees with its filename.
+#[test]
+fn build_wheel_metadata_mismatch() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+        from zipfile import ZipFile
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = "alpha-1.0.0-py3-none-any.whl"
+            with ZipFile(Path(wheel_directory, filename), "w") as wheel:
+                wheel.writestr(
+                    "alpha-1.0.0.dist-info/METADATA",
+                    "Metadata-Version: 2.1\nName: other\nVersion: 9.0.0\n",
+                )
+            return filename
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.build().arg("--wheel").current_dir(&project), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/project`
+      cause: Failed to validate the built wheel
+      cause: Package metadata name `other` does not match `alpha` from the wheel filename
+    ");
+
+    // Preserve the compatibility escape hatch for known-bad third-party wheels.
+    uv_snapshot!(context.filters(), context.build().arg("--wheel").env(EnvVars::UV_SKIP_WHEEL_FILENAME_CHECK, "1").current_dir(&project), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/alpha-1.0.0-py3-none-any.whl
+    ");
+
+    fs_err::remove_dir_all(project.child("__pycache__"))?;
+    project.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+        from zipfile import ZipFile
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = "alpha-1.0.0-py3-none-any.whl"
+            with ZipFile(Path(wheel_directory, filename), "w") as wheel:
+                wheel.writestr(
+                    "alpha-1.0.0.dist-info/METADATA",
+                    "Metadata-Version: 2.1\nName: alpha\nVersion: 9.0.0\n",
+                )
+            return filename
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.build().arg("--wheel").current_dir(&project), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/project`
+      cause: Failed to validate the built wheel
+      cause: Package metadata version `9.0.0` does not match `1.0.0` from the wheel filename
+    ");
+
+    // A filename may include a local version that is omitted from the embedded metadata.
+    fs_err::remove_dir_all(project.child("__pycache__"))?;
+    project.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+        from zipfile import ZipFile
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = "alpha-1.0.0+local-py3-none-any.whl"
+            with ZipFile(Path(wheel_directory, filename), "w") as wheel:
+                wheel.writestr(
+                    "alpha-1.0.0.dist-info/METADATA",
+                    "Metadata-Version: 2.1\nName: alpha\nVersion: 1.0.0\n",
+                )
+            return filename
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.build().arg("--wheel").current_dir(&project), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/alpha-1.0.0+local-py3-none-any.whl
+    ");
+
+    // Preserve the setuptools fallback for source trees without project metadata.
+    fs_err::remove_dir_all(project.child("__pycache__"))?;
+    project.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+        from zipfile import ZipFile
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = "UNKNOWN-0.0.0-py3-none-any.whl"
+            with ZipFile(Path(wheel_directory, filename), "w") as wheel:
+                wheel.writestr(
+                    "UNKNOWN-0.0.0.dist-info/METADATA",
+                    "Metadata-Version: 2.1\nVersion: 0.0.0\n",
+                )
+            return filename
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.build().arg("--wheel").current_dir(&project), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/UNKNOWN-0.0.0-py3-none-any.whl
+    ");
+
+    Ok(())
+}
+
 #[cfg(unix)] // Symlinks aren't universally available on windows.
 #[test]
 fn build_with_symlink() -> Result<()> {
@@ -2680,13 +2795,13 @@ fn build_workspace_virtual_root() -> Result<()> {
     "#})?;
 
     uv_snapshot!(context.filters(), context.build().arg("--no-build-logs"), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
     Building source distribution...
     warning: `[TEMP_DIR]/` appears to be a workspace root without a Python project; consider using `uv sync` to install the workspace, or add a `[build-system]` table to `pyproject.toml`
     Building wheel from source distribution...
-    error: Failed to build `[TEMP_DIR]/`
-      cause: The source distribution declares name cache, but the wheel declares name unknown
+    Successfully built dist/cache-0.0.0.tar.gz
+    Successfully built dist/UNKNOWN-0.0.0-py3-none-any.whl
     ");
     Ok(())
 }
@@ -2706,13 +2821,13 @@ fn build_pyproject_toml_not_a_project() -> Result<()> {
     "})?;
 
     uv_snapshot!(context.filters(), context.build().arg("--no-build-logs"), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
     Building source distribution...
     warning: `[TEMP_DIR]/` does not appear to be a Python project, as the `pyproject.toml` does not include a `[build-system]` table, and neither `setup.py` nor `setup.cfg` are present in the directory
     Building wheel from source distribution...
-    error: Failed to build `[TEMP_DIR]/`
-      cause: The source distribution declares name cache, but the wheel declares name unknown
+    Successfully built dist/cache-0.0.0.tar.gz
+    Successfully built dist/UNKNOWN-0.0.0-py3-none-any.whl
     ");
     Ok(())
 }
