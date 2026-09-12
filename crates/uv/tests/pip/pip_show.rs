@@ -1,13 +1,17 @@
+use std::collections::BTreeMap;
 use std::env::current_dir;
+use std::path::PathBuf;
 
 use anyhow::Result;
 use assert_cmd::prelude::*;
+use assert_fs::fixture::FileWriteBin;
 use assert_fs::fixture::FileWriteStr;
 use assert_fs::fixture::PathChild;
 use indoc::indoc;
 
 use uv_static::EnvVars;
 
+use uv_test::packse::generate_wheel;
 use uv_test::uv_snapshot;
 
 #[test]
@@ -20,6 +24,91 @@ fn show_empty() {
     warning: Please provide a package name or names.
     "
     );
+}
+
+fn install_metadata_warning_fixture(context: &uv_test::TestContext) -> Result<PathBuf> {
+    let (filename, bytes) = generate_wheel(
+        &"metadata-warning".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+    );
+    let wheel = context.temp_dir.child(filename);
+    wheel.write_binary(&bytes)?;
+    context
+        .pip_install()
+        .arg(wheel.path())
+        .arg("--no-index")
+        .arg("--no-deps")
+        .arg("--offline")
+        .assert()
+        .success();
+    Ok(context
+        .site_packages()
+        .join("metadata_warning-1.0.0.dist-info/METADATA"))
+}
+
+#[test]
+fn show_lenient_requirement_warning_omits_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let metadata_path = install_metadata_warning_fixture(&context)?;
+    let metadata = indoc! {"
+        Metadata-Version: 2.3
+        Name: metadata-warning
+        Version: 1.0.0
+        Requires-Dist: dependency @ 'https://user:requires-secret@example.com/private-1.0-py3-none-any.whl?sig=signature-secret'
+    "};
+    fs_err::write(&metadata_path, metadata)?;
+
+    let assert = context
+        .pip_show()
+        .arg("metadata-warning")
+        .env(EnvVars::RUST_LOG, "warn")
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(stdout.contains("Requires: dependency"));
+    assert!(stderr.contains("Fixing invalid requirement by removing stray quotes"));
+    for output in [stdout, stderr] {
+        assert!(!output.contains("requires-secret"));
+        assert!(!output.contains("signature-secret"));
+    }
+    assert_eq!(fs_err::read_to_string(metadata_path)?, metadata);
+    Ok(())
+}
+
+#[test]
+fn show_invalid_extra_warning_omits_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let metadata_path = install_metadata_warning_fixture(&context)?;
+    let metadata = indoc! {"
+        Metadata-Version: 2.3
+        Name: metadata-warning
+        Version: 1.0.0
+        Provides-Extra: https://user:extra-secret@example.com/private.whl?sig=signature-secret
+        Provides-Extra: valid
+    "};
+    fs_err::write(&metadata_path, metadata)?;
+
+    let assert = context
+        .pip_show()
+        .arg("metadata-warning")
+        .env(EnvVars::RUST_LOG, "warn")
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(stdout.contains("Name: metadata-warning"));
+    assert!(stderr.contains("Ignoring invalid extra"));
+    for output in [stdout, stderr] {
+        assert!(!output.contains("extra-secret"));
+        assert!(!output.contains("signature-secret"));
+    }
+    assert_eq!(fs_err::read_to_string(metadata_path)?, metadata);
+    Ok(())
 }
 
 #[test]
