@@ -6,8 +6,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![expect(clippy::cast_sign_loss)]
-
 use std::{
     io::{BufRead, Read, Seek, SeekFrom},
     sync::Arc,
@@ -109,7 +107,6 @@ impl Read for CloneableSeekableReader {
 
         let read_result = read_at(&self.file, buf, self.pos);
         if let Ok(bytes_read) = read_result {
-            // TODO, once stabilised, use checked_add_signed
             self.pos += bytes_read as u64;
         }
         read_result
@@ -119,27 +116,18 @@ impl Read for CloneableSeekableReader {
 impl Seek for CloneableSeekableReader {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
         let new_pos = match pos {
-            SeekFrom::Start(pos) => pos,
-            SeekFrom::End(offset_from_end) => {
-                let file_len = self.ascertain_file_length()?;
-                if -offset_from_end as u64 > file_len {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "Seek too far backwards",
-                    ));
-                }
-                // TODO, once stabilised, use checked_add_signed
-                file_len - (-offset_from_end as u64)
-            }
-            // TODO, once stabilised, use checked_add_signed
-            SeekFrom::Current(offset_from_pos) => {
-                if offset_from_pos > 0 {
-                    self.pos + (offset_from_pos as u64)
-                } else {
-                    self.pos - ((-offset_from_pos) as u64)
-                }
-            }
-        };
+            SeekFrom::Start(pos) => Some(pos),
+            SeekFrom::End(offset_from_end) => self
+                .ascertain_file_length()?
+                .checked_add_signed(offset_from_end),
+            SeekFrom::Current(offset_from_pos) => self.pos.checked_add_signed(offset_from_pos),
+        }
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Seek position is out of range",
+            )
+        })?;
         self.pos = new_pos;
         self.clear_buffer();
         Ok(new_pos)
@@ -227,6 +215,66 @@ mod test {
                 std::io::ErrorKind::InvalidInput
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_seek_offsets() -> std::io::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let path = temp_dir.path().join("archive.zip");
+        fs_err::write(&path, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])?;
+        let mut reader = CloneableSeekableReader::new(fs_err::File::open(path)?);
+
+        // Seeking past the end is valid, and a later read returns EOF.
+        assert_eq!(reader.seek(SeekFrom::End(2))?, 12);
+        assert_eq!(reader.read(&mut [0])?, 0);
+        assert_eq!(reader.seek(SeekFrom::Current(-5))?, 7);
+        let mut output = [0; 2];
+        reader.read_exact(&mut output)?;
+        assert_eq!(output, [7, 8]);
+        assert_eq!(reader.seek(SeekFrom::End(-10))?, 0);
+
+        // Relative offsets must not wrap or overflow, including i64::MIN.
+        for offset in [
+            SeekFrom::End(-11),
+            SeekFrom::End(i64::MIN),
+            SeekFrom::Current(-1),
+            SeekFrom::Current(i64::MIN),
+        ] {
+            assert_eq!(
+                reader.seek(offset).unwrap_err().kind(),
+                std::io::ErrorKind::InvalidInput
+            );
+            assert_eq!(reader.stream_position()?, 0);
+        }
+
+        reader.seek(SeekFrom::Start(u64::MAX))?;
+        assert_eq!(
+            reader.seek(SeekFrom::Current(1)).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+        assert_eq!(reader.stream_position()?, u64::MAX);
+        assert_eq!(reader.seek(SeekFrom::Current(i64::MIN))?, i64::MAX as u64);
+        Ok(())
+    }
+
+    #[test]
+    fn test_invalid_seek_preserves_buffer() -> std::io::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let path = temp_dir.path().join("archive.zip");
+        fs_err::write(&path, [0, 1, 2, 3, 4])?;
+        let mut reader = CloneableSeekableReader::new(fs_err::File::open(path)?);
+
+        assert_eq!(reader.fill_buf()?, [0, 1, 2, 3, 4]);
+        reader.consume(2);
+        assert_eq!(
+            reader.seek(SeekFrom::Current(-3)).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+        assert_eq!(reader.fill_buf()?, [2, 3, 4]);
+        let mut output = [0; 3];
+        reader.read_exact(&mut output)?;
+        assert_eq!(output, [2, 3, 4]);
         Ok(())
     }
 
