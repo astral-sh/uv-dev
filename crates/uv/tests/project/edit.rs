@@ -1409,6 +1409,40 @@ fn add_remove_dev() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn edit_dev_group_environment_conflicts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [dependency-groups]
+        foo = []
+    "#})?;
+    let original = fs_err::read_to_string(&pyproject_toml)?;
+
+    uv_snapshot!(context.filters(), context.add().arg("anyio").arg("--optional").arg("foo").arg("--frozen").env(EnvVars::UV_DEV, "1"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: the argument `UV_DEV` (environment variable) cannot be used with `--optional`
+    ");
+
+    uv_snapshot!(context.filters(), context.remove().arg("anyio").arg("--group").arg("foo").arg("--frozen").env(EnvVars::UV_DEV, "1"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: the argument `UV_DEV` (environment variable) cannot be used with `--group`
+    ");
+
+    assert_eq!(fs_err::read_to_string(&pyproject_toml)?, original);
+
+    Ok(())
+}
+
 /// Add and remove an optional dependency.
 #[test]
 fn add_remove_optional() -> Result<()> {
