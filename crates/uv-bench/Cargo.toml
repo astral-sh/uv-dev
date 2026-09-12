@@ -169,6 +169,11 @@ path = "benches/python_discovery.rs"
 harness = false
 
 [[bench]]
+name = "python_install"
+path = "benches/python_install.rs"
+harness = false
+
+[[bench]]
 name = "conflict_markers"
 path = "benches/conflict_markers.rs"
 harness = false

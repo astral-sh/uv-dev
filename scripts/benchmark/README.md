@@ -43,6 +43,10 @@ names, and `serve-fixtures.py --python-archives .cache/bench-python-archives` ca
 Python installation mirror. Python-management workloads select this frozen download metadata so
 later interpreter rebuilds do not silently change their inputs.
 
+The installation workload installs one, two, or four real interpreter versions into an empty
+directory. It compares a populated archive cache with a fresh cache and the delayed loopback mirror.
+Both cases include extraction and installation; fixture downloads happen before timing.
+
 Pass `--project-caches` to also prepare a separate cache for each frozen environment. Cache
 maintenance workloads copy these caches and reconstruct their environments before timing, retaining
 the real cache layout and links between installed files and cached wheel contents.
