@@ -2,7 +2,7 @@
 
 Issue: owner/repository#number
 
-Classification: bug, enhancement, duplicate, or question
+Classification: bug (regression), bug, enhancement, duplicate, or question
 
 ## Summary
 
