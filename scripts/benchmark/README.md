@@ -57,6 +57,31 @@ python3 scripts/benchmark/qualify-concurrent-downloads.py \
 Repeat `--scenario` to select individual checks when comparing implementations with different cache
 capabilities.
 
+`qualify-wheel-metadata.py` compares two binaries using the same interpreter and fixture server. It
+generates a deterministic wheel dependency graph, primes each cache independently, and alternates
+the order of repeated warm and offline resolutions. It also interrupts a process while its metadata
+request is active, then checks concurrent recovery and offline reuse. A separate contention check
+resolves already-cached metadata while another process is paused during a full wheel download. Both
+PEP 658 and byte-range metadata paths are exercised, and warm resolutions must make no HTTP
+requests.
+
+```shell
+python3 scripts/benchmark/qualify-wheel-metadata.py \
+  --base /absolute/path/to/base/uv \
+  --candidate /absolute/path/to/candidate/uv \
+  --python /absolute/path/to/python3.11 \
+  --packages 128 \
+  --iterations 30 \
+  --output wheel-metadata-qualification.json
+```
+
+Use binaries built with the same toolchain and profile. The report retains every paired sample,
+binary and fixture hashes, request counts, and whether the contention check completed before the
+download lock was released. `--expect-coalesced-candidate` requires one metadata request after an
+interrupted leader. `--expect-nonblocking-base` and `--expected-candidate-warm-lock unblocked` can
+assert the warm-cache contention contract when both implementations support it. These end-to-end CLI
+measurements complement, rather than replace, optimized in-process benchmarks.
+
 ## Getting Started
 
 From the `scripts/benchmark` directory:
