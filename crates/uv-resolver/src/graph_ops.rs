@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::collections::hash_map::Entry;
 
+use indexmap::IndexSet;
 use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::{Direction, Graph};
@@ -115,62 +116,16 @@ pub(crate) fn simplify_conflict_markers(
         .flat_map(|set| set.iter().map(ConflictItem::as_ref))
         .collect();
 
-    // The set of activated extras and groups for each node. The ROOT nodes
-    // don't have any extras/groups activated.
-    let mut activated: FxHashMap<NodeIndex, Vec<FxHashSet<ConflictItemRef<'_>>>> =
-        FxHashMap::default();
-
-    // Collect the root nodes.
-    //
-    // Besides the actual virtual root node, virtual dev dependencies packages are also root
-    // nodes since the edges don't cover dev dependencies.
-    let mut queue: Vec<_> = graph
-        .node_indices()
-        .filter(|node_index| {
-            graph
-                .edges_directed(*node_index, Direction::Incoming)
-                .next()
-                .is_none()
-        })
-        .collect();
-
-    while let Some(parent_index) = queue.pop() {
-        let extra = graph[parent_index]
-            .package_extra_names()
-            .map(ConflictItemRef::from);
-        let group = graph[parent_index]
-            .package_group_names()
-            .map(ConflictItemRef::from);
-        for item in extra
-            .into_iter()
-            .chain(group)
-            .filter(|item| relevant.contains(item))
-        {
-            for set in activated
-                .entry(parent_index)
-                .or_insert_with(|| vec![FxHashSet::default()])
-            {
-                set.insert(item);
-            }
-        }
-        let sets = activated
-            .get(&parent_index)
-            .cloned()
-            .unwrap_or_else(|| vec![FxHashSet::default()]);
-        for child_edge in graph.edges_directed(parent_index, Direction::Outgoing) {
-            let mut change = false;
-            let existing = activated.entry(child_edge.target()).or_default();
-            for set in &sets {
-                if !existing.contains(set) {
-                    existing.push(set.clone());
-                    change = true;
-                }
-            }
-            if change {
-                queue.push(child_edge.target());
-            }
-        }
-    }
+    let activated = propagate_conflict_activations(graph, |node| {
+        [
+            node.package_extra_names()
+                .map(ConflictItemRef::from)
+                .filter(|item| relevant.contains(item)),
+            node.package_group_names()
+                .map(ConflictItemRef::from)
+                .filter(|item| relevant.contains(item)),
+        ]
+    });
 
     let mut inferences: FxHashMap<NodeIndex, Vec<BTreeSet<Inference>>> = FxHashMap::default();
     for (node_id, sets) in activated {
@@ -269,6 +224,73 @@ pub(crate) fn simplify_conflict_markers(
     }
 }
 
+/// Propagate activated extras and groups through every path in the dependency graph.
+fn propagate_conflict_activations<'graph, Node, Edge>(
+    graph: &'graph Graph<Node, Edge>,
+    conflict_items: impl Fn(&'graph Node) -> [Option<ConflictItemRef<'graph>>; 2],
+) -> FxHashMap<NodeIndex, IndexSet<Vec<ConflictItemRef<'graph>>, FxBuildHasher>> {
+    let mut activated: FxHashMap<NodeIndex, IndexSet<Vec<ConflictItemRef<'graph>>, FxBuildHasher>> =
+        FxHashMap::default();
+
+    // Besides the actual virtual root node, virtual dev dependencies packages are also root
+    // nodes since the edges don't cover dev dependencies.
+    let mut queue: Vec<_> = graph
+        .node_indices()
+        .filter(|node_index| {
+            graph
+                .edges_directed(*node_index, Direction::Incoming)
+                .next()
+                .is_none()
+        })
+        .collect();
+
+    while let Some(parent_index) = queue.pop() {
+        for item in conflict_items(&graph[parent_index]).into_iter().flatten() {
+            activate_conflict_item(activated.entry(parent_index).or_default(), item);
+        }
+        let sets = activated
+            .get(&parent_index)
+            .cloned()
+            .unwrap_or_else(|| IndexSet::from_iter([Vec::default()]));
+        for child_edge in graph.edges_directed(parent_index, Direction::Outgoing) {
+            let existing = activated.entry(child_edge.target()).or_default();
+            let previous_len = existing.len();
+            existing.extend(sets.iter().cloned());
+            if existing.len() != previous_len {
+                queue.push(child_edge.target());
+            }
+        }
+    }
+    activated
+}
+
+/// Add an activated conflict item to every path while preserving path order and uniqueness.
+///
+/// Each path is kept sorted so it can be used as a stable hash key. Rebuild the set after an
+/// activation since mutating a key in place would invalidate its hash.
+fn activate_conflict_item<'item>(
+    sets: &mut IndexSet<Vec<ConflictItemRef<'item>>, FxBuildHasher>,
+    item: ConflictItemRef<'item>,
+) {
+    if sets.is_empty() {
+        sets.insert(vec![item]);
+        return;
+    }
+
+    if sets.iter().all(|set| set.binary_search(&item).is_ok()) {
+        return;
+    }
+
+    let previous = std::mem::take(sets);
+    sets.reserve(previous.len());
+    for mut set in previous {
+        if let Err(index) = set.binary_search(&item) {
+            set.insert(index, item);
+        }
+        sets.insert(set);
+    }
+}
+
 pub(crate) trait Reachable<T> {
     /// The marker representing the "true" value.
     fn true_marker() -> T;
@@ -334,5 +356,126 @@ impl Boolean for MarkerTree {
 
     fn or(&mut self, other: Self) {
         *self = Self::or(*self, other);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use indexmap::IndexSet;
+    use petgraph::Graph;
+    use rustc_hash::FxBuildHasher;
+
+    use uv_normalize::{ExtraName, GroupName, PackageName};
+    use uv_pypi_types::{ConflictItem, ConflictItemRef};
+
+    use super::{activate_conflict_item, propagate_conflict_activations};
+
+    fn conflict_item(package: &str, extra: &str) -> ConflictItem {
+        ConflictItem::from((
+            PackageName::from_str(package).expect("valid package name"),
+            ExtraName::from_str(extra).expect("valid extra name"),
+        ))
+    }
+
+    fn group_item(package: &str, group: &str) -> ConflictItem {
+        ConflictItem::from((
+            PackageName::from_str(package).expect("valid package name"),
+            GroupName::from_str(group).expect("valid group name"),
+        ))
+    }
+
+    fn activation_path(mut items: Vec<ConflictItem>) -> Vec<ConflictItem> {
+        items.sort_unstable();
+        items
+    }
+
+    #[test]
+    fn activation_paths_remain_sorted_and_distinct() {
+        let left = conflict_item("left", "first");
+        let right = conflict_item("right", "first");
+        let shared = conflict_item("shared", "first");
+        let mut sets: IndexSet<Vec<ConflictItemRef<'_>>, FxBuildHasher> =
+            IndexSet::from_iter([vec![right.as_ref()], vec![left.as_ref()]]);
+
+        activate_conflict_item(&mut sets, shared.as_ref());
+        activate_conflict_item(&mut sets, shared.as_ref());
+
+        assert_eq!(
+            sets.into_iter().collect::<Vec<_>>(),
+            vec![
+                vec![right.as_ref(), shared.as_ref()],
+                vec![left.as_ref(), shared.as_ref()]
+            ],
+        );
+    }
+
+    #[test]
+    fn activation_reindexes_paths_that_become_equivalent() {
+        let first = conflict_item("package", "first");
+        let second = conflict_item("package", "second");
+        let mut sets: IndexSet<Vec<ConflictItemRef<'_>>, FxBuildHasher> =
+            IndexSet::from_iter([vec![first.as_ref()], vec![first.as_ref(), second.as_ref()]]);
+
+        activate_conflict_item(&mut sets, second.as_ref());
+
+        assert_eq!(
+            sets.into_iter().collect::<Vec<_>>(),
+            vec![vec![first.as_ref(), second.as_ref()]]
+        );
+    }
+
+    #[test]
+    fn activation_paths_propagate_through_convergence_and_cycles() {
+        let left = conflict_item("left", "extra");
+        let right = group_item("right", "group");
+        let shared = conflict_item("shared", "extra");
+
+        let mut graph = Graph::new();
+        let left_root = graph.add_node([None, None]);
+        let right_root = graph.add_node([None, None]);
+        let left_node = graph.add_node([Some(left.clone()), None]);
+        let right_node = graph.add_node([None, Some(right.clone())]);
+        let shared_node = graph.add_node([Some(shared.clone()), None]);
+        let tail = graph.add_node([None, None]);
+        graph.add_edge(left_root, left_node, ());
+        graph.add_edge(right_root, right_node, ());
+        graph.add_edge(left_node, shared_node, ());
+        graph.add_edge(right_node, shared_node, ());
+        graph.add_edge(shared_node, tail, ());
+        graph.add_edge(tail, shared_node, ());
+
+        let activated = propagate_conflict_activations(&graph, |items| {
+            [
+                items[0].as_ref().map(ConflictItem::as_ref),
+                items[1].as_ref().map(ConflictItem::as_ref),
+            ]
+        });
+        let expected = vec![
+            activation_path(vec![right.clone(), shared.clone()]),
+            activation_path(vec![left.clone(), shared.clone()]),
+        ];
+
+        assert_eq!(
+            activated[&shared_node]
+                .iter()
+                .map(|path| path
+                    .iter()
+                    .map(ConflictItemRef::to_owned)
+                    .collect::<Vec<_>>())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(
+            activated[&tail]
+                .iter()
+                .map(|path| path
+                    .iter()
+                    .map(ConflictItemRef::to_owned)
+                    .collect::<Vec<_>>())
+                .collect::<Vec<_>>(),
+            expected
+        );
     }
 }
