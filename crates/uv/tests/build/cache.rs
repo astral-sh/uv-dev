@@ -2,13 +2,14 @@ use std::fmt::Write;
 use std::path::PathBuf;
 use std::process::Command;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use assert_fs::prelude::*;
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
 use futures::executor::block_on;
 use insta::{allow_duplicates, assert_snapshot};
 use predicates::prelude::predicate;
+use url::Url;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
@@ -657,6 +658,87 @@ fn refresh_local_wheel_recovers_missing_archive() -> Result<()> {
             Uninstalled 1 package in [TIME]
             Installed 1 package in [TIME]
              ~ binary-payload==0.1.0 (from file://[TEMP_DIR]/binary_payload-0.1.0-py3-none-any.whl)
+            ");
+        }
+
+        assert!(!context.cache_files(CacheBucket::Archive)?.is_empty());
+        context
+            .assert_command("from binary_payload import module; print(module.VALUE, end='')")
+            .success()
+            .stdout("not binary");
+    }
+
+    Ok(())
+}
+
+/// Locked installations must not reuse a direct wheel pointer whose archive is missing.
+#[tokio::test]
+async fn sync_locked_direct_wheel_recovers_missing_archive() -> Result<()> {
+    let server = MockServer::start().await;
+    for (remote, content_addressed_cache) in
+        [(false, false), (false, true), (true, false), (true, true)]
+    {
+        let context = uv_test::test_context!("3.12")
+            .with_filter((r" \(from (?:file|http)://.*\)", " (from [WHEEL_URL])"));
+        let wheel = binary_payload_wheel(&context)?;
+        let source = if remote {
+            Mock::given(method("GET"))
+                .and(path("/binary_payload-0.1.0-py3-none-any.whl"))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(fs_err::read(&wheel)?))
+                .mount(&server)
+                .await;
+            format!("{}/binary_payload-0.1.0-py3-none-any.whl", server.uri())
+        } else {
+            Url::from_file_path(&wheel)
+                .map_err(|()| anyhow!("wheel path is not absolute"))?
+                .to_string()
+        };
+        context
+            .temp_dir
+            .child("pyproject.toml")
+            .write_str(&format!(
+                r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["binary-payload @ {source}"]
+            "#,
+            ))?;
+
+        let mut sync = context.sync();
+        sync.arg("--no-index");
+        if content_addressed_cache {
+            sync.args(["--preview-features", "content-addressed-cache"]);
+        }
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), sync, @"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Resolved 2 packages in [TIME]
+            Installed 1 package in [TIME]
+             + binary-payload==0.1.0 (from [WHEEL_URL])
+            ");
+        }
+
+        // A fresh environment can encounter wheel pointers restored without their archives.
+        fs_err::remove_dir_all(context.cache_dir.child("archive-v0"))?;
+        fs_err::remove_dir_all(&context.venv)?;
+        let mut sync = context.sync();
+        sync.args(["--locked", "--no-index"]);
+        if content_addressed_cache {
+            sync.args(["--preview-features", "content-addressed-cache"]);
+        }
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), sync, @"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+            Creating virtual environment at: .venv
+            Resolved 2 packages in [TIME]
+            Prepared 1 package in [TIME]
+            Installed 1 package in [TIME]
+             + binary-payload==0.1.0 (from [WHEEL_URL])
             ");
         }
 
