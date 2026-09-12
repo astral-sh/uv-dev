@@ -22,20 +22,18 @@ import tomllib
 NO_BUMP_CRATES = {"uv", "uv-build", "uv-version"}
 
 
-def main() -> None:
-    # Pre-sync NO_BUMP_CRATES versions before running cargo metadata.
-    #
+def sync_binary_crate_pins(workspace_manifest: pathlib.Path) -> None:
     # Rooster updates crate versions but isn't workspace-aware, so it doesn't update
     # the workspace dependency pins in the root Cargo.toml. This can cause cargo metadata
     # to fail with version mismatches (e.g., when going from 0.9.x to 0.10.0).
     # We fix the pins first by reading the crate versions directly.
-    script_dir = pathlib.Path(__file__).parent
-    workspace_manifest = script_dir.parent / "Cargo.toml"
     workspace_manifest_contents = workspace_manifest.read_text()
     parsed_workspace_manifest = tomllib.loads(workspace_manifest_contents)
 
     for crate_name in NO_BUMP_CRATES:
-        crate_manifest = script_dir.parent / "crates" / crate_name / "Cargo.toml"
+        crate_manifest = (
+            workspace_manifest.parent / "crates" / crate_name / "Cargo.toml"
+        )
         if not crate_manifest.exists():
             continue
         crate_version = tomllib.loads(crate_manifest.read_text())["package"]["version"]
@@ -52,6 +50,11 @@ def main() -> None:
             )
 
     workspace_manifest.write_text(workspace_manifest_contents)
+
+
+def main() -> None:
+    workspace_manifest = pathlib.Path(__file__).parent.parent / "Cargo.toml"
+    sync_binary_crate_pins(workspace_manifest)
 
     # Now cargo metadata will succeed
     result = subprocess.run(

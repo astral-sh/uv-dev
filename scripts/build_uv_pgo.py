@@ -185,18 +185,7 @@ def main() -> None:
     for profile in profile_dir.glob("uv-*.profraw"):
         profile.unlink()
 
-    environment["CARGO_INCREMENTAL"] = "0"
-    if target.endswith("-apple-darwin"):
-        for variable in ("CFLAGS", "CXXFLAGS"):
-            environment[variable] = append_flags(
-                environment.get(variable), "-fno-profile-generate -fno-profile-use"
-            )
-    if target.endswith("-pc-windows-msvc") and "+crt-static" not in environment.get(
-        "RUSTFLAGS", ""
-    ):
-        environment["RUSTFLAGS"] = append_flags(
-            environment.get("RUSTFLAGS"), "-C target-feature=+crt-static"
-        )
+    configure_build_environment(target, environment)
 
     instrumented_target_dir = target_dir / "instrumented"
     instrumented_environment = environment | {
@@ -240,6 +229,21 @@ def main() -> None:
     print(
         f"Profile-guided uv: {target_dir / target / profile / binary.name}", flush=True
     )
+
+
+def configure_build_environment(target: str, environment: dict[str, str]) -> None:
+    environment["CARGO_INCREMENTAL"] = "0"
+    if target.endswith("-apple-darwin"):
+        for variable in ("CFLAGS", "CXXFLAGS"):
+            environment[variable] = append_flags(
+                environment.get(variable), "-fno-profile-generate -fno-profile-use"
+            )
+    if target.endswith("-pc-windows-msvc") and "+crt-static" not in environment.get(
+        "RUSTFLAGS", ""
+    ):
+        environment["RUSTFLAGS"] = append_flags(
+            environment.get("RUSTFLAGS"), "-C target-feature=+crt-static"
+        )
 
 
 def train_uv(
@@ -324,18 +328,23 @@ def prepare_corpus(corpus_directory: Path) -> None:
         if project.additional_environments or project.exclude_dependencies:
             manifest = destination / "pyproject.toml"
             content = manifest.read_text()
-            if project.additional_environments:
-                content = extend_project_environments(project, content)
-            if project.exclude_dependencies:
-                dependencies = ", ".join(
-                    f'"{dependency}"' for dependency in project.exclude_dependencies
-                )
-                setting = f"exclude-dependencies = [{dependencies}]\n"
-                if "[tool.uv]\n" in content:
-                    content = content.replace("[tool.uv]\n", f"[tool.uv]\n{setting}", 1)
-                else:
-                    content += f"\n[tool.uv]\n{setting}"
+            content = configure_project_manifest(project, content)
             manifest.write_text(content)
+
+
+def configure_project_manifest(project: EcosystemProject, content: str) -> str:
+    if project.additional_environments:
+        content = extend_project_environments(project, content)
+    if project.exclude_dependencies:
+        dependencies = ", ".join(
+            f'"{dependency}"' for dependency in project.exclude_dependencies
+        )
+        setting = f"exclude-dependencies = [{dependencies}]\n"
+        if "[tool.uv]\n" in content:
+            content = content.replace("[tool.uv]\n", f"[tool.uv]\n{setting}", 1)
+        else:
+            content += f"\n[tool.uv]\n{setting}"
+    return content
 
 
 def extend_project_environments(project: EcosystemProject, content: str) -> str:
@@ -385,6 +394,30 @@ def run_workloads(
         }
     )
     labels = prepare_pythons(binary, training_environment, profile_dir)
+    commands = workload_commands(binary, launcher, corpus_directory)
+
+    for label, command in commands:
+        workload_environment = training_environment.copy()
+        group = profile_group(label)
+        if label != group:
+            project = label.removeprefix(f"{group}-")
+            cache_directory = corpus_directory / "cache"
+            if group.startswith("universal-"):
+                cache_directory /= "universal"
+            workload_environment["UV_CACHE_DIR"] = str(cache_directory / project)
+        if profile_dir is not None:
+            workload_environment["LLVM_PROFILE_FILE"] = str(
+                profile_dir / f"uv-{group}-%m.profraw"
+            )
+        print(f"Training uv workload: {label}", flush=True)
+        run(command, environment=workload_environment)
+
+    return (*labels, *(label for label, _ in commands))
+
+
+def workload_commands(
+    binary: Path, launcher: Path, corpus_directory: Path
+) -> list[tuple[str, list[str]]]:
     commands: list[tuple[str, list[str]]] = []
 
     for project in CORPUS_PROJECTS:
@@ -504,24 +537,7 @@ def run_workloads(
     # The Windows trampoline calls process::exit, bypassing LLVM's profile flush.
     if launcher.is_file() and launcher.suffix != ".exe":
         commands.append(("launcher", [str(launcher), "--version"]))
-
-    for label, command in commands:
-        workload_environment = training_environment.copy()
-        group = profile_group(label)
-        if label != group:
-            project = label.removeprefix(f"{group}-")
-            cache_directory = corpus_directory / "cache"
-            if group.startswith("universal-"):
-                cache_directory /= "universal"
-            workload_environment["UV_CACHE_DIR"] = str(cache_directory / project)
-        if profile_dir is not None:
-            workload_environment["LLVM_PROFILE_FILE"] = str(
-                profile_dir / f"uv-{group}-%m.profraw"
-            )
-        print(f"Training uv workload: {label}", flush=True)
-        run(command, environment=workload_environment)
-
-    return (*labels, *(label for label, _ in commands))
+    return commands
 
 
 def prepare_pythons(

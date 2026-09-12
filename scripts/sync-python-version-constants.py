@@ -32,13 +32,7 @@ ROOT = SELF_DIR.parent
 PYTHON_MINOR_VERSIONS = ("3.15", "3.14", "3.13", "3.12", "3.11", "3.10")
 
 
-def main() -> None:
-    # Read the download metadata
-    metadata_path = ROOT / "crates" / "uv-python" / "download-metadata.json"
-    with open(metadata_path) as f:
-        metadata = json.load(f)
-
-    # Collect all versions per minor, separating stable and prerelease
+def latest_python_versions(metadata: dict) -> dict[str, str]:
     stable_versions: dict[str, str] = {}
     prerelease_versions: dict[str, str] = {}
 
@@ -55,24 +49,23 @@ def main() -> None:
         if prerelease:
             version += prerelease
 
-        if prerelease:
-            if minor not in prerelease_versions or Version(version) > Version(
-                prerelease_versions[minor]
-            ):
-                prerelease_versions[minor] = version
-        else:
-            if minor not in stable_versions or Version(version) > Version(
-                stable_versions[minor]
-            ):
-                stable_versions[minor] = version
+        versions = prerelease_versions if prerelease else stable_versions
+        previous = versions.get(minor)
+        if previous is None or Version(version) > Version(previous):
+            versions[minor] = version
 
     # Use stable if available, otherwise prerelease
-    latest_versions: dict[str, str] = {}
-    for minor, version in stable_versions.items():
-        latest_versions[minor] = version
+    latest_versions = stable_versions.copy()
     for minor, version in prerelease_versions.items():
-        if minor not in latest_versions:
-            latest_versions[minor] = version
+        latest_versions.setdefault(minor, version)
+    return latest_versions
+
+
+def main() -> None:
+    metadata_path = ROOT / "crates" / "uv-python" / "download-metadata.json"
+    with open(metadata_path) as f:
+        metadata = json.load(f)
+    latest_versions = latest_python_versions(metadata)
 
     # Update the constants in uv-test/src/lib.rs
     lib_path = ROOT / "crates" / "uv-test" / "src" / "lib.rs"

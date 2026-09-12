@@ -25,15 +25,8 @@ def expected_members(path: Path) -> dict[str, str]:
     raise ValueError(f"Unsupported release archive: {path.name}")
 
 
-def read_binaries(path: Path) -> dict[str, bytes]:
-    """Read every executable, requiring uv's exact GitHub release archive layout."""
-    expected = expected_members(path)
-    if path.suffix == ".zip":
-        with ZipFile(path) as archive:
-            if sorted(archive.namelist()) != sorted(expected):
-                raise ValueError(f"Unexpected release archive contents: {path.name}")
-            return {binary: archive.read(member) for member, binary in expected.items()}
-
+def read_tar_binaries(path: Path, expected: dict[str, str]) -> dict[str, bytes]:
+    """Read only the expected regular files and allow their top-level directory."""
     with tarfile.open(path, "r:gz") as archive:
         directory = path.name.removesuffix(".tar.gz")
         members = [
@@ -53,6 +46,17 @@ def read_binaries(path: Path) -> dict[str, bytes]:
             with source:
                 binaries[expected[member.name]] = source.read()
         return binaries
+
+
+def read_binaries(path: Path) -> dict[str, bytes]:
+    """Read every executable, requiring uv's exact GitHub release archive layout."""
+    expected = expected_members(path)
+    if path.suffix == ".zip":
+        with ZipFile(path) as archive:
+            if sorted(archive.namelist()) != sorted(expected):
+                raise ValueError(f"Unexpected release archive contents: {path.name}")
+            return {binary: archive.read(member) for member, binary in expected.items()}
+    return read_tar_binaries(path, expected)
 
 
 def extract_binaries(path: Path, output: Path) -> None:

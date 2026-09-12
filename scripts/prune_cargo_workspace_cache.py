@@ -36,10 +36,9 @@ def fingerprint_last_used(directory: Path) -> int | None:
     return max(timestamps, default=None)
 
 
-def prune_workspace_fingerprints(
-    profile: Path, marker_timestamp: int, packages: set[str]
-) -> tuple[int, int, int]:
-    fingerprint_root = profile / ".fingerprint"
+def collect_fingerprints(
+    fingerprint_root: Path, marker_timestamp: int, packages: set[str]
+) -> tuple[dict[str, set[str]], set[str], set[str]]:
     stale_fingerprints_by_package: dict[str, set[str]] = {}
     active_fingerprints: set[str] = set()
     active_packages: set[str] = set()
@@ -65,6 +64,38 @@ def prune_workspace_fingerprints(
         elif package in packages:
             stale_fingerprints_by_package.setdefault(package, set()).add(fingerprint)
 
+    return stale_fingerprints_by_package, active_fingerprints, active_packages
+
+
+def remove_stale_artifacts(directory: Path, stale_fingerprints: set[str]) -> int:
+    if not directory.is_dir():
+        return 0
+
+    removed_paths = 0
+    for artifact in directory.iterdir():
+        match = ARTIFACT_FINGERPRINT.search(artifact.name)
+        if match is None or match.group(1) not in stale_fingerprints:
+            continue
+
+        if artifact.is_symlink() or artifact.is_file():
+            artifact.unlink()
+        elif artifact.is_dir():
+            shutil.rmtree(artifact)
+        else:
+            continue
+
+        removed_paths += 1
+
+    return removed_paths
+
+
+def prune_workspace_fingerprints(
+    profile: Path, marker_timestamp: int, packages: set[str]
+) -> tuple[int, int, int]:
+    fingerprint_root = profile / ".fingerprint"
+    stale_fingerprints_by_package, active_fingerprints, active_packages = (
+        collect_fingerprints(fingerprint_root, marker_timestamp, packages)
+    )
     if not active_fingerprints:
         raise RuntimeError("No active Cargo fingerprints found; refusing to prune")
 
@@ -77,22 +108,7 @@ def prune_workspace_fingerprints(
     removed_paths = 0
 
     for directory in (fingerprint_root, profile / "deps", profile / "build"):
-        if not directory.is_dir():
-            continue
-
-        for artifact in directory.iterdir():
-            match = ARTIFACT_FINGERPRINT.search(artifact.name)
-            if match is None or match.group(1) not in stale_fingerprints:
-                continue
-
-            if artifact.is_symlink() or artifact.is_file():
-                artifact.unlink()
-            elif artifact.is_dir():
-                shutil.rmtree(artifact)
-            else:
-                continue
-
-            removed_paths += 1
+        removed_paths += remove_stale_artifacts(directory, stale_fingerprints)
 
     return len(stale_fingerprints), removed_paths, len(active_fingerprints)
 

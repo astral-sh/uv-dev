@@ -147,6 +147,35 @@ def apple_json(token: str, suffix: str = "", body: dict | None = None) -> dict:
         raise RuntimeError(f"Apple Notary API returned HTTP {error.code}") from None
 
 
+def wait_for_notarization(token: str, submission_id: str, deadline: float) -> None:
+    """Poll a submission, report its log, and require acceptance before the deadline."""
+    while True:
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"Apple notarization timed out: {submission_id}")
+        status = apple_json(token, f"/{submission_id}")["data"]["attributes"]["status"]
+        if status == "In Progress":
+            time.sleep(10)
+            continue
+
+        log_url = apple_json(token, f"/{submission_id}/logs")["data"]["attributes"][
+            "developerLogUrl"
+        ]
+        if not log_url.startswith("https://"):
+            raise ValueError("Apple returned an invalid notarization log URL")
+        with urllib.request.urlopen(log_url, timeout=60) as response:
+            log = json.load(response)
+        for issue in log.get("issues") or []:
+            print(
+                f"Apple notarization {issue['severity']}: "
+                f"{issue['path']}: {issue['message']}",
+                file=sys.stderr,
+            )
+        if status != "Accepted":
+            raise ValueError(f"Apple notarization {status}: {submission_id}")
+        print(f"Apple notarization accepted: {submission_id}")
+        return
+
+
 def notarize(signed: Path) -> None:
     """Submit all targets' signed binaries together and wait for Apple's acceptance."""
     key = notarization_key()
@@ -187,31 +216,7 @@ def notarize(signed: Path) -> None:
         except (BotoCoreError, ClientError):
             raise RuntimeError("Apple notarization upload failed") from None
 
-        while True:
-            if time.monotonic() >= deadline:
-                raise TimeoutError(f"Apple notarization timed out: {submission_id}")
-            status = apple_json(token, f"/{submission_id}")["data"]["attributes"][
-                "status"
-            ]
-            if status != "In Progress":
-                log_url = apple_json(token, f"/{submission_id}/logs")["data"][
-                    "attributes"
-                ]["developerLogUrl"]
-                if not log_url.startswith("https://"):
-                    raise ValueError("Apple returned an invalid notarization log URL")
-                with urllib.request.urlopen(log_url, timeout=60) as response:
-                    log = json.load(response)
-                for issue in log.get("issues") or []:
-                    print(
-                        f"Apple notarization {issue['severity']}: "
-                        f"{issue['path']}: {issue['message']}",
-                        file=sys.stderr,
-                    )
-                if status != "Accepted":
-                    raise ValueError(f"Apple notarization {status}: {submission_id}")
-                print(f"Apple notarization accepted: {submission_id}")
-                return
-            time.sleep(10)
+        wait_for_notarization(token, submission_id, deadline)
 
 
 def main() -> None:
