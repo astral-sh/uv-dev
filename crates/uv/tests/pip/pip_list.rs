@@ -4,9 +4,30 @@ use assert_fs::fixture::ChildPath;
 use assert_fs::fixture::FileWriteStr;
 use assert_fs::fixture::PathChild;
 use assert_fs::prelude::*;
+use insta::allow_duplicates;
 
 use uv_static::EnvVars;
 use uv_test::uv_snapshot;
+
+const INVALID_INSTALLER_METADATA: &str =
+    r#""https://user:sidecar-secret@example.invalid/a?sig=sidecar-signature""#;
+
+/// Populate enough wheel records to exercise batched installed-package indexing.
+fn create_many_installed_distributions(site_packages: &ChildPath) -> Result<Vec<String>> {
+    create_installed_distributions(site_packages, 1_024)
+}
+
+fn create_installed_distributions(site_packages: &ChildPath, count: usize) -> Result<Vec<String>> {
+    let mut packages = Vec::with_capacity(count);
+    for index in 0..count {
+        let package = format!("filler{index:04}");
+        site_packages
+            .child(format!("{package}-1.0.0.dist-info"))
+            .create_dir_all()?;
+        packages.push(package);
+    }
+    Ok(packages)
+}
 
 #[test]
 fn list_empty_columns() {
@@ -44,6 +65,225 @@ fn list_empty_json() {
     []
     "
     );
+}
+
+#[test]
+fn list_many_distributions_keeps_metadata_lazy() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_concurrent_installs("4");
+    let site_packages = ChildPath::new(context.site_packages());
+    let packages = create_many_installed_distributions(&site_packages)?;
+
+    for (package, version) in [("omega", "2.0.0"), ("alpha", "1.0.0")] {
+        let dist_info = site_packages.child(format!("{package}-{version}.dist-info"));
+        dist_info.create_dir_all()?;
+        dist_info.child("METADATA").write_str("invalid")?;
+        dist_info.child("WHEEL").write_str("invalid")?;
+    }
+
+    let mut command = context.pip_list();
+    command.arg("--format=json");
+    for package in packages {
+        command.arg("--exclude").arg(package);
+    }
+
+    uv_snapshot!(context.filters(), command, @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [{"name":"alpha","version":"1.0.0"},{"name":"omega","version":"2.0.0"}]
+    "#);
+
+    Ok(())
+}
+
+#[test]
+fn list_many_distributions_reports_first_error() -> Result<()> {
+    for concurrent_installs in ["1", "4"] {
+        let context = uv_test::test_context!("3.12").with_concurrent_installs(concurrent_installs);
+        let site_packages = ChildPath::new(context.site_packages());
+        create_many_installed_distributions(&site_packages)?;
+
+        for package in ["a_warning", "c_warning"] {
+            let dist_info = site_packages.child(format!("{package}-1.0.0.dist-info"));
+            dist_info.create_dir_all()?;
+            dist_info
+                .child("direct_url.json")
+                .write_str(r#"{"url":"relative","dir_info":{}}"#)?;
+        }
+        for package in ["b_error", "z_error"] {
+            let dist_info = site_packages.child(format!("{package}-1.0.0.dist-info"));
+            dist_info.create_dir_all()?;
+            dist_info.child("direct_url.json").write_str("invalid")?;
+        }
+        site_packages
+            .child("~dangling-1.0.0.dist-info")
+            .create_dir_all()?;
+
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), context.pip_list()
+                .env(EnvVars::RUST_LOG, "uv_distribution_types=warn"), @"
+            exit_code: 2 (failure)
+            ----- stderr -----
+            WARN Failed to parse direct URL: relative URL without a base
+            error: Failed to read metadata from: `[SITE_PACKAGES]/b_error-1.0.0.dist-info`
+              Caused by: expected value at line 1 column 1
+            ");
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn list_orders_optional_sidecar_warnings_at_parallel_threshold() -> Result<()> {
+    for concurrent_installs in ["1", "4"] {
+        for distribution_count in [1_023, 1_024, 1_025] {
+            let context =
+                uv_test::test_context!("3.12").with_concurrent_installs(concurrent_installs);
+            let site_packages = ChildPath::new(context.site_packages());
+            create_installed_distributions(&site_packages, distribution_count - 2)?;
+            for package in ["z_warning", "a_warning"] {
+                let dist_info = site_packages.child(format!("{package}-1.0.0.dist-info"));
+                dist_info.create_dir_all()?;
+                for sidecar in ["uv_cache.json", "uv_build.json"] {
+                    dist_info
+                        .child(sidecar)
+                        .write_str(INVALID_INSTALLER_METADATA)?;
+                }
+            }
+
+            allow_duplicates! {
+                uv_snapshot!(context.filters(), context.pip_list().arg("--editable"), @"
+                exit_code: 0 (success)
+                ----- stderr -----
+                warning: Ignoring invalid installer metadata at `[SITE_PACKAGES]/a_warning-1.0.0.dist-info/uv_cache.json`: invalid JSON data
+                warning: Ignoring invalid installer metadata at `[SITE_PACKAGES]/a_warning-1.0.0.dist-info/uv_build.json`: invalid JSON data
+                warning: Ignoring invalid installer metadata at `[SITE_PACKAGES]/z_warning-1.0.0.dist-info/uv_cache.json`: invalid JSON data
+                warning: Ignoring invalid installer metadata at `[SITE_PACKAGES]/z_warning-1.0.0.dist-info/uv_build.json`: invalid JSON data
+                ");
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn list_many_distributions_reports_sidecar_warnings_before_error() -> Result<()> {
+    for concurrent_installs in ["1", "4"] {
+        for error_index in [30, 32] {
+            let before = format!("filler{:04}", error_index - 1);
+            let error = format!("filler{error_index:04}");
+            let context = uv_test::test_context!("3.12")
+                .with_concurrent_installs(concurrent_installs)
+                .with_filter((before.clone(), "before"))
+                .with_filter((error.clone(), "error"));
+            let site_packages = ChildPath::new(context.site_packages());
+            create_many_installed_distributions(&site_packages)?;
+
+            site_packages
+                .child(format!("{before}-1.0.0.dist-info/uv_cache.json"))
+                .write_str(INVALID_INSTALLER_METADATA)?;
+            let dist_info = site_packages.child(format!("{error}-1.0.0.dist-info"));
+            for sidecar in ["uv_cache.json", "uv_build.json"] {
+                dist_info
+                    .child(sidecar)
+                    .write_str(INVALID_INSTALLER_METADATA)?;
+            }
+            dist_info.child("direct_url.json").write_str("invalid")?;
+
+            for later_index in [error_index + 1, error_index + 32] {
+                for sidecar in ["uv_cache.json", "uv_build.json"] {
+                    site_packages
+                        .child(format!("filler{later_index:04}-1.0.0.dist-info/{sidecar}"))
+                        .write_str(INVALID_INSTALLER_METADATA)?;
+                }
+            }
+
+            allow_duplicates! {
+                uv_snapshot!(context.filters(), context.pip_list(), @"
+                exit_code: 2 (failure)
+                ----- stderr -----
+                warning: Ignoring invalid installer metadata at `[SITE_PACKAGES]/before-1.0.0.dist-info/uv_cache.json`: invalid JSON data
+                warning: Ignoring invalid installer metadata at `[SITE_PACKAGES]/error-1.0.0.dist-info/uv_cache.json`: invalid JSON data
+                warning: Ignoring invalid installer metadata at `[SITE_PACKAGES]/error-1.0.0.dist-info/uv_build.json`: invalid JSON data
+                error: Failed to read metadata from: `[SITE_PACKAGES]/error-1.0.0.dist-info`
+                  Caused by: expected value at line 1 column 1
+                ");
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn list_many_distributions_orders_optional_sidecar_read_errors() -> Result<()> {
+    for concurrent_installs in ["1", "4"] {
+        for error_sidecar in ["uv_cache.json", "uv_build.json"] {
+            let context = uv_test::test_context!("3.12")
+                .with_concurrent_installs(concurrent_installs)
+                .with_filter((
+                    r"failed to (?:read from|open) file (`[^`]+`): [^\n]+",
+                    "failed to read file $1: [IO_ERROR]",
+                ));
+            let site_packages = ChildPath::new(context.site_packages());
+            create_many_installed_distributions(&site_packages)?;
+            let dist_info = site_packages.child("filler0031-1.0.0.dist-info");
+            for sidecar in ["uv_cache.json", "uv_build.json"] {
+                if sidecar == error_sidecar {
+                    dist_info.child(sidecar).create_dir_all()?;
+                } else {
+                    dist_info
+                        .child(sidecar)
+                        .write_str(INVALID_INSTALLER_METADATA)?;
+                }
+                site_packages
+                    .child(format!("filler0032-1.0.0.dist-info/{sidecar}"))
+                    .write_str(INVALID_INSTALLER_METADATA)?;
+            }
+
+            if error_sidecar == "uv_cache.json" {
+                allow_duplicates! {
+                    uv_snapshot!(context.filters(), context.pip_list(), @"
+                    exit_code: 2 (failure)
+                    ----- stderr -----
+                    error: Failed to read metadata from: `[SITE_PACKAGES]/filler0031-1.0.0.dist-info`
+                      Caused by: failed to read file `[SITE_PACKAGES]/filler0031-1.0.0.dist-info/uv_cache.json`: [IO_ERROR]
+                    ");
+                }
+            } else {
+                allow_duplicates! {
+                    uv_snapshot!(context.filters(), context.pip_list(), @"
+                    exit_code: 2 (failure)
+                    ----- stderr -----
+                    warning: Ignoring invalid installer metadata at `[SITE_PACKAGES]/filler0031-1.0.0.dist-info/uv_cache.json`: invalid JSON data
+                    error: Failed to read metadata from: `[SITE_PACKAGES]/filler0031-1.0.0.dist-info`
+                      Caused by: failed to read file `[SITE_PACKAGES]/filler0031-1.0.0.dist-info/uv_build.json`: [IO_ERROR]
+                    ");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn list_many_distributions_orders_dangling_warnings() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_concurrent_installs("4");
+    let site_packages = ChildPath::new(context.site_packages());
+    create_many_installed_distributions(&site_packages)?;
+    for package in ["~z", "~a"] {
+        site_packages
+            .child(format!("{package}-1.0.0.dist-info"))
+            .create_dir_all()?;
+    }
+
+    uv_snapshot!(context.filters(), context.pip_list().arg("--editable"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Ignoring dangling temporary directory: `[SITE_PACKAGES]/~a-1.0.0.dist-info`
+    warning: Ignoring dangling temporary directory: `[SITE_PACKAGES]/~z-1.0.0.dist-info`
+    ");
+
+    Ok(())
 }
 
 #[test]
@@ -617,10 +857,12 @@ fn list_format_freeze() {
 #[test]
 fn list_legacy_editable() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_concurrent_installs("4")
         .with_filter((r"\-\-\-\-\-\-+.*", "[UNDERLINE]"))
         .with_filter(("  +", " "));
 
     let site_packages = ChildPath::new(context.site_packages());
+    create_many_installed_distributions(&site_packages)?;
 
     let target = context.temp_dir.child("zstandard_project");
     target.child("zstd").create_dir_all()?;

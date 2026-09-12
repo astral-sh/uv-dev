@@ -171,6 +171,24 @@ impl InstallerMetadataTestContext {
             .join("installed_sidecar_fixture-1.0.0.dist-info")
     }
 
+    fn with_large_index(mut self) -> Result<Self> {
+        self.inner = self.inner.with_concurrent_installs("4");
+        let site_packages = ChildPath::new(self.inner.site_packages());
+        for index in 0..1_024 {
+            let package = format!("index_filler_{index:04}");
+            let dist_info = site_packages.child(format!("{package}-1.0.0.dist-info"));
+            dist_info.create_dir_all()?;
+            dist_info.child("METADATA").write_str(&format!(
+                "Metadata-Version: 2.3\nName: {}\nVersion: 1.0.0\n",
+                package.replace('_', "-")
+            ))?;
+            dist_info
+                .child("WHEEL")
+                .write_str("Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n")?;
+        }
+        Ok(self)
+    }
+
     fn sidecar(&self, name: &str) -> PathBuf {
         self.dist_info().join(name)
     }
@@ -398,5 +416,63 @@ fn malformed_registry_metadata_rechecks_hashes() -> Result<()> {
             assert_eq!(context.builds()?, builds);
         }
     }
+    Ok(())
+}
+
+#[test]
+fn malformed_build_metadata_rechecks_hashes_in_large_indexes() -> Result<()> {
+    for (registry, upgrade) in [(false, false), (true, false), (true, true)] {
+        let context = InstallerMetadataTestContext::new(registry)?.with_large_index()?;
+        let builds = context.builds()?;
+        context.replace_sidecar("uv_build.json", &serde_json::to_vec(CANARY)?)?;
+        context
+            .install("beta", true, upgrade)?
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("Hash mismatch"))
+            .stderr(predicate::str::contains("sidecar-secret").not())
+            .stderr(predicate::str::contains("sidecar-signature").not());
+        context.assert_flavor("alpha");
+        assert_eq!(context.builds()?, builds);
+        assert_eq!(
+            fs::read(context.sidecar("uv_build.json"))?,
+            serde_json::to_vec(CANARY)?
+        );
+
+        context
+            .install("beta", false, upgrade)?
+            .assert()
+            .success()
+            .stderr(predicate::str::contains("Installed 1 package"))
+            .stderr(predicate::str::contains("sidecar-secret").not())
+            .stderr(predicate::str::contains("sidecar-signature").not());
+        context.assert_flavor("beta");
+        context.assert_repaired("beta", false)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn filtered_large_indexes_skip_unrelated_sidecars() -> Result<()> {
+    let context = InstallerMetadataTestContext::new(false)?.with_large_index()?;
+    let unrelated =
+        ChildPath::new(context.inner.site_packages()).child("index_filler_0031-1.0.0.dist-info");
+    unrelated.child("direct_url.json").write_str("invalid")?;
+    context
+        .inner
+        .pip_list()
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("index_filler_0031"));
+
+    context
+        .install("beta", false, false)?
+        .arg("--reinstall")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Installed 1 package"))
+        .stderr(predicate::str::contains("index_filler_0031").not());
+    context.assert_flavor("beta");
+    context.assert_repaired("beta", false)?;
     Ok(())
 }

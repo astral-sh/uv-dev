@@ -189,6 +189,138 @@ impl<T> OptionalInstallerMetadata<T> {
     }
 }
 
+/// The eagerly read sidecars of an installed `.dist-info` distribution.
+///
+/// Reading the sidecars does not emit diagnostics. Converting the result into an [`InstalledDist`]
+/// reports invalid optional installer metadata and direct URLs, allowing callers to read
+/// directories concurrently and report diagnostics in a deterministic order.
+#[derive(Debug)]
+pub struct InstalledDistInfo {
+    name: PackageName,
+    version: Version,
+    path: Box<Path>,
+    cache_info_invalid: bool,
+    build_info_invalid: bool,
+    sidecars: Result<InstalledDistInfoSidecars, InstalledDistError>,
+}
+
+#[derive(Debug)]
+struct InstalledDistInfoSidecars {
+    cache_info: Option<CacheInfo>,
+    build_info: Option<BuildInfo>,
+    direct_url: Option<DirectUrl>,
+}
+
+impl InstalledDistInfo {
+    /// Read a distribution from a `.dist-info` directory without reading `METADATA` or `WHEEL`.
+    ///
+    /// Sidecar errors are deferred until conversion so diagnostics from earlier sidecars can be
+    /// reported before the first error.
+    pub fn try_from_path(path: &Path) -> Result<Option<Self>, InstalledDistError> {
+        if path.extension().is_none_or(|ext| ext != "dist-info") {
+            return Ok(None);
+        }
+
+        let Some(file_stem) = path.file_stem() else {
+            return Ok(None);
+        };
+        let Some(file_stem) = file_stem.to_str() else {
+            return Ok(None);
+        };
+        let Some((name, version)) = file_stem.split_once('-') else {
+            return Ok(None);
+        };
+
+        let name = PackageName::from_str(name)?;
+        let version = Version::from_str(version)?;
+        let mut cache_info_invalid = false;
+        let mut build_info_invalid = false;
+        let sidecars = (|| -> Result<_, InstalledDistError> {
+            let cache_info = InstalledDist::read_cache_info(path)?;
+            cache_info_invalid = cache_info.is_invalid();
+            let build_info = InstalledDist::read_build_info(path)?;
+            build_info_invalid = build_info.is_invalid();
+            let direct_url = InstalledDist::read_direct_url(path)?;
+
+            Ok(InstalledDistInfoSidecars {
+                cache_info: cache_info.into_option(),
+                build_info: build_info.into_option(),
+                direct_url,
+            })
+        })();
+
+        Ok(Some(Self {
+            name,
+            version,
+            path: path.to_path_buf().into_boxed_path(),
+            cache_info_invalid,
+            build_info_invalid,
+            sidecars,
+        }))
+    }
+}
+
+impl TryFrom<InstalledDistInfo> for InstalledDist {
+    type Error = InstalledDistError;
+
+    fn try_from(dist_info: InstalledDistInfo) -> Result<Self, Self::Error> {
+        let InstalledDistInfo {
+            name,
+            version,
+            path,
+            cache_info_invalid,
+            build_info_invalid,
+            sidecars,
+        } = dist_info;
+
+        if cache_info_invalid {
+            warn_invalid_installer_metadata(&path.join("uv_cache.json"));
+        }
+        if build_info_invalid {
+            warn_invalid_installer_metadata(&path.join("uv_build.json"));
+        }
+
+        let InstalledDistInfoSidecars {
+            cache_info,
+            build_info,
+            direct_url,
+        } = sidecars?;
+        let installer_metadata_invalid = cache_info_invalid || build_info_invalid;
+
+        if let Some(direct_url) = direct_url {
+            match DisplaySafeUrl::try_from(&direct_url) {
+                Ok(url) => {
+                    return Ok(Self {
+                        installer_metadata_invalid,
+                        ..Self::from(InstalledDistKind::Url(InstalledDirectUrlDist {
+                            name,
+                            version,
+                            editable: matches!(&direct_url, DirectUrl::LocalDirectory { dir_info, .. } if dir_info.editable == Some(true)),
+                            direct_url: Box::new(direct_url),
+                            url,
+                            path,
+                            cache_info,
+                            build_info,
+                        }))
+                    });
+                }
+                Err(err) => warn!("Failed to parse direct URL: {err}"),
+            }
+        }
+
+        Ok(Self {
+            installer_metadata_invalid,
+            ..Self::from(InstalledDistKind::Registry(InstalledRegistryDist {
+                name,
+                version,
+                path,
+                cache_info,
+                build_info,
+            }))
+        })
+    }
+}
+
 impl InstalledDist {
     /// Try to parse a distribution from a `.dist-info` directory name (like `django-5.0a1.dist-info`).
     ///
@@ -196,60 +328,9 @@ impl InstalledDist {
     pub fn try_from_path(path: &Path) -> Result<Option<Self>, InstalledDistError> {
         // Ex) `cffi-1.16.0.dist-info`
         if path.extension().is_some_and(|ext| ext == "dist-info") {
-            let Some(file_stem) = path.file_stem() else {
-                return Ok(None);
-            };
-            let Some(file_stem) = file_stem.to_str() else {
-                return Ok(None);
-            };
-            let Some((name, version)) = file_stem.split_once('-') else {
-                return Ok(None);
-            };
-
-            let name = PackageName::from_str(name)?;
-            let version = Version::from_str(version)?;
-            let cache_info = Self::read_cache_info(path)?;
-            let build_info = Self::read_build_info(path)?;
-            let installer_metadata_invalid = cache_info.is_invalid() || build_info.is_invalid();
-            let cache_info = cache_info.into_option();
-            let build_info = build_info.into_option();
-
-            let kind = if let Some(direct_url) = Self::read_direct_url(path)? {
-                match DisplaySafeUrl::try_from(&direct_url) {
-                    Ok(url) => InstalledDistKind::Url(InstalledDirectUrlDist {
-                        name,
-                        version,
-                        editable: matches!(&direct_url, DirectUrl::LocalDirectory { dir_info, .. } if dir_info.editable == Some(true)),
-                        direct_url: Box::new(direct_url),
-                        url,
-                        path: path.to_path_buf().into_boxed_path(),
-                        cache_info,
-                        build_info,
-                    }),
-                    Err(err) => {
-                        warn!("Failed to parse direct URL: {err}");
-                        InstalledDistKind::Registry(InstalledRegistryDist {
-                            name,
-                            version,
-                            path: path.to_path_buf().into_boxed_path(),
-                            cache_info,
-                            build_info,
-                        })
-                    }
-                }
-            } else {
-                InstalledDistKind::Registry(InstalledRegistryDist {
-                    name,
-                    version,
-                    path: path.to_path_buf().into_boxed_path(),
-                    cache_info,
-                    build_info,
-                })
-            };
-            return Ok(Some(Self {
-                installer_metadata_invalid,
-                ..Self::from(kind)
-            }));
+            return InstalledDistInfo::try_from_path(path)?
+                .map(Self::try_from)
+                .transpose();
         }
 
         // Ex) `zstandard-0.22.0-py3.12.egg-info` or `vtk-9.2.6.egg-info`
@@ -454,13 +535,7 @@ impl InstalledDist {
         match serde_json::from_reader::<_, T>(BufReader::new(file)) {
             Ok(metadata) => Ok(OptionalInstallerMetadata::Valid(metadata)),
             Err(err) if err.is_io() => Err(err.into()),
-            Err(_) => {
-                warn_user_once!(
-                    "Ignoring invalid installer metadata at `{}`: invalid JSON data",
-                    path.user_display()
-                );
-                Ok(OptionalInstallerMetadata::Invalid)
-            }
+            Err(_) => Ok(OptionalInstallerMetadata::Invalid),
         }
     }
 
@@ -660,6 +735,13 @@ impl InstalledMetadata for InstalledDist {
             InstalledDistKind::LegacyEditable(dist) => dist.installed_version(),
         }
     }
+}
+
+fn warn_invalid_installer_metadata(path: &Path) {
+    warn_user_once!(
+        "Ignoring invalid installer metadata at `{}`: invalid JSON data",
+        path.user_display()
+    );
 }
 
 fn read_metadata(path: &Path) -> Option<uv_pypi_types::Metadata10> {
