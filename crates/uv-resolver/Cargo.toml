@@ -68,7 +68,7 @@ reqwest = { workspace = true }
 rkyv = { workspace = true }
 rustc-hash = { workspace = true }
 same-file = { workspace = true }
-schemars = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true, features = ["jiff02"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 smallvec = { workspace = true }
@@ -89,5 +89,9 @@ insta = { workspace = true }
 toml = { workspace = true }
 
 [features]
-schemars = ["dep:schemars", "uv-distribution-types/schemars"]
+schemars = [
+    "dep:schemars",
+    "uv-distribution-types/schemars",
+    "uv-fs/schemars",
+]
 tracing-durations-export = []

@@ -59,6 +59,11 @@ where
 
 /// The full `uv workspace metadata` JSON object
 #[derive(Debug, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[cfg_attr(
+    feature = "schemars",
+    schemars(title = "uv workspace metadata (preview)")
+)]
 pub struct Metadata {
     /// Format information
     schema: SchemaReport,
@@ -79,11 +84,17 @@ pub struct Metadata {
     /// The version of python required by the workspace
     ///
     /// Every `marker` we emit implicitly assumes this constraint to keep things clean
+    #[cfg_attr(feature = "schemars", schemars(with = "String"))]
     requires_python: RequiresPython,
     /// Info about conflicting packages
     conflicts: MetadataConflicts,
     /// A mapping from importable module names to the package nodes that provide them
     #[serde(skip_serializing_if = "BTreeMap::is_empty", default)]
+    // Python's Unicode identifier rules do not have a portable JSON Schema regex equivalent.
+    #[cfg_attr(
+        feature = "schemars",
+        schemars(with = "BTreeMap<String, Vec<MetadataModuleOwner>>")
+    )]
     module_owners: BTreeMap<ModuleName, Vec<MetadataModuleOwner>>,
     /// An index of which nodes are workspace members
     ///
@@ -98,6 +109,7 @@ pub struct Metadata {
 /// The schema version for the metadata report.
 #[derive(serde::Serialize, Debug, Default)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 enum SchemaVersion {
     /// An unstable, experimental schema.
     #[default]
@@ -106,6 +118,7 @@ enum SchemaVersion {
 
 /// The schema metadata for the metadata report.
 #[derive(serde::Serialize, Debug, Default)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct SchemaReport {
     /// The version of the schema.
     version: SchemaVersion,
@@ -113,6 +126,7 @@ struct SchemaReport {
 
 /// Information about the existing or synchronized environment for the workspace.
 #[derive(Debug, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct MetadataEnvironment {
     /// Absolute path to the environment root.
     root: PortablePathBuf,
@@ -123,11 +137,16 @@ struct MetadataEnvironment {
     /// Distributions present in the environment, independently of the locked resolution.
     packages: BTreeMap<String, MetadataInstalledPackage>,
     /// Importable modules recorded by installed distributions.
+    #[cfg_attr(
+        feature = "schemars",
+        schemars(with = "BTreeMap<String, Vec<MetadataInstalledModuleOwner>>")
+    )]
     module_owners: BTreeMap<ModuleName, Vec<MetadataInstalledModuleOwner>>,
 }
 
 /// An installed distribution whose metadata records an importable module.
 #[derive(Debug, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct MetadataInstalledModuleOwner {
     /// Key for the distribution in `environment.packages`.
     installed_id: String,
@@ -135,10 +154,12 @@ struct MetadataInstalledModuleOwner {
 
 /// A distribution observed in an existing Python environment.
 #[derive(Debug, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct MetadataInstalledPackage {
     /// Normalized distribution name.
     name: PackageName,
     /// Installed distribution version.
+    #[cfg_attr(feature = "schemars", schemars(with = "String"))]
     version: Version,
     /// Absolute path to the installed distribution metadata.
     path: PortablePathBuf,
@@ -167,12 +188,15 @@ impl MetadataInstalledPackage {
 
 /// Information about the Python interpreter in an existing environment.
 #[derive(Debug, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PythonReport {
     /// Absolute path to the Python executable.
     path: PortablePathBuf,
     /// Full Python version.
+    #[cfg_attr(feature = "schemars", schemars(with = "String"))]
     version: StringVersion,
     /// Python implementation name.
+    #[cfg_attr(feature = "schemars", schemars(with = "String"))]
     implementation: LenientImplementationName,
 }
 
@@ -202,6 +226,7 @@ impl PythonReport {
 
 /// The script entry-point.
 #[derive(Debug, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub(crate) struct MetadataScript {
     /// Absolute path to the script.
     path: PortablePathBuf,
@@ -217,6 +242,7 @@ impl MetadataScript {
 
 /// The workspace entry-point.
 #[derive(Debug, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub(crate) struct MetadataWorkspace {
     /// Absolute path to the workspace root.
     path: PortablePathBuf,
@@ -232,6 +258,7 @@ impl MetadataWorkspace {
 
 /// Info for looking up workspace members, most information is stored in the node behind `id`
 #[derive(Debug, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub(crate) struct MetadataWorkspaceMember {
     /// Package name
     name: PackageName,
@@ -268,6 +295,7 @@ impl MetadataWorkspaceMember {
 
 /// An installed distribution that provides an importable module.
 #[derive(Debug, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct MetadataModuleOwner {
     /// Key for the package node in the `resolution` graph.
     package_id: MetadataNodeIdFlat,
@@ -356,6 +384,7 @@ struct MetadataModuleOwner {
 ///
 /// Workspace nodes and script nodes
 #[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub(crate) struct MetadataNode {
     /// A unique id for this node that will be used to refer to it
     #[serde(flatten)]
@@ -370,6 +399,7 @@ pub(crate) struct MetadataNode {
     dependency_groups: Vec<MetadataGroup>,
     /// The latest known version of this package, when requested by the caller.
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[cfg_attr(feature = "schemars", schemars(with = "Option<String>"))]
     latest_version: Option<Version>,
     /// Info about building the package
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -505,17 +535,20 @@ impl MetadataNode {
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 enum MetadataWorkspaceNodeKind {
     Workspace,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 enum MetadataWorkspaceGroupNodeKind {
     Group(GroupName),
 }
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 enum MetadataScriptNodeKind {
     Script,
 }
@@ -755,6 +788,7 @@ fn add_metadata_reachability<'lock>(
 /// The unique key for every node in the graph.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(untagged)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub(crate) enum MetadataNodeId {
     Package(MetadataPackageNodeId),
     Script(MetadataScriptNodeId),
@@ -766,11 +800,13 @@ pub(crate) enum MetadataNodeId {
 ///
 /// (It's not entirely clear to me that two nodes can differ only by `source` but it doesn't hurt.)
 #[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub(crate) struct MetadataPackageNodeId {
     /// The name of the package
     name: PackageName,
     /// The version of the package, if any could be found (source trees may have no version)
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[cfg_attr(feature = "schemars", schemars(with = "Option<String>"))]
     version: Option<Version>,
     /// The source of the package (directory, registry, URL...)
     source: MetadataSource,
@@ -780,6 +816,7 @@ pub(crate) struct MetadataPackageNodeId {
 
 /// The unique key for a script node.
 #[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub(crate) struct MetadataScriptNodeId {
     kind: MetadataScriptNodeKind,
     /// Absolute path to the script.
@@ -788,6 +825,7 @@ pub(crate) struct MetadataScriptNodeId {
 
 /// The unique key for a workspace node.
 #[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub(crate) struct MetadataWorkspaceNodeId {
     kind: MetadataWorkspaceNodeKind,
     /// Absolute path to the workspace root.
@@ -796,6 +834,7 @@ pub(crate) struct MetadataWorkspaceNodeId {
 
 /// The unique key for a dependency group defined on the workspace root.
 #[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub(crate) struct MetadataWorkspaceGroupNodeId {
     kind: MetadataWorkspaceGroupNodeKind,
     /// Absolute path to the workspace root.
@@ -880,6 +919,7 @@ impl Display for MetadataNodeId {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct MetadataDependency {
     id: MetadataNodeIdFlat,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -891,6 +931,7 @@ type MetadataMarker = String;
 /// The kind a node can have in the dependency graph
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub(crate) enum MetadataNodeKind {
     /// The node is the package itself
     /// its edges are `project.dependencies`
@@ -921,6 +962,7 @@ impl Display for MetadataNodeKind {
 
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(untagged, rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 enum MetadataSource {
     Registry {
         registry: MetadataRegistrySource,
@@ -1032,6 +1074,7 @@ fn normalize_workspace_relative_path(
 
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 enum MetadataRegistrySource {
     /// Ex) `https://pypi.org/simple`
     Url(UrlString),
@@ -1041,6 +1084,7 @@ enum MetadataRegistrySource {
 
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(untagged, rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 enum MetadataSourceDist {
     Url {
         url: UrlString,
@@ -1078,6 +1122,7 @@ impl MetadataSourceDist {
 
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct MetadataSourceDistMetadata {
     /// A hash of the source distribution.
     #[serde(skip_serializing_if = "BTreeMap::is_empty", default)]
@@ -1117,6 +1162,7 @@ impl MetadataSourceDistMetadata {
     }
 }
 #[derive(Clone, Debug, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct MetadataWheel {
     /// A URL or file path (via `file://`) where the wheel that was locked
     /// against was found. The location does not need to exist in the future,
@@ -1147,6 +1193,7 @@ struct MetadataWheel {
     /// URL. But we do use it for various things, and thus compute it at
     /// deserialization time. Not being able to extract a wheel filename from a
     /// wheel URL is thus a deserialization error.
+    #[cfg_attr(feature = "schemars", schemars(with = "String"))]
     filename: WheelFilename,
 }
 
@@ -1164,6 +1211,7 @@ impl MetadataWheel {
 
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(untagged, rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 enum MetadataWheelWireSource {
     Url { url: UrlString },
     Path { path: PortablePathBuf },
@@ -1183,18 +1231,21 @@ impl MetadataWheelWireSource {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct MetadataExtra {
     name: ExtraName,
     id: MetadataNodeIdFlat,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct MetadataGroup {
     name: GroupName,
     id: MetadataNodeIdFlat,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct MetadataBuildSystem {
     /// The `build-backend` specified in the pyproject.toml
     build_backend: String,
@@ -1203,6 +1254,7 @@ struct MetadataBuildSystem {
 
 /// Conflicts
 #[derive(Clone, Debug, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct MetadataConflicts {
     sets: Vec<MetadataConflictSet>,
 }
@@ -1223,6 +1275,7 @@ impl MetadataConflicts {
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct MetadataConflictSet {
     items: Vec<MetadataConflictItem>,
 }
@@ -1243,6 +1296,7 @@ impl MetadataConflictSet {
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct MetadataConflictItem {
     /// These should always be names of packages referred to in [`Metadata::members`]
     package: PackageName,
@@ -1279,6 +1333,7 @@ impl MetadataConflictItem {
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 enum MetadataConflictKind {
     Group(GroupName),
     Extra(ExtraName),

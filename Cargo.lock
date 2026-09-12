@@ -4480,6 +4480,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "687274d293b6cdc6e73e0fee520bf2049650090d7164f87672d212a3c530cf4a"
 dependencies = [
  "dyn-clone",
+ "jiff",
  "ref-cast",
  "schemars_derive",
  "serde",
@@ -6480,6 +6481,7 @@ dependencies = [
  "uv-preview",
  "uv-pypi-types",
  "uv-python",
+ "uv-resolver",
  "uv-settings",
  "uv-static",
  "uv-test",

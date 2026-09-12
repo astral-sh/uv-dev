@@ -178,7 +178,10 @@ def visit(metadata: UvMetadata, to_analyze: list[Node]):
 
 ## Schema
 
-A full JSON schema for the format will be provided when the format is finalized.
+The [preview JSON schema](metadata.schema.json) describes the current output format. It is generated
+from the serialization types with `cargo dev generate-json-schema --target workspace-metadata`. Like
+the command itself, the schema can change while the format is in preview; publishing it does not
+establish a stable interface.
 
 Here is a human-readable annotated example:
 

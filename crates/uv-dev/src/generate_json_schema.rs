@@ -30,12 +30,40 @@ struct CombinedOptions {
 pub(crate) struct Args {
     #[arg(long, default_value_t, value_enum)]
     pub(crate) mode: Mode,
+    #[arg(long, default_value_t, value_enum)]
+    pub(crate) target: Target,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, clap::ValueEnum, Default)]
+pub(crate) enum Target {
+    /// Configuration in `uv.toml` and `pyproject.toml`.
+    #[default]
+    Configuration,
+    /// The preview `uv workspace metadata` output format.
+    WorkspaceMetadata,
+}
+
+impl Target {
+    fn filename(self) -> &'static str {
+        match self {
+            Self::Configuration => "uv.schema.json",
+            Self::WorkspaceMetadata => "docs/reference/internals/metadata.schema.json",
+        }
+    }
+
+    fn command(self) -> &'static str {
+        match self {
+            Self::Configuration => "cargo dev generate-json-schema",
+            Self::WorkspaceMetadata => "cargo dev generate-json-schema --target workspace-metadata",
+        }
+    }
 }
 
 pub(crate) fn main(args: &Args) -> Result<()> {
     // Generate the schema.
-    let schema_string = generate()?;
-    let filename = "uv.schema.json";
+    let schema_string = generate(args.target)?;
+    let filename = args.target.filename();
+    let command = args.target.command();
     let schema_path = PathBuf::from(ROOT_DIR).join(filename);
 
     match args.mode {
@@ -48,16 +76,14 @@ pub(crate) fn main(args: &Args) -> Result<()> {
                     println!("Up-to-date: {filename}");
                 } else {
                     let comparison = StrComparison::new(&current, &schema_string);
-                    bail!(
-                        "{filename} changed, please run `cargo dev generate-json-schema`:\n{comparison}"
-                    );
+                    bail!("{filename} changed, please run `{command}`:\n{comparison}");
                 }
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                bail!("{filename} not found, please run `cargo dev generate-json-schema`");
+                bail!("{filename} not found, please run `{command}`");
             }
             Err(err) => {
-                bail!("{filename} changed, please run `cargo dev generate-json-schema`:\n{err}");
+                bail!("{filename} changed, please run `{command}`:\n{err}");
             }
         },
         Mode::Write => match fs_err::read_to_string(&schema_path) {
@@ -74,7 +100,7 @@ pub(crate) fn main(args: &Args) -> Result<()> {
                 fs_err::write(schema_path, schema_string.as_bytes())?;
             }
             Err(err) => {
-                bail!("{filename} changed, please run `cargo dev generate-json-schema`:\n{err}");
+                bail!("{filename} changed, please run `{command}`:\n{err}");
             }
         },
     }
@@ -90,17 +116,26 @@ const REPLACEMENTS: &[(&str, &str)] = &[
     ),
 ];
 
-/// Generate the JSON schema for the combined options as a string.
-fn generate() -> Result<String> {
+fn schema(target: Target) -> schemars::Schema {
     let settings = schemars::generate::SchemaSettings::draft07();
-    let generator = schemars::SchemaGenerator::new(settings);
-    let schema = generator.into_root_schema_for::<CombinedOptions>();
+    match target {
+        Target::Configuration => settings
+            .into_generator()
+            .into_root_schema_for::<CombinedOptions>(),
+        Target::WorkspaceMetadata => settings
+            .for_serialize()
+            .into_generator()
+            .into_root_schema_for::<uv_resolver::Metadata>(),
+    }
+}
 
-    let json = serde_json::to_string_pretty(&schema).unwrap();
+/// Generate a JSON schema as a formatted string.
+fn generate(target: Target) -> Result<String> {
+    let json = serde_json::to_string_pretty(&schema(target))?;
 
     // Format with prettier
-    let output = Command::new("npx")
-        .args(["prettier@3.9.0", "--stdin-filepath", "uv.schema.json"])
+    let mut output = Command::new("npx")
+        .args(["prettier@3.9.0", "--stdin-filepath", target.filename()])
         .current_dir(ROOT_DIR)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -108,8 +143,10 @@ fn generate() -> Result<String> {
         .spawn()
         .context("Failed to spawn prettier")?;
 
-    std::io::Write::write_all(&mut output.stdin.as_ref().unwrap(), json.as_bytes())
+    let mut stdin = output.stdin.take().context("Missing prettier stdin")?;
+    std::io::Write::write_all(&mut stdin, json.as_bytes())
         .context("Failed to write to prettier stdin")?;
+    drop(stdin);
 
     let output = output
         .wait_with_output()
@@ -121,16 +158,52 @@ fn generate() -> Result<String> {
 
     let mut output = String::from_utf8(output.stdout).context("prettier output is not UTF-8")?;
 
-    for (value, replacement) in REPLACEMENTS {
-        assert_ne!(
-            value, replacement,
-            "`value` and `replacement` must be different, but both are `{value}`"
-        );
-        let before = &output;
-        let after = output.replace(value, replacement);
-        assert_ne!(*before, after, "Could not find `{value}` in the output");
-        output = after;
+    if target == Target::Configuration {
+        for (value, replacement) in REPLACEMENTS {
+            assert_ne!(
+                value, replacement,
+                "`value` and `replacement` must be different, but both are `{value}`"
+            );
+            let before = &output;
+            let after = output.replace(value, replacement);
+            assert_ne!(*before, after, "Could not find `{value}` in the output");
+            output = after;
+        }
     }
 
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Target, schema};
+
+    #[test]
+    fn workspace_metadata_schema_describes_serialized_values() -> anyhow::Result<()> {
+        let schema = serde_json::to_value(schema(Target::WorkspaceMetadata))?;
+        let definitions = &schema["definitions"];
+
+        assert_eq!(schema["title"], "uv workspace metadata (preview)");
+        assert_eq!(definitions["SchemaVersion"]["oneOf"][0]["const"], "preview");
+        assert_eq!(
+            definitions["MetadataInstalledPackage"]["properties"]["version"]["type"],
+            "string"
+        );
+        assert_eq!(
+            definitions["PythonReport"]["properties"]["version"]["type"],
+            "string"
+        );
+
+        // Module names can contain non-ASCII identifiers, including combining characters.
+        // Keep their object keys unrestricted rather than approximating Python's identifier rules.
+        for owners in [
+            &schema["properties"]["module_owners"],
+            &definitions["MetadataEnvironment"]["properties"]["module_owners"],
+        ] {
+            assert!(owners.get("patternProperties").is_none());
+            assert_eq!(owners["additionalProperties"]["type"], "array");
+        }
+
+        Ok(())
+    }
 }
