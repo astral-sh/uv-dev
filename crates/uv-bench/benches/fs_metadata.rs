@@ -2,19 +2,25 @@
 //!
 //! Fixture construction, interpreter discovery, and validation are outside the timed regions.
 //! These controlled file-count sweeps complement the whole-command workspace and resolver benches.
+//! Set `UV_BENCH_CONCURRENT_INSTALLS` before starting the process to select the installer pool
+//! size. Each process uses one setting because the production Rayon pool is initialized once.
 
 // Keep the same allocator as uv, even though no symbols are referenced directly.
 extern crate uv_performance_memory_allocator;
 
+use std::cell::OnceCell;
 use std::env;
 use std::hint::black_box;
+use std::num::NonZeroUsize;
 use std::process::Command;
+use std::sync::atomic::Ordering;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main, measurement::WallTime};
 use sha2::{Digest, Sha256};
 
 use uv_cache::{ArchiveFileId, ArchiveId, Cache};
 use uv_cache_info::CacheInfo;
+use uv_configuration::RAYON_PARALLELISM;
 use uv_distribution_types::Name;
 use uv_installer::SitePackages;
 use uv_python::{Interpreter, PythonEnvironment, Target};
@@ -47,42 +53,63 @@ fn python_environment() -> PythonEnvironment {
     PythonEnvironment::from_interpreter(interpreter)
 }
 
+fn configure_installer_parallelism() {
+    let parallelism = env::var_os("UV_BENCH_CONCURRENT_INSTALLS").map_or(0, |value| {
+        value
+            .into_string()
+            .expect("UV_BENCH_CONCURRENT_INSTALLS must be valid UTF-8")
+            .parse::<NonZeroUsize>()
+            .expect("UV_BENCH_CONCURRENT_INSTALLS must be a positive integer")
+            .get()
+    });
+    RAYON_PARALLELISM.store(parallelism, Ordering::Relaxed);
+}
+
 fn installed_package_sidecars(criterion: &mut Criterion<WallTime>) {
     if is_codspeed_simulation() {
         return;
     }
 
-    let base_environment = python_environment();
+    configure_installer_parallelism();
+    let base_environment = OnceCell::new();
     let mut group = criterion.benchmark_group("installed_package_sidecars");
     for sidecars in [
         installed_packages::Sidecars::Missing,
         installed_packages::Sidecars::Present,
         installed_packages::Sidecars::Mixed,
     ] {
-        for package_count in [50, 500, 1_024, 2_000] {
-            let root = tempfile::tempdir().expect("Failed to create site-packages fixture");
-            installed_packages::create(root.path(), package_count, sidecars);
-            let environment = base_environment
-                .clone()
-                .with_target(Target::from(root.path().to_path_buf()))
-                .expect("Failed to configure target environment");
-
-            let packages = SitePackages::from_environment(&environment)
-                .expect("Failed to index site-packages fixture");
-            let actual: Vec<_> = packages
-                .iter()
-                .map(|distribution| distribution.name().to_string())
-                .collect();
-            let expected: Vec<_> = (0..package_count)
-                .map(|index| format!("metadata-bench-{index:04}"))
-                .collect();
-            assert_eq!(actual, expected);
-            drop(packages);
-
+        for package_count in [50, 500, 1_023, 1_024, 1_025, 2_000] {
+            let fixture = OnceCell::new();
             group.bench_with_input(
                 BenchmarkId::new(sidecars.name(), package_count),
-                &environment,
-                |bencher, environment| {
+                &package_count,
+                |bencher, &package_count| {
+                    // Criterion applies its row filter before invoking this closure. Keep one
+                    // fixture for a selected row without creating the other file-count sweeps.
+                    let (_root, environment) = fixture.get_or_init(|| {
+                        let root =
+                            tempfile::tempdir().expect("Failed to create site-packages fixture");
+                        installed_packages::create(root.path(), package_count, sidecars);
+                        let environment = base_environment
+                            .get_or_init(python_environment)
+                            .clone()
+                            .with_target(Target::from(root.path().to_path_buf()))
+                            .expect("Failed to configure target environment");
+
+                        let packages = SitePackages::from_environment(&environment)
+                            .expect("Failed to index site-packages fixture");
+                        let actual: Vec<_> = packages
+                            .iter()
+                            .map(|distribution| distribution.name().to_string())
+                            .collect();
+                        let expected: Vec<_> = (0..package_count)
+                            .map(|index| format!("metadata-bench-{index:04}"))
+                            .collect();
+                        assert_eq!(actual, expected);
+                        drop(packages);
+
+                        (root, environment)
+                    });
                     bencher.iter(|| {
                         let packages = SitePackages::from_environment(black_box(environment))
                             .expect("Failed to index site-packages fixture");
@@ -130,13 +157,18 @@ fn prune_retained_archive_files(criterion: &mut Criterion<WallTime>) {
 
     let mut group = criterion.benchmark_group("prune_retained_archive_files");
     for file_count in [10_000, 100_000] {
-        let cache = retained_file_cache(file_count);
-        assert_retained_cache(&cache);
-
+        let cache = OnceCell::new();
         group.bench_with_input(
             BenchmarkId::from_parameter(file_count),
-            &cache,
-            |bencher, cache| bencher.iter(|| assert_retained_cache(black_box(cache))),
+            &file_count,
+            |bencher, &file_count| {
+                let cache = cache.get_or_init(|| {
+                    let cache = retained_file_cache(file_count);
+                    assert_retained_cache(&cache);
+                    cache
+                });
+                bencher.iter(|| assert_retained_cache(black_box(cache)));
+            },
         );
     }
     group.finish();
@@ -149,37 +181,42 @@ fn source_cache_key_globs(criterion: &mut Criterion<WallTime>) {
 
     let mut group = criterion.benchmark_group("source_cache_key_globs");
     for file_count in [100, 10_000] {
-        let root = tempfile::tempdir().expect("Failed to create source-cache fixture");
-        fs_err::write(
-            root.path().join("pyproject.toml"),
-            "[tool.uv]\ncache-keys = [{ file = \"src/**/*.py\" }]\n",
-        )
-        .expect("Failed to write source-cache keys");
-        for index in 0..file_count {
-            let directory = root.path().join(format!("src/package_{:04}", index / 100));
-            fs_err::create_dir_all(&directory).expect("Failed to create source directory");
-            fs_err::write(
-                directory.join(format!("module_{index:04}.py")),
-                b"VALUE = 1\n",
-            )
-            .expect("Failed to write source file");
-        }
-
-        let cache_info =
-            CacheInfo::from_directory(root.path()).expect("Failed to compute source cache key");
-        assert!(!cache_info.is_empty());
-        assert_eq!(
-            cache_info,
-            CacheInfo::from_directory(root.path()).expect("Failed to repeat source cache key")
-        );
-
+        let root = OnceCell::new();
         group.bench_with_input(
             BenchmarkId::from_parameter(file_count),
-            root.path(),
-            |bencher, root| {
+            &file_count,
+            |bencher, &file_count| {
+                let root = root.get_or_init(|| {
+                    let root = tempfile::tempdir().expect("Failed to create source-cache fixture");
+                    fs_err::write(
+                        root.path().join("pyproject.toml"),
+                        "[tool.uv]\ncache-keys = [{ file = \"src/**/*.py\" }]\n",
+                    )
+                    .expect("Failed to write source-cache keys");
+                    for index in 0..file_count {
+                        let directory = root.path().join(format!("src/package_{:04}", index / 100));
+                        fs_err::create_dir_all(&directory)
+                            .expect("Failed to create source directory");
+                        fs_err::write(
+                            directory.join(format!("module_{index:04}.py")),
+                            b"VALUE = 1\n",
+                        )
+                        .expect("Failed to write source file");
+                    }
+
+                    let cache_info = CacheInfo::from_directory(root.path())
+                        .expect("Failed to compute source cache key");
+                    assert!(!cache_info.is_empty());
+                    assert_eq!(
+                        cache_info,
+                        CacheInfo::from_directory(root.path())
+                            .expect("Failed to repeat source cache key")
+                    );
+                    root
+                });
                 bencher.iter(|| {
                     black_box(
-                        CacheInfo::from_directory(black_box(root))
+                        CacheInfo::from_directory(black_box(root.path()))
                             .expect("Failed to compute source cache key"),
                     )
                 });
