@@ -15,7 +15,7 @@ use uv_workspace::pyproject::{Sources, ToolUvSources};
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, ProjectWorkspace, WorkspaceCache};
 
 use crate::Metadata;
-use crate::metadata::{GitWorkspaceMember, LoweredRequirement, MetadataError};
+use crate::metadata::{GitWorkspaceMember, IndexLookup, LoweredRequirement, MetadataError};
 
 #[derive(Debug, Clone)]
 pub struct RequiresDist {
@@ -144,6 +144,12 @@ impl RequiresDist {
         // a valid extra or group, if present.
         Self::validate_sources(project_sources, &metadata, &dependency_groups)?;
 
+        let indexes = IndexLookup::new(
+            locations,
+            project_indexes,
+            project_workspace.workspace().indexes(),
+        );
+
         // Lower the dependency groups.
         let mut lowered_dependency_groups = BTreeMap::new();
         for (name, flat_group) in dependency_groups {
@@ -161,10 +167,9 @@ impl RequiresDist {
                         Some(&metadata.name),
                         project_workspace.project_root(),
                         project_sources,
-                        project_indexes,
+                        &indexes,
                         None,
                         Some(&name),
-                        locations,
                         project_workspace.workspace(),
                         git_member,
                         editable,
@@ -206,10 +211,9 @@ impl RequiresDist {
                     Some(&metadata.name),
                     project_workspace.project_root(),
                     project_sources,
-                    project_indexes,
+                    &indexes,
                     extra.as_deref(),
                     None,
-                    locations,
                     project_workspace.workspace(),
                     git_member,
                     editable,

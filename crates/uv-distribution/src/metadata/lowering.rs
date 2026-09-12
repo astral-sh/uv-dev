@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use either::Either;
 use futures::future::join_all;
+use rustc_hash::FxHashMap;
 
 use thiserror::Error;
 use uv_auth::CredentialsCache;
@@ -39,6 +41,68 @@ enum RequirementOrigin {
     Workspace,
 }
 
+/// A borrowed lookup for indexes referenced by `tool.uv.sources`.
+#[derive(Debug)]
+pub struct IndexLookup<'data> {
+    locations: &'data IndexLocations,
+    project_indexes: &'data [Index],
+    workspace_indexes: &'data [Index],
+    by_name: OnceLock<FxHashMap<&'data IndexName, &'data Index>>,
+}
+
+impl<'data> IndexLookup<'data> {
+    /// Create an index lookup with CLI, project, and workspace precedence.
+    pub fn new(
+        locations: &'data IndexLocations,
+        project_indexes: &'data [Index],
+        workspace_indexes: &'data [Index],
+    ) -> Self {
+        Self {
+            locations,
+            project_indexes,
+            workspace_indexes,
+            by_name: OnceLock::new(),
+        }
+    }
+
+    /// Return the first eligible index with the given name.
+    pub fn get(&self, name: &IndexName) -> Option<&'data Index> {
+        if let Some(by_name) = self.by_name.get() {
+            return by_name.get(name).copied();
+        }
+
+        let mut indexes = self.indexes();
+        if let Some(index) = indexes.by_ref().take(16).find(|index| {
+            index
+                .name
+                .as_ref()
+                .is_some_and(|candidate| candidate == name)
+        }) {
+            return Some(index);
+        }
+        indexes.next()?;
+
+        let by_name = self.by_name.get_or_init(|| {
+            let mut by_name = FxHashMap::default();
+            for index in self.indexes() {
+                if let Some(name) = index.name.as_ref() {
+                    by_name.entry(name).or_insert(index);
+                }
+            }
+            by_name
+        });
+        by_name.get(name).copied()
+    }
+
+    fn indexes(&self) -> impl Iterator<Item = &'data Index> + 'data {
+        self.locations
+            .indexes()
+            .filter(|index| matches!(index.origin, Some(Origin::Cli)))
+            .chain(self.project_indexes.iter())
+            .chain(self.workspace_indexes.iter())
+    }
+}
+
 impl LoweredRequirement {
     /// Combine `project.dependencies` or `project.optional-dependencies` with `tool.uv.sources`.
     pub(crate) async fn from_requirement<'data>(
@@ -46,10 +110,9 @@ impl LoweredRequirement {
         project_name: Option<&'data PackageName>,
         project_dir: &'data Path,
         project_sources: &'data BTreeMap<PackageName, Sources>,
-        project_indexes: &'data [Index],
+        indexes: &'data IndexLookup<'data>,
         extra: Option<&ExtraName>,
         group: Option<&GroupName>,
-        locations: &'data IndexLocations,
         workspace: &'data Workspace,
         git_member: Option<&'data GitWorkspaceMember<'data>>,
         editable: bool,
@@ -240,18 +303,9 @@ impl LoweredRequirement {
                             extra,
                             group,
                         } => {
-                            // Identify the named index from either the project indexes or the workspace indexes,
-                            // in that order.
-                            let Some(index) = locations
-                                .indexes()
-                                .filter(|index| matches!(index.origin, Some(Origin::Cli)))
-                                .chain(project_indexes.iter())
-                                .chain(workspace.indexes().iter())
-                                .find(|Index { name, .. }| {
-                                    name.as_ref().is_some_and(|name| *name == index)
-                                })
-                            else {
-                                let hint = missing_index_hint(locations, &index);
+                            // Identify the named index with CLI, project, and workspace precedence.
+                            let Some(index) = indexes.get(&index) else {
+                                let hint = missing_index_hint(indexes.locations, &index);
                                 return Err(LoweringError::MissingIndex {
                                     package: requirement.name.clone(),
                                     index,
@@ -329,8 +383,7 @@ impl LoweredRequirement {
         requirement: uv_pep508::Requirement<VerbatimParsedUrl>,
         dir: &'data Path,
         sources: &'data BTreeMap<PackageName, Sources>,
-        indexes: &'data [Index],
-        locations: &'data IndexLocations,
+        indexes: &'data IndexLookup<'data>,
         cache: &'data Cache,
         workspace_cache: &'data WorkspaceCache,
         credentials_cache: &'data CredentialsCache,
@@ -431,15 +484,8 @@ impl LoweredRequirement {
                             (source, marker)
                         }
                         Source::Registry { index, marker, .. } => {
-                            let Some(index) = locations
-                                .indexes()
-                                .filter(|index| matches!(index.origin, Some(Origin::Cli)))
-                                .chain(indexes.iter())
-                                .find(|Index { name, .. }| {
-                                    name.as_ref().is_some_and(|name| *name == index)
-                                })
-                            else {
-                                let hint = missing_index_hint(locations, &index);
+                            let Some(index) = indexes.get(&index) else {
+                                let hint = missing_index_hint(indexes.locations, &index);
                                 return Err(LoweringError::MissingIndex {
                                     package: requirement.name.clone(),
                                     index,
@@ -1046,4 +1092,189 @@ fn git_path(path: &Path) -> Result<PathBuf, LoweringError> {
     path.simple_canonicalize()
         .or_else(|_| normalize_absolute_path(path))
         .map_err(LoweringError::RelativeTo)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use super::*;
+
+    fn index(name: &str, host: &str, origin: Option<Origin>) -> Index {
+        let index =
+            Index::from_str(&format!("{name}=https://{host}/simple")).expect("valid named index");
+        if let Some(origin) = origin {
+            index.with_origin(origin)
+        } else {
+            index
+        }
+    }
+
+    #[test]
+    fn index_lookup_preserves_precedence_and_first_duplicate() {
+        let cli = vec![
+            index("shared", "first-cli.example.com", Some(Origin::Cli)),
+            index("shared", "second-cli.example.com", Some(Origin::Cli)),
+        ];
+        let locations = IndexLocations::new(cli, vec![], false);
+        let project = vec![
+            index("project", "first-project.example.com", None),
+            index("project", "second-project.example.com", None),
+            index("shared", "project.example.com", None),
+        ];
+        let mut workspace = vec![
+            index("workspace", "first-workspace.example.com", None),
+            index("workspace", "second-workspace.example.com", None),
+            index("project", "workspace.example.com", None),
+            index("shared", "workspace.example.com", None),
+        ];
+        workspace.extend((0..32).map(|position| {
+            index(
+                &format!("padding-{position}"),
+                &format!("padding-{position}.example.com"),
+                None,
+            )
+        }));
+        let lookup = IndexLookup::new(&locations, &project, &workspace);
+
+        let shared = IndexName::from_str("shared").expect("valid index name");
+        let project_name = IndexName::from_str("project").expect("valid index name");
+        let workspace_name = IndexName::from_str("workspace").expect("valid index name");
+
+        assert_eq!(
+            lookup.get(&shared).expect("CLI index").raw_url().host_str(),
+            Some("first-cli.example.com")
+        );
+        assert_eq!(
+            lookup
+                .get(&project_name)
+                .expect("project index")
+                .raw_url()
+                .host_str(),
+            Some("first-project.example.com")
+        );
+        assert_eq!(
+            lookup
+                .get(&workspace_name)
+                .expect("workspace index")
+                .raw_url()
+                .host_str(),
+            Some("first-workspace.example.com")
+        );
+        assert!(lookup.by_name.get().is_none());
+
+        let last = IndexName::from_str("padding-31").expect("valid index name");
+        assert_eq!(
+            lookup.get(&last).expect("last index").raw_url().host_str(),
+            Some("padding-31.example.com")
+        );
+        assert!(lookup.by_name.get().is_some());
+        assert_eq!(
+            lookup.get(&shared).expect("CLI index").raw_url().host_str(),
+            Some("first-cli.example.com")
+        );
+        assert_eq!(
+            lookup
+                .get(&project_name)
+                .expect("project index")
+                .raw_url()
+                .host_str(),
+            Some("first-project.example.com")
+        );
+        assert_eq!(
+            lookup
+                .get(&workspace_name)
+                .expect("workspace index")
+                .raw_url()
+                .host_str(),
+            Some("first-workspace.example.com")
+        );
+    }
+
+    #[test]
+    fn index_lookup_indexes_late_hits_and_misses() {
+        let project = (0..64)
+            .map(|position| {
+                index(
+                    &format!("index-{position}"),
+                    &format!("index-{position}.example.com"),
+                    None,
+                )
+            })
+            .collect::<Vec<_>>();
+        let locations = IndexLocations::default();
+        let lookup = IndexLookup::new(&locations, &project, &[]);
+        let first = IndexName::from_str("index-0").expect("valid index name");
+        let last = IndexName::from_str("index-63").expect("valid index name");
+        let missing = IndexName::from_str("missing").expect("valid index name");
+
+        assert_eq!(
+            lookup
+                .get(&first)
+                .expect("first index")
+                .raw_url()
+                .host_str(),
+            Some("index-0.example.com")
+        );
+        assert!(lookup.by_name.get().is_none());
+        assert_eq!(
+            lookup.get(&last).expect("last index").raw_url().host_str(),
+            Some("index-63.example.com")
+        );
+        assert!(lookup.by_name.get().is_some());
+        assert!(lookup.get(&missing).is_none());
+    }
+
+    #[tokio::test]
+    async fn non_workspace_registry_source_retains_missing_index_hint() {
+        let locations = IndexLocations::new(
+            vec![index(
+                "private",
+                "private.example.com",
+                Some(Origin::Project),
+            )],
+            vec![],
+            false,
+        );
+        let lookup = IndexLookup::new(&locations, &[], &[]);
+        let requirement = uv_pep508::Requirement::<VerbatimParsedUrl>::from_str("demo")
+            .expect("valid requirement");
+        let sources = [(
+            PackageName::from_str("demo").expect("valid package name"),
+            [Source::Registry {
+                index: IndexName::from_str("private").expect("valid index name"),
+                marker: MarkerTree::TRUE,
+                extra: None,
+                group: None,
+            }]
+            .into_iter()
+            .collect::<Sources>(),
+        )]
+        .into();
+        let cache = Cache::temp().expect("temporary cache");
+        let workspace_cache = WorkspaceCache::default();
+        let credentials_cache = CredentialsCache::new();
+        let error = LoweredRequirement::from_non_workspace_requirement(
+            requirement,
+            Path::new("."),
+            &sources,
+            &lookup,
+            &cache,
+            &workspace_cache,
+            &credentials_cache,
+        )
+        .await
+        .next()
+        .expect("lowered requirement")
+        .expect_err("missing index");
+
+        assert!(matches!(error, LoweringError::MissingIndex { .. }));
+        let hint = uv_errors::Hint::hints(&error).into_iter().next();
+        assert_eq!(
+            hint.as_deref(),
+            Some(
+                "Index `private` was found in a project-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`"
+            )
+        );
+    }
 }
