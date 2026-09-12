@@ -754,6 +754,49 @@ fn tool_list_initialized_empty_json() -> Result<()> {
 }
 
 #[test]
+fn tool_list_json_quiet() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_tool_dirs();
+    let list = || {
+        let mut command = context.tool_list();
+        command.args([
+            "--offline",
+            "--no-python-downloads",
+            "--preview-features",
+            "json-output",
+        ]);
+        command
+    };
+    let check = || -> Result<()> {
+        let default = list().args(["--output-format", "json"]).assert().success();
+        let quiet = list()
+            .args(["--output-format", "json", "-q"])
+            .assert()
+            .success();
+        assert_eq!(default.get_output().stdout, quiet.get_output().stdout);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&quiet.get_output().stdout)?,
+            serde_json::json!({"schema": {"version": "preview"}, "tools": []}),
+        );
+        list()
+            .args(["--output-format", "json", "-qq"])
+            .assert()
+            .success()
+            .stdout("");
+        list()
+            .args(["--output-format", "text", "-q"])
+            .assert()
+            .success()
+            .stdout("");
+        Ok(())
+    };
+
+    check()?;
+    fs::create_dir_all(context.temp_dir.child("tools"))?;
+    check()?;
+    Ok(())
+}
+
+#[test]
 fn tool_list_outdated_json() {
     let context = uv_test::test_context!("3.12")
         .with_filtered_python_keys()
@@ -892,6 +935,31 @@ fn tool_list_json() -> Result<()> {
         serde_json::from_slice::<Value>(&report.stdout)?,
         serde_json::from_slice::<Value>(&all_fields.get_output().stdout)?,
     );
+
+    let quiet = context
+        .tool_list()
+        .args([
+            "--output-format",
+            "json",
+            "--preview-features",
+            "json-output",
+            "-q",
+        ])
+        .assert()
+        .success();
+    assert_eq!(report.stdout, quiet.get_output().stdout);
+    context
+        .tool_list()
+        .args([
+            "--output-format",
+            "json",
+            "--preview-features",
+            "json-output",
+            "-qq",
+        ])
+        .assert()
+        .success()
+        .stdout("");
 
     Ok(())
 }
