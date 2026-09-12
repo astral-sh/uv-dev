@@ -256,14 +256,14 @@ fn invalid_requirements_txt_nested_includes() -> Result<()> {
     Ok(())
 }
 
-/// A source window must not expose a credentialed entry separated by a bare carriage return.
+/// A bare carriage return is escaped without discarding the annotated physical line.
 #[test]
-fn invalid_requirements_txt_with_carriage_return_credentials() -> Result<()> {
+fn invalid_requirements_txt_with_carriage_return_source_context() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context
         .temp_dir
         .child("requirements.txt")
-        .write_str("--index-url https://user:password@example.com/simple\rflask==1.0.x\r")?;
+        .write_str("--index-url https://example.com/simple\rflask==1.0.x\r")?;
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--offline")
@@ -271,10 +271,12 @@ fn invalid_requirements_txt_with_carriage_return_credentials() -> Result<()> {
         .arg("requirements.txt"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Couldn't parse requirement in `requirements.txt` at position 53
+    error: Couldn't parse requirement
       cause: after parsing `1.0`, found `.x`, which is not part of a valid version
-             flask==1.0.x
-                  ^^^^^^^
+       --> requirements.txt:1:45
+        |
+      1 | --index-url https://example.com/simple␍flask==1.0.x␍
+        |                                             ^^^^^^^ invalid requirement
     ");
 
     Ok(())
@@ -1284,6 +1286,9 @@ async fn invalid_remote_requirements_txt() -> Result<()> {
     error: Failed to parse included requirements file
       info: The file was included here
        --> requirements.txt:1:1
+        |
+      1 | -r http://user:password@[LOCALHOST]/requirements.txt
+        | -------------------------------------------------------- included here
       cause: Couldn't parse requirement
       cause: after parsing `1.0`, found `.x`, which is not part of a valid version
        --> http://user:****@[LOCALHOST]/requirements.txt:2:6

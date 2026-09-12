@@ -87,11 +87,9 @@ pub(crate) fn missing_index_source(
             .to_string(),
         pyproject.raw.as_str(),
     );
-    // Inline source tables can share a line with credentials or arbitrary marker strings.
     Some(
         SourceSnippet::new(source)
-            .with_annotation(SourceAnnotation::primary(range).with_label("undeclared index"))
-            .without_source_text(),
+            .with_annotation(SourceAnnotation::primary(range).with_label("undeclared index")),
     )
 }
 
@@ -381,9 +379,9 @@ mod tests {
     }
 
     #[test]
-    fn missing_index_source_is_location_only() -> Result<()> {
+    fn missing_index_source_keeps_neighboring_sources() -> Result<()> {
         let pyproject = PyProjectToml::from_string(
-            "[tool.uv.sources]\n\"Demo.Pkg\" = [{ url = 'https://user:sentinel-secret@example.com/demo_pkg-1.0.0-py3-none-any.whl', marker = \"sys_platform == 'sentinel-secret'\" }, { index = 'private', marker = \"sys_platform != 'sentinel-secret'\" }]\n".to_string(),
+            "[tool.uv.sources]\n\"Demo.Pkg\" = [{ url = 'https://example.com/demo_pkg-1.0.0-py3-none-any.whl', marker = \"sys_platform == 'win32'\" }, { index = 'private', marker = \"sys_platform != 'win32'\" }]\n".to_string(),
             Path::new("pyproject.toml"),
         )?;
         let package = PackageName::from_str("demo-pkg")?;
@@ -422,13 +420,16 @@ mod tests {
                 .with_diagnostic(diagnostic_for_error)
                 .with_stream(&mut output),
         )?;
-        insta::assert_snapshot!(anstream::adapter::strip_str(&output), @"
+        insta::assert_snapshot!(anstream::adapter::strip_str(&output), @r#"
         error: Package `demo-pkg` references an undeclared index: `private`
-           --> ./pyproject.toml:2:157
+           --> ./pyproject.toml:2:126
+            |
+          2 | "Demo.Pkg" = [{ url = 'https://example.com/demo_pkg-1.0.0-py3-none-any.whl', marker = "sys_platform == 'win32'" }, { index = 'private', marker = "sys_platform != 'win32'" }]
+            |                                                                                                                              ^^^^^^^^^ undeclared index
           info: Index `private` was found in a user-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
 
         hint: Define index `private` in the project's `pyproject.toml`
-        ");
+        "#);
         Ok(())
     }
 

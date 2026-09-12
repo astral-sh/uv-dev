@@ -6,7 +6,7 @@ use std::sync::Arc;
 use uv_distribution_types::RequirementProvenance;
 use uv_errors::{Diagnostic, Info, SourceAnnotation, SourceFile, SourceSnippet};
 use uv_fs::Simplified;
-use uv_pep508::{Pep508Error, Pep508ErrorSource, split_scheme};
+use uv_pep508::{Pep508Error, Pep508ErrorSource};
 use uv_pypi_types::VerbatimParsedUrl;
 use uv_redacted::DisplaySafeUrl;
 
@@ -43,13 +43,7 @@ pub(super) fn requirement_provenance(
     source_file: &SourceFile,
     range: Range<usize>,
 ) -> RequirementProvenance {
-    let show_source = can_show_source(source_file, &range);
-    let provenance = RequirementProvenance::new(source_file.clone(), range);
-    if show_source {
-        provenance.with_source_text()
-    } else {
-        provenance
-    }
+    RequirementProvenance::new(source_file.clone(), range)
 }
 
 impl RequirementsTxtFileError {
@@ -152,14 +146,8 @@ fn snippet(
     range: Range<usize>,
     label: &'static str,
 ) -> SourceSnippet<'static> {
-    let show_source = can_show_source(source_file, &range);
-    let snippet = SourceSnippet::new(source_file.clone())
-        .with_annotation(SourceAnnotation::primary(range).with_label(label));
-    if show_source {
-        snippet
-    } else {
-        snippet.without_source_text()
-    }
+    SourceSnippet::new(source_file.clone())
+        .with_annotation(SourceAnnotation::primary(range).with_label(label))
 }
 
 fn secondary_snippet(
@@ -167,31 +155,8 @@ fn secondary_snippet(
     range: Range<usize>,
     label: &'static str,
 ) -> SourceSnippet<'static> {
-    let show_source = can_show_source(source_file, &range);
-    let snippet = SourceSnippet::new(source_file.clone())
-        .with_annotation(SourceAnnotation::secondary(range).with_label(label));
-    if show_source {
-        snippet
-    } else {
-        snippet.without_source_text()
-    }
-}
-
-/// Source locations are derived from parser spans, never from the text of a message. This separate
-/// privacy guard conservatively omits source lines that might expose URL credentials or signatures.
-fn can_show_source(source_file: &SourceFile, range: &Range<usize>) -> bool {
-    let Some(lines) = source_file.lines_for_span(range.clone()) else {
-        return false;
-    };
-    !may_contain_url(lines)
-}
-
-fn may_contain_url(text: &str) -> bool {
-    text.contains('@')
-        || text.contains("://")
-        || text
-            .split_whitespace()
-            .any(|word| split_scheme(word).is_some())
+    SourceSnippet::new(source_file.clone())
+        .with_annotation(SourceAnnotation::secondary(range).with_label(label))
 }
 
 /// Override only the presentation of the PEP 508 source. Its own `Display` includes an underline
@@ -202,10 +167,7 @@ fn pep508_diagnostic(
     statement: Range<usize>,
     label: &'static str,
 ) -> Option<Diagnostic<'static>> {
-    if matches!(&error.message, Pep508ErrorSource::UrlError(_))
-        || may_contain_url(&error.input)
-        || !can_show_source(source_file, &statement)
-    {
+    if matches!(&error.message, Pep508ErrorSource::UrlError(_)) {
         return None;
     }
     let range =
@@ -281,7 +243,7 @@ mod tests {
 
     use crate::RequirementsTxtRequirement;
 
-    use super::{can_show_source, mapped_pep508_span, point_span};
+    use super::{mapped_pep508_span, pep508_diagnostic, point_span};
 
     #[test]
     fn pep508_span_uses_original_decoded_bytes() -> Result<()> {
@@ -361,48 +323,15 @@ mod tests {
     }
 
     #[test]
-    fn source_filter_uses_only_annotated_lines() {
-        let prefix = "--index-url https://user:password@example.com/simple\n";
-        let requirement = "flask==1.0.x";
-        let text = format!("{prefix}{requirement}\n");
-        let source = SourceFile::new("requirements.txt", text);
-        insta::assert_debug_snapshot!((
-            can_show_source(&source, &(0..prefix.len())),
-            can_show_source(&source, &(prefix.len() + 5..prefix.len() + requirement.len())),
-            can_show_source(&SourceFile::new("requirements.txt", "-r https://user:password@example.com/requirements.txt"), &(0..2)),
-            can_show_source(&SourceFile::new("requirements.txt", "-r constraints.txt"), &(0..18)),
-        ), @"
-        (
-            false,
-            true,
-            false,
-            true,
-        )
-        ");
-    }
-
-    #[test]
-    fn source_filter_matches_rendered_crlf_windows() {
-        let credential_line = "--index-url https://user:password@example.com/simple";
-        let source = SourceFile::new("requirements.txt", format!("{credential_line}\r\nflask\n"));
-        let carriage_return = credential_line.len();
-        let newline = carriage_return + 1;
-        let bare_cr_source =
-            SourceFile::new("requirements.txt", format!("{credential_line}\rflask\n"));
-        insta::assert_debug_snapshot!((
-            can_show_source(&source, &(carriage_return..carriage_return)),
-            can_show_source(&source, &(newline..newline)),
-            can_show_source(&source, &(newline + 1..newline + 2)),
-            can_show_source(&bare_cr_source, &(carriage_return + 1..carriage_return + 2)),
-            can_show_source(&source, &(source.text().len()..source.text().len())),
-        ), @"
-        (
-            false,
-            false,
-            true,
-            false,
-            true,
-        )
-        ");
+    fn pep508_diagnostic_keeps_source_for_url_marker_syntax() -> Result<()> {
+        let requirement = "demo @ https://example.com/demo-1.0.0-py3-none-any.whl ; python_version";
+        let prefix = "# source requirements\r\n";
+        let source = SourceFile::new("requirements.txt", format!("{prefix}{requirement}\r\n"));
+        let error = RequirementsTxtRequirement::parse(requirement, Path::new("."), false)
+            .err()
+            .context("the marker should be missing a comparison")?;
+        let span = prefix.len()..prefix.len() + requirement.len();
+        assert!(pep508_diagnostic(&source, &error, span, "invalid requirement").is_some());
+        Ok(())
     }
 }

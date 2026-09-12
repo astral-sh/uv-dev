@@ -47,13 +47,7 @@ impl DuplicatePackageDiagnostic {
 #[derive(Debug)]
 struct ProjectNameSource {
     source: SourceFile,
-    field: Option<ProjectNameField>,
-}
-
-#[derive(Debug)]
-struct ProjectNameField {
-    key: Range<usize>,
-    value: Range<usize>,
+    span: Option<Range<usize>>,
 }
 
 #[derive(Clone, Copy)]
@@ -87,51 +81,24 @@ impl ProjectNameSource {
     }
 
     fn from_source(source: SourceFile, expected_name: &PackageName) -> Self {
-        let field = SourceMap::parse(source.text()).ok().and_then(|map| {
+        let span = SourceMap::parse(source.text()).ok().and_then(|map| {
             let path = [Key("project"), Key("name")];
             let name = PackageName::from_str(map.string(&path)?).ok()?;
             // The typed member determines identity; only attach its matching declaration.
             if &name != expected_name {
                 return None;
             }
-            Some(ProjectNameField {
-                key: map.key_span(&[Key("project")], "name")?,
-                value: map.span(&path)?,
-            })
+            map.span(&path)
         });
-        Self { source, field }
+        Self { source, span }
     }
 
     fn snippet(&self, role: ProjectNameRole) -> SourceSnippet<'static> {
         let mut snippet = SourceSnippet::new(self.source.clone());
-        if let Some(field) = &self.field {
-            snippet = snippet.with_annotation(role.annotation(field.value.clone()));
-            if self.is_standalone_assignment(field) {
-                return snippet;
-            }
+        if let Some(span) = &self.span {
+            snippet = snippet.with_annotation(role.annotation(span.clone()));
         }
-        snippet.without_source_text()
-    }
-
-    /// A validated project name is safe to show, but an inline table or trailing comment can
-    /// contain unrelated credentials. Only expose a physical line containing this assignment
-    /// and no other non-whitespace text.
-    fn is_standalone_assignment(&self, field: &ProjectNameField) -> bool {
-        let Some(window) = self.source.line_range_for_span(field.value.clone()) else {
-            return false;
-        };
-        if self.source.line_range_for_span(field.key.clone()) != Some(window.clone()) {
-            return false;
-        }
-        let text = self.source.text();
-        text.get(window.start..field.key.start)
-            .is_some_and(|prefix| prefix.trim().is_empty())
-            && text
-                .get(field.key.end..field.value.start)
-                .is_some_and(|separator| separator.trim() == "=")
-            && text
-                .get(field.value.end..window.end)
-                .is_some_and(|suffix| suffix.trim().is_empty())
+        snippet
     }
 }
 
@@ -147,42 +114,37 @@ mod tests {
     use super::ProjectNameSource;
 
     #[test]
-    fn project_name_source_requires_exact_standalone_field() -> Result<()> {
+    fn project_name_source_uses_exact_matching_field() -> Result<()> {
         let name = PackageName::from_str("example")?;
-
-        let escaped = ProjectNameSource::from_source(
-            SourceFile::new(
-                "pyproject.toml",
-                "[project]\r\n\"na\\u006de\" = \"\\u0065xample\"\r\n",
+        let sources = [
+            "[project]\r\n\"na\\u006de\" = \"\\u0065xample\"\r\n",
+            "[project]\nname = \"\"\"\nexample\"\"\"\n",
+            "project = { name = 'example', version = '0.1.0' }\n",
+            "[project]\nname = 'example' # shared by both members\n",
+            "[project]\nname = 'other'\n",
+        ];
+        let values = sources.map(|source| {
+            let name_source =
+                ProjectNameSource::from_source(SourceFile::new("pyproject.toml", source), &name);
+            name_source.span.and_then(|span| source.get(span))
+        });
+        insta::assert_debug_snapshot!(values, @r#"
+        [
+            Some(
+                "\"\\u0065xample\"",
             ),
-            &name,
-        );
-        assert!(
-            escaped
-                .field
-                .as_ref()
-                .is_some_and(|field| escaped.is_standalone_assignment(field))
-        );
-
-        let multiline = ProjectNameSource::from_source(
-            SourceFile::new(
-                "pyproject.toml",
-                "[project]\nname = \"\"\"\nexample\"\"\"\n",
+            Some(
+                "\"\"\"\nexample\"\"\"",
             ),
-            &name,
-        );
-        assert!(
-            multiline
-                .field
-                .as_ref()
-                .is_some_and(|field| !multiline.is_standalone_assignment(field))
-        );
-
-        let mismatched = ProjectNameSource::from_source(
-            SourceFile::new("pyproject.toml", "[project]\nname = 'other'\n"),
-            &name,
-        );
-        assert!(mismatched.field.is_none());
+            Some(
+                "'example'",
+            ),
+            Some(
+                "'example'",
+            ),
+            None,
+        ]
+        "#);
 
         Ok(())
     }

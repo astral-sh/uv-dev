@@ -254,7 +254,6 @@ mod tests {
             SourceFile::new(name, contents),
             0..contents.trim_end().len(),
         )
-        .with_source_text()
     }
 
     fn dependency(

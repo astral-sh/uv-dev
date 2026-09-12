@@ -79,7 +79,6 @@ pub struct Requirement {
 #[derive(Clone, Debug)]
 pub struct RequirementProvenance {
     occurrence: Arc<RequirementOccurrence>,
-    show_source: bool,
 }
 
 #[derive(Debug)]
@@ -90,45 +89,27 @@ struct RequirementOccurrence {
 
 impl RequirementProvenance {
     /// Retain a location in the exact decoded source used by a requirement parser.
-    ///
-    /// Source text is hidden until the producer has checked that the complete annotated lines
-    /// are safe to display.
     pub fn new(source: SourceFile, span: Range<usize>) -> Self {
         Self {
             occurrence: Arc::new(RequirementOccurrence { source, span }),
-            show_source: false,
         }
-    }
-
-    /// Allow the validated source lines to be displayed.
-    #[must_use]
-    pub fn with_source_text(mut self) -> Self {
-        self.show_source = true;
-        self
     }
 
     /// Combine two witnesses only when they identify the same exact authored occurrence.
     ///
     /// Clones retain an opaque occurrence identity. Independently parsed requirements are not
     /// assumed to share an occurrence, even if their display-safe source names and text match.
-    /// The stricter visibility policy wins.
     pub fn unambiguous_with(&self, other: &Self) -> Option<Self> {
         Arc::ptr_eq(&self.occurrence, &other.occurrence).then(|| Self {
             occurrence: self.occurrence.clone(),
-            show_source: self.show_source && other.show_source,
         })
     }
 
     /// Render this occurrence with a label chosen by the error that cites it.
     pub fn snippet(&self, label: impl Into<Cow<'static, str>>) -> SourceSnippet<'static> {
-        let snippet = SourceSnippet::new(self.occurrence.source.clone()).with_annotation(
+        SourceSnippet::new(self.occurrence.source.clone()).with_annotation(
             SourceAnnotation::primary(self.occurrence.span.clone()).with_label(label),
-        );
-        if self.show_source {
-            snippet
-        } else {
-            snippet.without_source_text()
-        }
+        )
     }
 }
 
@@ -1327,10 +1308,10 @@ mod tests {
             "pypyp==1,>=1.2".parse::<uv_pep508::Requirement<VerbatimParsedUrl>>()?,
         );
         let first = Requirement {
-            provenance: Some(
-                RequirementProvenance::new(SourceFile::new("first.in", "pypyp==1,>=1.2\n"), 0..14)
-                    .with_source_text(),
-            ),
+            provenance: Some(RequirementProvenance::new(
+                SourceFile::new("first.in", "pypyp==1,>=1.2\n"),
+                0..14,
+            )),
             ..plain.clone()
         };
         let second = Requirement {
@@ -1362,7 +1343,6 @@ mod tests {
     fn provenance_requires_an_unambiguous_occurrence() {
         let text = "pypyp==1,>=1.2\npypyp==1,>=1.2\n";
         let first = RequirementProvenance::new(SourceFile::new("requirements.in", text), 0..14);
-        let visible = first.clone().with_source_text();
         let reparsed = RequirementProvenance::new(SourceFile::new("requirements.in", text), 0..14);
         let second = RequirementProvenance::new(SourceFile::new("requirements.in", text), 15..29);
         let changed = RequirementProvenance::new(
@@ -1370,16 +1350,7 @@ mod tests {
             0..14,
         );
 
-        assert!(
-            visible
-                .unambiguous_with(&visible.clone())
-                .is_some_and(|merged| merged.show_source)
-        );
-        assert!(
-            visible
-                .unambiguous_with(&first)
-                .is_some_and(|merged| !merged.show_source)
-        );
+        assert!(first.unambiguous_with(&first.clone()).is_some());
         assert!(first.unambiguous_with(&reparsed).is_none());
         assert!(first.unambiguous_with(&second).is_none());
         assert!(first.unambiguous_with(&changed).is_none());

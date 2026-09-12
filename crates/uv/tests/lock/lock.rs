@@ -1030,13 +1030,16 @@ fn lock_project_requirement_source_splits() -> Result<()> {
         url = "https://example.com/simple"
     "#})?;
 
-    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: your project depends on pypyp==1 and pypyp>=1.2, which are incompatible
        --> pyproject.toml:7:5
-    ");
+        |
+      7 |     "pypyp==1,>=1.2; python_version >= '3.12'",
+        |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no version can satisfy this requirement
+    "#);
     Ok(())
 }
 
@@ -26842,16 +26845,19 @@ fn lock_named_index_cli() -> Result<()> {
     )?;
 
     // The package references a non-existent index.
-    uv_snapshot!(context.filters(), context.lock(), @"
+    uv_snapshot!(context.filters(), context.lock(), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to build `project @ file://[TEMP_DIR]/`
       cause: Failed to parse entry: `jinja2`
       cause: Package `jinja2` references an undeclared index: `pytorch`
        --> pyproject.toml:9:28
+        |
+      9 |         jinja2 = { index = "pytorch" }
+        |                            ^^^^^^^^^ undeclared index
 
     hint: Define index `pytorch` in the project's `pyproject.toml`
-    ");
+    "#);
 
     // But it's fine if it comes from the CLI.
     uv_snapshot!(context.filters(), context.lock().arg("--index").arg("pytorch=https://astral-sh.github.io/pytorch-mirror/whl/cu121"), @"
@@ -26947,35 +26953,41 @@ fn lock_named_index_source_locations() -> Result<()> {
         [tool.uv.sources]
         "Demo_Pkg" = [
             { index = "member-missing", extra = "unused" },
-            { index = "member-missing", marker = "sys_platform != 'sentinel-secret'" }, { url = "https://user:sentinel-secret@example.com/demo_pkg-1.0.0-py3-none-any.whl", marker = "sys_platform == 'sentinel-secret'" },
+            { index = "member-missing", marker = "sys_platform != 'win32'" }, { url = "https://example.com/demo_pkg-1.0.0-py3-none-any.whl", marker = "sys_platform == 'win32'" },
         ]
     "#};
     let member_pyproject = context.temp_dir.child("packages/member/pyproject.toml");
     member_pyproject.write_str(&format!("{member_project}\n{member_sources}"))?;
 
-    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to build `member @ file://[TEMP_DIR]/packages/member`
       cause: Failed to parse entry: `demo-pkg`
       cause: Package `demo-pkg` references an undeclared index: `member-missing`
-       --> packages/member/pyproject.toml:13:15
+        --> packages/member/pyproject.toml:13:15
+         |
+      13 |     { index = "member-missing", marker = "sys_platform != 'win32'" }, { url = "https://example.com/demo_pkg-1.0.0-py3-none-any.whl", marker = "sys_platform == 'win32'" },
+         |               ^^^^^^^^^^^^^^^^ undeclared index
 
     hint: Define index `member-missing` in the project's `pyproject.toml`
-    ");
+    "#);
 
     // Without the member override, the root declaration is the source of the missing index.
     member_pyproject.write_str(member_project)?;
-    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to build `member @ file://[TEMP_DIR]/packages/member`
       cause: Failed to parse entry: `demo-pkg`
       cause: Package `demo-pkg` references an undeclared index: `root-missing`
-       --> pyproject.toml:12:24
+        --> pyproject.toml:12:24
+         |
+      12 | "Demo.Pkg" = { index = "root-missing" }
+         |                        ^^^^^^^^^^^^^^ undeclared index
 
     hint: Define index `root-missing` in the project's `pyproject.toml`
-    ");
+    "#);
 
     Ok(())
 }
@@ -27012,17 +27024,20 @@ fn lock_named_index_config_file_hint() -> Result<()> {
     )?;
 
     // The index is defined in `uv.toml`, which should produce a hint.
-    uv_snapshot!(context.filters(), context.lock(), @"
+    uv_snapshot!(context.filters(), context.lock(), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to build `project @ file://[TEMP_DIR]/`
       cause: Failed to parse entry: `jinja2`
       cause: Package `jinja2` references an undeclared index: `pytorch`
        --> pyproject.toml:9:28
+        |
+      9 |         jinja2 = { index = "pytorch" }
+        |                            ^^^^^^^^^ undeclared index
       info: Index `pytorch` was found in a project-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
 
     hint: Define index `pytorch` in the project's `pyproject.toml`
-    ");
+    "#);
 
     Ok(())
 }
@@ -27068,17 +27083,20 @@ fn lock_named_index_user_config_file_hint() -> Result<()> {
 
     // The index is defined in a user-level `uv.toml`, which should produce a hint.
     uv_snapshot!(context.filters(), context.lock()
-        .env(EnvVars::XDG_CONFIG_HOME, xdg.path()), @"
+        .env(EnvVars::XDG_CONFIG_HOME, xdg.path()), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to build `project @ file://[TEMP_DIR]/`
       cause: Failed to parse entry: `jinja2`
       cause: Package `jinja2` references an undeclared index: `pytorch`
        --> pyproject.toml:9:28
+        |
+      9 |         jinja2 = { index = "pytorch" }
+        |                            ^^^^^^^^^ undeclared index
       info: Index `pytorch` was found in a user-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
 
     hint: Define index `pytorch` in the project's `pyproject.toml`
-    ");
+    "#);
 
     Ok(())
 }
@@ -30427,19 +30445,25 @@ fn lock_multiple_sources_conflict() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.lock(), @"
+    uv_snapshot!(context.filters(), context.lock(), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to parse: `pyproject.toml`
       cause: Failed to parse `tool.uv.sources`
       cause: Source markers must be disjoint, but the following markers overlap: `python_full_version == '3.12.*' and sys_platform == 'win32'` and `sys_platform == 'win32'`.
-       --> pyproject.toml:11:163
+        --> pyproject.toml:11:163
+         |
+      11 |             { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", marker = "sys_platform == 'win32'" },
+         |                                                                                                                                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^
       info: The other source is declared here
-       --> pyproject.toml:10:173
+        --> pyproject.toml:10:173
+         |
+      10 |             { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", marker = "sys_platform == 'win32' and python_version == '3.12'" },
+         |                                                                                                                                                                             ------------------------------------------------------
 
     hint: replace `sys_platform == 'win32'` with `python_full_version != '3.12.*' and sys_platform == 'win32'`
        --> pyproject.toml:11:163
-    ");
+    "#);
 
     Ok(())
 }
@@ -30472,9 +30496,15 @@ fn lock_multiple_sources_no_marker() -> Result<()> {
     error: Failed to parse: `pyproject.toml`
       cause: Failed to parse `tool.uv.sources`
       cause: When multiple sources are provided, each source must include a platform marker (e.g., `marker = "sys_platform == 'linux'"`)
-       --> pyproject.toml:10:13
+        --> pyproject.toml:10:13
+         |
+      10 |             { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl" },
+         |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
       info: The other source is declared here
-       --> pyproject.toml:11:13
+        --> pyproject.toml:11:13
+         |
+      11 |             { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz" },
+         |             ---------------------------------------------------------------------------------------------------------------------------------------------
     "#);
 
     Ok(())
@@ -32199,13 +32229,16 @@ fn lock_group_requires_undefined_group() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.lock(), @"
+    uv_snapshot!(context.filters(), context.lock(), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Project `myproject` has malformed dependency groups
       cause: Failed to find group `foo` specified in `[tool.uv.dependency-groups]`
-       --> pyproject.toml:12:9
-    ");
+        --> pyproject.toml:12:9
+         |
+      12 |         foo = { requires-python = ">=3.13" }
+         |         ^^^ undefined group
+    "#);
     Ok(())
 }
 
@@ -32232,16 +32265,22 @@ fn lock_group_requires_dev_dep() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.lock(), @"
+    uv_snapshot!(context.filters(), context.lock(), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     error: Project `myproject` has malformed dependency groups
       cause: `[tool.uv.dependency-groups]` specifies the `dev` group, but only `tool.uv.dev-dependencies` was found. To reference the `dev` group, remove the `tool.uv.dev-dependencies` section and add any development dependencies to the `dev` entry in the `[dependency-groups]` table instead.
-       --> pyproject.toml:12:9
+        --> pyproject.toml:12:9
+         |
+      12 |         dev = { requires-python = ">=3.13" }
+         |         ^^^ undefined group
       info: Legacy development dependencies are defined here
        --> pyproject.toml:9:9
-    ");
+        |
+      9 |         dev-dependencies = ["sortedcontainers"]
+        |         ---------------- legacy development dependencies
+    "#);
     Ok(())
 }
 
@@ -32445,6 +32484,9 @@ fn lock_group_include_dev() -> Result<()> {
          |                                                      ^^^^^ the standard `dev` group is not defined
       info: Legacy development dependencies are defined here
        --> pyproject.toml:9:9
+        |
+      9 |         dev-dependencies = ["anyio"]
+        |         ---------------- legacy development dependencies
     "#);
 
     Ok(())
@@ -32560,7 +32602,7 @@ fn lock_group_include_cycle_tail() -> Result<()> {
 
 #[cfg(feature = "test-universal")]
 #[test]
-fn lock_group_include_source_privacy() -> Result<()> {
+fn lock_group_include_source_context() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -32571,7 +32613,7 @@ fn lock_group_include_source_privacy() -> Result<()> {
 
         [dependency-groups]
         first = [{ include-group = "middle" }]
-        middle = [{ include-group = "missing" }, "private \u0040 https\u003a//user:password@example.com/private-1.0.0-py3-none-any.whl"]
+        middle = [{ include-group = "missing" }, "demo \u0040 https\u003a//example.com/demo-1.0.0-py3-none-any.whl"]
     "#})?;
 
     uv_snapshot!(context.filters(), context.lock().arg("--offline"), @r#"
@@ -32580,6 +32622,9 @@ fn lock_group_include_source_privacy() -> Result<()> {
     error: Project `project` has malformed dependency groups
       cause: Failed to find group `missing` included by `middle`
        --> pyproject.toml:8:29
+        |
+      8 | middle = [{ include-group = "missing" }, "demo /u0040 https/u003a//example.com/demo-1.0.0-py3-none-any.whl"]
+        |                             ^^^^^^^^^ undefined group
       info: Group `middle` is included by `first` here
        --> pyproject.toml:7:28
         |
@@ -32596,8 +32641,8 @@ fn lock_group_include_source_privacy() -> Result<()> {
         [dependency-groups]
         first = [{ include-group = "middle" }]
         middle = [
-            """private @ https://example.com/private-1.0.0-py3-none-any.whl?token=\
-                sentinel-secret""", { include-group = "missing" },
+            """demo @ https://example.com/\
+                demo-1.0.0-py3-none-any.whl""", { include-group = "missing" },
         ]
     "#})?;
 
@@ -32606,7 +32651,10 @@ fn lock_group_include_source_privacy() -> Result<()> {
     ----- stderr -----
     error: Project `project` has malformed dependency groups
       cause: Failed to find group `missing` included by `middle`
-       --> pyproject.toml:10:47
+        --> pyproject.toml:10:59
+         |
+      10 |         demo-1.0.0-py3-none-any.whl""", { include-group = "missing" },
+         |                                                           ^^^^^^^^^ undefined group
       info: Group `middle` is included by `first` here
        --> pyproject.toml:7:28
         |

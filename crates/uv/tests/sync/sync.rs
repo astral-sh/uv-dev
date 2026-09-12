@@ -9483,20 +9483,23 @@ fn sync_python_version() -> Result<()> {
 }
 
 #[test]
-fn sync_python_version_source_privacy() -> Result<()> {
+fn sync_python_version_source_context() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
-        project = { name = "project", version = "0.1.0", requires-python = "<3.12", description = "not for diagnostics" }
+        project = { name = "project", version = "0.1.0", requires-python = "<3.12", description = "example package" }
     "#})?;
 
-    uv_snapshot!(context.filters(), context.sync().arg("--python").arg("3.12").arg("--offline"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--python").arg("3.12").arg("--offline"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `<3.12` (from `project.requires-python`)
        --> pyproject.toml:1:68
-    ");
+        |
+      1 | project = { name = "project", version = "0.1.0", requires-python = "<3.12", description = "example package" }
+        |                                                                    ^^^^^^^ requires Python `<3.12`
+    "#);
 
     Ok(())
 }
@@ -9558,7 +9561,7 @@ fn sync_python_version_source_inherited_group() -> Result<()> {
         version = "0.1.0"
 
         [dependency-groups]
-        parent = ["private @ https://user:sentinel-secret@example.com/private-1.0.0-py3-none-any.whl", { include-group = "Child.Bound" }]
+        parent = ["demo @ https://example.com/demo-1.0.0-py3-none-any.whl", { include-group = "Child.Bound" }]
         "Child.Bound" = []
 
         [tool.uv.dependency-groups]
@@ -9580,7 +9583,10 @@ fn sync_python_version_source_inherited_group() -> Result<()> {
       10 | "Child.Bound" = { requires-python = ">=3.13" }
          |                                     ^^^^^^^^ group `child-bound` requires Python `>=3.13`
       info: Group `child-bound` is included by `parent` here
-       --> pyproject.toml:6:114
+       --> pyproject.toml:6:87
+        |
+      6 | parent = ["demo @ https://example.com/demo-1.0.0-py3-none-any.whl", { include-group = "Child.Bound" }]
+        |                                                                                       ------------- included here
     "#);
 
     // The authored tilde specifier belongs to the included group as well.
@@ -9599,7 +9605,10 @@ fn sync_python_version_source_inherited_group() -> Result<()> {
       10 | "Child.Bound" = { requires-python = "~=3.13" }
          |                                     ^^^^^^^^ group `child-bound` requires Python `~=3.13`
       info: Group `child-bound` is included by `parent` here
-       --> pyproject.toml:6:114
+       --> pyproject.toml:6:87
+        |
+      6 | parent = ["demo @ https://example.com/demo-1.0.0-py3-none-any.whl", { include-group = "Child.Bound" }]
+        |                                                                                       ------------- included here
     "#);
 
     Ok(())

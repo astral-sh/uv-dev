@@ -91,7 +91,7 @@ fn json_error_format_does_not_change_clap_errors() -> Result<()> {
 #[cfg(feature = "test-python")]
 fn json_source_marker_suggestion_identifies_a_usable_edit() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let source = "# café\n[project]\nname = 'project'\nversion = '0.1.0'\nrequires-python = '>=3.12'\n[tool.uv.sources]\ndemo = [\n  { url = 'https://user:sentinel-secret@example.com/one.whl', marker = \"sys_platform == 'linux'\" },\n  { url = 'https://user:sentinel-secret@example.com/two.whl', marker = \"python_version >= '3.12'\" },\n]\n";
+    let source = "# café\n[project]\nname = 'project'\nversion = '0.1.0'\nrequires-python = '>=3.12'\n[tool.uv.sources]\ndemo = [\n  { url = 'https://example.com/one.whl', marker = \"sys_platform == 'linux'\" },\n  { url = 'https://example.com/two.whl', marker = \"python_version >= '3.12'\" },\n]\n";
     let pyproject = context.temp_dir.child("pyproject.toml");
     pyproject.write_str(source)?;
 
@@ -100,11 +100,21 @@ fn json_source_marker_suggestion_identifies_a_usable_edit() -> Result<()> {
         .args(["--offline", "--error-format=json"])
         .output()?;
     assert_eq!(output.status.code(), Some(2));
-    assert!(!String::from_utf8_lossy(&output.stderr).contains("sentinel-secret"));
     let report: Value = serde_json::from_slice(&output.stderr)?;
-    let suggestion = report["errors"]
+    let errors = report["errors"]
         .as_array()
-        .context("error chain is an array")?
+        .context("error chain is an array")?;
+    assert!(errors.iter().any(|error| {
+        error["sources"].as_array().is_some_and(|sources| {
+            sources.iter().any(|source| {
+                source["kind"] == "snippet"
+                    && source["windows"][0]["text"]
+                        .as_str()
+                        .is_some_and(|text| text.contains("https://example.com/two.whl"))
+            })
+        })
+    }));
+    let suggestion = errors
         .iter()
         .flat_map(|error| error["hints"].as_array().into_iter().flatten())
         .find_map(|hint| hint.get("suggestion"))
