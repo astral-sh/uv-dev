@@ -8,7 +8,7 @@
 # ///
 """Build native verification matrices for signed release artifacts.
 
-Every macOS and Windows target in `dist-workspace.toml` needs a runner to check
+Every macOS and Windows target in `release-targets.toml` needs a runner to check
 its signed wheels and GitHub archive. Fail if the runner table falls out of sync
 so a new release target cannot bypass verification.
 """
@@ -36,9 +36,9 @@ PLATFORMS = {
 
 
 def release_targets() -> list[str]:
-    """Read the target inventory used by cargo-dist."""
-    workspace = Path(__file__).resolve().parent.parent / "dist-workspace.toml"
-    return tomllib.loads(workspace.read_text(encoding="utf-8"))["dist"]["targets"]
+    """Read the standalone release target inventory."""
+    workspace = Path(__file__).resolve().parent.parent / "release-targets.toml"
+    return tomllib.loads(workspace.read_text(encoding="utf-8"))["targets"]
 
 
 def signing_plan() -> dict[str, list[dict[str, str]]]:
@@ -52,7 +52,7 @@ def signing_plan() -> dict[str, list[dict[str, str]]]:
     configured = {target for platforms in PLATFORMS.values() for target in platforms}
     if configured != expected:
         raise ValueError(
-            f"Signing targets differ from dist-workspace.toml: {configured ^ expected}"
+            f"Signing targets differ from release-targets.toml: {configured ^ expected}"
         )
     return {
         system: [
