@@ -18,9 +18,12 @@ env:
 
 jobs:
   plan:
+    # uv-dev main is synchronized from uv, where push CI already runs.
+    if: ${{ github.repository != 'astral-sh/uv-dev' || github.event_name != 'push' || github.ref != 'refs/heads/main' }}
     uses: $/.github/workflows/plan.yml
 
   check-fmt:
+    if: ${{ github.repository != 'astral-sh/uv-dev' || github.event_name != 'push' || github.ref != 'refs/heads/main' }}
     uses: $/.github/workflows/check-fmt.yml
 
   review:
