@@ -235,8 +235,10 @@ impl Pep723Script {
         };
         let metadata = Pep723Metadata::from_str(&default_metadata)?;
 
-        // Extract the shebang and script content.
-        let (shebang, postlude) = extract_shebang(contents)?;
+        // Extract the script header and script content.
+        let (header, postlude, _) = extract_script_header(contents);
+        let header = std::str::from_utf8(header)?;
+        let postlude = std::str::from_utf8(postlude)?;
 
         // Add a newline to the beginning if it starts with a valid metadata comment line.
         let postlude = if postlude.strip_prefix('#').is_some_and(|postlude| {
@@ -247,14 +249,14 @@ impl Pep723Script {
         }) {
             format!("\n{postlude}")
         } else {
-            postlude
+            postlude.to_string()
         };
 
         Ok((
-            if shebang.is_empty() {
+            if header.is_empty() {
                 String::new()
             } else {
-                format!("{shebang}\n")
+                format!("{header}\n")
             },
             metadata,
             postlude,
@@ -283,15 +285,24 @@ impl Pep723Script {
         let metadata = serialize_metadata(&default_metadata);
 
         let script = if let Some(existing_contents) = existing_contents {
-            let (mut shebang, contents) = extract_shebang(&existing_contents)?;
-            if !shebang.is_empty() {
-                shebang.push_str("\n#\n");
+            let (header, contents, has_shebang) = extract_script_header(&existing_contents);
+            let mut script = Vec::with_capacity(header.len() + metadata.len() + contents.len() + 3);
+            if !header.is_empty() {
+                script.extend_from_slice(header);
+                script.push(b'\n');
+            }
+            if has_shebang {
+                script.extend_from_slice(b"#\n");
                 // If the shebang doesn't contain `uv`, it's probably something like
                 // `#! /usr/bin/env python`, which isn't going to respect the inline metadata.
                 // Issue a warning for users who might not know that.
                 // TODO: There are a lot of mistakes we could consider detecting here, like
                 // `uv run` without `--script` when the file doesn't end in `.py`.
-                if !regex::regex!(r"\buv\b").is_match(&shebang) {
+                if !std::str::from_utf8(header)?
+                    .lines()
+                    .next()
+                    .is_some_and(|shebang| regex::regex!(r"\buv\b").is_match(shebang))
+                {
                     warn_user!(
                         "If you execute {} directly, it might ignore its inline metadata.\nConsider replacing its shebang with: {}",
                         file.to_string_lossy().cyan(),
@@ -299,11 +310,12 @@ impl Pep723Script {
                     );
                 }
             }
-            indoc::formatdoc! {r"
-            {shebang}{metadata}
-            {contents}" }
+            script.extend_from_slice(metadata.as_bytes());
+            script.push(b'\n');
+            script.extend_from_slice(contents);
+            script
         } else if bare {
-            metadata
+            metadata.into_bytes()
         } else {
             indoc::formatdoc! {r#"
             {metadata}
@@ -318,6 +330,7 @@ impl Pep723Script {
                 metadata = metadata,
                 name = script_name,
             }
+            .into_bytes()
         };
 
         Ok(fs_err::tokio::write(file, script).await?)
@@ -666,40 +679,88 @@ impl ScriptTag {
     }
 }
 
-/// Extracts the shebang line from the given file contents and returns it along with the remaining
-/// content.
-fn extract_shebang(contents: &[u8]) -> Result<(String, String), Pep723Error> {
-    let contents = std::str::from_utf8(contents)?;
+/// Extracts the shebang and encoding cookie from the given file contents.
+fn extract_script_header(contents: &[u8]) -> (&[u8], &[u8], bool) {
+    let (first_line, remaining) = split_first_line(contents);
+    let has_shebang = first_line.starts_with(b"#!");
 
-    if contents.starts_with("#!") {
-        // Find the first newline.
-        let bytes = contents.as_bytes();
-        let index = bytes
-            .iter()
-            .position(|&b| b == b'\r' || b == b'\n')
-            .unwrap_or(bytes.len());
-
-        // Support `\r`, `\n`, and `\r\n` line endings.
-        let width = match bytes.get(index) {
-            Some(b'\r') => {
-                if bytes.get(index + 1) == Some(&b'\n') {
-                    2
-                } else {
-                    1
-                }
-            }
-            Some(b'\n') => 1,
-            _ => 0,
-        };
-
-        // Extract the shebang line.
-        let shebang = contents[..index].to_string();
-        let script = contents[index + width..].to_string();
-
-        Ok((shebang, script))
-    } else {
-        Ok((String::new(), contents.to_string()))
+    if is_encoding_cookie(first_line) {
+        return (first_line, remaining, has_shebang);
     }
+
+    let first_line_comment = trim_start(first_line);
+    if first_line_comment.is_empty() || first_line_comment.starts_with(b"#") {
+        let (second_line, script) = split_first_line(remaining);
+        if is_encoding_cookie(second_line) {
+            let header_length = contents.len() - script.len();
+            let header = &contents[..header_length];
+            let header = header.strip_suffix(b"\n").unwrap_or(header);
+            let header = header.strip_suffix(b"\r").unwrap_or(header);
+            return (header, script, has_shebang);
+        }
+    }
+
+    if has_shebang {
+        (first_line, remaining, true)
+    } else {
+        (b"", contents, false)
+    }
+}
+
+/// Returns whether a line contains a PEP 263 encoding declaration.
+fn is_encoding_cookie(line: &[u8]) -> bool {
+    let line = trim_start(line);
+    let Some(comment) = line.strip_prefix(b"#") else {
+        return false;
+    };
+
+    comment
+        .windows("coding".len())
+        .enumerate()
+        .any(|(index, word)| {
+            if word != b"coding" {
+                return false;
+            }
+
+            let suffix = &comment[index + "coding".len()..];
+            let Some(delimiter) = suffix.first() else {
+                return false;
+            };
+            if !matches!(delimiter, b':' | b'=') {
+                return false;
+            }
+
+            suffix[1..]
+                .iter()
+                .find(|byte| !matches!(**byte, b' ' | b'\t'))
+                .is_some_and(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
+                })
+        })
+}
+
+/// Splits the first line from the remaining contents.
+fn split_first_line(contents: &[u8]) -> (&[u8], &[u8]) {
+    let index = contents
+        .iter()
+        .position(|byte| matches!(byte, b'\r' | b'\n'))
+        .unwrap_or(contents.len());
+    let width = match contents.get(index) {
+        Some(b'\r') if contents.get(index + 1) == Some(&b'\n') => 2,
+        Some(b'\r' | b'\n') => 1,
+        _ => 0,
+    };
+
+    (&contents[..index], &contents[index + width..])
+}
+
+/// Remove leading Python whitespace from a source line.
+fn trim_start(line: &[u8]) -> &[u8] {
+    let start = line
+        .iter()
+        .position(|byte| !matches!(byte, b' ' | b'\t' | b'\x0c'))
+        .unwrap_or(line.len());
+    &line[start..]
 }
 
 /// Formats the provided metadata by prefixing each line with `#` and wrapping it with script markers.

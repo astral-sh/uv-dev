@@ -983,6 +983,65 @@ fn init_script_shebang() -> Result<()> {
     Ok(())
 }
 
+/// Initializing a script must not move a PEP 263 encoding cookie out of the first two lines.
+#[test]
+fn init_script_encoding_cookie() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let first = context.temp_dir.child("first.py");
+    fs_err::write(&first, b"# coding: latin-1\nprint(\"\xe9\")\n")?;
+    uv_snapshot!(context.filters(), context.init().arg("--script").arg("first.py"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Initialized script at `first.py`
+    ");
+    assert_eq!(
+        fs_err::read(&first)?,
+        b"# coding: latin-1\n# /// script\n# requires-python = \">=3.12\"\n# dependencies = []\n# ///\n\nprint(\"\xe9\")\n"
+    );
+    uv_snapshot!(context.filters(), context.python_command().arg(first.path()), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    é
+
+    ----- stderr -----
+    ");
+
+    let second = context.temp_dir.child("second.py");
+    fs_err::write(
+        &second,
+        b"#!/usr/bin/env python3\n# coding: latin-1\nprint(\"\xe9\")\n",
+    )?;
+    uv_snapshot!(context.filters(), context.init().arg("--script").arg("second.py"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    warning: If you execute second.py directly, it might ignore its inline metadata.
+    Consider replacing its shebang with: #!/usr/bin/env -S uv run --script
+    Initialized script at `second.py`
+    ");
+    assert_eq!(
+        fs_err::read(&second)?,
+        b"#!/usr/bin/env python3\n# coding: latin-1\n#\n# /// script\n# requires-python = \">=3.12\"\n# dependencies = []\n# ///\n\nprint(\"\xe9\")\n"
+    );
+    uv_snapshot!(context.filters(), context.python_command().arg(second.path()), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    é
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
 // Make sure that `uv init --script` picks the latest non-pre-release version of Python
 // for the `requires-python` constraint.
 #[cfg(feature = "test-python-patch")]
