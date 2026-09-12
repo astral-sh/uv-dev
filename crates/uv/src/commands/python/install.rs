@@ -1483,7 +1483,7 @@ fn read_bin_link_target(path: &Path) -> Option<PathBuf> {
 
 fn resolve_bin_link_target(path: &Path, encoded_target: &Path) -> Option<PathBuf> {
     if cfg!(unix) {
-        fs_err::canonicalize(path).ok()
+        fs_err::canonicalize(path.parent()?.join(encoded_target)).ok()
     } else if cfg!(windows) {
         dunce::canonicalize(encoded_target).ok()
     } else {
