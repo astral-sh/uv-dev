@@ -223,6 +223,26 @@ mod tests {
             definitions["DirInfo"]["properties"]["editable"]["type"],
             "boolean"
         );
+        for field in ["requires_dist", "provides_extra"] {
+            assert!(
+                definitions["MetadataInstalledPackage"]["required"]
+                    .as_array()
+                    .is_some_and(|fields| fields.iter().any(|required| required == field))
+            );
+            assert_eq!(
+                definitions["MetadataInstalledPackage"]["properties"][field]["type"],
+                "array"
+            );
+        }
+        assert_eq!(
+            definitions["MetadataInstalledPackage"]["properties"]["requires_dist"]["items"]["$ref"],
+            "#/definitions/Requirement"
+        );
+        assert_eq!(definitions["Requirement"]["type"], "string");
+        assert_eq!(
+            definitions["MetadataInstalledPackage"]["properties"]["requires_python"]["type"],
+            "string"
+        );
         assert_eq!(
             definitions["PythonReport"]["properties"]["version"]["type"],
             "string"

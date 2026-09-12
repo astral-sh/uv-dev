@@ -1,16 +1,19 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Display;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
-    InstalledDist, InstalledDistKind, Name, Requirement, RequiresPython, ResolvedDist, UrlString,
+    InstalledDist, InstalledDistError, InstalledDistKind, Name, Requirement, RequiresPython,
+    ResolvedDist, UrlString,
 };
-use uv_fs::PortablePathBuf;
+use uv_fs::{PortablePathBuf, Simplified};
 use uv_normalize::{ExtraName, GroupName, PackageName};
-use uv_pep440::Version;
-use uv_pep508::{MarkerTree, StringVersion};
-use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, Conflicts, DirectUrl, ModuleName};
+use uv_pep440::{Version, VersionSpecifiers};
+use uv_pep508::{MarkerTree, Pep508ErrorSource, StringVersion};
+use uv_pypi_types::{
+    ConflictItem, ConflictKind, ConflictSet, Conflicts, DirectUrl, ModuleName, VerbatimParsedUrl,
+};
 use uv_python::{Interpreter, LenientImplementationName, PythonEnvironment};
 use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 use uv_workspace::Workspace;
@@ -29,6 +32,30 @@ enum MetadataErrorKind {
     Lock(#[from] LockError),
     #[error(transparent)]
     InstalledOrigin(#[from] DisplaySafeUrlError),
+    #[error(transparent)]
+    InstalledMetadata(#[from] InstalledDistError),
+    #[error("Failed to parse installed metadata file: `{}`", path.user_display())]
+    InstalledMetadataParse {
+        path: PathBuf,
+        #[source]
+        error: InstalledMetadataParseError,
+    },
+}
+
+#[derive(Debug, thiserror::Error)]
+enum InstalledMetadataParseError {
+    #[error("Metadata field {0} not found")]
+    FieldNotFound(&'static str),
+    #[error("Invalid `{0}` field")]
+    InvalidField(&'static str),
+    #[error("Invalid PEP 508 requirement in `Requires-Dist`")]
+    InvalidRequirement,
+    #[error("Invalid URL requirement in `Requires-Dist`")]
+    InvalidRequirementUrl,
+    #[error("Unsupported requirement in `Requires-Dist`")]
+    UnsupportedRequirement,
+    #[error("Invalid core metadata")]
+    Other,
 }
 
 #[derive(Debug)]
@@ -174,10 +201,21 @@ struct MetadataInstalledPackage {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[cfg_attr(feature = "schemars", schemars(with = "MetadataDirectUrl"))]
     direct_url: Option<MetadataDirectUrl>,
+    /// Normalized dependency declarations, including unevaluated markers.
+    requires_dist: Vec<uv_pep508::Requirement<VerbatimParsedUrl>>,
+    /// Python version constraint declared by the installed distribution.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[cfg_attr(feature = "schemars", schemars(with = "String"))]
+    requires_python: Option<VersionSpecifiers>,
+    /// Optional features declared by the distribution, not the extras requested at installation.
+    provides_extra: Vec<ExtraName>,
 }
 
 impl MetadataInstalledPackage {
     fn from_dist(dist: &InstalledDist) -> Result<Self, MetadataError> {
+        let metadata = dist
+            .read_metadata()
+            .map_err(redact_installed_metadata_error)?;
         let direct_url = match &dist.kind {
             InstalledDistKind::Url(dist) => Some(MetadataDirectUrl::try_from(&*dist.direct_url)?),
             InstalledDistKind::Registry(_)
@@ -191,6 +229,9 @@ impl MetadataInstalledPackage {
             path: PortablePathBuf::from(dist.install_path()),
             editable: dist.is_editable(),
             direct_url,
+            requires_dist: metadata.requires_dist.to_vec(),
+            requires_python: metadata.requires_python.clone(),
+            provides_extra: metadata.provides_extra.to_vec(),
         })
     }
 
@@ -200,6 +241,41 @@ impl MetadataInstalledPackage {
 
     fn id_for_path(path: &Path) -> String {
         format!("installed+{}", PortablePathBuf::from(path))
+    }
+}
+
+/// Retain the metadata path and error category without quoting its untrusted field values.
+/// Parser messages and source spans can contain credentials even when no usable URL was parsed.
+fn redact_installed_metadata_error(error: InstalledDistError) -> MetadataError {
+    let (path, error) = match error {
+        InstalledDistError::MetadataParse { path, err }
+        | InstalledDistError::PkgInfoParse { path, err } => (path, err),
+        error => return error.into(),
+    };
+    let error = match error.as_ref() {
+        uv_pypi_types::MetadataError::FieldNotFound(field) => {
+            InstalledMetadataParseError::FieldNotFound(field)
+        }
+        uv_pypi_types::MetadataError::InvalidName(_) => {
+            InstalledMetadataParseError::InvalidField("Name")
+        }
+        uv_pypi_types::MetadataError::Pep440VersionError(_) => {
+            InstalledMetadataParseError::InvalidField("Version")
+        }
+        uv_pypi_types::MetadataError::Pep440Error(_) => {
+            InstalledMetadataParseError::InvalidField("Requires-Python")
+        }
+        uv_pypi_types::MetadataError::Pep508Error(error) => match &error.message {
+            Pep508ErrorSource::String(_) => InstalledMetadataParseError::InvalidRequirement,
+            Pep508ErrorSource::UrlError(_) => InstalledMetadataParseError::InvalidRequirementUrl,
+            Pep508ErrorSource::UnsupportedRequirement(_) => {
+                InstalledMetadataParseError::UnsupportedRequirement
+            }
+        },
+        _ => InstalledMetadataParseError::Other,
+    };
+    MetadataError {
+        kind: Box::new(MetadataErrorKind::InstalledMetadataParse { path, error }),
     }
 }
 
@@ -1664,9 +1740,33 @@ impl Metadata {
 
 #[cfg(test)]
 mod tests {
-    use uv_pypi_types::DirectUrl;
+    use uv_distribution_types::InstalledDistError;
+    use uv_pypi_types::{DirectUrl, MetadataError as CoreMetadataError};
 
-    use super::{MetadataDirectUrl, MetadataError};
+    use super::{MetadataDirectUrl, MetadataError, redact_installed_metadata_error};
+
+    #[test]
+    fn installed_metadata_errors_do_not_retain_raw_values() {
+        let raw = "https://user:metadata-secret@example.com/private?sig=signature-secret";
+        for error in [
+            InstalledDistError::MetadataParse {
+                path: "demo.dist-info/METADATA".into(),
+                err: Box::new(CoreMetadataError::InvalidMetadataVersion(raw.to_string())),
+            },
+            InstalledDistError::PkgInfoParse {
+                path: "demo.egg-info/PKG-INFO".into(),
+                err: Box::new(CoreMetadataError::InvalidMetadataVersion(raw.to_string())),
+            },
+        ] {
+            let error = redact_installed_metadata_error(error);
+            let source = std::error::Error::source(&error).expect("metadata error has a category");
+            assert_eq!(source.to_string(), "Invalid core metadata");
+            for output in [error.to_string(), format!("{error:?}")] {
+                assert!(!output.contains("metadata-secret"));
+                assert!(!output.contains("signature-secret"));
+            }
+        }
+    }
 
     #[test]
     fn installed_direct_url_report_redacts_credentials() -> Result<(), MetadataError> {
