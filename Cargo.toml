@@ -140,6 +140,7 @@ dotenvy = { version = "0.15.7" }
 dunce = { version = "1.0.5" }
 editpe = { version = "0.2.4", default-features = false, features = ["std"] }
 either = { version = "1.13.0" }
+encoding_rs = { version = "0.8.35" }
 encoding_rs_io = { version = "0.1.7" }
 embed-manifest = { version = "1.5.0" }
 enumflags2 = { version = "0.7.12" }
