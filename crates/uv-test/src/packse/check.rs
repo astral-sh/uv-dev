@@ -172,6 +172,7 @@ pub enum LockScenarioFailureKind {
     InvalidPins,
     InvalidClosure,
     ChangedLockfile,
+    NonCanonicalLockfile,
 }
 
 impl LockScenarioFailureKind {
@@ -188,6 +189,7 @@ impl fmt::Display for LockScenarioFailureKind {
             Self::InvalidPins => "uv returned invalid lockfile export pins",
             Self::InvalidClosure => "uv returned an invalid lockfile dependency closure",
             Self::ChangedLockfile => "uv changed a lockfile during a read-only check",
+            Self::NonCanonicalLockfile => "uv rejected its freshly written lockfile",
         })
     }
 }
@@ -600,6 +602,7 @@ struct LockRun<'a> {
     pyproject: String,
     lock_path: PathBuf,
     trace: LockTrace,
+    canonical_diff: Option<String>,
 }
 
 impl<'a> LockRun<'a> {
@@ -623,6 +626,7 @@ impl<'a> LockRun<'a> {
             pyproject,
             lock_path,
             trace: LockTrace::default(),
+            canonical_diff: None,
         })
     }
 
@@ -645,16 +649,42 @@ impl<'a> LockRun<'a> {
         ensure_success(&output, "uv lock --locked --offline")?;
         self.ensure_unchanged(&lock, "uv lock --locked")?;
 
+        let output = self.run_command("canonical-check", self.canonical_check_command())?;
+        ensure_canonical_lock(&output)?;
+        self.ensure_unchanged(&lock, "uv lock --check")?;
+        Ok(lock)
+    }
+
+    fn canonical_check_command(&self) -> Command {
         let mut command = lock_command(self.context, self.scenario, self.server);
         command
             .arg("--check")
             .arg("--refresh")
             .arg("--preview-features")
             .arg("lockfile-format-check");
-        let output = self.run_command("canonical-check", command)?;
-        ensure_success(&output, "uv lock --check --refresh")?;
-        self.ensure_unchanged(&lock, "uv lock --check")?;
-        Ok(lock)
+        command
+    }
+
+    /// Retain the lockfile uv would write after rejecting the freshly written one.
+    fn capture_canonical_refresh(&mut self) -> Result<()> {
+        let original = fs_err::read_to_string(&self.lock_path)?;
+        let mut command = lock_command(self.context, self.scenario, self.server);
+        command
+            .arg("--refresh")
+            .arg("--preview-features")
+            .arg("lockfile-format-check");
+        let output = self.run_command("canonical-refresh", command)?;
+        ensure_success(&output, "uv lock --refresh")?;
+        let refreshed = fs_err::read_to_string(&self.lock_path)?;
+        self.canonical_diff = Some(crate::diff_snapshot(&original, &refreshed, 4));
+        let output = self.run_command(
+            "canonical-check-after-refresh",
+            self.canonical_check_command(),
+        )?;
+        ensure_success(
+            &output,
+            "uv lock --check --refresh after updating the lockfile",
+        )
     }
 
     fn export_command(&self) -> Command {
@@ -698,19 +728,27 @@ impl<'a> LockRun<'a> {
     }
 
     fn finish<T>(
-        &self,
+        &mut self,
         result: Result<T>,
         targets: &[ScenarioTarget],
         selections: Option<&[ProjectSelection]>,
         artifacts: Option<(&Path, &ScenarioDocument)>,
     ) -> Result<T> {
-        let error = match result {
+        let mut error = match result {
             Ok(value) => return Ok(value),
             Err(error) => error,
         };
         if let Some((directory, document)) = artifacts
             && !self.trace.is_empty()
         {
+            if LockScenarioFailureKind::from_error(&error)
+                == Some(LockScenarioFailureKind::NonCanonicalLockfile)
+                && let Err(capture_error) = self.capture_canonical_refresh()
+            {
+                error = error.context(format!(
+                    "failed to capture the refreshed lockfile: {capture_error:#}"
+                ));
+            }
             if let Err(capture_error) =
                 self.write_artifacts(directory, document, targets, selections, &error)
             {
@@ -748,6 +786,9 @@ impl<'a> LockRun<'a> {
             }))?,
         )?;
         self.trace.write(directory)?;
+        if let Some(diff) = &self.canonical_diff {
+            fs_err::write(directory.join("initial-to-refreshed.diff"), diff)?;
+        }
         self.server.write_distributions(&directory.join("index"))?;
         Ok(())
     }
@@ -794,6 +835,24 @@ fn ensure_success(output: &Output, command: &str) -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     Ok(())
+}
+
+fn ensure_canonical_lock(output: &Output) -> Result<()> {
+    let result = ensure_success(output, "uv lock --check --refresh");
+    if is_canonical_lock_mismatch(
+        output.status.code(),
+        &String::from_utf8_lossy(&output.stderr),
+    ) {
+        result.context(LockScenarioFailureKind::NonCanonicalLockfile)
+    } else {
+        result
+    }
+}
+
+fn is_canonical_lock_mismatch(status: Option<i32>, stderr: &str) -> bool {
+    status == Some(1)
+        && stderr
+            .contains("The lockfile at `uv.lock` needs to be updated, but `--check` was provided.")
 }
 
 fn ensure_no_solution(output: &Output, command: &str) -> Result<()> {
@@ -879,6 +938,19 @@ pub fn parse_pins(contents: &str, environment: &MarkerEnvironment) -> Result<Sel
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classifies_only_fresh_lock_rejections() {
+        let mismatch =
+            "error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.";
+        assert!(is_canonical_lock_mismatch(Some(1), mismatch));
+        assert!(!is_canonical_lock_mismatch(Some(0), mismatch));
+        assert!(!is_canonical_lock_mismatch(Some(2), mismatch));
+        assert!(!is_canonical_lock_mismatch(
+            Some(1),
+            "error: Failed to download a wheel"
+        ));
+    }
 
     #[test]
     fn target_matrices_are_stable_and_deduplicated() {
