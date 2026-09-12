@@ -2355,6 +2355,12 @@ async fn run_project(
             .await
         }
         ProjectCommand::Sync(args) => {
+            if args.system {
+                bail!(
+                    "The `--system` flag is not supported by `uv sync` (set `UV_PROJECT_ENVIRONMENT` to the target environment path instead)"
+                );
+            }
+
             // Resolve the settings from the command-line arguments and workspace configuration.
             let args = settings::SyncSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
