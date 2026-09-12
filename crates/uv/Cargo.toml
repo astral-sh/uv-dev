@@ -154,6 +154,7 @@ wiremock = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["fs", "poll", "process", "socket", "uio", "user"] }
+socket2 = { workspace = true }
 uv-unix = { workspace = true }
 
 [features]

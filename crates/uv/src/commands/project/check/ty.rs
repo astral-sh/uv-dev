@@ -232,6 +232,7 @@ pub(super) async fn run(
         writeln!(stderr, "`")?;
     }
 
+    crate::daemon::flush_process_caches();
     let handle = command.spawn().context("Failed to spawn `ty check`")?;
     run_to_completion(handle).await
 }

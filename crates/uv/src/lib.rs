@@ -348,6 +348,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
         let user = FilesystemOptions::user().map_err(map_settings_error)?;
         project.combine(user).combine(system)
     };
+    daemon::flush_process_caches();
 
     // If the target is a remote script, download it.
     // If the target is a PEP 723 script, parse it.
@@ -3103,6 +3104,8 @@ where
         .expect("Tokio executor failed, was there a panic?")
         .join()
         .expect("Tokio executor failed, was there a panic?");
+
+    daemon::finish_process_caches();
 
     match result {
         Ok(code) => code.into(),

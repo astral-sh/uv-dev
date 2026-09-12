@@ -199,6 +199,7 @@ pub(crate) async fn format(
     // Add any additional arguments passed after `--`
     command.args(extra_args.iter());
 
+    crate::daemon::flush_process_caches();
     let handle = command.spawn().context("Failed to spawn `ruff format`")?;
     run_to_completion(handle).await
 }

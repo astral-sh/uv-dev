@@ -1,5 +1,6 @@
-use std::io;
+use std::io::{self, Read, Write};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
@@ -13,6 +14,7 @@ use nix::errno::Errno;
 use nix::libc;
 use nix::sys::signal::{self, SigSet, SigmaskHow, Signal, kill};
 use nix::unistd::Pid;
+use serde::Serialize;
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -141,6 +143,15 @@ impl Daemon {
             .args(["export", "--frozen", "--no-header", "--no-hashes"])
             .output()?)
     }
+
+    fn workspace_list(&self, context: &TestContext, local: bool) -> Command {
+        let mut command = self.command(context);
+        if local {
+            command.arg("--no-daemon");
+        }
+        command.args(["--offline", "workspace", "list"]);
+        command
+    }
 }
 
 impl Drop for Daemon {
@@ -223,6 +234,392 @@ fn write_project(context: &TestContext) -> Result<String> {
     .to_owned();
     context.temp_dir.child("uv.lock").write_str(&lock)?;
     Ok(lock)
+}
+
+fn assert_output_eq(local: &Output, delegated: &Output) {
+    assert_eq!(local.status.code(), delegated.status.code());
+    assert_eq!(local.stdout, delegated.stdout);
+    assert_eq!(local.stderr, delegated.stderr);
+}
+
+fn manifest_cache_hits(status: &Value) -> Result<u64> {
+    status["manifest_cache_hits"]
+        .as_u64()
+        .context("daemon manifest-cache hit counter")
+}
+
+#[test]
+fn daemon_manifest_cache_rejects_non_worker_observations() -> Result<()> {
+    #[derive(Serialize)]
+    enum CacheRequest {
+        Manifests,
+    }
+
+    let context = uv_test::test_context_with_versions!(&[]);
+    let Some(daemon) = Daemon::start(&context)? else {
+        return Ok(());
+    };
+    let before = daemon.status(&context)?;
+    let socket = fs_err::read_dir(daemon.directory.path())?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "sock")
+        })
+        .context("daemon socket")?;
+    let mut stream = UnixStream::connect(socket)?;
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+    let mut encoded = Vec::new();
+    for frame in [
+        rmp_serde::to_vec(&CacheRequest::Manifests)?,
+        rmp_serde::to_vec(&(
+            vec!["[project]\nname = 'untrusted'\nversion = '1'\n"],
+            u64::MAX,
+            u64::MAX,
+        ))?,
+    ] {
+        encoded.extend(u32::try_from(frame.len())?.to_be_bytes());
+        encoded.extend(frame);
+    }
+    match stream.write_all(&encoded) {
+        Ok(()) => {}
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
+            ) => {}
+        Err(error) => return Err(error.into()),
+    }
+    let mut response = [0; 4];
+    match stream.read(&mut response) {
+        Ok(0) => {}
+        Err(error) if error.kind() == io::ErrorKind::ConnectionReset => {}
+        Ok(_) => bail!("daemon acknowledged a cache batch from a non-worker"),
+        Err(error) => return Err(error.into()),
+    }
+    let after = daemon.status(&context)?;
+    for field in [
+        "completed_requests",
+        "cached_manifests",
+        "cached_manifest_source_bytes",
+        "manifest_cache_hits",
+        "manifest_cache_dropped",
+    ] {
+        assert_eq!(before[field], after[field]);
+    }
+    Ok(())
+}
+
+#[test]
+fn daemon_manifest_cache_invalidation() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let source = indoc! {r#"
+        [project]
+        name = "first"
+        version = "0.1.0"
+    "#};
+    let manifest = context.temp_dir.child("pyproject.toml");
+    manifest.write_str(source)?;
+    let Some(daemon) = Daemon::start(&context)? else {
+        return Ok(());
+    };
+
+    let local = daemon.workspace_list(&context, true).output()?;
+    daemon.assert_success(&local)?;
+    assert_eq!(local.stdout, b"first\n");
+    let cold = daemon.workspace_list(&context, false).output()?;
+    daemon.assert_success(&cold)?;
+    assert_output_eq(&local, &cold);
+    let cold_status = daemon.status(&context)?;
+    assert_eq!(cold_status["cached_manifests"], 1);
+    assert_eq!(cold_status["cached_manifest_source_bytes"], source.len());
+    assert_eq!(cold_status["manifest_cache_dropped"], 0);
+
+    let warm = daemon.workspace_list(&context, false).output()?;
+    daemon.assert_success(&warm)?;
+    assert_output_eq(&local, &warm);
+    assert!(manifest_cache_hits(&daemon.status(&context)?)? > manifest_cache_hits(&cold_status)?);
+
+    // File identity, size, and timestamps are not substitutes for the bytes that were read.
+    let replacement_source = source.replace("\"first\"", "\"other\"");
+    assert_eq!(replacement_source.len(), source.len());
+    let modified = filetime::FileTime::from_last_modification_time(&fs_err::metadata(&manifest)?);
+    let replacement = context.temp_dir.child("replacement.toml");
+    replacement.write_str(&replacement_source)?;
+    filetime::set_file_mtime(&replacement, modified)?;
+    fs_err::rename(&replacement, &manifest)?;
+    let updated = daemon.workspace_list(&context, false).output()?;
+    daemon.assert_success(&updated)?;
+    assert_eq!(updated.stdout, b"other\n");
+    assert_output_eq(&daemon.workspace_list(&context, true).output()?, &updated);
+    let updated_status = daemon.status(&context)?;
+    assert_eq!(updated_status["cached_manifests"], 2);
+    assert_eq!(
+        updated_status["cached_manifest_source_bytes"],
+        source.len() + replacement_source.len()
+    );
+
+    manifest.write_str("[project\n")?;
+    let invalid = daemon.workspace_list(&context, false).output()?;
+    let local_invalid = daemon.workspace_list(&context, true).output()?;
+    assert!(!invalid.status.success());
+    assert_output_eq(&local_invalid, &invalid);
+    assert_eq!(daemon.status(&context)?["cached_manifests"], 2);
+
+    fs_err::remove_file(&manifest)?;
+    let missing = daemon.workspace_list(&context, false).output()?;
+    let local_missing = daemon.workspace_list(&context, true).output()?;
+    assert!(!missing.status.success());
+    assert_output_eq(&local_missing, &missing);
+    assert_eq!(daemon.status(&context)?["cached_manifests"], 2);
+    Ok(())
+}
+
+#[test]
+fn daemon_manifest_cache_flushes_after_config_bypass() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let source = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+    "#};
+    context.temp_dir.child("pyproject.toml").write_str(source)?;
+    let Some(daemon) = Daemon::start(&context)? else {
+        return Ok(());
+    };
+    let run = |local| {
+        daemon
+            .workspace_list(&context, local)
+            .arg("--no-config")
+            .output()
+    };
+    let local = run(true)?;
+    daemon.assert_success(&local)?;
+    assert_eq!(daemon.status(&context)?["cached_manifests"], 0);
+
+    // Configuration discovery is disabled, so only the invocation's final flush can publish
+    // the manifest read by `workspace list`.
+    let cold = run(false)?;
+    daemon.assert_success(&cold)?;
+    assert_output_eq(&local, &cold);
+    let cold_status = daemon.status(&context)?;
+    assert_eq!(cold_status["cached_manifests"], 1);
+    assert_eq!(cold_status["cached_manifest_source_bytes"], source.len());
+    assert_eq!(cold_status["manifest_cache_dropped"], 0);
+
+    let warm = run(false)?;
+    daemon.assert_success(&warm)?;
+    assert_output_eq(&local, &warm);
+    assert!(manifest_cache_hits(&daemon.status(&context)?)? > manifest_cache_hits(&cold_status)?);
+    Ok(())
+}
+
+#[test]
+fn daemon_manifest_cache_lowers_in_request_context() -> Result<()> {
+    let first = uv_test::test_context_with_versions!(&[]);
+    let second = uv_test::test_context_with_versions!(&[]);
+    let source = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+
+        [tool.uv]
+        constraint-dependencies = [
+            "dependency @ ${DAEMON_MANIFEST_URL}",
+            "archive @ file://${PROJECT_ROOT}/archive",
+        ]
+    "#};
+    first.temp_dir.child("pyproject.toml").write_str(source)?;
+    second.temp_dir.child("pyproject.toml").write_str(source)?;
+    first.temp_dir.child("archive").create_dir_all()?;
+    second
+        .temp_dir
+        .child("archive")
+        .write_str("not an archive")?;
+    let Some(daemon) = Daemon::start(&first)? else {
+        return Ok(());
+    };
+    let run = |context: &TestContext, local, url| {
+        daemon
+            .workspace_list(context, local)
+            .env_remove("PROJECT_ROOT")
+            .env("DAEMON_MANIFEST_URL", url)
+            .output()
+    };
+    let valid_url = "https://example.org/dependency-1.0.0.tar.gz";
+
+    let local = run(&first, true, valid_url)?;
+    daemon.assert_success(&local)?;
+    let cold = run(&first, false, valid_url)?;
+    daemon.assert_success(&cold)?;
+    assert_output_eq(&local, &cold);
+    let before = daemon.status(&first)?;
+    assert_eq!(before["cached_manifests"], 1);
+
+    // The same source classifies the second directory's regular file independently.
+    let local_file = run(&second, true, valid_url)?;
+    let delegated_file = run(&second, false, valid_url)?;
+    assert!(!local_file.status.success());
+    assert_output_eq(&local_file, &delegated_file);
+
+    fs_err::remove_file(second.temp_dir.child("archive"))?;
+    second.temp_dir.child("archive").create_dir_all()?;
+    let local_directory = run(&second, true, valid_url)?;
+    let delegated_directory = run(&second, false, valid_url)?;
+    daemon.assert_success(&delegated_directory)?;
+    assert_output_eq(&local_directory, &delegated_directory);
+
+    // A syntax-cache hit must still expand the current request's environment.
+    let invalid_url = "hg+https://example.org/dependency";
+    let local_environment = run(&second, true, invalid_url)?;
+    let delegated_environment = run(&second, false, invalid_url)?;
+    assert!(!local_environment.status.success());
+    assert_output_eq(&local_environment, &delegated_environment);
+    let after = daemon.status(&second)?;
+    assert_eq!(after["cached_manifests"], 1);
+    assert_eq!(after["cached_manifest_source_bytes"], source.len());
+    assert!(manifest_cache_hits(&after)? > manifest_cache_hits(&before)?);
+    Ok(())
+}
+
+#[test]
+fn daemon_manifest_cache_replays_diagnostics() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let manifest = context.temp_dir.child("pyproject.toml");
+    manifest.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+
+        [tool.uv]
+        dev-dependencies = []
+    "#})?;
+    let Some(daemon) = Daemon::start(&context)? else {
+        return Ok(());
+    };
+
+    let local = daemon.workspace_list(&context, true).output()?;
+    daemon.assert_success(&local)?;
+    let cold = daemon.workspace_list(&context, false).output()?;
+    daemon.assert_success(&cold)?;
+    assert_output_eq(&local, &cold);
+    uv_snapshot!(context.filters(), daemon.workspace_list(&context, false), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project
+
+    ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    ");
+
+    let local_quiet = daemon
+        .workspace_list(&context, true)
+        .arg("--quiet")
+        .output()?;
+    let delegated_quiet = daemon
+        .workspace_list(&context, false)
+        .arg("--quiet")
+        .output()?;
+    daemon.assert_success(&delegated_quiet)?;
+    assert_output_eq(&local_quiet, &delegated_quiet);
+    assert!(delegated_quiet.stderr.is_empty());
+    assert_output_eq(&local, &daemon.workspace_list(&context, false).output()?);
+
+    // Successful syntax parsing can be cached even when typed project validation fails.
+    manifest.write_str("[project]\nname = \"project\"\n")?;
+    let local_error = daemon.workspace_list(&context, true).output()?;
+    let cold_error = daemon.workspace_list(&context, false).output()?;
+    assert!(!local_error.status.success());
+    assert_output_eq(&local_error, &cold_error);
+    let before = daemon.status(&context)?;
+    assert_eq!(before["cached_manifests"], 2);
+    let warm_error = daemon.workspace_list(&context, false).output()?;
+    assert_output_eq(&local_error, &warm_error);
+    assert!(manifest_cache_hits(&daemon.status(&context)?)? > manifest_cache_hits(&before)?);
+    Ok(())
+}
+
+#[test]
+fn daemon_manifest_cache_allows_project_edits() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let control = uv_test::test_context_with_versions!(&[]);
+    write_project(&context)?;
+    write_project(&control)?;
+    let Some(daemon) = Daemon::start(&context)? else {
+        return Ok(());
+    };
+
+    daemon.assert_success(&daemon.workspace_list(&context, false).output()?)?;
+    daemon.assert_success(&daemon.workspace_list(&context, false).output()?)?;
+    let before = daemon.status(&context)?;
+    assert_eq!(before["cached_manifests"], 1);
+
+    for expected in [b"0.1.1\n".as_slice(), b"0.1.2\n".as_slice()] {
+        let arguments = [
+            "--offline",
+            "version",
+            "--package",
+            "project",
+            "--bump",
+            "patch",
+            "--frozen",
+        ];
+        let local = daemon
+            .command(&control)
+            .arg("--no-daemon")
+            .args(arguments)
+            .output()?;
+        daemon.assert_success(&local)?;
+        let delegated = daemon.command(&context).args(arguments).output()?;
+        daemon.assert_success(&delegated)?;
+        assert_output_eq(&local, &delegated);
+        assert_eq!(
+            fs_err::read(context.temp_dir.child("pyproject.toml"))?,
+            fs_err::read(control.temp_dir.child("pyproject.toml"))?
+        );
+
+        let version = daemon
+            .command(&context)
+            .args(["--offline", "version", "--short"])
+            .output()?;
+        daemon.assert_success(&version)?;
+        assert_eq!(version.stdout, expected);
+    }
+
+    let after = daemon.status(&context)?;
+    assert!(manifest_cache_hits(&after)? > manifest_cache_hits(&before)?);
+    assert_eq!(after["manifest_cache_dropped"], 0);
+    Ok(())
+}
+
+#[test]
+fn daemon_manifest_cache_skips_large_sources() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let source = format!(
+        "[project]\nname = \"project\"\nversion = \"0.1.0\"\n#{}\n",
+        "x".repeat(256 * 1024)
+    );
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&source)?;
+    let Some(daemon) = Daemon::start(&context)? else {
+        return Ok(());
+    };
+
+    let local = daemon.workspace_list(&context, true).output()?;
+    daemon.assert_success(&local)?;
+    for _ in 0..2 {
+        let delegated = daemon.workspace_list(&context, false).output()?;
+        daemon.assert_success(&delegated)?;
+        assert_output_eq(&local, &delegated);
+    }
+    let status = daemon.status(&context)?;
+    assert_eq!(status["cached_manifests"], 0);
+    assert_eq!(status["cached_manifest_source_bytes"], 0);
+    Ok(())
 }
 
 #[test]
@@ -476,7 +873,6 @@ fn daemon_process_context() -> Result<()> {
         .stderr(Stdio::piped());
     let mut child = command.spawn()?;
     {
-        use std::io::Write;
         child
             .stdin
             .take()

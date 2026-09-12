@@ -58,12 +58,8 @@ impl ProcessContext {
     }
 
     pub(super) fn validate(&self, stream: &UnixStream) -> Result<()> {
-        #[cfg(target_os = "macos")]
-        let peer_pid = getsockopt(stream, sockopt::LocalPeerPid)?;
-        #[cfg(target_os = "linux")]
-        let peer_pid = getsockopt(stream, sockopt::PeerCredentials)?.pid();
         ensure!(
-            self.pid == peer_pid,
+            self.pid == peer_pid(stream)?,
             "Caller PID does not match socket peer"
         );
         let client_pid = Pid::from_raw(self.pid);
@@ -95,6 +91,14 @@ impl ProcessContext {
     pub(super) fn restore(self) -> Result<()> {
         restore_context(self)
     }
+}
+
+/// Return the kernel-authenticated process on the other end of a local socket.
+pub(super) fn peer_pid(stream: &UnixStream) -> Result<i32> {
+    #[cfg(target_os = "macos")]
+    return Ok(getsockopt(stream, sockopt::LocalPeerPid)?);
+    #[cfg(target_os = "linux")]
+    return Ok(getsockopt(stream, sockopt::PeerCredentials)?.pid());
 }
 
 #[allow(unsafe_code)]

@@ -44,3 +44,16 @@ pub(crate) fn dispatch(args: &[OsString], cli: &Cli) -> anyhow::Result<Option<Ex
         Ok(None)
     }
 }
+
+/// Opportunistically make this worker's parsed sources available to later requests.
+/// Call before spawning a long-running external command, while uv still owns signal handling.
+pub(crate) fn flush_process_caches() {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    unix::flush_process_caches(false);
+}
+
+/// Stop observing a completed invocation and flush its final bounded batch of sources.
+pub(crate) fn finish_process_caches() {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    unix::flush_process_caches(true);
+}

@@ -1,8 +1,9 @@
 //! A session-local, single-threaded fork server.
 //!
-//! The parent may parse lockfiles, but must never enter uv's command runner, initialize its
-//! process-global settings, start a runtime, or create background threads. Each child starts uv
-//! exactly once, after restoring the invoking process's execution context.
+//! The parent may parse lockfiles and context-free project-manifest syntax, but must never enter
+//! uv's command runner, initialize its process-global settings, start a runtime, or create
+//! background threads. Each child starts uv exactly once, after restoring the invoking
+//! process's execution context.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -38,10 +39,12 @@ use uv_cache::Cache;
 use uv_cache_key::hash_digest;
 use uv_cli::Cli;
 use uv_resolver::Lock;
+use uv_workspace::pyproject::PyProjectToml;
 
 use super::Bootstrap;
 
 mod context;
+mod manifests;
 mod reaper;
 use context::ProcessContext;
 use reaper::ChildNotifications;
@@ -65,6 +68,8 @@ enum Request {
     },
     Hit,
     Stop,
+    // Followed by a separately bounded manifest-cache frame.
+    Manifests,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -93,6 +98,10 @@ struct Status {
     cached_locks: usize,
     cached_source_bytes: usize,
     cache_hits: u64,
+    cached_manifests: usize,
+    cached_manifest_source_bytes: usize,
+    manifest_cache_hits: u64,
+    manifest_cache_dropped: u64,
     stopping: bool,
 }
 
@@ -343,9 +352,11 @@ fn status(
     children: &BTreeMap<i32, UnixStream>,
     completed: u64,
     hits: u64,
+    manifests: &manifests::Counters,
     stopping: bool,
 ) -> Result<Status> {
     let (cached_locks, cached_source_bytes) = Lock::process_cache_stats();
+    let (cached_manifests, cached_manifest_source_bytes) = PyProjectToml::process_cache_stats();
     Ok(Status {
         pid: getpid().as_raw(),
         session: getsid(None)?.as_raw(),
@@ -354,6 +365,10 @@ fn status(
         cached_locks,
         cached_source_bytes,
         cache_hits: hits,
+        cached_manifests,
+        cached_manifest_source_bytes,
+        manifest_cache_hits: manifests.hits,
+        manifest_cache_dropped: manifests.dropped,
         stopping,
     })
 }
@@ -383,10 +398,12 @@ fn serve(paths: Paths) -> Result<Bootstrap> {
     listener.set_nonblocking(true)?;
     let notifications = ChildNotifications::install()?;
     Lock::enable_process_cache();
+    PyProjectToml::enable_process_cache();
     let mut children = BTreeMap::new();
     let mut stop_waiters = Vec::new();
     let mut completed = 0;
     let mut hits = 0;
+    let mut manifest_counters = manifests::Counters::default();
     let mut last_activity = Instant::now();
     loop {
         // Drain before reaping: a child that exits after waitpid reports StillAlive must leave
@@ -410,7 +427,13 @@ fn serve(paths: Paths) -> Result<Bootstrap> {
         if children.is_empty()
             && (!stop_waiters.is_empty() || last_activity.elapsed() >= IDLE_TIMEOUT)
         {
-            let response = Response::Status(status(&children, completed, hits, true)?);
+            let response = Response::Status(status(
+                &children,
+                completed,
+                hits,
+                &manifest_counters,
+                true,
+            )?);
             for mut stream in stop_waiters {
                 let _ = write_frame(&mut stream, &response);
             }
@@ -487,6 +510,7 @@ fn serve(paths: Paths) -> Result<Bootstrap> {
                     &children,
                     completed,
                     hits,
+                    &manifest_counters,
                     !stop_waiters.is_empty(),
                 )?);
                 let _ = write_frame(&mut stream, &response);
@@ -511,6 +535,13 @@ fn serve(paths: Paths) -> Result<Bootstrap> {
             Request::Hit => {
                 hits += 1;
                 let _ = write_frame(&mut stream, &Response::Observed);
+            }
+            Request::Manifests => {
+                // A batch can only originate from a live worker forked by this server. The
+                // syntax itself is portable across invocation contexts; lowering stays local.
+                if context::peer_pid(&stream).is_ok_and(|pid| children.contains_key(&pid)) {
+                    let _ = manifests::accept(&mut stream, &mut manifest_counters);
+                }
             }
             Request::Run(invocation) => {
                 let descriptors = match receive_fds(&stream) {
@@ -537,7 +568,7 @@ fn serve(paths: Paths) -> Result<Bootstrap> {
                 }
                 // SAFETY: This process has never started uv's runtime, initialized its command
                 // globals, or created a thread. Its only application work is synchronous socket
-                // handling and lockfile parsing, and no mutex guard is held across this call.
+                // handling and source parsing, and no mutex guard is held across this call.
                 match unsafe { fork() } {
                     Ok(ForkResult::Parent { child }) => {
                         let _ = write_frame(&mut stream, &Response::Accepted(child.as_raw()));
@@ -593,6 +624,7 @@ fn prepare_worker(
     WORKER.store(true, Ordering::Relaxed);
     let _ = CACHE_SOCKET.set(socket);
     Lock::observe_process_cache(observe_lock_cache);
+    manifests::initialize_worker();
     Ok(Bootstrap::Continue(
         invocation
             .args
@@ -600,6 +632,10 @@ fn prepare_worker(
             .map(OsString::from_vec)
             .collect(),
     ))
+}
+
+pub(super) fn flush_process_caches(close: bool) {
+    manifests::flush(close);
 }
 
 fn observe_lock_cache(contents: &str, hit: bool) {
