@@ -1,0 +1,17 @@
+name: Probe native cache artifact transfer
+description: Exercise the cache service on an isolated uv-dev branch
+inputs:
+  mode:
+    required: true
+    description: export or import
+  directory:
+    required: true
+    description: Artifact directory
+outputs:
+  key:
+    description: Isolated destination key
+  paths:
+    description: Paths for an ordinary actions/cache restore
+runs:
+  using: node24
+  main: ../probe.mjs

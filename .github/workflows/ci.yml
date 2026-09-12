@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      cache-artifact-probe:
+        description: Exercise an isolated native-cache artifact transfer
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -18,9 +23,12 @@ env:
 
 jobs:
   plan:
+    # The mirror imports its main-branch Rust caches from the upstream CI run.
+    if: ${{ !inputs.cache-artifact-probe && (github.repository != 'astral-sh/uv-dev' || github.event_name != 'push' || github.ref != 'refs/heads/main') }}
     uses: $/.github/workflows/plan.yml
 
   check-fmt:
+    if: ${{ !inputs.cache-artifact-probe && (github.repository != 'astral-sh/uv-dev' || github.event_name != 'push' || github.ref != 'refs/heads/main') }}
     uses: $/.github/workflows/check-fmt.yml
 
   review:
@@ -289,6 +297,76 @@ jobs:
           UV_TEST_PUBLISH_CLOUDSMITH_TOKEN: ${{ secrets.UV_TEST_PUBLISH_CLOUDSMITH_TOKEN }}
           UV_TEST_PUBLISH_PYTHON_VERSION: ${{ env.PYTHON_VERSION }}
           UV_TEST_PUBLISH_GITLAB_PYPI_OIDC_TOKEN: ${{ steps.load-gitlab-oidc-token.outputs.GITLAB_PYPI_OIDC_TOKEN }}
+
+  export-rust-caches:
+    needs:
+      - check-lint
+      - check-docs
+      - check-publish
+      - check-generated-files
+      - test
+      - test-windows-trampolines
+      - build-dev-binaries
+    if: ${{ github.repository == 'astral-sh/uv' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    uses: ./.github/workflows/export-rust-caches.yml
+    permissions:
+      contents: read
+      actions: read
+
+  cache-artifact-probe-export:
+    if: ${{ github.repository == 'astral-sh/uv-dev' && github.event_name == 'workflow_dispatch' && inputs.cache-artifact-probe && github.ref != 'refs/heads/main' }}
+    runs-on: github-ubuntu-24.04-x86_64-2
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/rust-cache-artifacts/probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          mode: export
+          directory: ${{ runner.temp }}/cache-artifact-probe
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-cache-probe
+          path: ${{ runner.temp }}/cache-artifact-probe/
+          compression-level: 0
+          retention-days: 1
+
+  cache-artifact-probe-import:
+    needs: cache-artifact-probe-export
+    runs-on: github-ubuntu-24.04-x86_64-2
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: native-cache-probe
+          path: ${{ runner.temp }}/cache-artifact-probe
+      - uses: ./.github/actions/rust-cache-artifacts/probe
+        id: import
+        with:
+          mode: import
+          directory: ${{ runner.temp }}/cache-artifact-probe
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: restore
+        with:
+          key: ${{ steps.import.outputs.key }}
+          path: ${{ steps.import.outputs.paths }}
+          fail-on-cache-miss: true
+      - name: Require an ordinary cache hit
+        env:
+          CACHE_HIT: ${{ steps.restore.outputs.cache-hit }}
+        run: test "$CACHE_HIT" = true
 
   required-checks-passed:
     name: "all required jobs passed"
