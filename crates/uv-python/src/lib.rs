@@ -48,6 +48,8 @@ mod target;
 mod version_files;
 mod virtualenv;
 #[cfg(windows)]
+mod windows_executable;
+#[cfg(windows)]
 pub mod windows_registry;
 
 #[cfg(windows)]

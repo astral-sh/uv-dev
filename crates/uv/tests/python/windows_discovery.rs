@@ -7,6 +7,44 @@ use uv_static::EnvVars;
 use uv_test::venv_bin_path;
 
 #[test]
+fn python_find_skips_incompatible_cpython_file_versions() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+    let python311 = &context.python_versions[0].1;
+    let python312 = &context.python_versions[1].1;
+
+    let found = context
+        .python_find()
+        .args(["3.12", "--no-cache", "-vv"])
+        .env(EnvVars::RUST_LOG, "uv_python=trace")
+        .assert()
+        .success();
+    let found_path = PathBuf::from(String::from_utf8_lossy(&found.get_output().stdout).trim());
+    assert_eq!(
+        fs_err::canonicalize(found_path)?,
+        fs_err::canonicalize(python312)?,
+    );
+
+    let stderr = String::from_utf8_lossy(&found.get_output().stderr)
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    let python311_dir = python311
+        .parent()
+        .context("Python executable has a parent")?
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    assert!(stderr.contains("version resource reports python 3.11"));
+    assert!(
+        !stderr.lines().any(|line| {
+            line.contains("querying interpreter executable at") && line.contains(&python311_dir)
+        }),
+        "known-incompatible CPython executables should not be started: {stderr}",
+    );
+
+    Ok(())
+}
+
+#[test]
 fn python_find_retargeted_cpython_venv_launcher() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
     let python311 = &context.python_versions[0].1;
