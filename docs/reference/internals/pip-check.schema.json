@@ -1,0 +1,269 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "uv pip check (preview)",
+  "description": "The preview `uv pip check` JSON report.",
+  "type": "object",
+  "properties": {
+    "diagnostics": {
+      "description": "Compatibility diagnostics, sorted by package, kind, and normalized details.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/DiagnosticReport"
+      }
+    },
+    "environment": {
+      "description": "The installed environment being inspected.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/EnvironmentReport"
+        }
+      ]
+    },
+    "packages_checked": {
+      "description": "Number of installed distributions examined, including duplicate distributions.",
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "schema": {
+      "description": "Format information.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/SchemaReport"
+        }
+      ]
+    },
+    "target": {
+      "description": "The target against which the environment was checked.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/CheckTargetReport"
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "environment",
+    "target",
+    "packages_checked",
+    "diagnostics"
+  ],
+  "definitions": {
+    "CheckTargetReport": {
+      "description": "The target used to check the installed distributions.",
+      "type": "object",
+      "properties": {
+        "python_platform": {
+          "description": "Explicit platform override, or null when using the installed interpreter's platform.",
+          "type": ["string", "null"]
+        },
+        "python_version": {
+          "description": "Normalized, release-only full Python version used for compatibility and marker checks.",
+          "type": "string"
+        }
+      },
+      "required": ["python_version", "python_platform"]
+    },
+    "DiagnosticReport": {
+      "type": "object",
+      "properties": {
+        "package": {
+          "description": "Normalized name of the package with the incompatibility.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PackageName"
+            }
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "duplicate_package"
+            },
+            "paths": {
+              "description": "Portable paths to the installed metadata locations, sorted lexicographically.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": ["kind", "paths"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "installed_version": {
+              "description": "Version of the dependency installed in the inspected environment.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "incompatible_dependency"
+            },
+            "requirement": {
+              "description": "Normalized PEP 508 requirement with credential-safe URLs.",
+              "type": "string"
+            }
+          },
+          "required": ["kind", "requirement", "installed_version"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "incompatible_platform"
+            }
+          },
+          "required": ["kind"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "installed_version": {
+              "description": "Python version installed in the inspected environment.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "incompatible_python_version"
+            },
+            "requires_python": {
+              "description": "Python versions required by the package.",
+              "type": "string"
+            }
+          },
+          "required": ["kind", "requires_python", "installed_version"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "metadata_unavailable"
+            },
+            "path": {
+              "description": "Portable path to the installed distribution's metadata location.",
+              "type": "string"
+            }
+          },
+          "required": ["kind", "path"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "missing_dependency"
+            },
+            "requirement": {
+              "description": "Normalized PEP 508 requirement with credential-safe URLs.",
+              "type": "string"
+            }
+          },
+          "required": ["kind", "requirement"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "tags_unavailable"
+            },
+            "path": {
+              "description": "Portable path to the installed distribution's metadata location.",
+              "type": "string"
+            }
+          },
+          "required": ["kind", "path"]
+        }
+      ],
+      "required": ["package"]
+    },
+    "EnvironmentReport": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "The path to the environment.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          ]
+        },
+        "python": {
+          "description": "The Python interpreter for the environment.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PythonReport"
+            }
+          ]
+        }
+      },
+      "required": ["path", "python"]
+    },
+    "PackageName": {
+      "description": "The normalized name of a package.\n\nConverts the name to lowercase and collapses runs of `-`, `_`, and `.` down to a single `-`.\nFor example, `---`, `.`, and `__` are all converted to a single `-`.\n\nSee: <https://packaging.python.org/en/latest/specifications/name-normalization/>",
+      "type": "string"
+    },
+    "PortablePathBuf": {
+      "type": "string"
+    },
+    "PythonReport": {
+      "description": "Information about the Python interpreter in an existing environment.",
+      "type": "object",
+      "properties": {
+        "implementation": {
+          "description": "Python implementation name.",
+          "type": "string"
+        },
+        "key": {
+          "description": "Interpreter installation key, as used by `uv python list`.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Absolute path to the Python executable.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          ]
+        },
+        "version": {
+          "description": "Full Python version.",
+          "type": "string"
+        }
+      },
+      "required": ["path", "version", "implementation", "key"]
+    },
+    "SchemaReport": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "description": "The version of the schema.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SchemaVersion"
+            }
+          ]
+        }
+      },
+      "required": ["version"]
+    },
+    "SchemaVersion": {
+      "oneOf": [
+        {
+          "description": "An unstable, experimental schema.",
+          "type": "string",
+          "const": "preview"
+        }
+      ]
+    }
+  }
+}

@@ -1238,6 +1238,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             let cache = cache.init().await?;
 
             commands::pip_check(
+                args.output_format,
                 args.settings.python.as_deref(),
                 args.settings.system,
                 args.settings.python_version.as_ref(),
@@ -1245,6 +1246,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 &args.settings.dependency_metadata,
                 &cache,
                 printer,
+                globals.preview,
             )
         }
         Commands::Pip(PipNamespace {

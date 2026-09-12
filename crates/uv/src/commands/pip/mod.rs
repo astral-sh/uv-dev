@@ -6,6 +6,7 @@ use uv_pypi_types::ResolverMarkerEnvironment;
 use uv_python::{Interpreter, PythonVersion};
 
 pub(crate) mod check;
+pub(crate) mod check_report;
 pub(crate) mod compile;
 pub(crate) mod freeze;
 pub(crate) mod install;
