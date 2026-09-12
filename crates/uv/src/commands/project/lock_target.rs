@@ -144,9 +144,10 @@ impl<'lock> LockTarget<'lock> {
                 let mut known_groups = FxHashSet::default();
                 for member in workspace.packages().values() {
                     known_groups.extend(
-                        FlatDependencyGroups::from_pyproject_toml(
+                        FlatDependencyGroups::from_workspace(
                             member.root(),
                             member.pyproject_toml(),
+                            workspace,
                         )?
                         .into_iter()
                         .map(|(group, _)| group),

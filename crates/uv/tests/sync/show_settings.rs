@@ -3791,6 +3791,7 @@ fn preview_features() {
     +            ArtifactHashFiltering,
     +            ContentAddressedCache,
     +            MissingExcludeNewerPackageLock,
+    +            IncludeGroupWorkspace,
     +        ],
          },
          python_preference: Managed,
