@@ -529,6 +529,24 @@ fn run_pep723_script_empty_dependency() -> Result<()> {
     Ok(())
 }
 
+/// Run a PEP 723-compatible script that uses carriage-return-only newlines.
+#[test]
+fn run_pep723_script_carriage_return_newlines() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let script = context.temp_dir.child("main.py");
+    script.write_str(concat!(
+        "# /// script\r",
+        "# requires-python = \">=3.11\"\r",
+        "# dependencies = [\"iniconfig\"]\r",
+        "# ///\r",
+        "import iniconfig\r",
+    ))?;
+
+    context.run().arg("main.py").assert().success();
+
+    Ok(())
+}
+
 /// A PEP 723 script with a long file name should still succeed at creating a script environment on
 /// Windows.
 #[test]
