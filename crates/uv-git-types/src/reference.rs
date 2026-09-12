@@ -76,7 +76,7 @@ impl GitReference {
 
     /// Percent-encode a revision string for use in a URL.
     pub(crate) fn encode_rev(rev: &str) -> Cow<'_, str> {
-        utf8_percent_encode(rev, GIT_REFERENCE_ENCODE_SET).into()
+        Cow::Owned(utf8_percent_encode(rev, GIT_REFERENCE_ENCODE_SET).to_string())
     }
 
     /// Returns the kind of this reference.
