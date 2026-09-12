@@ -5,11 +5,12 @@
 //! outside its supported subset are rejected rather than silently compared with different rules.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Bound;
 
 use anyhow::{Result, bail, ensure};
 
 use uv_normalize::{ExtraName, PackageName};
-use uv_pep440::Version;
+use uv_pep440::{Version, VersionSpecifiers, release_specifiers_to_ranges};
 use uv_pep508::{MarkerEnvironment, MarkerExpression, Requirement, VersionOrUrl};
 
 use super::scenario::Scenario;
@@ -37,6 +38,7 @@ impl<'a> ScenarioOracle<'a> {
     ///
     /// Stable, non-yanked versions with platform-independent wheels are supported. Dependencies
     /// may have ordinary environment markers and additive extras, including recursive extras.
+    /// Dependency `Requires-Python` is interpreted as a lower bound, as documented by uv.
     pub fn new(scenario: &'a Scenario, environment: &'a MarkerEnvironment) -> Result<Self> {
         ensure!(
             scenario.resolver_options.no_binary.is_empty(),
@@ -69,6 +71,12 @@ impl<'a> ScenarioOracle<'a> {
                                 .all(|tag| tag.as_str() == "py3-none-any")),
                     "the scenario oracle requires universal wheels: {name}=={version}"
                 );
+                ensure!(
+                    metadata.requires_python.as_ref().is_none_or(|specifier| {
+                        !release_specifiers_to_ranges(specifier.clone()).is_empty()
+                    }),
+                    "the scenario oracle does not model empty Requires-Python ranges: {name}=={version}"
+                );
                 for requirement in metadata
                     .requires
                     .iter()
@@ -92,7 +100,9 @@ impl<'a> ScenarioOracle<'a> {
                 .root
                 .requires_python
                 .as_ref()
-                .is_none_or(|specifier| specifier.contains(self.environment.python_full_version())),
+                .is_none_or(|specifier| {
+                    specifier.contains(&self.environment.python_full_version().only_release())
+                }),
             "the root does not support Python {}",
             self.environment.python_full_version()
         );
@@ -153,9 +163,10 @@ impl<'a> ScenarioOracle<'a> {
                 .versions
                 .iter()
                 .filter(|(_, metadata)| {
-                    metadata.requires_python.as_ref().is_none_or(|specifier| {
-                        specifier.contains(self.environment.python_full_version())
-                    })
+                    dependency_supports_python(
+                        metadata.requires_python.as_ref(),
+                        self.environment.python_full_version(),
+                    )
                 })
                 .map(|(version, _)| version)
                 .collect::<Vec<_>>();
@@ -231,10 +242,10 @@ impl<'a> ScenarioOracle<'a> {
             }
         }
         ensure!(
-            metadata
-                .requires_python
-                .as_ref()
-                .is_none_or(|specifier| specifier.contains(self.environment.python_full_version())),
+            dependency_supports_python(
+                metadata.requires_python.as_ref(),
+                self.environment.python_full_version(),
+            ),
             "{}=={version} does not support Python {}",
             requirement.name,
             self.environment.python_full_version()
@@ -246,6 +257,27 @@ impl<'a> ScenarioOracle<'a> {
             changed |= extras.insert(extra.clone());
         }
         Ok(changed)
+    }
+}
+
+/// Apply uv's documented lower-bound-only policy to dependency metadata.
+///
+/// The root's Python range remains a full constraint. Taking the first interval boundary also
+/// handles exclusions that raise the minimum version, such as `>=3.12,!=3.12.*`.
+fn dependency_supports_python(specifiers: Option<&VersionSpecifiers>, python: &Version) -> bool {
+    let Some(specifiers) = specifiers else {
+        return true;
+    };
+    let range = release_specifiers_to_ranges(specifiers.clone());
+    let Some((lower, _)) = range.bounding_range() else {
+        // Empty ranges are rejected when the oracle is constructed.
+        return false;
+    };
+    let python = python.only_release();
+    match lower {
+        Bound::Included(lower) => python >= *lower,
+        Bound::Excluded(lower) => python > *lower,
+        Bound::Unbounded => true,
     }
 }
 
@@ -294,17 +326,21 @@ mod tests {
     use super::*;
 
     fn environment() -> MarkerEnvironment {
+        environment_for_python("3.12.0", "3.12")
+    }
+
+    fn environment_for_python(full_version: &str, version: &str) -> MarkerEnvironment {
         MarkerEnvironment::try_from(MarkerEnvironmentBuilder {
             implementation_name: "cpython",
-            implementation_version: "3.12.0",
+            implementation_version: full_version,
             os_name: "posix",
             platform_machine: "x86_64",
             platform_python_implementation: "CPython",
             platform_release: "",
             platform_system: "Linux",
             platform_version: "",
-            python_full_version: "3.12.0",
-            python_version: "3.12",
+            python_full_version: full_version,
+            python_version: version,
             sys_platform: "linux",
         })
         .expect("valid marker environment")
@@ -441,6 +477,106 @@ requires_python = ">=3.13"
         assert_eq!(result.solution, None);
         assert_eq!(result.checked, 4);
         Ok(())
+    }
+
+    #[test]
+    fn ignores_dependency_python_upper_bounds() -> Result<()> {
+        let mut scenario = scenario(
+            r#"
+name = "python-upper-bound"
+[root]
+requires_python = ">=3.12,<3.15"
+requires = ["node-0==2"]
+[expected]
+satisfiable = true
+[packages.node-0.versions."2"]
+requires = ["node-2==2"]
+[packages.node-2.versions."2"]
+requires_python = ">=3.12,<3.13"
+"#,
+        );
+        let environment = environment_for_python("3.14.0", "3.14");
+        let expected = selection(&[("node-0", "2"), ("node-2", "2")]);
+        let oracle = ScenarioOracle::new(&scenario, &environment)?;
+        assert_eq!(oracle.find_solution(4)?.solution, Some(expected.clone()));
+        oracle.validate(&expected)?;
+
+        scenario.root.requires_python = Some(">=3.12,<3.14".parse()?);
+        let oracle = ScenarioOracle::new(&scenario, &environment)?;
+        assert_eq!(oracle.find_solution(4)?.solution, None);
+        insta::assert_snapshot!(
+            oracle.validate(&expected).expect_err("the root upper bound is enforced"),
+            @"the root does not support Python 3.14.0"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn compares_dependency_python_lower_bounds() -> Result<()> {
+        let cases = [
+            ("<=3.8", "3.12", true),
+            (">=3.12,<3.13", "3.14", true),
+            ("==3.12.*", "3.14", true),
+            ("~=3.12", "3.14", true),
+            (">=3.13", "3.12", false),
+            (">3.12", "3.12", false),
+            (">3.12", "3.12.1", true),
+            (">=3.12,!=3.12.*", "3.12.1", false),
+            (">=3.12,!=3.12.*", "3.13", true),
+            (">=3.12,!=3.13.*", "3.13", true),
+            (">=3.13", "3.13.0rc1", true),
+        ];
+        for (specifier, python, expected) in cases {
+            assert_eq!(
+                dependency_supports_python(Some(&specifier.parse()?), &python.parse()?),
+                expected,
+                "{specifier} on Python {python}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn compares_root_python_release_versions() -> Result<()> {
+        let scenario = scenario(
+            r#"
+name = "python-prerelease"
+[root]
+requires_python = ">=3.13,<3.14"
+requires = ["a"]
+[expected]
+satisfiable = true
+[packages.a.versions."1"]
+requires_python = ">=3.13"
+"#,
+        );
+        let environment = environment_for_python("3.13.0rc1", "3.13");
+        let oracle = ScenarioOracle::new(&scenario, &environment)?;
+        assert_eq!(
+            oracle.find_solution(2)?.solution,
+            Some(selection(&[("a", "1")]))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_empty_dependency_python_ranges() {
+        let scenario = scenario(
+            r#"
+name = "empty-python-range"
+[root]
+requires = ["a"]
+[expected]
+satisfiable = false
+[packages.a.versions."1"]
+requires_python = ">=3.13,<3.12"
+"#,
+        );
+        let environment = environment();
+        let error = ScenarioOracle::new(&scenario, &environment)
+            .err()
+            .expect("empty Python ranges are not modeled");
+        insta::assert_snapshot!(error, @"the scenario oracle does not model empty Requires-Python ranges: a==1");
     }
 
     #[test]
