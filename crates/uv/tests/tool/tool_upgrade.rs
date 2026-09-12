@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::process::Command;
 
 use anyhow::{Result, bail};
@@ -14,18 +15,41 @@ use wiremock::{
 
 use uv_static::EnvVars;
 
+use uv_test::packse::generate_wheel_with_files;
 use uv_test::{uv_snapshot, venv_bin_path};
 
 #[test]
-fn tool_upgrade_empty() {
+fn tool_upgrade_empty() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
+    let wheelhouse = context.temp_dir.child("wheelhouse");
+    wheelhouse.create_dir_all()?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"tool-upgrade-fixture".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("tool_upgrade_fixture/cli.py", "def main():\n    pass\n"),
+            (
+                "tool_upgrade_fixture-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\nupgrade-fixture = tool_upgrade_fixture.cli:main\n",
+            ),
+        ],
+    );
+    wheelhouse.child(filename).write_binary(&wheel)?;
 
     uv_snapshot!(context.filters(), context.tool_upgrade()
         .arg("--all")
+        .arg("--offline")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(wheelhouse.path())
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -36,29 +60,39 @@ fn tool_upgrade_empty() {
         .arg("--all")
         .arg("-p")
         .arg("3.13")
+        .arg("--offline")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(wheelhouse.path())
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Nothing to upgrade
     ");
 
-    // Install the latest `babel`.
+    // Install the latest version from the local wheelhouse.
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("babel")
-        .arg("--index-url")
-        .arg("https://pypi.org/simple/")
+        .arg("tool-upgrade-fixture")
+        .arg("--offline")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(wheelhouse.path())
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + babel==2.14.0
-    Installed 1 executable: pybabel
+     + tool-upgrade-fixture==1.0.0
+    Installed 1 executable: upgrade-fixture
     ");
 
     uv_snapshot!(context.filters(), context.tool_upgrade()
         .arg("--all")
+        .arg("--offline")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(wheelhouse.path())
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -69,11 +103,17 @@ fn tool_upgrade_empty() {
         .arg("--all")
         .arg("-p")
         .arg("3.12")
+        .arg("--offline")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(wheelhouse.path())
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Nothing to upgrade
     ");
+
+    Ok(())
 }
 
 #[test]
