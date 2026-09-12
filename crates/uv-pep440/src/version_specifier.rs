@@ -543,7 +543,7 @@ impl VersionSpecifier {
     }
 
     /// `<=<version>`
-    pub fn less_than_equal_version(version: Version) -> Self {
+    pub(crate) fn less_than_equal_version(version: Version) -> Self {
         Self {
             operator: Operator::LessThanEqual,
             version,
