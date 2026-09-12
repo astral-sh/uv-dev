@@ -1,5 +1,10 @@
 [
   {
+    "filename": "uv-source.tar.gz",
+    "url": "https://codeload.github.com/astral-sh/uv/tar.gz/c7db143b6a64b9ef73ab5cd39a3241a24c8807bc",
+    "sha256": "2b25ecfcc581557df4e4ae5751b8de0b160333817c467dfee4ec19ea5af031ee"
+  },
+  {
     "filename": "flask-3.1.1-py3-none-any.whl",
     "replay": false,
     "url": "https://files.pythonhosted.org/packages/3d/68/9d4508e893976286d2ead7f8f571314af6c2037af34853a30fd769c02e9d/flask-3.1.1-py3-none-any.whl",
