@@ -3,14 +3,16 @@ use assert_fs::fixture::ChildPath;
 use assert_fs::fixture::FileWriteStr;
 use assert_fs::fixture::PathChild;
 
+use uv_test::packse::PackseServer;
 use uv_test::uv_snapshot;
 
 #[test]
 fn check_compatible_packages() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("packages/pip-check.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("requests==2.31.0")?;
+    requirements_txt.write_str("parent==1.0.0")?;
 
     uv_snapshot!(context
         .pip_install()
@@ -19,21 +21,19 @@ fn check_compatible_packages() -> Result<()> {
         .arg("--strict"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 5 packages in [TIME]
-    Prepared 5 packages in [TIME]
-    Installed 5 packages in [TIME]
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + idna==3.6
-     + requests==2.31.0
-     + urllib3==2.2.1
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + child==3.6
+     + parent==1.0.0
+     + second-child==2.2.1
     "
     );
 
     uv_snapshot!(context.pip_check(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 5 packages in [TIME]
+    Checked 3 packages in [TIME]
     All installed packages are compatible
     "
     );
@@ -65,10 +65,11 @@ fn check_versionless_egg_info_file() -> Result<()> {
 // this test force-installs idna 2.4 to trigger a failure.
 #[test]
 fn check_incompatible_packages() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("packages/pip-check.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("requests==2.31.0")?;
+    requirements_txt.write_str("parent==1.0.0")?;
 
     uv_snapshot!(context
         .pip_install()
@@ -77,24 +78,22 @@ fn check_incompatible_packages() -> Result<()> {
         .arg("--strict"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 5 packages in [TIME]
-    Prepared 5 packages in [TIME]
-    Installed 5 packages in [TIME]
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + idna==3.6
-     + requests==2.31.0
-     + urllib3==2.2.1
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + child==3.6
+     + parent==1.0.0
+     + second-child==2.2.1
     "
     );
 
-    let requirements_txt_idna = context.temp_dir.child("requirements_idna.txt");
-    requirements_txt_idna.write_str("idna==2.4")?;
+    let requirements_txt_child = context.temp_dir.child("requirements_child.txt");
+    requirements_txt_child.write_str("child==2.4")?;
 
     uv_snapshot!(context
         .pip_install()
         .arg("-r")
-        .arg("requirements_idna.txt")
+        .arg("requirements_child.txt")
         .arg("--strict"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -102,18 +101,18 @@ fn check_incompatible_packages() -> Result<()> {
     Prepared 1 package in [TIME]
     Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
-     - idna==3.6
-     + idna==2.4
-    warning: The package `requests` requires `idna>=2.5,<4`, but `2.4` is installed
+     - child==3.6
+     + child==2.4
+    warning: The package `parent` requires `child>=2.5,<4`, but `2.4` is installed
     "
     );
 
     uv_snapshot!(context.pip_check(), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Checked 5 packages in [TIME]
+    Checked 3 packages in [TIME]
     Found 1 incompatibility
-    The package `requests` requires `idna>=2.5,<4`, but `2.4` is installed
+    The package `parent` requires `child>=2.5,<4`, but `2.4` is installed
     "
     );
 
@@ -125,10 +124,11 @@ fn check_incompatible_packages() -> Result<()> {
 // with multiple incompatible packages.
 #[test]
 fn check_multiple_incompatible_packages() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("packages/pip-check.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("requests==2.31.0")?;
+    requirements_txt.write_str("parent==1.0.0")?;
 
     uv_snapshot!(context
         .pip_install()
@@ -137,19 +137,17 @@ fn check_multiple_incompatible_packages() -> Result<()> {
         .arg("--strict"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 5 packages in [TIME]
-    Prepared 5 packages in [TIME]
-    Installed 5 packages in [TIME]
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + idna==3.6
-     + requests==2.31.0
-     + urllib3==2.2.1
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + child==3.6
+     + parent==1.0.0
+     + second-child==2.2.1
     "
     );
 
     let requirements_txt_two = context.temp_dir.child("requirements_two.txt");
-    requirements_txt_two.write_str("idna==2.4\nurllib3==1.20")?;
+    requirements_txt_two.write_str("child==2.4\nsecond-child==1.20")?;
 
     uv_snapshot!(context
         .pip_install()
@@ -162,22 +160,22 @@ fn check_multiple_incompatible_packages() -> Result<()> {
     Prepared 2 packages in [TIME]
     Uninstalled 2 packages in [TIME]
     Installed 2 packages in [TIME]
-     - idna==3.6
-     + idna==2.4
-     - urllib3==2.2.1
-     + urllib3==1.20
-    warning: The package `requests` requires `idna>=2.5,<4`, but `2.4` is installed
-    warning: The package `requests` requires `urllib3>=1.21.1,<3`, but `1.20` is installed
+     - child==3.6
+     + child==2.4
+     - second-child==2.2.1
+     + second-child==1.20
+    warning: The package `parent` requires `child>=2.5,<4`, but `2.4` is installed
+    warning: The package `parent` requires `second-child>=1.21.1,<3`, but `1.20` is installed
     "
     );
 
     uv_snapshot!(context.pip_check(), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Checked 5 packages in [TIME]
+    Checked 3 packages in [TIME]
     Found 2 incompatibilities
-    The package `requests` requires `idna>=2.5,<4`, but `2.4` is installed
-    The package `requests` requires `urllib3>=1.21.1,<3`, but `1.20` is installed
+    The package `parent` requires `child>=2.5,<4`, but `2.4` is installed
+    The package `parent` requires `second-child>=1.21.1,<3`, but `1.20` is installed
     "
     );
 
@@ -186,18 +184,19 @@ fn check_multiple_incompatible_packages() -> Result<()> {
 
 #[test]
 fn check_python_version() {
-    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("packages/pip-check.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
 
     uv_snapshot!(context
         .pip_install()
-        .arg("urllib3")
+        .arg("requires-python")
         .arg("--strict"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + urllib3==2.2.1
+     + requires-python==1.0.0
     "
     );
 
@@ -206,17 +205,18 @@ fn check_python_version() {
     ----- stderr -----
     Checked 1 package in [TIME]
     Found 1 incompatibility
-    The package `urllib3` requires Python >=3.8, but `3.12.[X]` is installed
+    The package `requires-python` requires Python >=3.8, but `3.12.[X]` is installed
     "
     );
 }
 
 #[test]
 fn check_dependency_metadata_from_config_file() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("packages/pip-check.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("requests==2.31.0")?;
+    requirements_txt.write_str("parent==1.0.0")?;
 
     uv_snapshot!(context
         .pip_install()
@@ -225,24 +225,22 @@ fn check_dependency_metadata_from_config_file() -> Result<()> {
         .arg("--strict"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 5 packages in [TIME]
-    Prepared 5 packages in [TIME]
-    Installed 5 packages in [TIME]
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + idna==3.6
-     + requests==2.31.0
-     + urllib3==2.2.1
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + child==3.6
+     + parent==1.0.0
+     + second-child==2.2.1
     "
     );
 
-    let requirements_txt_idna = context.temp_dir.child("requirements_idna.txt");
-    requirements_txt_idna.write_str("idna==2.4")?;
+    let requirements_txt_child = context.temp_dir.child("requirements_child.txt");
+    requirements_txt_child.write_str("child==2.4")?;
 
     uv_snapshot!(context
         .pip_install()
         .arg("-r")
-        .arg("requirements_idna.txt")
+        .arg("requirements_child.txt")
         .arg("--strict"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -250,9 +248,9 @@ fn check_dependency_metadata_from_config_file() -> Result<()> {
     Prepared 1 package in [TIME]
     Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
-     - idna==3.6
-     + idna==2.4
-    warning: The package `requests` requires `idna>=2.5,<4`, but `2.4` is installed
+     - child==3.6
+     + child==2.4
+    warning: The package `parent` requires `child>=2.5,<4`, but `2.4` is installed
     "
     );
 
@@ -260,7 +258,7 @@ fn check_dependency_metadata_from_config_file() -> Result<()> {
     uv_toml.write_str(
         r#"
         dependency-metadata = [
-          { name = "requests", version = "2.31.0", requires-dist = ["certifi>=2017.4.17", "charset-normalizer>=2,<4", "idna>=2.4,<4", "urllib3>=1.21.1,<3"] },
+          { name = "parent", version = "1.0.0", requires-dist = ["child>=2.4,<4", "second-child>=1.21.1,<3"] },
         ]
         "#,
     )?;
@@ -271,7 +269,7 @@ fn check_dependency_metadata_from_config_file() -> Result<()> {
         .arg("uv.toml"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 5 packages in [TIME]
+    Checked 3 packages in [TIME]
     All installed packages are compatible
     "
     );

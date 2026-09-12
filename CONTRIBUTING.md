@@ -82,6 +82,19 @@ To update snapshots for a specific test:
 cargo insta test --accept --test-runner nextest -- <test_name>
 ```
 
+### Package indexes
+
+Integration tests use local Packse scenarios instead of resolving against live PyPI. A
+`uv_test::test_context!` has a representative local index by default. Prefer a focused scenario in
+`test/scenarios` when a test needs a particular dependency graph, artifact, or upload time, and use
+`with_packse_index` to select it. `PackseServer` also provides distribution URLs, bytes, and hashes
+for direct-URL and integrity tests.
+
+The test harness rejects HTTP requests and redirects to PyPI unless a test explicitly opts in.
+Tests of the public service itself must use `#[cfg(feature = "test-pypi")]` and
+`with_pypi_access()`. Run that separate coverage with
+`cargo nextest run --workspace --features test-pypi --profile ci-pypi`.
+
 ### Python
 
 Testing uv requires multiple specific Python versions; they can be installed with:

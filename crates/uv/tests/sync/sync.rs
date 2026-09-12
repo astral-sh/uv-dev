@@ -23,7 +23,7 @@ use uv_test::{TestContext, download_to_disk, uv_snapshot, venv_bin_path};
 
 #[test]
 fn sync() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_packse_index("packages/workflow.toml");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -32,7 +32,7 @@ fn sync() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
+        dependencies = ["workflow-direct"]
         "#,
     )?;
 
@@ -40,10 +40,11 @@ fn sync() -> Result<()> {
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
+    Resolved 3 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + workflow-direct==1.0.0
+     + workflow-transitive==2.0.0
     ");
 
     assert!(context.temp_dir.child("uv.lock").exists());
@@ -305,8 +306,7 @@ fn sync_relocatable_envs_default() -> Result<()> {
         .arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    black, 24.3.0 (compiled: yes)
-    Python (CPython) 3.12.[X]
+    black 24.3.0
     ");
 
     Ok(())
@@ -397,7 +397,7 @@ fn sync_reuses_pip_install_sdist_cache() -> Result<()> {
 
 #[test]
 fn locked() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_packse_index("packages/workflow.toml");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -406,7 +406,7 @@ fn locked() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["anyio==3.7.0"]
+        dependencies = ["workflow-direct"]
         "#,
     )?;
 
@@ -429,7 +429,7 @@ fn locked() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
+        dependencies = ["workflow-added"]
         "#,
     )?;
 
@@ -467,7 +467,7 @@ fn locked() -> Result<()> {
 
 #[test]
 fn frozen() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_packse_index("packages/workflow.toml");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -476,7 +476,7 @@ fn frozen() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["anyio==3.7.0"]
+        dependencies = ["workflow-direct"]
         "#,
     )?;
 
@@ -496,7 +496,7 @@ fn frozen() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
+        dependencies = ["workflow-added"]
         "#,
     )?;
 
@@ -504,11 +504,10 @@ fn frozen() -> Result<()> {
     uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==3.7.0
-     + idna==3.6
-     + sniffio==1.3.1
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + workflow-direct==1.0.0
+     + workflow-transitive==2.0.0
     ");
 
     // A no-op frozen sync should determine the installation plan without constructing a registry
@@ -518,7 +517,7 @@ fn frozen() -> Result<()> {
         .env(EnvVars::RUST_LOG, "uv_client::base_client=debug"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 3 packages in [TIME]
+    Checked 2 packages in [TIME]
     ");
 
     Ok(())
@@ -526,7 +525,7 @@ fn frozen() -> Result<()> {
 
 #[test]
 fn empty() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_packse_index("packages/workflow.toml");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1169,7 +1168,7 @@ fn mixed_requires_python() -> Result<()> {
 fn group_requires_python_useful_defaults() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.8", "3.9"]);
 
-    // Require 3.8 for our project, but have a dev-dependency on a version of sphinx that needs 3.9
+    // Require 3.8 for our project, but have a dev-dependency that needs 3.9.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -1180,7 +1179,7 @@ fn group_requires_python_useful_defaults() -> Result<()> {
         dependencies = ["anyio"]
 
         [dependency-groups]
-        dev = ["sphinx>=7.2.6"]
+        dev = ["voluptuous>=0.15.1"]
         "#,
     )?;
 
@@ -1192,7 +1191,7 @@ fn group_requires_python_useful_defaults() -> Result<()> {
 
     // Running `uv sync --no-dev` should ideally succeed, locking for Python 3.8.
     // ...but once we pick the 3.8 interpreter the lock freaks out because it sees
-    // that the dependency-group containing sphinx will never successfully install,
+    // that the dependency-group package will never successfully install,
     // even though it's not enabled!
     uv_snapshot!(context.filters(), context.sync()
         .arg("--no-dev"), @"
@@ -1201,23 +1200,23 @@ fn group_requires_python_useful_defaults() -> Result<()> {
     Using CPython 3.8.[X] interpreter at: [PYTHON-3.8]
     Creating virtual environment at: .venv
     error: No solution found when resolving dependencies for split (markers: python_full_version == '3.8.*')
-      cause: Because the requested Python version (>=3.8) does not satisfy Python>=3.9 and sphinx==7.2.6 depends on Python>=3.9, we can conclude that sphinx==7.2.6 cannot be used.
-             And because only sphinx<=7.2.6 is available, we can conclude that sphinx>=7.2.6 cannot be used.
-             And because pharaohs-tomp:dev depends on sphinx>=7.2.6 and your project requires pharaohs-tomp:dev, we can conclude that your project's requirements are unsatisfiable.
+      cause: Because the requested Python version (>=3.8) does not satisfy Python>=3.9 and voluptuous==0.15.1 depends on Python>=3.9, we can conclude that voluptuous==0.15.1 cannot be used.
+             And because only voluptuous<=0.15.1 is available, we can conclude that voluptuous>=0.15.1 cannot be used.
+             And because pharaohs-tomp:dev depends on voluptuous>=0.15.1 and your project requires pharaohs-tomp:dev, we can conclude that your project's requirements are unsatisfiable.
 
-    hint: The `requires-python` value (>=3.8) includes Python versions that are not supported by your dependencies (e.g., sphinx==7.2.6 only supports >=3.9). Consider using a more restrictive `requires-python` value (like >=3.9).
+    hint: The `requires-python` value (>=3.8) includes Python versions that are not supported by your dependencies (e.g., voluptuous==0.15.1 only supports >=3.9). Consider using a more restrictive `requires-python` value (like >=3.9).
     ");
 
-    // Running `uv sync` should always fail, as now sphinx is involved
+    // Running `uv sync` should always fail, as now the dev group is involved.
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies for split (markers: python_full_version == '3.8.*')
-      cause: Because the requested Python version (>=3.8) does not satisfy Python>=3.9 and sphinx==7.2.6 depends on Python>=3.9, we can conclude that sphinx==7.2.6 cannot be used.
-             And because only sphinx<=7.2.6 is available, we can conclude that sphinx>=7.2.6 cannot be used.
-             And because pharaohs-tomp:dev depends on sphinx>=7.2.6 and your project requires pharaohs-tomp:dev, we can conclude that your project's requirements are unsatisfiable.
+      cause: Because the requested Python version (>=3.8) does not satisfy Python>=3.9 and voluptuous==0.15.1 depends on Python>=3.9, we can conclude that voluptuous==0.15.1 cannot be used.
+             And because only voluptuous<=0.15.1 is available, we can conclude that voluptuous>=0.15.1 cannot be used.
+             And because pharaohs-tomp:dev depends on voluptuous>=0.15.1 and your project requires pharaohs-tomp:dev, we can conclude that your project's requirements are unsatisfiable.
 
-    hint: The `requires-python` value (>=3.8) includes Python versions that are not supported by your dependencies (e.g., sphinx==7.2.6 only supports >=3.9). Consider using a more restrictive `requires-python` value (like >=3.9).
+    hint: The `requires-python` value (>=3.8) includes Python versions that are not supported by your dependencies (e.g., voluptuous==0.15.1 only supports >=3.9). Consider using a more restrictive `requires-python` value (like >=3.9).
     ");
 
     // Adding group requires python should fix it
@@ -1231,7 +1230,7 @@ fn group_requires_python_useful_defaults() -> Result<()> {
         dependencies = ["anyio"]
 
         [dependency-groups]
-        dev = ["sphinx>=7.2.6"]
+        dev = ["voluptuous>=0.15.1"]
 
         [tool.uv.dependency-groups]
         dev = {requires-python = ">=3.9"}
@@ -1243,7 +1242,7 @@ fn group_requires_python_useful_defaults() -> Result<()> {
         .arg("--no-dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 29 packages in [TIME]
+    Resolved 7 packages in [TIME]
     Prepared 5 packages in [TIME]
     Installed 5 packages in [TIME]
      + anyio==4.3.0
@@ -1253,43 +1252,22 @@ fn group_requires_python_useful_defaults() -> Result<()> {
      + typing-extensions==4.10.0
     ");
 
-    // Running `uv sync` should succeed, bumping to Python 3.9 as sphinx is now involved.
+    // Running `uv sync` should succeed, bumping to Python 3.9 as the dev group is now involved.
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
     Removed virtual environment at: .venv
     Creating virtual environment at: .venv
-    Resolved 29 packages in [TIME]
-    Prepared 22 packages in [TIME]
-    Installed 27 packages in [TIME]
-     + alabaster==0.7.16
+    Resolved 7 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 6 packages in [TIME]
      + anyio==4.3.0
-     + babel==2.14.0
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + docutils==0.20.1
      + exceptiongroup==1.2.0
      + idna==3.6
-     + imagesize==1.4.1
-     + importlib-metadata==7.1.0
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + packaging==24.0
-     + pygments==2.17.2
-     + requests==2.31.0
      + sniffio==1.3.1
-     + snowballstemmer==2.2.0
-     + sphinx==7.2.6
-     + sphinxcontrib-applehelp==1.0.8
-     + sphinxcontrib-devhelp==1.0.6
-     + sphinxcontrib-htmlhelp==2.0.5
-     + sphinxcontrib-jsmath==1.0.1
-     + sphinxcontrib-qthelp==1.0.7
-     + sphinxcontrib-serializinghtml==1.1.10
      + typing-extensions==4.10.0
-     + urllib3==2.2.1
-     + zipp==3.18.1
+     + voluptuous==0.15.1
     ");
 
     Ok(())
@@ -1302,7 +1280,7 @@ fn group_requires_python_useful_defaults() -> Result<()> {
 fn group_requires_python_useful_non_defaults() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.8", "3.9"]);
 
-    // Require 3.8 for our project, but have a dev-dependency on a version of sphinx that needs 3.9
+    // Require 3.8 for our project, but have a dependency-group package that needs 3.9.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -1313,7 +1291,7 @@ fn group_requires_python_useful_non_defaults() -> Result<()> {
         dependencies = ["anyio"]
 
         [dependency-groups]
-        mygroup = ["sphinx>=7.2.6"]
+        mygroup = ["voluptuous>=0.15.1"]
         "#,
     )?;
 
@@ -1325,7 +1303,7 @@ fn group_requires_python_useful_non_defaults() -> Result<()> {
 
     // Running `uv sync` should ideally succeed, locking for Python 3.8.
     // ...but once we pick the 3.8 interpreter the lock freaks out because it sees
-    // that the dependency-group containing sphinx will never successfully install,
+    // that the dependency-group package will never successfully install,
     // even though it's not enabled, or even a default!
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 1 (failure)
@@ -1333,24 +1311,24 @@ fn group_requires_python_useful_non_defaults() -> Result<()> {
     Using CPython 3.8.[X] interpreter at: [PYTHON-3.8]
     Creating virtual environment at: .venv
     error: No solution found when resolving dependencies for split (markers: python_full_version == '3.8.*')
-      cause: Because the requested Python version (>=3.8) does not satisfy Python>=3.9 and sphinx==7.2.6 depends on Python>=3.9, we can conclude that sphinx==7.2.6 cannot be used.
-             And because only sphinx<=7.2.6 is available, we can conclude that sphinx>=7.2.6 cannot be used.
-             And because pharaohs-tomp:mygroup depends on sphinx>=7.2.6 and your project requires pharaohs-tomp:mygroup, we can conclude that your project's requirements are unsatisfiable.
+      cause: Because the requested Python version (>=3.8) does not satisfy Python>=3.9 and voluptuous==0.15.1 depends on Python>=3.9, we can conclude that voluptuous==0.15.1 cannot be used.
+             And because only voluptuous<=0.15.1 is available, we can conclude that voluptuous>=0.15.1 cannot be used.
+             And because pharaohs-tomp:mygroup depends on voluptuous>=0.15.1 and your project requires pharaohs-tomp:mygroup, we can conclude that your project's requirements are unsatisfiable.
 
-    hint: The `requires-python` value (>=3.8) includes Python versions that are not supported by your dependencies (e.g., sphinx==7.2.6 only supports >=3.9). Consider using a more restrictive `requires-python` value (like >=3.9).
+    hint: The `requires-python` value (>=3.8) includes Python versions that are not supported by your dependencies (e.g., voluptuous==0.15.1 only supports >=3.9). Consider using a more restrictive `requires-python` value (like >=3.9).
     ");
 
-    // Running `uv sync --group mygroup` should definitely fail, as now sphinx is involved
+    // Running `uv sync --group mygroup` should definitely fail, as now the group is involved.
     uv_snapshot!(context.filters(), context.sync()
         .arg("--group").arg("mygroup"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies for split (markers: python_full_version == '3.8.*')
-      cause: Because the requested Python version (>=3.8) does not satisfy Python>=3.9 and sphinx==7.2.6 depends on Python>=3.9, we can conclude that sphinx==7.2.6 cannot be used.
-             And because only sphinx<=7.2.6 is available, we can conclude that sphinx>=7.2.6 cannot be used.
-             And because pharaohs-tomp:mygroup depends on sphinx>=7.2.6 and your project requires pharaohs-tomp:mygroup, we can conclude that your project's requirements are unsatisfiable.
+      cause: Because the requested Python version (>=3.8) does not satisfy Python>=3.9 and voluptuous==0.15.1 depends on Python>=3.9, we can conclude that voluptuous==0.15.1 cannot be used.
+             And because only voluptuous<=0.15.1 is available, we can conclude that voluptuous>=0.15.1 cannot be used.
+             And because pharaohs-tomp:mygroup depends on voluptuous>=0.15.1 and your project requires pharaohs-tomp:mygroup, we can conclude that your project's requirements are unsatisfiable.
 
-    hint: The `requires-python` value (>=3.8) includes Python versions that are not supported by your dependencies (e.g., sphinx==7.2.6 only supports >=3.9). Consider using a more restrictive `requires-python` value (like >=3.9).
+    hint: The `requires-python` value (>=3.8) includes Python versions that are not supported by your dependencies (e.g., voluptuous==0.15.1 only supports >=3.9). Consider using a more restrictive `requires-python` value (like >=3.9).
     ");
 
     // Adding group requires python should fix it
@@ -1364,7 +1342,7 @@ fn group_requires_python_useful_non_defaults() -> Result<()> {
         dependencies = ["anyio"]
 
         [dependency-groups]
-        mygroup = ["sphinx>=7.2.6"]
+        mygroup = ["voluptuous>=0.15.1"]
 
         [tool.uv.dependency-groups]
         mygroup = {requires-python = ">=3.9"}
@@ -1375,7 +1353,7 @@ fn group_requires_python_useful_non_defaults() -> Result<()> {
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 29 packages in [TIME]
+    Resolved 7 packages in [TIME]
     Prepared 5 packages in [TIME]
     Installed 5 packages in [TIME]
      + anyio==4.3.0
@@ -1394,36 +1372,15 @@ fn group_requires_python_useful_non_defaults() -> Result<()> {
     Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
     Removed virtual environment at: .venv
     Creating virtual environment at: .venv
-    Resolved 29 packages in [TIME]
-    Prepared 22 packages in [TIME]
-    Installed 27 packages in [TIME]
-     + alabaster==0.7.16
+    Resolved 7 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 6 packages in [TIME]
      + anyio==4.3.0
-     + babel==2.14.0
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + docutils==0.20.1
      + exceptiongroup==1.2.0
      + idna==3.6
-     + imagesize==1.4.1
-     + importlib-metadata==7.1.0
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + packaging==24.0
-     + pygments==2.17.2
-     + requests==2.31.0
      + sniffio==1.3.1
-     + snowballstemmer==2.2.0
-     + sphinx==7.2.6
-     + sphinxcontrib-applehelp==1.0.8
-     + sphinxcontrib-devhelp==1.0.6
-     + sphinxcontrib-htmlhelp==2.0.5
-     + sphinxcontrib-jsmath==1.0.1
-     + sphinxcontrib-qthelp==1.0.7
-     + sphinxcontrib-serializinghtml==1.1.10
      + typing-extensions==4.10.0
-     + urllib3==2.2.1
-     + zipp==3.18.1
+     + voluptuous==0.15.1
     ");
 
     Ok(())
@@ -1515,8 +1472,8 @@ fn sync_non_project_dev_dependencies() -> Result<()> {
         dependencies = ["iniconfig>=1"]
 
         [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
         "#,
     )?;
     child
@@ -1771,8 +1728,8 @@ fn sync_non_project_group() -> Result<()> {
         baz = ["typing-extensions"]
 
         [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
         "#,
     )?;
     child
@@ -1899,7 +1856,7 @@ fn sync_build_isolation() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["source-distribution @ https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz"]
+        dependencies = ["source-distribution==0.0.1"]
         "#,
     )?;
 
@@ -1924,7 +1881,7 @@ fn sync_build_isolation() -> Result<()> {
      + pluggy==1.4.0
      + setuptools==69.2.0
      + trove-classifiers==2024.3.3
-     + wheel==0.43.0
+     + wheel==0.42.0
     ");
 
     // Running `uv sync` should succeed.
@@ -1940,9 +1897,9 @@ fn sync_build_isolation() -> Result<()> {
      - pathspec==0.12.1
      - pluggy==1.4.0
      - setuptools==69.2.0
-     + source-distribution==0.0.1 (from https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz)
+     + source-distribution==0.0.1
      - trove-classifiers==2024.3.3
-     - wheel==0.43.0
+     - wheel==0.42.0
     ");
 
     assert!(context.temp_dir.child("uv.lock").exists());
@@ -1963,7 +1920,7 @@ fn sync_build_isolation_package() -> Result<()> {
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = [
-            "source-distribution @ https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz",
+            "source-distribution==0.0.1",
         ]
 
         [tool.uv]
@@ -1976,7 +1933,7 @@ fn sync_build_isolation_package() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    error: Failed to build `source-distribution @ https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz`
+    error: Failed to build `source-distribution==0.0.1`
       cause: The build backend returned an error
       cause: Call to `hatchling.build.build_wheel` failed (exit status: 1)
 
@@ -1985,9 +1942,9 @@ fn sync_build_isolation_package() -> Result<()> {
                File "<string>", line 8, in <module>
              ModuleNotFoundError: No module named 'hatchling'
 
-    hint: `source-distribution` was included because `project` (v0.1.0) depends on `source-distribution`
+    hint: `source-distribution` (v0.0.1) was included because `project` (v0.1.0) depends on `source-distribution`
 
-    hint: This error likely indicates that `source-distribution` depends on `hatchling`, but doesn't declare it as a build dependency. If `source-distribution` is a first-party package, consider adding `hatchling` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
+    hint: This error likely indicates that `source-distribution@0.0.1` depends on `hatchling`, but doesn't declare it as a build dependency. If `source-distribution` is a first-party package, consider adding `hatchling` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
 
     [tool.uv.extra-build-dependencies]
     source-distribution = ["hatchling"]
@@ -2021,7 +1978,7 @@ fn sync_build_isolation_package() -> Result<()> {
      - packaging==24.0
      - pathspec==0.12.1
      - pluggy==1.4.0
-     + source-distribution==0.0.1 (from https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz)
+     + source-distribution==0.0.1
      - trove-classifiers==2024.3.3
     ");
 
@@ -2033,30 +1990,47 @@ fn sync_build_isolation_package() -> Result<()> {
 /// By default, isolated dependencies should be installed before non-isolated dependencies.
 #[test]
 fn sync_build_isolation_package_order() -> Result<()> {
+    let artifacts = uv_test::packse::PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
+    let source_distribution_0_0_1_archive =
+        context.temp_dir.child("source_distribution-0.0.1.tar.gz");
+    download_to_disk(
+        &artifacts.file_url("source_distribution-0.0.1.tar.gz"),
+        &source_distribution_0_0_1_archive,
+    );
+    let source_distribution_0_0_1 = Url::from_file_path(source_distribution_0_0_1_archive.path())
+        .expect("source distribution path should convert to a file URL");
+
+    let source_distribution_0_0_3_archive =
+        context.temp_dir.child("source_distribution-0.0.3.tar.gz");
+    download_to_disk(
+        &artifacts.file_url("source_distribution-0.0.3.tar.gz"),
+        &source_distribution_0_0_3_archive,
+    );
+    let source_distribution_0_0_3 = Url::from_file_path(source_distribution_0_0_3_archive.path())
+        .expect("source distribution path should convert to a file URL");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = [
-            "source-distribution @ https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz",
+            "source-distribution @ {source_distribution_0_0_1}",
         ]
 
         [tool.uv]
         no-build-isolation-package = ["source-distribution"]
         "#,
-    )?;
+    })?;
 
     // Running `uv sync` should fail.
     uv_snapshot!(context.filters(), context.sync(), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    error: Failed to build `source-distribution @ https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz`
+    error: Failed to build `source-distribution @ file://[TEMP_DIR]/source_distribution-0.0.1.tar.gz`
       cause: The build backend returned an error
       cause: Call to `hatchling.build.build_wheel` failed (exit status: 1)
 
@@ -2067,7 +2041,7 @@ fn sync_build_isolation_package_order() -> Result<()> {
 
     hint: `source-distribution` was included because `project` (v0.1.0) depends on `source-distribution`
 
-    hint: This error likely indicates that `source-distribution` depends on `hatchling`, but doesn't declare it as a build dependency. If `source-distribution` is a first-party package, consider adding `hatchling` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
+    hint: This error likely indicates that `source-distribution@0.0.1` depends on `hatchling`, but doesn't declare it as a build dependency. If `source-distribution` is a first-party package, consider adding `hatchling` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
 
     [tool.uv.extra-build-dependencies]
     source-distribution = ["hatchling"]
@@ -2076,21 +2050,20 @@ fn sync_build_isolation_package_order() -> Result<()> {
     "#);
 
     // Add `hatchling`.
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = [
             "hatchling",
-            "source-distribution @ https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz",
+            "source-distribution @ {source_distribution_0_0_1}",
         ]
 
         [tool.uv]
         no-build-isolation-package = ["source-distribution"]
         "#,
-    )?;
+    })?;
 
     // Running `uv sync` should succeed; `hatchling` should be installed first.
     uv_snapshot!(context.filters(), context.sync(), @"
@@ -2105,25 +2078,24 @@ fn sync_build_isolation_package_order() -> Result<()> {
      + packaging==24.0
      + pathspec==0.12.1
      + pluggy==1.4.0
-     + source-distribution==0.0.1 (from https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz)
+     + source-distribution==0.0.1 (from file://[TEMP_DIR]/source_distribution-0.0.1.tar.gz)
      + trove-classifiers==2024.3.3
     ");
 
     // Modify the version.
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = [
-            "source-distribution @ https://files.pythonhosted.org/packages/1f/e5/5b016c945d745f8b108e759d428341488a6aee8f51f07c6c4e33498bb91f/source_distribution-0.0.3.tar.gz",
+            "source-distribution @ {source_distribution_0_0_3}",
         ]
 
         [tool.uv]
         no-build-isolation-package = ["source-distribution"]
         "#,
-    )?;
+    })?;
 
     // Running `uv sync` should uninstall `hatchling`, then build `source-distribution`, then uninstall
     // the existing `source-distribution`, and finally install the new one.
@@ -2138,27 +2110,26 @@ fn sync_build_isolation_package_order() -> Result<()> {
      - packaging==24.0
      - pathspec==0.12.1
      - pluggy==1.4.0
-     - source-distribution==0.0.1 (from https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz)
-     + source-distribution==0.0.3 (from https://files.pythonhosted.org/packages/1f/e5/5b016c945d745f8b108e759d428341488a6aee8f51f07c6c4e33498bb91f/source_distribution-0.0.3.tar.gz)
+     - source-distribution==0.0.1 (from file://[TEMP_DIR]/source_distribution-0.0.1.tar.gz)
+     + source-distribution==0.0.3 (from file://[TEMP_DIR]/source_distribution-0.0.3.tar.gz)
      - trove-classifiers==2024.3.3
     ");
 
     // Revert back.
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = [
             "hatchling",
-            "source-distribution @ https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz",
+            "source-distribution @ {source_distribution_0_0_1}",
         ]
 
         [tool.uv]
         no-build-isolation-package = ["source-distribution"]
         "#,
-    )?;
+    })?;
 
     // Running `uv sync` should install everything in a single phase, since the build is cached.
     uv_snapshot!(context.filters(), context.sync(), @"
@@ -2171,8 +2142,8 @@ fn sync_build_isolation_package_order() -> Result<()> {
      + packaging==24.0
      + pathspec==0.12.1
      + pluggy==1.4.0
-     - source-distribution==0.0.3 (from https://files.pythonhosted.org/packages/1f/e5/5b016c945d745f8b108e759d428341488a6aee8f51f07c6c4e33498bb91f/source_distribution-0.0.3.tar.gz)
-     + source-distribution==0.0.1 (from https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz)
+     - source-distribution==0.0.3 (from file://[TEMP_DIR]/source_distribution-0.0.3.tar.gz)
+     + source-distribution==0.0.1 (from file://[TEMP_DIR]/source_distribution-0.0.1.tar.gz)
      + trove-classifiers==2024.3.3
     ");
 
@@ -2197,7 +2168,7 @@ fn sync_build_isolation_extra() -> Result<()> {
 
         [project.optional-dependencies]
         build = ["hatchling"]
-        compile = ["source-distribution @ https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz"]
+        compile = ["source-distribution==0.0.1"]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
@@ -2221,7 +2192,7 @@ fn sync_build_isolation_extra() -> Result<()> {
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-    error: Failed to build `source-distribution @ https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz`
+    error: Failed to build `source-distribution==0.0.1`
       cause: The build backend returned an error
       cause: Call to `hatchling.build.build_wheel` failed (exit status: 1)
 
@@ -2230,9 +2201,9 @@ fn sync_build_isolation_extra() -> Result<()> {
                File "<string>", line 8, in <module>
              ModuleNotFoundError: No module named 'hatchling'
 
-    hint: `source-distribution` was included because `project[compile]` (v0.1.0) depends on `source-distribution`
+    hint: `source-distribution` (v0.0.1) was included because `project[compile]` (v0.1.0) depends on `source-distribution`
 
-    hint: This error likely indicates that `source-distribution` depends on `hatchling`, but doesn't declare it as a build dependency. If `source-distribution` is a first-party package, consider adding `hatchling` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
+    hint: This error likely indicates that `source-distribution@0.0.1` depends on `hatchling`, but doesn't declare it as a build dependency. If `source-distribution` is a first-party package, consider adding `hatchling` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
 
     [tool.uv.extra-build-dependencies]
     source-distribution = ["hatchling"]
@@ -2254,7 +2225,7 @@ fn sync_build_isolation_extra() -> Result<()> {
      + packaging==24.0
      + pathspec==0.12.1
      + pluggy==1.4.0
-     + source-distribution==0.0.1 (from https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz)
+     + source-distribution==0.0.1
      + trove-classifiers==2024.3.3
     ");
 
@@ -2291,7 +2262,7 @@ fn sync_build_isolation_extra() -> Result<()> {
      - packaging==24.0
      - pathspec==0.12.1
      - pluggy==1.4.0
-     + source-distribution==0.0.1 (from https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz)
+     + source-distribution==0.0.1
      - trove-classifiers==2024.3.3
     ");
 
@@ -2789,6 +2760,8 @@ fn sync_extra_build_dependencies_sources() -> Result<()> {
 
 #[test]
 fn sync_extra_build_dependencies_index() -> Result<()> {
+    let build_dependencies_index =
+        uv_test::packse::PackseServer::new("packages/sync-extra-build-index.toml");
     let context = uv_test::test_context!("3.12").with_filtered_counts();
 
     // Write a test package that arbitrarily requires `anyio` at build time
@@ -2866,7 +2839,7 @@ fn sync_extra_build_dependencies_index() -> Result<()> {
     hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
-    // Ensure that we're resolving to `4.3.0`, the "latest" on PyPI.
+    // Ensure that the default index resolves the build dependency to `4.3.0`.
     uv_snapshot!(context.filters(), context.sync().env(EnvVars::EXPECTED_ANYIO_VERSION, "4.3"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -2876,8 +2849,8 @@ fn sync_extra_build_dependencies_index() -> Result<()> {
      + child==0.1.0 (from file://[TEMP_DIR]/child)
     ");
 
-    // Pin `anyio` to the Test PyPI.
-    pyproject_toml.write_str(indoc! {r#"
+    // Pin `anyio` to an explicit index for the extra build dependency.
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "parent"
         version = "0.1.0"
@@ -2885,19 +2858,21 @@ fn sync_extra_build_dependencies_index() -> Result<()> {
         dependencies = ["child"]
 
         [tool.uv.sources]
-        child = { path = "child" }
-        anyio = { index = "test" }
+        child = {{ path = "child" }}
+        anyio = {{ index = "test" }}
 
         [tool.uv.extra-build-dependencies]
         child = ["anyio"]
 
         [[tool.uv.index]]
-        url = "https://test.pypi.org/simple"
+        url = "{build_dependencies_index}"
         name = "test"
         explicit = true
-    "#})?;
+    "#,
+        build_dependencies_index = build_dependencies_index.index_url(),
+    })?;
 
-    // The child should be rebuilt with `3.5` on reinstall, the "latest" on Test PyPI.
+    // The child should be rebuilt with the explicit index's `3.5` on reinstall.
     uv_snapshot!(context.filters(), context.sync()
         .arg("--reinstall-package").arg("child").env(EnvVars::EXPECTED_ANYIO_VERSION, "4.3"), @"
     exit_code: 1 (failure)
@@ -3197,7 +3172,7 @@ fn sync_reset_state() -> Result<()> {
     Prepared 3 packages in [TIME]
     Installed 3 packages in [TIME]
      + project==0.1.0 (from file://[TEMP_DIR]/)
-     + pydantic-core==2.17.0
+     + pydantic-core==2.20.1
      + typing-extensions==4.10.0
     ");
 
@@ -4869,19 +4844,19 @@ fn sync_group_non_project_member() -> Result<()> {
         [[package]]
         name = "iniconfig"
         version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz", hash = "sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
+            { url = "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
         name = "typing-extensions"
         version = "4.10.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/16/3a/0d26ce356c7465a19c9ea8814b960f8a36c3b0d07c323176620b7b483e44/typing_extensions-4.10.0.tar.gz", hash = "sha256:b0abd7c89e8fb96f98db18d86106ff1d90ab692004eb746cf6eda2682f91b3cb", size = 77558, upload-time = "2024-02-25T22:12:49.693Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/typing_extensions-4.10.0.tar.gz", hash = "sha256:adefbbc2f75a47edb1f4491a2e99a45438ec3dd0c2670276b321cad2ca522246", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/f9/de/dc04a3ea60b22624b51c703a84bbe0184abcd1d0b9bc8074b5d6b7ab90bb/typing_extensions-4.10.0-py3-none-any.whl", hash = "sha256:69b1a937c3a517342112fb4c6df7e72fc39a38e7891a5730ed4985b5214b5475", size = 33926, upload-time = "2024-02-25T22:12:47.72Z" },
+            { url = "http://[LOCALHOST]/files/typing_extensions-4.10.0-py3-none-any.whl", hash = "sha256:0626263fe1dcda7bc3ee7b2872064b534d4831718055d22d4f32f9e474a867a4", upload-time = "2024-03-24T00:00:00Z" },
         ]
         "#
         );
@@ -5000,19 +4975,19 @@ fn sync_group_self() -> Result<()> {
         [[package]]
         name = "idna"
         version = "3.6"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426, upload-time = "2023-11-25T15:40:54.902Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/idna-3.6.tar.gz", hash = "sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567, upload-time = "2023-11-25T15:40:52.604Z" },
+            { url = "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl", hash = "sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
         name = "iniconfig"
         version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz", hash = "sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
+            { url = "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
@@ -5054,10 +5029,10 @@ fn sync_group_self() -> Result<()> {
         [[package]]
         name = "typing-extensions"
         version = "4.10.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/16/3a/0d26ce356c7465a19c9ea8814b960f8a36c3b0d07c323176620b7b483e44/typing_extensions-4.10.0.tar.gz", hash = "sha256:b0abd7c89e8fb96f98db18d86106ff1d90ab692004eb746cf6eda2682f91b3cb", size = 77558, upload-time = "2024-02-25T22:12:49.693Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/typing_extensions-4.10.0.tar.gz", hash = "sha256:adefbbc2f75a47edb1f4491a2e99a45438ec3dd0c2670276b321cad2ca522246", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/f9/de/dc04a3ea60b22624b51c703a84bbe0184abcd1d0b9bc8074b5d6b7ab90bb/typing_extensions-4.10.0-py3-none-any.whl", hash = "sha256:69b1a937c3a517342112fb4c6df7e72fc39a38e7891a5730ed4985b5214b5475", size = 33926, upload-time = "2024-02-25T22:12:47.72Z" },
+            { url = "http://[LOCALHOST]/files/typing_extensions-4.10.0-py3-none-any.whl", hash = "sha256:0626263fe1dcda7bc3ee7b2872064b534d4831718055d22d4f32f9e474a867a4", upload-time = "2024-03-24T00:00:00Z" },
         ]
         "#
         );
@@ -5236,7 +5211,8 @@ fn sync_non_existent_extra_no_optional_dependencies() -> Result<()> {
 /// version of uv that predates when `provides-extras` feature was added.
 #[test]
 fn sync_ignore_extras_check_when_no_provides_extras() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let index = uv_test::packse::PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&index.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -5252,32 +5228,36 @@ fn sync_ignore_extras_check_when_no_provides_extras() -> Result<()> {
 
     // Write a lockfile that does not have `provides-extra`, simulating a version that predates when
     // the feature was added.
-    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+    context.temp_dir.child("uv.lock").write_str(&formatdoc! {r#"
         version = 1
         requires-python = ">=3.12"
 
         [[package]]
         name = "project"
         version = "0.1.0"
-        source = { virtual = "." }
+        source = {{ virtual = "." }}
 
         [package.optional-dependencies]
         types = [
-            { name = "sniffio" },
+            {{ name = "sniffio" }},
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "sniffio", marker = "extra == 'types'", specifier = ">1" }]
+        requires-dist = [{{ name = "sniffio", marker = "extra == 'types'", specifier = ">1" }}]
 
         [[package]]
         name = "sniffio"
         version = "1.3.1"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372 }
+        source = {{ registry = "{index_url}" }}
+        sdist = {{ url = "{sniffio_sdist_url}", hash = "sha256:34888f1347c8f93bebd1f37054d3560ac5366d0da41c499bfee0781a86932bda", upload-time = "2024-03-24T00:00:00Z" }}
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235 },
+            {{ url = "{sniffio_wheel_url}", hash = "sha256:b33b49b60bb79f28e3719efef766725bbd3a543b51d3ffc9948624971288c9c0", upload-time = "2024-03-24T00:00:00Z" }},
         ]
-    "#})?;
+    "#,
+        index_url = index.index_url(),
+        sniffio_sdist_url = index.file_url("sniffio-1.3.1.tar.gz"),
+        sniffio_wheel_url = index.file_url("sniffio-1.3.1-py3-none-any.whl"),
+    })?;
 
     // Requesting a non-existent extra should not fail, as no validation should be performed.
     uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--extra").arg("baz"), @"
@@ -6117,7 +6097,7 @@ fn no_install_project_no_build_locked_dynamic_metadata() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(indoc! {r#"
+    pyproject_toml.write_str(&indoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -6591,10 +6571,10 @@ fn convert_to_virtual() -> Result<()> {
         [[package]]
         name = "iniconfig"
         version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz", hash = "sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
+            { url = "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
@@ -6648,10 +6628,10 @@ fn convert_to_virtual() -> Result<()> {
         [[package]]
         name = "iniconfig"
         version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz", hash = "sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
+            { url = "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
@@ -6714,10 +6694,10 @@ fn convert_to_package() -> Result<()> {
         [[package]]
         name = "iniconfig"
         version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz", hash = "sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
+            { url = "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
@@ -6782,10 +6762,10 @@ fn convert_to_package() -> Result<()> {
         [[package]]
         name = "iniconfig"
         version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz", hash = "sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
+            { url = "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
@@ -7857,6 +7837,44 @@ fn no_binary() -> Result<()> {
 }
 
 #[test]
+fn no_binary_global() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+    "#})?;
+    context.lock().assert().success();
+    context.sync().assert().success();
+
+    uv_snapshot!(context.filters(), context.sync().arg("--reinstall").arg("--no-binary"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ iniconfig==2.0.0
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--reinstall").env(EnvVars::UV_NO_BINARY, "1"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ iniconfig==2.0.0
+    ");
+    Ok(())
+}
+
+#[test]
 fn no_binary_package_empty_environment_variable() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -7905,8 +7923,8 @@ fn no_binary_error() -> Result<()> {
     uv_snapshot!(context.filters(), context.sync().arg("--no-binary-package").arg("odrive"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Resolved 31 packages in [TIME]
-    error: Distribution `odrive==0.6.8 @ registry+https://pypi.org/simple` can't be installed because it is marked as `--no-binary` but has no source distribution
+    Resolved 2 packages in [TIME]
+    error: Distribution `odrive==0.6.8 @ registry+http://[LOCALHOST]/simple/` can't be installed because it is marked as `--no-binary` but has no source distribution
     ");
 
     assert!(context.temp_dir.child("uv.lock").exists());
@@ -8065,20 +8083,23 @@ fn no_build_path_dependency() -> Result<()> {
 
 #[test]
 fn sync_wheel_url_source_error() -> Result<()> {
+    let direct_artifacts =
+        uv_test::packse::PackseServer::new("packages/lock-direct-artifacts.toml");
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
+    pyproject_toml.write_str(&format!(
         r#"
         [project]
         name = "uv-test"
         version = "0.0.0"
         requires-python = ">=3.10"
         dependencies = [
-            "cffi @ https://files.pythonhosted.org/packages/08/fd/cc2fedbd887223f9f5d170c96e57cbf655df9831a6546c1727ae13fa977a/cffi-1.17.1-cp310-cp310-macosx_11_0_arm64.whl",
+            "cffi @ {}",
         ]
         "#,
-    )?;
+        direct_artifacts.file_url("cffi-1.17.1-cp310-cp310-macosx_11_0_arm64.whl")
+    ))?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
@@ -8090,7 +8111,7 @@ fn sync_wheel_url_source_error() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    error: Distribution `cffi==1.17.1 @ direct+https://files.pythonhosted.org/packages/08/fd/cc2fedbd887223f9f5d170c96e57cbf655df9831a6546c1727ae13fa977a/cffi-1.17.1-cp310-cp310-macosx_11_0_arm64.whl` can't be installed because the binary distribution is incompatible with the current platform
+    error: Distribution `cffi==1.17.1 @ direct+http://[LOCALHOST]/files/cffi-1.17.1-cp310-cp310-macosx_11_0_arm64.whl` can't be installed because the binary distribution is incompatible with the current platform
 
     hint: You're using CPython 3.12 (`cp312`), but `cffi` (v1.17.1) only has wheels with the following Python ABI tag: `cp310`
     ");
@@ -8100,6 +8121,8 @@ fn sync_wheel_url_source_error() -> Result<()> {
 
 #[test]
 fn sync_wheel_path_source_error() -> Result<()> {
+    let direct_artifacts =
+        uv_test::packse::PackseServer::new("packages/lock-direct-artifacts.toml");
     let context = uv_test::test_context!("3.12");
 
     // Download a wheel.
@@ -8107,7 +8130,7 @@ fn sync_wheel_path_source_error() -> Result<()> {
         .temp_dir
         .child("cffi-1.17.1-cp310-cp310-macosx_11_0_arm64.whl");
     download_to_disk(
-        "https://files.pythonhosted.org/packages/08/fd/cc2fedbd887223f9f5d170c96e57cbf655df9831a6546c1727ae13fa977a/cffi-1.17.1-cp310-cp310-macosx_11_0_arm64.whl",
+        &direct_artifacts.file_url("cffi-1.17.1-cp310-cp310-macosx_11_0_arm64.whl"),
         &archive,
     );
 
@@ -8888,10 +8911,10 @@ fn sync_dynamic_extra() -> Result<()> {
             [[package]]
             name = "iniconfig"
             version = "2.0.0"
-            source = { registry = "https://pypi.org/simple" }
-            sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
+            source = { registry = "http://[LOCALHOST]/simple/" }
+            sdist = { url = "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz", hash = "sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3", upload-time = "2024-03-24T00:00:00Z" }
             wheels = [
-                { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
+                { url = "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c", upload-time = "2024-03-24T00:00:00Z" },
             ]
 
             [[package]]
@@ -8917,10 +8940,10 @@ fn sync_dynamic_extra() -> Result<()> {
             [[package]]
             name = "typing-extensions"
             version = "4.10.0"
-            source = { registry = "https://pypi.org/simple" }
-            sdist = { url = "https://files.pythonhosted.org/packages/16/3a/0d26ce356c7465a19c9ea8814b960f8a36c3b0d07c323176620b7b483e44/typing_extensions-4.10.0.tar.gz", hash = "sha256:b0abd7c89e8fb96f98db18d86106ff1d90ab692004eb746cf6eda2682f91b3cb", size = 77558, upload-time = "2024-02-25T22:12:49.693Z" }
+            source = { registry = "http://[LOCALHOST]/simple/" }
+            sdist = { url = "http://[LOCALHOST]/files/typing_extensions-4.10.0.tar.gz", hash = "sha256:adefbbc2f75a47edb1f4491a2e99a45438ec3dd0c2670276b321cad2ca522246", upload-time = "2024-03-24T00:00:00Z" }
             wheels = [
-                { url = "https://files.pythonhosted.org/packages/f9/de/dc04a3ea60b22624b51c703a84bbe0184abcd1d0b9bc8074b5d6b7ab90bb/typing_extensions-4.10.0-py3-none-any.whl", hash = "sha256:69b1a937c3a517342112fb4c6df7e72fc39a38e7891a5730ed4985b5214b5475", size = 33926, upload-time = "2024-02-25T22:12:47.72Z" },
+                { url = "http://[LOCALHOST]/files/typing_extensions-4.10.0-py3-none-any.whl", hash = "sha256:0626263fe1dcda7bc3ee7b2872064b534d4831718055d22d4f32f9e474a867a4", upload-time = "2024-03-24T00:00:00Z" },
             ]
             "#
             );
@@ -9518,11 +9541,11 @@ fn sync_ignores_incompatible_global_python_version() -> Result<()> {
 
 #[test]
 fn sync_explicit() -> Result<()> {
+    let explicit_index = uv_test::packse::PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "root"
         version = "0.1.0"
@@ -9533,13 +9556,14 @@ fn sync_explicit() -> Result<()> {
 
         [[tool.uv.index]]
         name = "test"
-        url = "https://test.pypi.org/simple"
+        url = "{explicit_index_url}"
         explicit = true
 
         [tool.uv.sources]
-        idna = { index = "test" }
+        idna = {{ index = "test" }}
         "#,
-    )?;
+        explicit_index_url = explicit_index.index_url(),
+    })?;
 
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
@@ -9547,7 +9571,7 @@ fn sync_explicit() -> Result<()> {
     Resolved 2 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + idna==2.7
+     + idna==3.6
     ");
 
     // Clear the environment.
@@ -9561,7 +9585,7 @@ fn sync_explicit() -> Result<()> {
     Creating virtual environment at: .venv
     Resolved 2 packages in [TIME]
     Installed 1 package in [TIME]
-     + idna==2.7
+     + idna==3.6
     ");
 
     Ok(())
@@ -9685,7 +9709,7 @@ fn sync_all_extras() -> Result<()> {
 
         [project.optional-dependencies]
         types = ["typing-extensions>=4"]
-        testing = ["packaging>=24"]
+        testing = ["packaging>=23"]
 
         [build-system]
         requires = ["hatchling"]
@@ -9953,7 +9977,7 @@ fn sync_all_groups() -> Result<()> {
 
         [dependency-groups]
         types = ["typing-extensions>=4"]
-        testing = ["packaging>=24"]
+        testing = ["packaging>=23"]
 
         [build-system]
         requires = ["hatchling"]
@@ -10016,11 +10040,13 @@ fn sync_all_groups() -> Result<()> {
 
 #[test]
 fn sync_multiple_sources_index_disjoint_extras() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00Z");
+    let cu118_index =
+        uv_test::packse::PackseServer::new("packages/sync-multiple-sources-index.toml");
+    let cu124_index = uv_test::packse::PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -10035,28 +10061,30 @@ fn sync_multiple_sources_index_disjoint_extras() -> Result<()> {
         constraint-dependencies = ["markupsafe<3"]
         conflicts = [
             [
-                { extra = "cu118" },
-                { extra = "cu124" },
+                {{ extra = "cu118" }},
+                {{ extra = "cu124" }},
             ],
         ]
 
         [tool.uv.sources]
         jinja2 = [
-            { index = "torch-cu118", extra = "cu118" },
-            { index = "torch-cu124", extra = "cu124" },
+            {{ index = "torch-cu118", extra = "cu118" }},
+            {{ index = "torch-cu124", extra = "cu124" }},
         ]
 
         [[tool.uv.index]]
         name = "torch-cu118"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cu118"
+        url = "{cu118_index}"
         explicit = true
 
         [[tool.uv.index]]
         name = "torch-cu124"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cu124"
+        url = "{cu124_index}"
         explicit = true
         "#,
-    )?;
+        cu118_index = cu118_index.index_url(),
+        cu124_index = cu124_index.index_url(),
+    })?;
 
     // Generate a lockfile.
     context.lock().assert().success();
@@ -10076,7 +10104,9 @@ fn sync_multiple_sources_index_disjoint_extras() -> Result<()> {
 
 #[test]
 fn sync_derivation_chain() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filter((r"[/\\].*[/\\]src", "/[TMP]/src"));
+    let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/workflow.toml")
+        .with_filter((r"[/\\].*[/\\]src", "/[TMP]/src"));
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -10130,7 +10160,9 @@ fn sync_derivation_chain() -> Result<()> {
 
 #[test]
 fn sync_derivation_chain_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filter((r"[/\\].*[/\\]src", "/[TMP]/src"));
+    let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/workflow.toml")
+        .with_filter((r"[/\\].*[/\\]src", "/[TMP]/src"));
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -10185,7 +10217,9 @@ fn sync_derivation_chain_extra() -> Result<()> {
 
 #[test]
 fn sync_derivation_chain_group() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filter((r"[/\\].*[/\\]src", "/[TMP]/src"));
+    let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/workflow.toml")
+        .with_filter((r"[/\\].*[/\\]src", "/[TMP]/src"));
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -10316,10 +10350,10 @@ fn sync_stale_egg_info() -> Result<()> {
             [[package]]
             name = "setuptools"
             version = "69.2.0"
-            source = { registry = "https://pypi.org/simple" }
-            sdist = { url = "https://files.pythonhosted.org/packages/4d/5b/dc575711b6b8f2f866131a40d053e30e962e633b332acf7cd2c24843d83d/setuptools-69.2.0.tar.gz", hash = "sha256:0ff4183f8f42cd8fa3acea16c45205521a4ef28f73c6391d8a25e92893134f2e", size = 2222950, upload-time = "2024-03-13T11:20:59.219Z" }
+            source = { registry = "http://[LOCALHOST]/simple/" }
+            sdist = { url = "http://[LOCALHOST]/files/setuptools-69.2.0.tar.gz", hash = "sha256:57605e0cc65a70885f111702f2562c64b7d1378a9b67c63a767913a50c574216", upload-time = "2024-03-24T00:00:00Z" }
             wheels = [
-                { url = "https://files.pythonhosted.org/packages/92/e1/1c8bb3420105e70bdf357d57dd5567202b4ef8d27f810e98bb962d950834/setuptools-69.2.0-py3-none-any.whl", hash = "sha256:c21c49fb1042386df081cb5d86759792ab89efca84cf114889191cd09aacc80c", size = 821485, upload-time = "2024-03-13T11:20:54.103Z" },
+                { url = "http://[LOCALHOST]/files/setuptools-69.2.0-py3-none-any.whl", hash = "sha256:c21c49fb1042386df081cb5d86759792ab89efca84cf114889191cd09aacc80c", upload-time = "2024-03-24T00:00:00Z" },
             ]
             "#
             );
@@ -10497,10 +10531,10 @@ fn sync_git_repeated_member_dynamic_metadata() -> Result<()> {
             [[package]]
             name = "iniconfig"
             version = "2.0.0"
-            source = { registry = "https://pypi.org/simple" }
-            sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
+            source = { registry = "http://[LOCALHOST]/simple/" }
+            sdist = { url = "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz", hash = "sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3", upload-time = "2024-03-24T00:00:00Z" }
             wheels = [
-                { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
+                { url = "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c", upload-time = "2024-03-24T00:00:00Z" },
             ]
 
             [[package]]
@@ -10515,10 +10549,10 @@ fn sync_git_repeated_member_dynamic_metadata() -> Result<()> {
             [[package]]
             name = "typing-extensions"
             version = "4.10.0"
-            source = { registry = "https://pypi.org/simple" }
-            sdist = { url = "https://files.pythonhosted.org/packages/16/3a/0d26ce356c7465a19c9ea8814b960f8a36c3b0d07c323176620b7b483e44/typing_extensions-4.10.0.tar.gz", hash = "sha256:b0abd7c89e8fb96f98db18d86106ff1d90ab692004eb746cf6eda2682f91b3cb", size = 77558, upload-time = "2024-02-25T22:12:49.693Z" }
+            source = { registry = "http://[LOCALHOST]/simple/" }
+            sdist = { url = "http://[LOCALHOST]/files/typing_extensions-4.10.0.tar.gz", hash = "sha256:adefbbc2f75a47edb1f4491a2e99a45438ec3dd0c2670276b321cad2ca522246", upload-time = "2024-03-24T00:00:00Z" }
             wheels = [
-                { url = "https://files.pythonhosted.org/packages/f9/de/dc04a3ea60b22624b51c703a84bbe0184abcd1d0b9bc8074b5d6b7ab90bb/typing_extensions-4.10.0-py3-none-any.whl", hash = "sha256:69b1a937c3a517342112fb4c6df7e72fc39a38e7891a5730ed4985b5214b5475", size = 33926, upload-time = "2024-02-25T22:12:47.72Z" },
+                { url = "http://[LOCALHOST]/files/typing_extensions-4.10.0-py3-none-any.whl", hash = "sha256:0626263fe1dcda7bc3ee7b2872064b534d4831718055d22d4f32f9e474a867a4", upload-time = "2024-03-24T00:00:00Z" },
             ]
             "#
             );
@@ -10788,7 +10822,9 @@ fn sync_git_path_archive_missing_lfs() -> Result<()> {
 /// A project without a build system is marked as its own editable dependency under the wrong name.
 #[test]
 fn mismatched_name_self_editable() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let build_dependencies = uv_test::packse::PackseServer::empty();
+    let context =
+        uv_test::test_context!("3.12").with_default_index(&build_dependencies.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -10859,19 +10895,22 @@ fn mismatched_name_self_editable_package() -> Result<()> {
 /// A wheel is available in the cache, but was requested under the wrong name.
 #[test]
 fn mismatched_name_cached_wheel() -> Result<()> {
+    let direct_artifacts =
+        uv_test::packse::PackseServer::new("packages/lock-direct-artifacts.toml");
     let context = uv_test::test_context!("3.12");
+    let iniconfig_sdist = direct_artifacts.file_url("iniconfig-2.0.0.tar.gz");
 
     // Cache the `iniconfig` wheel.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
+    pyproject_toml.write_str(&format!(
         r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig @ https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz"]
+        dependencies = ["iniconfig @ {iniconfig_sdist}"]
         "#,
-    )?;
+    ))?;
 
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
@@ -10879,23 +10918,23 @@ fn mismatched_name_cached_wheel() -> Result<()> {
     Resolved 2 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + iniconfig==2.0.0 (from https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz)
+     + iniconfig==2.0.0 (from http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz)
     ");
 
-    pyproject_toml.write_str(
+    pyproject_toml.write_str(&format!(
         r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["foo @ https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz"]
+        dependencies = ["foo @ {iniconfig_sdist}"]
         "#,
-    )?;
+    ))?;
 
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Failed to download and build `foo @ https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz`
+    error: Failed to download and build `foo @ http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz`
       cause: Package metadata name `iniconfig` does not match given name `foo`
     ");
 
@@ -11391,10 +11430,12 @@ fn sync_build_tag() -> Result<()> {
 
 #[test]
 fn url_hash_mismatch() -> Result<()> {
+    let direct_artifacts =
+        uv_test::packse::PackseServer::new("packages/lock-direct-artifacts.toml");
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
+    pyproject_toml.write_str(&format!(
         r#"
         [project]
         name = "project"
@@ -11403,12 +11444,14 @@ fn url_hash_mismatch() -> Result<()> {
         dependencies = ["iniconfig"]
 
         [tool.uv.sources]
-        iniconfig = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz" }
+        iniconfig = {{ url = "{}" }}
         "#,
-    )?;
+        direct_artifacts.file_url("iniconfig-2.0.0.tar.gz")
+    ))?;
 
     // Write a lockfile with an invalid hash.
-    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+    context.temp_dir.child("uv.lock").write_str(&format!(
+        r#"
         version = 1
         requires-python = ">=3.12"
 
@@ -11418,33 +11461,35 @@ fn url_hash_mismatch() -> Result<()> {
         [[package]]
         name = "iniconfig"
         version = "2.0.0"
-        source = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz" }
-        sdist = { hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b4" }
+        source = {{ url = "{iniconfig_url}" }}
+        sdist = {{ hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b4" }}
 
         [[package]]
         name = "project"
         version = "0.1.0"
-        source = { virtual = "." }
+        source = {{ virtual = "." }}
         dependencies = [
-            { name = "iniconfig" },
+            {{ name = "iniconfig" }},
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "iniconfig", url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz" }]
-    "#})?;
+        requires-dist = [{{ name = "iniconfig", url = "{iniconfig_url}" }}]
+        "#,
+        iniconfig_url = direct_artifacts.file_url("iniconfig-2.0.0.tar.gz")
+    ))?;
 
     // Running `uv sync` should fail.
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to generate package metadata for `iniconfig==2.0.0 @ direct+https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz`
-      cause: Hash mismatch for `iniconfig @ https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz`
+    error: Failed to generate package metadata for `iniconfig==2.0.0 @ direct+http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz`
+      cause: Hash mismatch for `iniconfig @ http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz`
 
              Expected:
                sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b4
 
              Computed:
-               sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3
+               sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3
     ");
 
     Ok(())
@@ -11452,12 +11497,14 @@ fn url_hash_mismatch() -> Result<()> {
 
 #[test]
 fn path_hash_mismatch() -> Result<()> {
+    let direct_artifacts =
+        uv_test::packse::PackseServer::new("packages/lock-direct-artifacts.toml");
     let context = uv_test::test_context!("3.12");
 
     // Download the source.
     let archive = context.temp_dir.child("iniconfig-2.0.0.tar.gz");
     download_to_disk(
-        "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz",
+        &direct_artifacts.file_url("iniconfig-2.0.0.tar.gz"),
         &archive,
     );
 
@@ -11512,7 +11559,7 @@ fn path_hash_mismatch() -> Result<()> {
                sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b4
 
              Computed:
-               sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3
+               sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3
     ");
 
     Ok(())
@@ -11948,32 +11995,32 @@ fn sync_locked_script() -> Result<()> {
         [[package]]
         name = "anyio"
         version = "4.3.0"
-        source = { registry = "https://pypi.org/simple" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
         dependencies = [
             { name = "idna" },
             { name = "sniffio" },
         ]
-        sdist = { url = "https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz", hash = "sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6", size = 159642, upload-time = "2024-02-19T08:36:28.641Z" }
+        sdist = { url = "http://[LOCALHOST]/files/anyio-4.3.0.tar.gz", hash = "sha256:13a6d97fa30ec110d85e3949a30c92306f0178135048329f54a335c3dade753a", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl", hash = "sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8", size = 85584, upload-time = "2024-02-19T08:36:26.842Z" },
+            { url = "http://[LOCALHOST]/files/anyio-4.3.0-py3-none-any.whl", hash = "sha256:c4f443e7e5a2c003b1534688207e85dbd11960efb66d4d6a4e7693fdfc6f5b33", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
         name = "idna"
         version = "3.6"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426, upload-time = "2023-11-25T15:40:54.902Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/idna-3.6.tar.gz", hash = "sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567, upload-time = "2023-11-25T15:40:52.604Z" },
+            { url = "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl", hash = "sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
         name = "sniffio"
         version = "1.3.1"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/sniffio-1.3.1.tar.gz", hash = "sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
+            { url = "http://[LOCALHOST]/files/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05", upload-time = "2024-03-24T00:00:00Z" },
         ]
         "#
         );
@@ -12049,41 +12096,41 @@ fn sync_locked_script() -> Result<()> {
         [[package]]
         name = "anyio"
         version = "4.3.0"
-        source = { registry = "https://pypi.org/simple" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
         dependencies = [
             { name = "idna" },
             { name = "sniffio" },
         ]
-        sdist = { url = "https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz", hash = "sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6", size = 159642, upload-time = "2024-02-19T08:36:28.641Z" }
+        sdist = { url = "http://[LOCALHOST]/files/anyio-4.3.0.tar.gz", hash = "sha256:13a6d97fa30ec110d85e3949a30c92306f0178135048329f54a335c3dade753a", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl", hash = "sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8", size = 85584, upload-time = "2024-02-19T08:36:26.842Z" },
+            { url = "http://[LOCALHOST]/files/anyio-4.3.0-py3-none-any.whl", hash = "sha256:c4f443e7e5a2c003b1534688207e85dbd11960efb66d4d6a4e7693fdfc6f5b33", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
         name = "idna"
         version = "3.6"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426, upload-time = "2023-11-25T15:40:54.902Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/idna-3.6.tar.gz", hash = "sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567, upload-time = "2023-11-25T15:40:52.604Z" },
+            { url = "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl", hash = "sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
         name = "iniconfig"
         version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz", hash = "sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
+            { url = "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
         name = "sniffio"
         version = "1.3.1"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/sniffio-1.3.1.tar.gz", hash = "sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
+            { url = "http://[LOCALHOST]/files/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05", upload-time = "2024-03-24T00:00:00Z" },
         ]
         "#
         );
@@ -12641,10 +12688,14 @@ fn transitive_group_conflicts_cycle() -> Result<()> {
 /// See: <https://github.com/astral-sh/uv/issues/11703>
 #[test]
 fn prune_cache_url_subdirectory() -> Result<()> {
+    let direct_artifacts =
+        uv_test::packse::PackseServer::new("packages/lock-direct-artifacts.toml");
+    let root_url = direct_artifacts.file_url("root-0.0.1.tar.gz");
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(indoc! {r#"
+    pyproject_toml.write_str(
+        &indoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -12654,8 +12705,10 @@ fn prune_cache_url_subdirectory() -> Result<()> {
         ]
 
         [tool.uv.sources]
-        root = { url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz", subdirectory = "packages/root" }
-    "#})?;
+        root = { url = "[ROOT_URL]", subdirectory = "packages/root" }
+    "#}
+        .replace("[ROOT_URL]", &root_url),
+    )?;
 
     // Lock the project.
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -12676,7 +12729,7 @@ fn prune_cache_url_subdirectory() -> Result<()> {
     Installed 4 packages in [TIME]
      + anyio==4.3.0
      + idna==3.6
-     + root==0.0.1 (from https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root)
+     + root==0.0.1 (from http://[LOCALHOST]/files/root-0.0.1.tar.gz#subdirectory=packages/root)
      + sniffio==1.3.1
     ");
 
@@ -12724,10 +12777,10 @@ fn locked_version_coherence() -> Result<()> {
         [[package]]
         name = "iniconfig"
         version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz", hash = "sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
+            { url = "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
@@ -12775,7 +12828,7 @@ fn locked_version_coherence() -> Result<()> {
 /// See: <https://github.com/astral-sh/uv/issues/12434>
 #[test]
 fn sync_build_constraints() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-03-24T19:00:00Z");
+    let context = uv_test::test_context!("3.9");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -12783,21 +12836,21 @@ fn sync_build_constraints() -> Result<()> {
         [project]
         name = "project"
         version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["json-merge-patch"]
+        requires-python = ">=3.9"
+        dependencies = ["requests==1.2"]
 
         [tool.uv]
-        build-constraint-dependencies = ["setuptools<78"]
+        build-constraint-dependencies = ["setuptools>=40"]
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.sync().arg("--no-binary-package").arg("json-merge-patch"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--no-binary-package").arg("requests"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + json-merge-patch==0.2
+     + requests==1.2.0
     ");
 
     let lock = context.read("uv.lock");
@@ -12811,30 +12864,30 @@ fn sync_build_constraints() -> Result<()> {
                 lock, @r#"
             version = 1
             revision = 3
-            requires-python = ">=3.12"
+            requires-python = ">=3.9"
 
             [options]
-            exclude-newer = "2025-03-24T19:00:00Z"
+            exclude-newer = "2024-03-25T00:00:00Z"
 
             [manifest]
-            build-constraints = [{ name = "setuptools", specifier = "<78" }]
-
-            [[package]]
-            name = "json-merge-patch"
-            version = "0.2"
-            source = { registry = "https://pypi.org/simple" }
-            sdist = { url = "https://files.pythonhosted.org/packages/39/62/3b783faabac9a099877397d8f7a7cc862a03fbf9fb1b90d414ea7c6bb096/json-merge-patch-0.2.tar.gz", hash = "sha256:09898b6d427c08754e2a97c709cf2dfd7e28bd10c5683a538914975eab778d39", size = 3081, upload-time = "2017-11-09T11:38:15.773Z" }
+            build-constraints = [{ name = "setuptools", specifier = ">=40" }]
 
             [[package]]
             name = "project"
             version = "0.1.0"
             source = { virtual = "." }
             dependencies = [
-                { name = "json-merge-patch" },
+                { name = "requests" },
             ]
 
             [package.metadata]
-            requires-dist = [{ name = "json-merge-patch" }]
+            requires-dist = [{ name = "requests", specifier = "==1.2" }]
+
+            [[package]]
+            name = "requests"
+            version = "1.2.0"
+            source = { registry = "http://[LOCALHOST]/simple/" }
+            sdist = { url = "http://[LOCALHOST]/files/requests-1.2.0.tar.gz", hash = "sha256:e6b8dcae10922783ae6d0e88d7bd463f64b1bd47051cc3c360b07bfb7af6ecf6", upload-time = "2024-03-24T00:00:00Z" }
             "#
             );
         }
@@ -12847,12 +12900,12 @@ fn sync_build_constraints() -> Result<()> {
     uv_snapshot!(context.filters(), context.sync().arg("--locked"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
     Creating virtual environment at: .venv
     Resolved 2 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + json-merge-patch==0.2
+     + requests==1.2.0
     ");
 
     // Modify the build constraints.
@@ -12861,11 +12914,11 @@ fn sync_build_constraints() -> Result<()> {
         [project]
         name = "project"
         version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["json-merge-patch"]
+        requires-python = ">=3.9"
+        dependencies = ["requests==1.2"]
 
         [tool.uv]
-        build-constraint-dependencies = ["setuptools<77"]
+        build-constraint-dependencies = ["setuptools>=41"]
         "#,
     )?;
 
@@ -13106,56 +13159,12 @@ fn sync_upload_time() -> Result<()> {
     ");
 
     let uv_lock = context.temp_dir.child("uv.lock");
-    uv_lock.write_str(r#"
-        version = 1
-        revision = 2
-        requires-python = ">=3.12"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "anyio"
-        version = "3.7.0"
-        source = { registry = "https://pypi.org/simple" }
-        dependencies = [
-            { name = "idna" },
-            { name = "sniffio" },
-        ]
-        sdist = { url = "https://files.pythonhosted.org/packages/c6/b3/fefbf7e78ab3b805dec67d698dc18dd505af7a18a8dd08868c9b4fa736b5/anyio-3.7.0.tar.gz", hash = "sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce", size = 142737, upload_time = "2023-05-27T11:12:46.688Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/68/fe/7ce1926952c8a403b35029e194555558514b365ad77d75125f521a2bec62/anyio-3.7.0-py3-none-any.whl", hash = "sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0", size = 80873, upload_time = "2023-05-27T11:12:44.474Z" },
-        ]
-
-        [[package]]
-        name = "idna"
-        version = "3.6"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426, upload_time = "2023-11-25T15:40:54.902Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567, upload_time = "2023-11-25T15:40:52.604Z" },
-        ]
-
-        [[package]]
-        name = "project"
-        version = "0.1.0"
-        source = { virtual = "." }
-        dependencies = [
-            { name = "anyio" },
-        ]
-
-        [package.metadata]
-        requires-dist = [{ name = "anyio", specifier = "==3.7.0" }]
-
-        [[package]]
-        name = "sniffio"
-        version = "1.3.1"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload_time = "2024-02-25T23:20:04.057Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload_time = "2024-02-25T23:20:01.196Z" },
-        ]
-    "#)?;
+    let lock = context
+        .read("uv.lock")
+        .replace("revision = 3", "revision = 2")
+        .replace("upload-time", "upload_time");
+    assert!(lock.contains("upload_time"));
+    uv_lock.write_str(&lock)?;
 
     // Install from the lockfile.
     uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
@@ -13264,32 +13273,39 @@ fn repeated_dev_member_all_packages() -> Result<()> {
 /// Test that hash checking doesn't fail with dependency metadata.
 #[test]
 fn direct_url_dependency_metadata() -> Result<()> {
+    let direct_artifacts =
+        uv_test::packse::PackseServer::new("packages/lock-direct-artifacts.toml");
     let context = uv_test::test_context!("3.12");
-    context.temp_dir.child("pyproject.toml").write_str(r#"
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&format!(
+            r#"
         [project]
         name = "debug"
         version = "0.1.0"
         requires-python = ">=3.9"
         dependencies = [
-            "tqdm",
+            "iniconfig",
         ]
 
         [tool.uv]
         dependency-metadata = [
-          { name = "tqdm", version = "4.67.1", requires-dist = [] },
+          {{ name = "iniconfig", version = "2.0.0", requires-dist = [] }},
         ]
 
         [tool.uv.sources]
-        tqdm = { url = "https://files.pythonhosted.org/packages/d0/30/dc54f88dd4a2b5dc8a0279bdd7270e735851848b762aeb1c1184ed1f6b14/tqdm-4.67.1-py3-none-any.whl" }
-        "#
-    )?;
+        iniconfig = {{ url = "{}" }}
+        "#,
+            direct_artifacts.file_url("iniconfig-2.0.0-py3-none-any.whl")
+        ))?;
 
-    uv_snapshot!(context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     Installed 1 package in [TIME]
-     + tqdm==4.67.1 (from https://files.pythonhosted.org/packages/d0/30/dc54f88dd4a2b5dc8a0279bdd7270e735851848b762aeb1c1184ed1f6b14/tqdm-4.67.1-py3-none-any.whl)
+     + iniconfig==2.0.0 (from http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl)
     ");
 
     Ok(())
@@ -13347,17 +13363,20 @@ fn sync_required_environment_hint() -> Result<()> {
 
 #[test]
 fn sync_url_with_query_parameters() -> Result<()> {
+    let artifacts = uv_test::packse::PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.13").with_exclude_newer("2025-03-24T19:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(r#"
+    pyproject_toml.write_str(&format!(
+        r#"
         [project]
         name = "example"
         version = "0.1.0"
         requires-python = ">=3.13"
-        dependencies = ["source-distribution @ https://files.pythonhosted.org/packages/1f/e5/5b016c945d745f8b108e759d428341488a6aee8f51f07c6c4e33498bb91f/source_distribution-0.0.3.tar.gz?foo=bar"]
-        "#
-    )?;
+        dependencies = ["source-distribution @ {}?foo=bar"]
+        "#,
+        artifacts.file_url("source_distribution-0.0.3.tar.gz")
+    ))?;
 
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
@@ -13365,7 +13384,7 @@ fn sync_url_with_query_parameters() -> Result<()> {
     Resolved 2 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + source-distribution==0.0.3 (from https://files.pythonhosted.org/packages/1f/e5/5b016c945d745f8b108e759d428341488a6aee8f51f07c6c4e33498bb91f/source_distribution-0.0.3.tar.gz?foo=bar)
+     + source-distribution==0.0.3 (from http://[LOCALHOST]/files/source_distribution-0.0.3.tar.gz?foo=bar)
     ");
 
     Ok(())
@@ -13379,15 +13398,15 @@ fn sync_exclude_newer_package() -> Result<()> {
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
-[project]
-name = "project"
-version = "0.1.0"
-requires-python = ">=3.12"
-dependencies = [
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
     "tqdm",
     "requests",
-]
-"#,
+    ]
+    "#,
     )?;
 
     // First sync with only the global exclude-newer to show the baseline
@@ -13442,18 +13461,18 @@ fn sync_exclude_newer_package_config() -> Result<()> {
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
-[project]
-name = "project"
-version = "0.1.0"
-requires-python = ">=3.12"
-dependencies = [
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
     "tqdm",
     "requests",
-]
+    ]
 
-[tool.uv]
-exclude-newer = "2022-04-04T12:00:00Z"
-"#,
+    [tool.uv]
+    exclude-newer = "2022-04-04T12:00:00Z"
+    "#,
     )?;
 
     // First sync with only the global exclude-newer from the config
@@ -13477,19 +13496,19 @@ exclude-newer = "2022-04-04T12:00:00Z"
     // Now add the package-specific exclude-newer to the config
     pyproject_toml.write_str(
         r#"
-[project]
-name = "project"
-version = "0.1.0"
-requires-python = ">=3.12"
-dependencies = [
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
     "tqdm",
     "requests",
-]
+    ]
 
-[tool.uv]
-exclude-newer = "2022-04-04T12:00:00Z"
-exclude-newer-package = { tqdm = "2022-09-04T00:00:00Z" }
-"#,
+    [tool.uv]
+    exclude-newer = "2022-04-04T12:00:00Z"
+    exclude-newer-package = { tqdm = "2022-09-04T00:00:00Z" }
+    "#,
     )?;
 
     // Sync again with the package-specific override
@@ -14584,7 +14603,8 @@ fn sync_extra_build_variables() -> Result<()> {
 
 #[test]
 fn reject_unmatched_runtime() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-01T00:00Z");
+    let context =
+        uv_test::test_context!("3.12").with_packse_index("packages/extra-build-match-runtime.toml");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -14593,20 +14613,20 @@ fn reject_unmatched_runtime() -> Result<()> {
         name = "foo"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["source-distribution", "iniconfig"]
+        dependencies = ["dynamic-runtime-source", "runtime-requirement"]
 
         [tool.uv.extra-build-dependencies]
-        source-distribution = [{ requirement = "iniconfig", match-runtime = true }]
+        dynamic-runtime-source = [{ requirement = "runtime-requirement", match-runtime = true }]
         "#,
     )?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Failed to download and build `source-distribution==0.0.3`
-      cause: Extra build requirement `iniconfig` was declared with `match-runtime = true`, but `source-distribution` does not declare static metadata, making runtime-matching impossible
+    error: Failed to download and build `dynamic-runtime-source==1.0.0`
+      cause: Extra build requirement `runtime-requirement` was declared with `match-runtime = true`, but `dynamic-runtime-source` does not declare static metadata, making runtime-matching impossible
 
-    hint: `source-distribution` (v0.0.3) was included because `foo` (v0.1.0) depends on `source-distribution`
+    hint: `dynamic-runtime-source` (v1.0.0) was included because `foo` (v0.1.0) depends on `dynamic-runtime-source`
     ");
 
     Ok(())
@@ -14990,11 +15010,11 @@ fn sync_git_lfs() -> Result<()> {
 
 #[test]
 fn match_runtime_optional() -> Result<()> {
+    let artifacts = uv_test::packse::PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-01T00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "foo"
         version = "0.1.0"
@@ -15005,12 +15025,13 @@ fn match_runtime_optional() -> Result<()> {
         bar = ["iniconfig", "typing-extensions"]
 
         [tool.uv.sources]
-        typing-extensions = { url = "https://files.pythonhosted.org/packages/72/94/1a15dd82efb362ac84269196e94cf00f187f7ed21c242792a923cdb1c61f/typing_extensions-4.15.0.tar.gz" }
+        typing-extensions = {{ url = "{typing_extensions_url}" }}
 
         [tool.uv.extra-build-dependencies]
-        typing-extensions = [{ requirement = "iniconfig", match-runtime = true }]
+        typing-extensions = [{{ requirement = "iniconfig", match-runtime = true }}]
         "#,
-    )?;
+        typing_extensions_url = artifacts.file_url("typing_extensions-4.10.0.tar.gz"),
+    })?;
 
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
@@ -15345,7 +15366,7 @@ async fn sync_non_pep625_sdist() -> Result<()> {
       cause: Because basic-package==0.1.0 has a non-PEP 625-compliant source distribution filename and only basic-package==0.1.0 is available, we can conclude that all versions of basic-package cannot be used.
              And because your project depends on basic-package, we can conclude that your project's requirements are unsatisfiable.
 
-    hint: `basic-package` was found on http://[LOCALHOST]/simple, but not at the requested version (basic-package==0.1.0). A compatible version may be available on a subsequent index (e.g., https://pypi.org/simple). By default, uv will only consider versions that are published on the first index that contains a given package, to avoid dependency confusion attacks. If all indexes are equally trusted, use `--index-strategy unsafe-best-match` to consider all versions from all indexes, regardless of the order in which they were defined.
+    hint: `basic-package` was found on http://[LOCALHOST]/simple, but not at the requested version (basic-package==0.1.0). A compatible version may be available on a subsequent index (e.g., http://[LOCALHOST]/simple/). By default, uv will only consider versions that are published on the first index that contains a given package, to avoid dependency confusion attacks. If all indexes are equally trusted, use `--index-strategy unsafe-best-match` to consider all versions from all indexes, regardless of the order in which they were defined.
     ");
 
     Ok(())
@@ -15598,10 +15619,10 @@ fn toggle_workspace_editable() -> Result<()> {
         [[package]]
         name = "iniconfig"
         version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz", hash = "sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
+            { url = "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
@@ -15702,10 +15723,10 @@ fn toggle_workspace_editable() -> Result<()> {
         [[package]]
         name = "iniconfig"
         version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz", hash = "sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
+            { url = "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
@@ -15865,10 +15886,10 @@ fn workspace_editable_conflict() -> Result<()> {
         [[package]]
         name = "iniconfig"
         version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz", hash = "sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
+            { url = "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
@@ -15959,10 +15980,10 @@ fn workspace_editable_conflict() -> Result<()> {
         [[package]]
         name = "iniconfig"
         version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz", hash = "sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
+            { url = "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
@@ -16285,13 +16306,12 @@ fn sync_reinstalls_on_version_change() -> Result<()> {
 
 /// Ensure that `uv sync` aborts when malware is detected in a dependency.
 #[tokio::test]
-async fn sync_malware_detected() {
+async fn sync_malware_detected() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let server = MockServer::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml
-        .write_str(&formatdoc! {r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -16301,10 +16321,10 @@ async fn sync_malware_detected() {
         [tool.uv.audit]
         malware-check = true
         malware-check-url = "{}"
-    "#, server.uri()})
-        .unwrap();
+    "#, server.uri()})?;
 
     context.lock().assert().success();
+    context.rewrite_lock_registry_sources("https://pypi.org/simple")?;
 
     Mock::given(method("POST"))
         .and(path("/v1/querybatch"))
@@ -16325,35 +16345,36 @@ async fn sync_malware_detected() {
 
     uv_snapshot!(context.filters(), context
         .sync()
+        .arg("--frozen")
         .arg("--preview-features").arg("malware-check")
         .env_remove(EnvVars::UV_MALWARE_CHECK)
         .env_remove(EnvVars::UV_MALWARE_CHECK_URL), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Resolved 2 packages in [TIME]
     warning: Malware detected in locked dependencies:
       - `iniconfig==2.0.0`: MAL-2026-1234 (https://osv.dev/vulnerability/MAL-2026-1234)
     error: Malware detected in one or more dependencies that would be installed; aborting sync. Set `UV_MALWARE_CHECK=0` to bypass this check.
     ");
+
+    Ok(())
 }
 
 /// Ensure that `uv sync` succeeds when no malware is found.
 #[tokio::test]
-async fn sync_malware_check_clean() {
+async fn sync_malware_check_clean() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml
-        .write_str(indoc! {r#"
+    pyproject_toml.write_str(indoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = ["iniconfig==2.0.0"]
-    "#})
-        .unwrap();
+    "#})?;
 
     context.lock().assert().success();
+    context.rewrite_lock_registry_sources("https://pypi.org/simple")?;
 
     let server = MockServer::start().await;
 
@@ -16367,28 +16388,38 @@ async fn sync_malware_check_clean() {
 
     uv_snapshot!(context.filters(), context
         .sync()
+        .arg("--frozen")
         .arg("--preview-features").arg("malware-check")
         .env(EnvVars::UV_MALWARE_CHECK, "1")
         .env(EnvVars::UV_MALWARE_CHECK_URL, server.uri()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 2 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + iniconfig==2.0.0
     ");
+
+    Ok(())
 }
 
 /// Ensure that malware checks can authenticate through the configured keyring provider.
 #[tokio::test]
 async fn sync_malware_check_keyring_auth() -> Result<()> {
+    let keyring_context = uv_test::test_context!("3.12");
     let context = uv_test::test_context!("3.12");
 
     // Install our keyring plugin.
-    context
+    keyring_context
         .pip_install()
         .arg(
-            context
+            keyring_context
+                .workspace_root
+                .join("test")
+                .join("packages")
+                .join("keyring_stub"),
+        )
+        .arg(
+            keyring_context
                 .workspace_root
                 .join("test")
                 .join("packages")
@@ -16406,11 +16437,8 @@ async fn sync_malware_check_keyring_auth() -> Result<()> {
         dependencies = ["iniconfig==2.0.0"]
     "#})?;
 
-    context
-        .lock()
-        .env(EnvVars::UV_DEFAULT_INDEX, "https://pypi.org/simple")
-        .assert()
-        .success();
+    context.lock().assert().success();
+    context.rewrite_lock_registry_sources("https://pypi.org/simple")?;
 
     let server = MockServer::start().await;
     let mut malware_check_url = Url::parse(&server.uri())?;
@@ -16439,11 +16467,11 @@ async fn sync_malware_check_keyring_auth() -> Result<()> {
 
     uv_snapshot!(context.filters(), context
         .sync()
+        .arg("--frozen")
         .arg("--preview-features").arg("malware-check")
         .arg("--keyring-provider").arg("subprocess")
         .env(EnvVars::UV_MALWARE_CHECK, "1")
         .env(EnvVars::UV_MALWARE_CHECK_URL, malware_check_url.as_str())
-        .env(EnvVars::UV_DEFAULT_INDEX, "https://pypi.org/simple")
         .env(
             EnvVars::KEYRING_TEST_CREDENTIALS,
             format!(
@@ -16451,10 +16479,9 @@ async fn sync_malware_check_keyring_auth() -> Result<()> {
                 server.uri()
             )
         )
-        .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
+        .env(EnvVars::PATH, venv_bin_path(&keyring_context.venv)), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Resolved 2 packages in [TIME]
     Keyring request for public@http://[LOCALHOST]/v1/querybatch
     warning: Malware detected in locked dependencies:
       - `iniconfig==2.0.0`: MAL-2026-1234 (https://osv.dev/vulnerability/MAL-2026-1234)
@@ -16466,12 +16493,11 @@ async fn sync_malware_check_keyring_auth() -> Result<()> {
 
 /// Ensure that the malware check only reports `MAL-` prefixed IDs and skips others.
 #[tokio::test]
-async fn sync_malware_check_skips_non_mal() {
+async fn sync_malware_check_skips_non_mal() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml
-        .write_str(indoc! {r#"
+    pyproject_toml.write_str(indoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -16481,10 +16507,10 @@ async fn sync_malware_check_skips_non_mal() {
         [tool.uv.audit]
         malware-check = false
         malware-check-url = "https://example.com"
-    "#})
-        .unwrap();
+    "#})?;
 
     context.lock().assert().success();
+    context.rewrite_lock_registry_sources("https://pypi.org/simple")?;
 
     let server = MockServer::start().await;
 
@@ -16513,36 +16539,37 @@ async fn sync_malware_check_skips_non_mal() {
     // The error should only mention the MAL- advisory.
     uv_snapshot!(context.filters(), context
         .sync()
+        .arg("--frozen")
         .arg("--preview-features").arg("malware-check")
         .env(EnvVars::UV_MALWARE_CHECK, "1")
         .env(EnvVars::UV_MALWARE_CHECK_URL, server.uri()), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Resolved 2 packages in [TIME]
     warning: Malware detected in locked dependencies:
       - `iniconfig==2.0.0`: MAL-2026-5678 (https://osv.dev/vulnerability/MAL-2026-5678)
     error: Malware detected in one or more dependencies that would be installed; aborting sync. Set `UV_MALWARE_CHECK=0` to bypass this check.
     ");
+
+    Ok(())
 }
 
 /// Ensure that `UV_MALWARE_CHECK=0` keeps the malware check disabled even when enabled in user
 /// configuration.
 #[tokio::test]
-async fn sync_malware_check_disabled() {
+async fn sync_malware_check_disabled() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml
-        .write_str(indoc! {r#"
+    pyproject_toml.write_str(indoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = ["iniconfig==2.0.0"]
-    "#})
-        .unwrap();
+    "#})?;
 
     context.lock().assert().success();
+    context.rewrite_lock_registry_sources("https://pypi.org/simple")?;
 
     let user_config_dir = context.user_config_dir.child("uv");
     user_config_dir.create_dir_all().unwrap();
@@ -16558,35 +16585,36 @@ async fn sync_malware_check_disabled() {
 
     uv_snapshot!(context.filters(), context
         .sync()
+        .arg("--frozen")
         .arg("--preview-features").arg("malware-check")
         .env(EnvVars::UV_MALWARE_CHECK, "0")
         .env(EnvVars::UV_MALWARE_CHECK_URL, server.uri()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 2 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + iniconfig==2.0.0
     ");
+
+    Ok(())
 }
 
 /// Ensure that a network error during the malware check fails the sync.
 #[tokio::test]
-async fn sync_malware_check_network_error() {
+async fn sync_malware_check_network_error() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml
-        .write_str(indoc! {r#"
+    pyproject_toml.write_str(indoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = ["iniconfig==2.0.0"]
-    "#})
-        .unwrap();
+    "#})?;
 
     context.lock().assert().success();
+    context.rewrite_lock_registry_sources("https://pypi.org/simple")?;
 
     let server = MockServer::start().await;
 
@@ -16599,16 +16627,18 @@ async fn sync_malware_check_network_error() {
 
     uv_snapshot!(context.filters(), context
         .sync()
+        .arg("--frozen")
         .arg("--preview-features").arg("malware-check")
         .env(EnvVars::UV_MALWARE_CHECK, "1")
         .env(EnvVars::UV_MALWARE_CHECK_URL, server.uri())
         .env(EnvVars::UV_TEST_NO_HTTP_RETRY_DELAY, "true"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Resolved 2 packages in [TIME]
     error: Malware check failed due to an error from OSV
       cause: HTTP status server error (500 Internal Server Error) for url (http://[LOCALHOST]/v1/querybatch)
     ");
+
+    Ok(())
 }
 
 /// Ensure that a malformed `UV_MALWARE_CHECK_URL` produces a clear error.
@@ -16638,12 +16668,11 @@ async fn sync_malware_check_url_invalid() {
 
 /// Test that malware checks query all extras and groups, but only fail for the installed set.
 #[tokio::test]
-async fn sync_malware_check_skips_inactive_extras_and_groups() {
+async fn sync_malware_check_skips_inactive_extras_and_groups() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml
-        .write_str(indoc! {r#"
+    pyproject_toml.write_str(indoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -16655,10 +16684,10 @@ async fn sync_malware_check_skips_inactive_extras_and_groups() {
 
         [dependency-groups]
         lint = ["sortedcontainers==2.4.0"]
-    "#})
-        .unwrap();
+    "#})?;
 
     context.lock().assert().success();
+    context.rewrite_lock_registry_sources("https://pypi.org/simple")?;
 
     let server = MockServer::start().await;
 
@@ -16679,12 +16708,12 @@ async fn sync_malware_check_skips_inactive_extras_and_groups() {
 
     uv_snapshot!(context.filters(), context
         .sync()
+        .arg("--frozen")
         .arg("--preview-features").arg("malware-check")
         .env(EnvVars::UV_MALWARE_CHECK, "1")
         .env(EnvVars::UV_MALWARE_CHECK_URL, server.uri()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 4 packages in [TIME]
     warning: Malware detected in locked dependencies:
       - `sortedcontainers==2.4.0`: MAL-INACTIVE-GROUP (https://osv.dev/vulnerability/MAL-INACTIVE-GROUP)
       - `typing-extensions==4.10.0`: MAL-INACTIVE-EXTRA (https://osv.dev/vulnerability/MAL-INACTIVE-EXTRA)
@@ -16692,6 +16721,8 @@ async fn sync_malware_check_skips_inactive_extras_and_groups() {
     Installed 1 package in [TIME]
      + iniconfig==2.0.0
     ");
+
+    Ok(())
 }
 
 /// Regression test for #19419: `uv sync --frozen` must honor credentials

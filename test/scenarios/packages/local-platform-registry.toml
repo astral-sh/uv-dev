@@ -1,0 +1,40 @@
+name = "local-platform-registry"
+description = "Public-version fallbacks, required wheel platforms, and conflicting indexes."
+
+[root]
+
+[expected]
+satisfiable = true
+
+[packages.platform-engine.versions."2.2.2"]
+requires_python = ">=3.10"
+requires = ["platform-common", "platform-accelerator; platform_machine == 'x86_64' and sys_platform == 'linux'"]
+sdist = false
+wheel_tags = ["py3-none-macosx_10_9_x86_64", "py3-none-macosx_11_0_arm64", "py3-none-manylinux_2_17_x86_64", "py3-none-manylinux_2_17_aarch64", "py3-none-win_amd64"]
+
+[packages.platform-engine.versions."2.5.1"]
+requires_python = ">=3.10"
+requires = ["platform-common", "platform-accelerator; platform_machine == 'x86_64' and sys_platform == 'linux'"]
+sdist = false
+wheel_tags = ["py3-none-macosx_11_0_arm64", "py3-none-manylinux_2_17_x86_64", "py3-none-manylinux_2_17_aarch64", "py3-none-win_amd64"]
+
+[packages.platform-common.versions."1.0.0"]
+requires_python = ">=3.10"
+sdist_backend = "in-tree"
+
+[packages.platform-accelerator.versions."1.0.0"]
+requires_python = ">=3.10"
+requires = ["platform-common"]
+sdist_backend = "in-tree"
+
+[packages.platform-math.versions."1.0.0"]
+requires_python = ">=3.10"
+sdist_backend = "in-tree"
+
+[packages.platform-monitor.versions."0.17.6"]
+requires_python = ">=3.10"
+requires = ["platform-common"]
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true

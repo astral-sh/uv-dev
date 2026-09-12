@@ -1,0 +1,17 @@
+name = "edit-test-index"
+description = "An extra index for uv add index tests."
+
+[root]
+requires = []
+
+[expected]
+satisfiable = true
+
+[packages.idna.versions."2.7"]
+sdist_backend = "in-tree"
+
+[packages.requests.versions."2.5.4.1"]
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true
