@@ -174,11 +174,13 @@ fn show_invalid_legacy_metadata_name_omits_source() -> Result<()> {
         let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
         assert!(stderr.contains("Failed to parse metadata"));
         assert!(stderr.contains("legacy_warning.egg-info"));
-        if [stdout, stderr]
+        if [&stdout, &stderr]
             .iter()
             .any(|output| output.contains("legacy-secret") || output.contains("signature-secret"))
         {
             leaked_layouts.push(layout);
+        } else {
+            assert!(stderr.contains("invalid `Name` field"));
         }
         assert_eq!(fs_err::read_to_string(&metadata_path)?, metadata);
     }
