@@ -6,7 +6,7 @@ use uv_python::PythonVersion;
 use uv_test::packse::check::{
     LockCheckResult, ScenarioPlatform, ScenarioTarget, check_lock_scenario, check_scenario,
 };
-use uv_test::packse::generate::{SmallGraphOptions, generate_small_graph};
+use uv_test::packse::generate::{SmallGraphOptions, generate_marker_graph, generate_small_graph};
 use uv_test::packse::scenario::Scenario;
 
 #[test]
@@ -167,6 +167,49 @@ fn generated_small_graphs_match_the_exhaustive_oracle() -> Result<()> {
         }
     }
     assert_eq!(satisfiable + unsatisfiable, 32);
+    assert!(satisfiable > 0);
+    assert!(unsatisfiable > 0);
+    Ok(())
+}
+
+#[test]
+fn generated_marker_graphs_match_their_concrete_projections() -> Result<()> {
+    let versions = ["3.12", "3.13", "3.14"]
+        .map(|version| PythonVersion::from_str(version).expect("valid Python version"));
+    let targets = ScenarioTarget::matrix(
+        &versions,
+        &[
+            ScenarioPlatform::Linux,
+            ScenarioPlatform::Macos,
+            ScenarioPlatform::Windows,
+        ],
+    );
+    let anchor = targets.first().expect("nonempty target matrix");
+    let options = SmallGraphOptions {
+        packages: 3,
+        versions: 2,
+    };
+    let mut satisfiable = 0;
+    let mut unsatisfiable = 0;
+    for seed in 0..4 {
+        let scenario = generate_marker_graph(seed, options, anchor, 27)?.scenario()?;
+        for target in &targets {
+            let context = uv_test::test_context!("3.12");
+            let result = check_scenario(&context, &scenario, target, 27)
+                .with_context(|| format!("generated marker graph seed {seed} for {target}"))?;
+            if result.selection.is_some() {
+                satisfiable += 1;
+            } else {
+                unsatisfiable += 1;
+            }
+        }
+        if seed < 2 {
+            let context = uv_test::test_context!("3.12");
+            check_lock_scenario(&context, &scenario, &targets, 27)
+                .with_context(|| format!("generated marker lock graph seed {seed}"))?;
+        }
+    }
+    assert_eq!(satisfiable + unsatisfiable, 36);
     assert!(satisfiable > 0);
     assert!(unsatisfiable > 0);
     Ok(())

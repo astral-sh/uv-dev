@@ -198,6 +198,25 @@ mod tests {
     }
 
     #[test]
+    fn marker_graphs_require_a_saved_seed() {
+        let arguments = ["uv-dev", "check-scenarios", "--uv", "uv", "--markers"];
+        assert!(Cli::try_parse_from(arguments).is_err());
+        assert!(
+            Cli::try_parse_from(arguments.into_iter().chain([
+                "--seed",
+                "0",
+                "--output-dir",
+                "generated",
+                "--python-version",
+                "3.12,3.13,3.14",
+                "--python-platform",
+                "linux,macos,windows",
+            ]))
+            .is_ok()
+        );
+    }
+
+    #[test]
     fn scenario_reducer_requires_a_replay_destination() {
         let arguments = ["uv-dev", "minimize-scenario", "--uv", "uv", "scenario.toml"];
         assert!(Cli::try_parse_from(arguments).is_err());

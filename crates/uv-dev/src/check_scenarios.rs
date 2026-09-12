@@ -12,7 +12,7 @@ use uv_test::packse::check::{
     LockCheckResult, ScenarioPlatform, ScenarioTarget, check_lock_scenario, check_scenario,
     check_scenario_with_artifacts,
 };
-use uv_test::packse::generate::{SmallGraphOptions, generate_small_graph};
+use uv_test::packse::generate::{SmallGraphOptions, generate_marker_graph, generate_small_graph};
 use uv_test::packse::scenario::ScenarioDocument;
 
 #[derive(clap::Args)]
@@ -44,6 +44,10 @@ pub(crate) struct Args {
     /// Generate small graphs beginning at this seed instead of reading scenario files.
     #[arg(long, conflicts_with = "scenarios", requires = "output_dir")]
     seed: Option<u64>,
+
+    /// Add Python and platform markers over three Python minor lines to generated graphs.
+    #[arg(long, requires = "seed")]
+    markers: bool,
 
     /// Number of consecutive seeds to check (defaults to 100).
     #[arg(long, requires = "seed")]
@@ -90,12 +94,17 @@ pub(crate) fn main(args: &Args) -> Result<()> {
             packages: args.packages.unwrap_or(3),
             versions: args.versions.unwrap_or(2),
         };
+        let minor_lines = if args.markers { 3 } else { 1 };
         ensure!(
             targets.iter().all(|other| {
                 other.python.major() == target.python.major()
-                    && other.python.minor() == target.python.minor()
+                    && other.python.minor() >= target.python.minor()
+                    && u16::from(other.python.minor())
+                        < u16::from(target.python.minor()) + minor_lines
             }),
-            "generated graphs cover one Python minor line; use a scenario file for cross-minor projections"
+            "generated graphs cover {minor_lines} Python minor line(s) starting at {}.{}",
+            target.python.major(),
+            target.python.minor(),
         );
         fs_err::create_dir_all(output_dir)?;
         let mut satisfiable = 0;
@@ -104,7 +113,11 @@ pub(crate) fn main(args: &Args) -> Result<()> {
             let seed = first_seed
                 .checked_add(u64::try_from(offset)?)
                 .context("the requested seed range overflows u64")?;
-            let document = generate_small_graph(seed, options, target, args.max_states)?;
+            let document = if args.markers {
+                generate_marker_graph(seed, options, target, args.max_states)?
+            } else {
+                generate_small_graph(seed, options, target, args.max_states)?
+            };
             let scenario = document.scenario()?;
             let path = output_dir.join(format!("{}.toml", scenario.name));
             save_scenario_input(&path, &document.to_toml()?)?;
