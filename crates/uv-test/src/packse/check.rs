@@ -148,6 +148,7 @@ pub fn check_scenario(
     let mut command = context.pip_compile();
     command
         .arg("requirements.in")
+        .arg("--no-config")
         .arg("--index-url")
         .arg(server.index_url())
         .arg("--python-version")
@@ -273,6 +274,7 @@ pub fn check_lock_scenario(
 
     let output = context
         .export()
+        .arg("--no-config")
         .arg("--frozen")
         .arg("--offline")
         .arg("--no-emit-project")
@@ -322,6 +324,7 @@ fn target_environment(scenario: &Scenario, target: &ScenarioTarget) -> Result<Ma
 fn lock_command(context: &TestContext, scenario: &Scenario, server: &PackseServer) -> Command {
     let mut command = context.lock();
     command
+        .arg("--no-config")
         .arg("--index-url")
         .arg(server.index_url())
         .arg("--no-build")
@@ -368,9 +371,12 @@ fn compare_output(
             expected.is_some(),
             "uv found a solution for an unsatisfiable scenario: {selection:?}"
         );
-        oracle
-            .validate(&selection)
-            .context("uv returned an invalid dependency closure")?;
+        oracle.validate(&selection).with_context(|| {
+            format!(
+                "uv returned an invalid dependency closure: {selection:?}\n{}",
+                String::from_utf8_lossy(&output.stdout)
+            )
+        })?;
         Ok(Some(selection))
     } else {
         ensure_no_solution(output, "uv pip compile")?;
