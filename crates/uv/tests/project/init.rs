@@ -3930,6 +3930,68 @@ fn init_with_description() -> Result<()> {
 }
 
 #[test]
+fn init_with_description_escaping() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let child = context.temp_dir.join("foo");
+    fs_err::create_dir_all(&child)?;
+
+    let description = "A \"quoted\" description with C:\\new\\thing";
+    context
+        .init()
+        .current_dir(&child)
+        .arg("--description")
+        .arg(description)
+        .arg("--lib")
+        .assert()
+        .success();
+
+    let pyproject = fs_err::read_to_string(child.join("pyproject.toml"))?;
+    let parsed: toml::Value = toml::from_str(&pyproject)?;
+    assert_eq!(parsed["project"]["description"].as_str(), Some(description));
+
+    Ok(())
+}
+
+#[test]
+fn init_with_description_rejects_newlines() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let carriage_return = context.temp_dir.child("carriage-return");
+    carriage_return.create_dir_all()?;
+    uv_snapshot!(context.filters(), context.init()
+        .current_dir(&carriage_return)
+        .arg("--description")
+        .arg("safe\rRequires-Dist: injected")
+        .arg("--lib"), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: `--description` must be a single line
+    ");
+    assert!(!carriage_return.child("pyproject.toml").exists());
+
+    let line_feed = context.temp_dir.child("line-feed");
+    line_feed.create_dir_all()?;
+    uv_snapshot!(context.filters(), context.init()
+        .current_dir(&line_feed)
+        .arg("--description")
+        .arg("safe\nRequires-Dist: injected")
+        .arg("--lib"), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: `--description` must be a single line
+    ");
+    assert!(!line_feed.child("pyproject.toml").exists());
+
+    Ok(())
+}
+
+#[test]
 fn init_without_description() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 

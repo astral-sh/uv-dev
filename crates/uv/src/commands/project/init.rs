@@ -96,6 +96,13 @@ pub(crate) async fn init(
             )?;
         }
         InitKind::Project(project_kind) => {
+            if description
+                .as_deref()
+                .is_some_and(|description| description.contains(['\r', '\n']))
+            {
+                bail!("`--description` must be a single line");
+            }
+
             // Default to the current directory if a path was not provided.
             let path = match explicit_path {
                 None => project_dir.to_path_buf(),
@@ -885,7 +892,10 @@ fn pyproject_project(
         description = if no_description {
             String::new()
         } else {
-            format!("\ndescription = \"{description}\"", description = description.unwrap_or("Add your description here"))
+            format!(
+                "\ndescription = {description}",
+                description = Value::from(description.unwrap_or("Add your description here"))
+            )
         },
         authors = author.map_or_else(String::new, |author| format!("\nauthors = [\n    {}\n]", author.to_toml_string())),
         requires_python = requires_python.specifiers(),
