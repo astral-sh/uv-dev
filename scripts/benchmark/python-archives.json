@@ -1,0 +1,376 @@
+{
+  "cpython-3.13.4-darwin-aarch64-none": {
+    "name": "cpython",
+    "arch": {
+      "family": "aarch64",
+      "variant": null
+    },
+    "os": "darwin",
+    "libc": "none",
+    "major": 3,
+    "minor": 13,
+    "patch": 4,
+    "prerelease": "",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20250610/cpython-3.13.4%2B20250610-aarch64-apple-darwin-install_only_stripped.tar.gz",
+    "sha256": "59183bd70b0facb184fc5e7bd18488595d90ac5eb010ac1ee63eea7db4e230a1",
+    "variant": null,
+    "build": "20250610"
+  },
+  "cpython-3.13.4-darwin-x86_64-none": {
+    "name": "cpython",
+    "arch": {
+      "family": "x86_64",
+      "variant": null
+    },
+    "os": "darwin",
+    "libc": "none",
+    "major": 3,
+    "minor": 13,
+    "patch": 4,
+    "prerelease": "",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20250610/cpython-3.13.4%2B20250610-x86_64-apple-darwin-install_only_stripped.tar.gz",
+    "sha256": "b219b93c37ffefe46495feff6d996048706832307de454efa60a09b392f887db",
+    "variant": null,
+    "build": "20250610"
+  },
+  "cpython-3.13.4-linux-aarch64-gnu": {
+    "name": "cpython",
+    "arch": {
+      "family": "aarch64",
+      "variant": null
+    },
+    "os": "linux",
+    "libc": "gnu",
+    "major": 3,
+    "minor": 13,
+    "patch": 4,
+    "prerelease": "",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20250610/cpython-3.13.4%2B20250610-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
+    "sha256": "fef6c8c96260eff9258aeb38bbfc90a9d662e683f8fe6946a941c954053bdb71",
+    "variant": null,
+    "build": "20250610"
+  },
+  "cpython-3.13.4-linux-x86_64-gnu": {
+    "name": "cpython",
+    "arch": {
+      "family": "x86_64",
+      "variant": null
+    },
+    "os": "linux",
+    "libc": "gnu",
+    "major": 3,
+    "minor": 13,
+    "patch": 4,
+    "prerelease": "",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20250610/cpython-3.13.4%2B20250610-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+    "sha256": "ffd0b484e40e4fffdfcac265560e109456f802485f1f27e3cd314763b2b1587c",
+    "variant": null,
+    "build": "20250610"
+  },
+  "cpython-3.13.4-windows-x86_64-none": {
+    "name": "cpython",
+    "arch": {
+      "family": "x86_64",
+      "variant": null
+    },
+    "os": "windows",
+    "libc": "none",
+    "major": 3,
+    "minor": 13,
+    "patch": 4,
+    "prerelease": "",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20250610/cpython-3.13.4%2B20250610-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+    "sha256": "1e6348c237d4665c5327683030594b4f93405ae19ad7dabfb1951d12bb266944",
+    "variant": null,
+    "build": "20250610"
+  },
+  "cpython-3.12.11-darwin-aarch64-none": {
+    "name": "cpython",
+    "arch": {
+      "family": "aarch64",
+      "variant": null
+    },
+    "os": "darwin",
+    "libc": "none",
+    "major": 3,
+    "minor": 12,
+    "patch": 11,
+    "prerelease": "",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20251007/cpython-3.12.11%2B20251007-aarch64-apple-darwin-install_only_stripped.tar.gz",
+    "sha256": "407fa242942a7ba5d91899abc562fc9897f7a0376f8d2060285e8c0560323f19",
+    "variant": null,
+    "build": "20251007"
+  },
+  "cpython-3.12.11-darwin-x86_64-none": {
+    "name": "cpython",
+    "arch": {
+      "family": "x86_64",
+      "variant": null
+    },
+    "os": "darwin",
+    "libc": "none",
+    "major": 3,
+    "minor": 12,
+    "patch": 11,
+    "prerelease": "",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20251007/cpython-3.12.11%2B20251007-x86_64-apple-darwin-install_only_stripped.tar.gz",
+    "sha256": "e0578395f02bb6ac61a0df0f9e280f0317bbb46d8bed66232b3aa9a1477256f8",
+    "variant": null,
+    "build": "20251007"
+  },
+  "cpython-3.12.11-linux-aarch64-gnu": {
+    "name": "cpython",
+    "arch": {
+      "family": "aarch64",
+      "variant": null
+    },
+    "os": "linux",
+    "libc": "gnu",
+    "major": 3,
+    "minor": 12,
+    "patch": 11,
+    "prerelease": "",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20251007/cpython-3.12.11%2B20251007-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
+    "sha256": "05d9207e41c36fbc2d80a51d9bd5d574ed3eb1c620ead49e7fcd57cc2b64edfd",
+    "variant": null,
+    "build": "20251007"
+  },
+  "cpython-3.12.11-linux-x86_64-gnu": {
+    "name": "cpython",
+    "arch": {
+      "family": "x86_64",
+      "variant": null
+    },
+    "os": "linux",
+    "libc": "gnu",
+    "major": 3,
+    "minor": 12,
+    "patch": 11,
+    "prerelease": "",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20251007/cpython-3.12.11%2B20251007-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+    "sha256": "f98121eb1fb2b05a25c1f3d2fe7cf08c3a2468c350785df3d84c2516e7280d3f",
+    "variant": null,
+    "build": "20251007"
+  },
+  "cpython-3.12.11-windows-aarch64-none": {
+    "name": "cpython",
+    "arch": {
+      "family": "aarch64",
+      "variant": null
+    },
+    "os": "windows",
+    "libc": "none",
+    "major": 3,
+    "minor": 12,
+    "patch": 11,
+    "prerelease": "",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20251007/cpython-3.12.11%2B20251007-aarch64-pc-windows-msvc-install_only_stripped.tar.gz",
+    "sha256": "4d7547ef9c97f52996ca2e9cb5c84aedda65a6972967c83ca382cba1ffe41aa5",
+    "variant": null,
+    "build": "20251007"
+  },
+  "cpython-3.12.11-windows-x86_64-none": {
+    "name": "cpython",
+    "arch": {
+      "family": "x86_64",
+      "variant": null
+    },
+    "os": "windows",
+    "libc": "none",
+    "major": 3,
+    "minor": 12,
+    "patch": 11,
+    "prerelease": "",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20251007/cpython-3.12.11%2B20251007-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+    "sha256": "d2877f74b01871c82d140a9eefe57b18185c7a84128727cbedcae45dc5c9e54f",
+    "variant": null,
+    "build": "20251007"
+  },
+  "cpython-3.11.13-darwin-aarch64-none": {
+    "name": "cpython",
+    "arch": {
+      "family": "aarch64",
+      "variant": null
+    },
+    "os": "darwin",
+    "libc": "none",
+    "major": 3,
+    "minor": 11,
+    "patch": 13,
+    "prerelease": "",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20251007/cpython-3.11.13%2B20251007-aarch64-apple-darwin-install_only_stripped.tar.gz",
+    "sha256": "78bc6defdc1dac5bf6765c8f938e6849383dbed831ea1e2d11576a4683fb1e8c",
+    "variant": null,
+    "build": "20251007"
+  },
+  "cpython-3.11.13-darwin-x86_64-none": {
+    "name": "cpython",
+    "arch": {
+      "family": "x86_64",
+      "variant": null
+    },
+    "os": "darwin",
+    "libc": "none",
+    "major": 3,
+    "minor": 11,
+    "patch": 13,
+    "prerelease": "",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20251007/cpython-3.11.13%2B20251007-x86_64-apple-darwin-install_only_stripped.tar.gz",
+    "sha256": "af2e93876eb643e71df9ca9210d23ff30127ef01f3213aab7d7b326c17df7e12",
+    "variant": null,
+    "build": "20251007"
+  },
+  "cpython-3.11.13-linux-aarch64-gnu": {
+    "name": "cpython",
+    "arch": {
+      "family": "aarch64",
+      "variant": null
+    },
+    "os": "linux",
+    "libc": "gnu",
+    "major": 3,
+    "minor": 11,
+    "patch": 13,
+    "prerelease": "",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20251007/cpython-3.11.13%2B20251007-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
+    "sha256": "5b08be545d415a562caeab61255e5583935b33caf21c6eafabb4ea7db87239b2",
+    "variant": null,
+    "build": "20251007"
+  },
+  "cpython-3.11.13-linux-x86_64-gnu": {
+    "name": "cpython",
+    "arch": {
+      "family": "x86_64",
+      "variant": null
+    },
+    "os": "linux",
+    "libc": "gnu",
+    "major": 3,
+    "minor": 11,
+    "patch": 13,
+    "prerelease": "",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20251007/cpython-3.11.13%2B20251007-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+    "sha256": "43bfc42529843ecd1d9c08c4a239ede348f96ff0acaef2ec24b28dc059f4f0c3",
+    "variant": null,
+    "build": "20251007"
+  },
+  "cpython-3.11.13-windows-aarch64-none": {
+    "name": "cpython",
+    "arch": {
+      "family": "aarch64",
+      "variant": null
+    },
+    "os": "windows",
+    "libc": "none",
+    "major": 3,
+    "minor": 11,
+    "patch": 13,
+    "prerelease": "",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20251007/cpython-3.11.13%2B20251007-aarch64-pc-windows-msvc-install_only_stripped.tar.gz",
+    "sha256": "b8504192706a89e51f9cb7f52a368c8a1b4c7cfa991abf0a01f7ddbec301d5c9",
+    "variant": null,
+    "build": "20251007"
+  },
+  "cpython-3.11.13-windows-x86_64-none": {
+    "name": "cpython",
+    "arch": {
+      "family": "x86_64",
+      "variant": null
+    },
+    "os": "windows",
+    "libc": "none",
+    "major": 3,
+    "minor": 11,
+    "patch": 13,
+    "prerelease": "",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20251007/cpython-3.11.13%2B20251007-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+    "sha256": "cde5153f59a67d9e108f2ed964526e9aed100eba180f54bee0496b4fd73a8b29",
+    "variant": null,
+    "build": "20251007"
+  },
+  "cpython-3.10.18-darwin-aarch64-none": {
+    "name": "cpython",
+    "arch": {
+      "family": "aarch64",
+      "variant": null
+    },
+    "os": "darwin",
+    "libc": "none",
+    "major": 3,
+    "minor": 10,
+    "patch": 18,
+    "prerelease": "",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20251007/cpython-3.10.18%2B20251007-aarch64-apple-darwin-install_only_stripped.tar.gz",
+    "sha256": "897ea4858f462ff6cc574e9e32d36e38e77b354d758ecb96e540a5732439c7b5",
+    "variant": null,
+    "build": "20251007"
+  },
+  "cpython-3.10.18-darwin-x86_64-none": {
+    "name": "cpython",
+    "arch": {
+      "family": "x86_64",
+      "variant": null
+    },
+    "os": "darwin",
+    "libc": "none",
+    "major": 3,
+    "minor": 10,
+    "patch": 18,
+    "prerelease": "",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20251007/cpython-3.10.18%2B20251007-x86_64-apple-darwin-install_only_stripped.tar.gz",
+    "sha256": "4fc2d788345c5786ec79d478def38073871502e88746e31d31211fe0c0d282a6",
+    "variant": null,
+    "build": "20251007"
+  },
+  "cpython-3.10.18-linux-aarch64-gnu": {
+    "name": "cpython",
+    "arch": {
+      "family": "aarch64",
+      "variant": null
+    },
+    "os": "linux",
+    "libc": "gnu",
+    "major": 3,
+    "minor": 10,
+    "patch": 18,
+    "prerelease": "",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20251007/cpython-3.10.18%2B20251007-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
+    "sha256": "d8653909f2446651aacf24b0ea2b05dbcb2a3f4c49284efc5a3ab750f7c6181e",
+    "variant": null,
+    "build": "20251007"
+  },
+  "cpython-3.10.18-linux-x86_64-gnu": {
+    "name": "cpython",
+    "arch": {
+      "family": "x86_64",
+      "variant": null
+    },
+    "os": "linux",
+    "libc": "gnu",
+    "major": 3,
+    "minor": 10,
+    "patch": 18,
+    "prerelease": "",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20251007/cpython-3.10.18%2B20251007-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+    "sha256": "7b1d02e28b0d36c4b0de044aaf8099cb0395ac3d6826c96ddd158241fcdc6f06",
+    "variant": null,
+    "build": "20251007"
+  },
+  "cpython-3.10.18-windows-x86_64-none": {
+    "name": "cpython",
+    "arch": {
+      "family": "x86_64",
+      "variant": null
+    },
+    "os": "windows",
+    "libc": "none",
+    "major": 3,
+    "minor": 10,
+    "patch": 18,
+    "prerelease": "",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20251007/cpython-3.10.18%2B20251007-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+    "sha256": "9404193fe6c3d22f6065d6a2700df103b307b27012e85504ca032f3cc0e244ed",
+    "variant": null,
+    "build": "20251007"
+  }
+}
