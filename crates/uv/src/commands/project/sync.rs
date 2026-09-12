@@ -31,9 +31,7 @@ use uv_python::{
     ConfigDiscovery, PythonDownloads, PythonEnvironment, PythonPreference, PythonRequest,
 };
 use uv_redacted::DisplaySafeUrl;
-use uv_resolver::{
-    FlatIndex, ForkStrategy, Installable, Lock, PrereleaseMode, PythonReport, ResolutionMode,
-};
+use uv_resolver::{FlatIndex, ForkStrategy, Installable, Lock, PrereleaseMode, ResolutionMode};
 use uv_scripts::Pep723Script;
 use uv_settings::{MalwareCheckSettings, PythonInstallMirrors};
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
@@ -54,6 +52,7 @@ use crate::commands::project::{
     ProjectError, ScriptEnvironment, UniversalState, default_dependency_groups, detect_conflicts,
     script_extra_build_requires, script_specification, update_environment,
 };
+use crate::commands::report::{EnvironmentReport, SchemaReport};
 use crate::commands::{ExitStatus, UvError, diagnostics};
 use crate::printer::Printer;
 use crate::settings::{
@@ -1182,20 +1181,6 @@ impl From<&Pep723Script> for ScriptReport {
     }
 }
 
-#[derive(Serialize, Debug, Default)]
-#[serde(rename_all = "snake_case")]
-enum SchemaVersion {
-    /// An unstable, experimental schema.
-    #[default]
-    Preview,
-}
-
-#[derive(Serialize, Debug, Default)]
-struct SchemaReport {
-    /// The version of the schema.
-    version: SchemaVersion,
-}
-
 /// A report of the uv sync operation
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -1322,23 +1307,6 @@ impl LockAction {
     }
 }
 
-#[derive(Serialize, Debug)]
-struct EnvironmentReport {
-    /// The path to the environment.
-    path: PortablePathBuf,
-    /// The Python interpreter for the environment.
-    python: PythonReport,
-}
-
-impl From<&PythonEnvironment> for EnvironmentReport {
-    fn from(env: &PythonEnvironment) -> Self {
-        Self {
-            python: PythonReport::from(env.interpreter()),
-            path: env.root().into(),
-        }
-    }
-}
-
 impl From<&SyncEnvironment> for EnvironmentReport {
     fn from(env: &SyncEnvironment) -> Self {
         let report = Self::from(&**env);
@@ -1349,19 +1317,6 @@ impl From<&SyncEnvironment> for EnvironmentReport {
         } else {
             report
         }
-    }
-}
-
-impl EnvironmentReport {
-    /// Set the path for this environment report.
-    #[must_use]
-    fn with_path(mut self, path: PortablePathBuf) -> Self {
-        if let Ok(python_path) = self.python.path().strip_prefix(self.path) {
-            let new_path = path.as_ref().to_path_buf().join(python_path);
-            self.python = self.python.with_path(new_path.as_path().into());
-        }
-        self.path = path;
-        self
     }
 }
 
@@ -1406,7 +1361,7 @@ impl SyncReport {
 
         let message = format!(
             "{action} {target} environment at: {path}",
-            path = environment.path.user_display().cyan(),
+            path = environment.path().user_display().cyan(),
         );
         if *dry_run {
             return Some(message.dimmed().to_string());
