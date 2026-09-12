@@ -1318,16 +1318,26 @@ impl ManagedPythonDownload {
                 };
 
             // Extract the downloaded archive into a temporary directory.
-            self.extract_reader(
-                reader,
-                temp_dir,
-                &filename,
-                ext,
-                size,
-                reporter,
-                Direction::Extract,
-            )
-            .await?
+            let result = self
+                .extract_reader(
+                    reader,
+                    temp_dir,
+                    &filename,
+                    ext,
+                    size,
+                    reporter,
+                    Direction::Extract,
+                )
+                .await;
+
+            if matches!(&result, Err(Error::HashMismatch { .. })) {
+                match fs_err::tokio::remove_file(&target_cache_file).await {
+                    Ok(()) => {}
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                    Err(err) => return Err(err.into()),
+                }
+            }
+            result?
         } else {
             // Avoid overlong log lines
             debug!("Downloading {url}");
@@ -1868,6 +1878,52 @@ mod tests {
     use uv_platform::{Arch, Libc, Os, Platform};
 
     use super::*;
+
+    #[test]
+    fn corrupt_cached_python_archive_is_removed_after_hash_mismatch() {
+        let _preview = uv_preview::test::with_features(&[]);
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let cache_dir = temp_dir.path().join("cache");
+        let installation_dir = temp_dir.path().join("installations");
+        let scratch_dir = temp_dir.path().join("scratch");
+        fs_err::create_dir_all(&cache_dir).expect("cache directory should be created");
+        fs_err::create_dir_all(&installation_dir)
+            .expect("installation directory should be created");
+        fs_err::create_dir_all(&scratch_dir).expect("scratch directory should be created");
+
+        let expected = "c3223d5924a0ed0ef5958a750377c362d0957587f896c0f6c635ae4b39e0f337";
+        let cached_archive = cache_dir.join("c3223d592-python.tar");
+        fs_err::write(&cached_archive, [0; 1024]).expect("cached archive should be written");
+
+        let mut download = cpython_download_for_url("file:///missing/python.tar");
+        download.sha256 = Some(Cow::Borrowed(expected));
+        let client = BaseClientBuilder::default()
+            .build()
+            .expect("client should be created");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime should be created");
+
+        let error = temp_env::with_var(
+            EnvVars::UV_PYTHON_CACHE_DIR,
+            Some(cache_dir.as_path()),
+            || {
+                runtime.block_on(download.fetch_from_url(
+                    DisplaySafeUrl::parse("file:///missing/python.tar").expect("URL should parse"),
+                    &client,
+                    &installation_dir,
+                    &scratch_dir,
+                    false,
+                    None,
+                ))
+            },
+        )
+        .expect_err("a corrupt cached archive should be rejected");
+
+        assert!(matches!(error, Error::HashMismatch { .. }));
+        assert!(!cached_archive.exists());
+    }
 
     /// Parse a request with all of its fields.
     #[test]
