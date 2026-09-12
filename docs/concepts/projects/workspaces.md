@@ -48,9 +48,9 @@ contain a `pyproject.toml` file. However, workspace members can be _either_
 [applications](./init.md#applications) or [libraries](./init.md#libraries); both are supported in
 the workspace context.
 
-Every workspace needs a root, which is _also_ a workspace member. In the above example, `albatross`
-is the workspace root, and the workspace members include all projects under the `packages`
-directory, except `seeds`.
+Every workspace needs a root. If the root declares a `[project]` table, it is _also_ a workspace
+member. In the above example, `albatross` is the workspace root, and the workspace members include
+all projects under the `packages` directory, except `seeds`.
 
 By default, `uv run` and `uv sync` operates on the workspace root. For example, in the above
 example, `uv run` and `uv run --package albatross` would be equivalent, while
@@ -90,6 +90,14 @@ uv selects the member that matches the dependency name.
 !!! note
 
     Dependencies between workspace members are editable.
+
+The root project is also a member. For example, a plugin member that declares `albatross` in its
+`project.dependencies` can select the root project with:
+
+```toml title="packages/albatross-plugin/pyproject.toml"
+[tool.uv.sources]
+albatross = { workspace = true }
+```
 
 Any `tool.uv.sources` definitions in the workspace root apply to all members, unless overridden in
 the `tool.uv.sources` of a specific member. For example, given the following `pyproject.toml`:
