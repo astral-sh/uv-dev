@@ -24,7 +24,7 @@ use uv_configuration::{
     ActiveEnvironment, Concurrency, Constraints, DependencyGroups, DryRun, EditableMode, EnvFile,
     ExtrasSpecification, InstallOptions, TargetTriple,
 };
-use uv_distribution::LoweredExtraBuildDependencies;
+use uv_distribution::{LoweredExtraBuildDependencies, LoweringContext};
 use uv_distribution_types::Requirement;
 use uv_fs::which::is_executable;
 use uv_fs::{PythonExt, Simplified, create_symlink};
@@ -932,8 +932,12 @@ pub(crate) async fn run(
     let spec = if requirements.is_empty() {
         None
     } else {
-        let spec =
-            RequirementsSpecification::from_simple_sources(&requirements, &client_builder).await?;
+        let spec = RequirementsSpecification::from_simple_sources(
+            &requirements,
+            &client_builder,
+            LoweringContext::new(&cache, workspace_cache, client_builder.credentials_cache()),
+        )
+        .await?;
 
         Some(spec)
     };
