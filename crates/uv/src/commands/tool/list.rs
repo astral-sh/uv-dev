@@ -94,9 +94,9 @@ pub(crate) async fn list(
             }
         };
 
-        // Get the tool version
-        let version = match tool_env.version() {
-            Ok(version) => version,
+        // Get the installed tool distribution.
+        let distribution = match tool_env.installed_dist() {
+            Ok(distribution) => distribution,
             Err(e) => {
                 if let uv_tool::Error::EnvironmentError(e) = e {
                     warn_user!(
@@ -110,7 +110,7 @@ pub(crate) async fn list(
             }
         };
 
-        valid_tools.push((name, tool, tool_env, version));
+        valid_tools.push((name, tool, tool_env, distribution));
     }
 
     // Determine the latest version for each tool when `--outdated` is requested.
@@ -123,7 +123,7 @@ pub(crate) async fn list(
 
         // Fetch the latest version for each tool.
         let mut fetches = futures::stream::iter(&valid_tools)
-            .map(|(name, tool, tool_env, _version)| {
+            .map(|(name, tool, tool_env, _distribution)| {
                 let client_builder = client_builder.clone();
                 let download_concurrency = download_concurrency.clone();
                 let args = args.clone();
@@ -183,17 +183,37 @@ pub(crate) async fn list(
         FxHashMap::default()
     };
 
-    for (name, tool, tool_env, version) in valid_tools {
+    for (name, tool, tool_env, distribution) in valid_tools {
+        let version = distribution.version();
         // If `--outdated` is set, skip tools that are up-to-date.
         if outdated {
             let is_outdated = latest
                 .get(&name)
                 .and_then(Option::as_ref)
-                .is_some_and(|filename| filename.version() > &version);
+                .is_some_and(|filename| filename.version() > version);
             if !is_outdated {
                 continue;
             }
         }
+
+        let editable = distribution
+            .as_editable()
+            .and_then(|url| url.to_file_path().ok())
+            .map(|path| {
+                // Keep metadata-controlled paths on one line without terminal escape sequences.
+                let path = path.simplified_display().to_string();
+                let path = anstream::adapter::strip_str(&path).to_string();
+                let mut escaped = String::with_capacity(path.len());
+                for character in path.chars() {
+                    if character.is_control() || matches!(character, '\u{2028}' | '\u{2029}') {
+                        escaped.extend(character.escape_default());
+                    } else {
+                        escaped.push(character);
+                    }
+                }
+                format!(" (editable from {escaped})")
+            })
+            .unwrap_or_default();
 
         let version_specifier = show_version_specifiers
             .then(|| {
@@ -269,7 +289,7 @@ pub(crate) async fn list(
                 printer.stdout(),
                 "{} ({})",
                 format!(
-                    "{name} v{version}{version_specifier}{extra_requirements}{with_requirements}{python_version}{latest_version}"
+                    "{name} v{version}{editable}{version_specifier}{extra_requirements}{with_requirements}{python_version}{latest_version}"
                 )
                 .bold(),
                 installed_tools.tool_dir(&name).simplified_display().cyan(),
@@ -279,7 +299,7 @@ pub(crate) async fn list(
                 printer.stdout(),
                 "{}",
                 format!(
-                    "{name} v{version}{version_specifier}{extra_requirements}{with_requirements}{python_version}{latest_version}"
+                    "{name} v{version}{editable}{version_specifier}{extra_requirements}{with_requirements}{python_version}{latest_version}"
                 )
                 .bold()
             )?;
