@@ -240,10 +240,12 @@ class FreshnessCase:
     wrong_hash: bool = False
     reinstall: bool = False
     upgrade: bool = False
+    uninstall_first: bool = False
     outcome: str = "success"
     value: str | None = None
     installed: int = 0
     built: int = 0
+    allow_missing_cache_record: bool = False
     strict_outcome: str | None = None
     fallback_outcome: str | None = None
     fallback_value: str | None = None
@@ -409,6 +411,23 @@ FRESHNESS_CASES = (
         "registry-source-fresh", "registry-source", flavor="alpha", value="alpha"
     ),
     FreshnessCase(
+        "registry-source-reinstall",
+        "registry-source",
+        flavor="alpha",
+        reinstall=True,
+        value="alpha",
+        installed=1,
+    ),
+    FreshnessCase(
+        "registry-source-warm-clean-install",
+        "registry-source",
+        flavor="alpha",
+        uninstall_first=True,
+        value="alpha",
+        installed=1,
+        allow_missing_cache_record=True,
+    ),
+    FreshnessCase(
         "registry-source-valid-changed-settings",
         "registry-source",
         flavor="beta",
@@ -457,6 +476,7 @@ FRESHNESS_CASES = (
         flavor="alpha",
         value="alpha",
         installed=1,
+        allow_missing_cache_record=True,
         fallback_installed=0,
     ),
     FreshnessCase(
@@ -848,9 +868,27 @@ class Qualification:
                 self.args, Path(temporary), self.fixtures[case.fixture]
             )
             probe = environment.initialize()
+            if case.uninstall_first:
+                removed = environment.command(
+                    "pip",
+                    "uninstall",
+                    "--python",
+                    str(environment.python),
+                    environment.fixture.name,
+                )
+                require_success(removed)
+                if install_work(removed["stderr"])["uninstalled"] != 1:
+                    raise AssertionError(
+                        "Warm-install setup did not uninstall the fixture"
+                    )
+                environment.setup.append(removed)
             environment.mutate(case.mutation)
             before = environment.snapshot()
-            payload_before = environment.payload()
+            if case.uninstall_first and any(
+                entry["kind"] != "missing" for entry in before.values()
+            ):
+                raise AssertionError("Warm-install setup left installed metadata")
+            payload_before = None if case.uninstall_first else environment.payload()
             events_before = environment.events()
             result = environment.install(
                 flavor=case.flavor,
@@ -867,7 +905,7 @@ class Qualification:
             ):
                 outcome, value, installed, built = (
                     case.strict_outcome or "reject",
-                    payload_before["value"],
+                    None if payload_before is None else payload_before["value"],
                     0,
                     0,
                 )
@@ -910,6 +948,15 @@ class Qualification:
                 for sidecar in (
                     SIDECARS if environment.fixture.source else ("uv_cache.json",)
                 ):
+                    if (
+                        sidecar == "uv_cache.json"
+                        and case.allow_missing_cache_record
+                        and environment.fixture.registry
+                        and not completed_builds
+                        and after[sidecar]["kind"] == "missing"
+                    ):
+                        # Registry-indexed built wheels can have empty cache information.
+                        continue
                     if after[sidecar].get("json_type") != "dict":
                         raise AssertionError(
                             f"Reinstallation did not repair {sidecar}: {after}"
@@ -923,10 +970,12 @@ class Qualification:
                     "wrong_hash": case.wrong_hash,
                     "reinstall": case.reinstall,
                     "upgrade": case.upgrade,
+                    "uninstall_first": case.uninstall_first,
                     "expected_outcome": outcome,
                     "expected_value": value,
                     "expected_installed": installed,
                     "expected_builds": built,
+                    "allow_missing_cache_record": case.allow_missing_cache_record,
                     "initial_probe": probe,
                     "setup": environment.setup,
                     "before": before,
