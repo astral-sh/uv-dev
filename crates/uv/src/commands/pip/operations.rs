@@ -1503,7 +1503,7 @@ impl uv_errors::Hinted for Error {
             Self::Resolve(uv_resolver::ResolveError::Dependencies(error, name, version, chain)) => {
                 crate::commands::diagnostics::dist_hints(name, Some(version), chain, error.hints())
             }
-            Self::Resolve(error) => error.hints(),
+            Self::Resolve(error) => crate::commands::diagnostics::resolve_error_hints(error),
             Self::Requirements(uv_requirements::Error::Dist(_, dist, error))
             | Self::RequirementsWithContext {
                 source: uv_requirements::Error::Dist(_, dist, error),

@@ -17,7 +17,7 @@ use fs_err::os::unix::fs::symlink;
 use futures::executor::block_on;
 use indoc::{formatdoc, indoc};
 use insta::{allow_duplicates, assert_snapshot};
-use predicates::prelude::predicate;
+use predicates::prelude::{PredicateBooleanExt, predicate};
 use sha2::{Digest, Sha256};
 use url::Url;
 use walkdir::WalkDir;
@@ -8642,8 +8642,107 @@ fn require_hashes_missing_dependency() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: In `--require-hashes` mode, all requirements must be pinned upfront with `==`, but found: `markupsafe`
+
+    hint: `markupsafe` (v2.1.5) was included because `werkzeug` (v3.0.0) depends on `markupsafe>=2.1.1`
     "
     );
+
+    Ok(())
+}
+
+/// Explain a missing transitive hash without reading the rejected wheel.
+#[test]
+fn require_hashes_missing_local_dependency() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (parent_filename, parent_wheel) = generate_wheel(
+        &"hash-parent".parse()?,
+        &"1.0.0".parse()?,
+        &["hash-leaf>=2".parse()?],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+    );
+    let (leaf_filename, leaf_wheel) = generate_wheel(
+        &"hash-leaf".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+    );
+    let parent_hash = hex::encode(Sha256::digest(&parent_wheel));
+    let leaf_hash = hex::encode(Sha256::digest(&leaf_wheel));
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    fs::write(links.child(parent_filename).path(), parent_wheel)?;
+    let leaf_path = links.child(leaf_filename);
+    fs::write(leaf_path.path(), &leaf_wheel)?;
+    let requirements = context.temp_dir.child("requirements.txt");
+    let command = || {
+        let mut command = context.pip_install();
+        command
+            .arg("--offline")
+            .arg("--no-index")
+            .arg("--no-build")
+            .arg("--no-cache")
+            .arg("--dry-run")
+            .arg("--require-hashes")
+            .arg("--find-links")
+            .arg(links.path())
+            .arg("-r")
+            .arg(requirements.path());
+        command
+    };
+
+    // A directly requested package is still rejected before resolution.
+    requirements.write_str("hash-parent==1.0.0")?;
+    uv_snapshot!(context.filters(), command(), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: hash-parent==1.0.0
+    ");
+
+    requirements.write_str(&format!("hash-parent==1.0.0 --hash=sha256:{parent_hash}"))?;
+    let missing_hash = uv_snapshot!(context.filters(), command(), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must be pinned upfront with `==`, but found: `hash-leaf`
+
+    hint: `hash-leaf` (v2.0.0) was included because `hash-parent` (v1.0.0) depends on `hash-leaf>=2`
+    ");
+
+    // The dependency chain comes from the resolver state, not the rejected artifact.
+    let malformed_wheel = b"not a wheel";
+    fs::write(leaf_path.path(), malformed_wheel)?;
+    let unread_wheel = command().output()?;
+    assert_eq!(unread_wheel.status.code(), Some(1));
+    assert_eq!(unread_wheel.stderr, missing_hash.stderr);
+
+    // Allowing that hash reaches the existing wheel-reading error instead.
+    let malformed_hash = hex::encode(Sha256::digest(malformed_wheel));
+    requirements.write_str(&format!(
+        "hash-parent==1.0.0 --hash=sha256:{parent_hash}\nhash-leaf==2.0.0 --hash=sha256:{malformed_hash}"
+    ))?;
+    command()
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Failed to read"))
+        .stderr(predicate::str::contains("--require-hashes").not());
+
+    // Both valid hashes still permit the same resolution.
+    fs::write(leaf_path.path(), leaf_wheel)?;
+    requirements.write_str(&format!(
+        "hash-parent==1.0.0 --hash=sha256:{parent_hash}\nhash-leaf==2.0.0 --hash=sha256:{leaf_hash}"
+    ))?;
+    uv_snapshot!(context.filters(), command(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Would download 2 packages
+    Would install 2 packages
+     + hash-leaf==2.0.0
+     + hash-parent==1.0.0
+    ");
 
     Ok(())
 }
