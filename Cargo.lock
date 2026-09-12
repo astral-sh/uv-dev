@@ -6090,6 +6090,7 @@ dependencies = [
  "uv-distribution-filename",
  "uv-distribution-types",
  "uv-extract",
+ "uv-git-types",
  "uv-install-wheel",
  "uv-pep440",
  "uv-pep508",
