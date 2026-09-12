@@ -54,8 +54,8 @@ impl Archive {
         }
     }
 
-    /// Returns `true` if the archive exists in the cache.
-    pub(crate) fn exists(&self, cache: &Cache) -> bool {
+    /// Returns `true` if the archive exists in the current cache bucket.
+    pub fn exists(&self, cache: &Cache) -> bool {
         self.version == ARCHIVE_VERSION && cache.archive(&self.id).exists()
     }
 }

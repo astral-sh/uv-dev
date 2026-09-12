@@ -1279,6 +1279,21 @@ fn lock_wheel_git_archive() -> Result<()> {
      + project==0.1.0 (from file://[TEMP_DIR]/)
     "###);
 
+    // A restored cache can contain a wheel pointer without its extracted archive.
+    fs_err::remove_dir_all(context.cache_dir.child("archive-v0"))?;
+    fs_err::remove_dir_all(&context.venv)?;
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @r###"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + iniconfig==2.0.0 (from git+https://github.com/astral-sh/archive-in-git-test@bb7ce6abf9f90544767701de5b7b0c7802dc642b#path=archives/iniconfig-2.0.0-py3-none-any.whl)
+     + project==0.1.0 (from file://[TEMP_DIR]/)
+    "###);
+
     Ok(())
 }
 
