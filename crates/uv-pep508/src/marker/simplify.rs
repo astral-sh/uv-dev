@@ -5,6 +5,7 @@ use arcstr::ArcStr;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use rustc_hash::FxBuildHasher;
+use smallvec::SmallVec;
 use version_ranges::Ranges;
 
 use uv_pep440::{Version, VersionSpecifier};
@@ -321,19 +322,38 @@ pub(crate) fn collect_edges<'a, T>(
 where
     T: Ord + Clone + 'a,
 {
-    let mut paths: IndexMap<_, Ranges<_>, FxBuildHasher> = IndexMap::default();
+    // Avoid allocating and rehashing a second map for the common narrow marker nodes.
+    if map.len() <= 16 {
+        let mut paths: IndexMap<_, Ranges<_>, FxBuildHasher> = IndexMap::default();
+        for (range, tree) in map {
+            // OK because all ranges are guaranteed to be non-empty.
+            let (start, end) = range.bounding_range().unwrap();
+            let range = Ranges::from_range_bounds((start.cloned(), end.cloned()));
+            paths
+                .entry(tree)
+                .and_modify(|union| *union = union.union(&range))
+                .or_insert(range);
+        }
+        return paths;
+    }
+
+    let mut paths: IndexMap<_, SmallVec<[(Bound<_>, Bound<_>); 1]>, FxBuildHasher> =
+        IndexMap::default();
     for (range, tree) in map {
         // OK because all ranges are guaranteed to be non-empty.
         let (start, end) = range.bounding_range().unwrap();
-        // Combine the ranges.
-        let range = Ranges::from_range_bounds((start.cloned(), end.cloned()));
         paths
             .entry(tree)
-            .and_modify(|union| *union = union.union(&range))
-            .or_insert_with(|| range.clone());
+            .or_default()
+            .push((start.cloned(), end.cloned()));
     }
 
+    // Edges are already ordered by range, so each subtree's ranges remain ordered after
+    // grouping. Construct the union once to avoid copying all prior ranges for every edge.
     paths
+        .into_iter()
+        .map(|(tree, ranges)| (tree, ranges.into_iter().collect()))
+        .collect()
 }
 
 /// Returns `Some` if the expression can be simplified as an inequality consisting
@@ -468,5 +488,78 @@ fn is_negation(left: &MarkerExpression, right: &MarkerExpression) -> bool {
 
             pair == pair2 && operator != operator2
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ops::Bound::{Excluded, Included, Unbounded};
+
+    use indexmap::IndexMap;
+    use rustc_hash::FxBuildHasher;
+    use version_ranges::Ranges;
+
+    use crate::MarkerTree;
+
+    use super::collect_edges;
+
+    #[test]
+    fn collect_edges_matches_incremental_union() {
+        let mut ranges = vec![Ranges::from_range_bounds((Unbounded, Excluded(0)))];
+        for value in 0..9 {
+            ranges.push(Ranges::singleton(value));
+            ranges.push(Ranges::from_range_bounds((
+                Excluded(value),
+                Excluded(value + 1),
+            )));
+        }
+        ranges.push(
+            [(Included(9), Included(9)), (Included(11), Unbounded)]
+                .into_iter()
+                .collect(),
+        );
+
+        for assignment in 0..(1 << 10) {
+            let edges = ranges
+                .iter()
+                .enumerate()
+                .map(|(index, range)| {
+                    let tree = if assignment & (1 << (index % 10)) == 0 {
+                        MarkerTree::FALSE
+                    } else {
+                        MarkerTree::TRUE
+                    };
+                    (range, tree)
+                })
+                .collect::<Vec<_>>();
+
+            let mut expected: IndexMap<_, Ranges<_>, FxBuildHasher> = IndexMap::default();
+            for (range, tree) in &edges {
+                let (start, end) = range.bounding_range().unwrap();
+                let range = Ranges::from_range_bounds((start.cloned(), end.cloned()));
+                expected
+                    .entry(*tree)
+                    .and_modify(|union| *union = union.union(&range))
+                    .or_insert(range);
+            }
+
+            let collected = collect_edges(edges.into_iter());
+            assert!(collected.keys().eq(expected.keys()));
+            assert_eq!(collected, expected);
+        }
+    }
+
+    #[test]
+    fn collect_edges_uses_bounding_ranges() {
+        let range = [(Included(1), Included(1)), (Included(3), Included(3))]
+            .into_iter()
+            .collect::<Ranges<_>>();
+
+        let collected = collect_edges([(&range, MarkerTree::TRUE)].into_iter());
+
+        assert_eq!(
+            collected[&MarkerTree::TRUE],
+            Ranges::from_range_bounds((Included(1), Included(3)))
+        );
     }
 }
