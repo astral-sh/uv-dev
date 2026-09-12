@@ -45,7 +45,9 @@ later interpreter rebuilds do not silently change their inputs.
 
 The installation workload installs one, two, or four real interpreter versions into an empty
 directory. It compares a populated archive cache with a fresh cache and the delayed loopback mirror.
-Both cases include extraction and installation; fixture downloads happen before timing.
+Both cases include extraction and installation; fixture downloads happen before timing. The Unix
+uninstall workload prepares the same installed versions and their executable links, then removes
+either one version or the entire installation set.
 
 Pass `--project-caches` to also prepare a separate cache for each frozen environment. Cache
 maintenance workloads copy these caches and reconstruct their environments before timing, retaining
