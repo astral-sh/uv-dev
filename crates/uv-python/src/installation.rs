@@ -96,14 +96,14 @@ impl PythonInstallation {
     ///
     /// This is the standard interface for discovering a Python installation for creating
     /// an environment. If interested in finding an existing environment, see
-    /// [`PythonEnvironment::find`] instead.
+    /// [`PythonEnvironment::find`](crate::PythonEnvironment::find) instead.
     ///
     /// Note we still require an [`EnvironmentPreference`] as this can either bypass virtual environments
     /// or prefer them. In most cases, this should be [`EnvironmentPreference::OnlySystem`]
     /// but if you want to allow an interpreter from a virtual environment if it satisfies the request,
     /// then use [`EnvironmentPreference::Any`].
     ///
-    /// See [`find_installation`] for implementation details.
+    /// See `find_python_installation` for implementation details.
     pub fn find(
         request: &PythonRequest,
         environments: EnvironmentPreference,
@@ -815,7 +815,7 @@ impl PythonInstallationMinorVersionKey {
         RefCast::ref_cast(key)
     }
 
-    /// Takes an [`IntoIterator`] of [`ManagedPythonInstallation`]s and returns an [`FxHashMap`] from
+    /// Takes an [`IntoIterator`] of [`ManagedPythonInstallation`]s and returns an [`IndexMap`] from
     /// [`PythonInstallationMinorVersionKey`] to the installation with highest [`PythonInstallationKey`]
     /// for that minor version key.
     #[inline]
