@@ -1172,6 +1172,18 @@ async fn fetch_downloads_from_url(
         })
 }
 
+/// Return the lock filename for a cached managed-Python archive.
+fn archive_cache_lock_filename(cache_filename: &str) -> String {
+    // Cache roots can have different spellings, and ASCII case aliases can refer to the same
+    // archive on case-insensitive filesystems. Fold the basename so publishers and rejected-entry
+    // removal share a lock without changing the archive's path. Lowercase names share their lock
+    // with older uv versions.
+    format!(
+        ".{}.lock",
+        cache_digest(&cache_filename.to_ascii_lowercase())
+    )
+}
+
 impl ManagedPythonDownload {
     pub(crate) fn url(&self) -> &Cow<'static, str> {
         &self.url
@@ -1277,10 +1289,8 @@ impl ManagedPythonDownload {
             };
             let cache_filename = format!("{hash_prefix}-{filename}");
             let target_cache_file = python_builds_dir.join(&cache_filename);
-            // Use the cache filename, not the spelling of the root path, so aliases of the same
-            // cache directory share the lock. The digest keeps the lock filename short.
             let cache_lock_file =
-                python_builds_dir.join(format!(".{}.lock", cache_digest(&cache_filename)));
+                python_builds_dir.join(archive_cache_lock_filename(&cache_filename));
 
             // Download the archive to the cache, or return a reader if we have it in cache.
             // TODO(konsti): We should "tee" the write so we can do the download-to-cache and unpacking
@@ -1930,6 +1940,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cached_archive_lock_filename_preserves_lowercase_names() {
+        let cache_filename =
+            "650f1d324-cpython-3.13.1-20250115-aarch64-apple-darwin-install_only_stripped.tar.gz";
+        assert_eq!(
+            archive_cache_lock_filename(cache_filename),
+            format!(".{}.lock", cache_digest(&cache_filename)),
+        );
+        assert_eq!(
+            archive_cache_lock_filename(cache_filename),
+            ".4abf976704103c9d.lock",
+        );
+    }
+
+    #[test]
+    fn cached_archive_lock_filename_folds_ascii_case() {
+        let cache_filename = "650f1d324-cpython.tar.gz";
+        assert_eq!(
+            archive_cache_lock_filename(cache_filename),
+            archive_cache_lock_filename("650F1D324-CPython.tar.gz"),
+        );
+    }
+
+    #[test]
+    fn cached_archive_lock_filename_preserves_distinct_entries() {
+        let filenames = [
+            "650f1d324-cpython.tar.gz",
+            "650f1d325-cpython.tar.gz",
+            "650f1d324-cpython.tar.xz",
+            "650f1d324-cpython-extra.tar.gz",
+            "650f1d324-cpython_extra.tar.gz",
+        ];
+        let lock_filenames: HashSet<_> = filenames
+            .into_iter()
+            .map(archive_cache_lock_filename)
+            .collect();
+        assert_eq!(lock_filenames.len(), filenames.len());
+    }
+
+    #[test]
     fn corrupt_cached_python_archive_is_removed_after_hash_mismatch() {
         let _preview = uv_preview::test::with_features(&[]);
         let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
@@ -2090,7 +2139,7 @@ mod tests {
         fs_err::create_dir_all(&cache_dir)?;
         let cache_filename = "cached-python.tar".to_string();
         let cached_archive = cache_dir.join(&cache_filename);
-        let cache_lock_file = cache_dir.join(format!(".{}.lock", cache_digest(&cache_filename)));
+        let cache_lock_file = cache_dir.join(archive_cache_lock_filename(&cache_filename));
         let rejected_contents = [0; 1024];
         let replacement_contents = [0; 2048];
         fs_err::write(&cached_archive, rejected_contents)?;
