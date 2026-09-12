@@ -65,6 +65,11 @@ in Flask, and 6,901 in Django. Its cold case starts with an empty uv Git cache; 
 a populated cache with a precise commit, a full commit-like reference, or an upstream branch/tag.
 These cases do not claim to evict the operating system's filesystem cache.
 
+GitHub metadata workloads compare empty source caches with real, already-materialized checkouts. The
+sample project and Flask have static metadata; Django and the pip regression fixture require their
+actual `setuptools` backend. Git transport is redirected to the pinned local repositories, while
+commit and raw-content requests use the delayed replay server.
+
 ## Workload selection
 
 Prefer immutable artifacts and dependency graphs from real projects. Include small, medium, and
