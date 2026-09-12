@@ -1717,12 +1717,14 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             commands::tool_list(
                 args.output,
                 args.outdated.into(),
+                args.output_format,
                 args.args,
                 args.filesystem,
                 client_builder.subcommand(vec!["tool".to_owned(), "list".to_owned()]),
                 globals.concurrency,
                 &cache,
                 printer,
+                globals.preview,
             )
             .await
         }

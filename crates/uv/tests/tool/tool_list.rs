@@ -3,6 +3,7 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::PathChild;
 use fs_err as fs;
 use insta::assert_snapshot;
+use serde_json::Value;
 use uv_static::EnvVars;
 use uv_test::uv_snapshot;
 use wiremock::{
@@ -281,6 +282,21 @@ fn tool_list_missing_receipt() {
     ----- stderr -----
     warning: Ignoring malformed tool `black` (run `uv tool uninstall black` to remove)
     ");
+
+    uv_snapshot!(context.filters(), context.tool_list()
+    .args(["--output-format", "json", "--preview-features", "json-output"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "tools": []
+    }
+
+    ----- stderr -----
+    warning: Ignoring malformed tool `black` (run `uv tool uninstall black` to remove)
+    "#);
 }
 
 #[test]
@@ -671,4 +687,211 @@ fn tool_list_show_all() {
     flask v3.0.2 [extras: async, dotenv] [with: requests] [CPython 3.12.[X]] ([TEMP_DIR]/tools/flask)
     - flask ([TEMP_DIR]/bin/flask)
     ");
+}
+
+#[test]
+fn tool_list_empty_json() {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+
+    uv_snapshot!(context.filters(), context.tool_list()
+    .arg("--output-format=json"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "tools": []
+    }
+
+    ----- stderr -----
+    warning: The `--output-format json` option is experimental and the schema may change without warning. Pass `--preview-features json-output` to disable this warning.
+    "#);
+}
+
+#[test]
+fn tool_list_outdated_empty_json() {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+
+    // With no tools installed, `--outdated` should produce the same output as the base case.
+    uv_snapshot!(context.filters(), context.tool_list()
+    .args(["--preview-features", "json-output"])
+    .arg("--output-format=json")
+    .arg("--outdated"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "tools": []
+    }
+    "#);
+}
+
+#[test]
+fn tool_list_initialized_empty_json() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    fs::create_dir_all(context.temp_dir.child("tools"))?;
+
+    uv_snapshot!(context.filters(), context.tool_list()
+    .args(["--output-format", "json", "--preview-features", "json-output"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "tools": []
+    }
+    "#);
+
+    Ok(())
+}
+
+#[test]
+fn tool_list_outdated_json() {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_keys()
+        .with_filtered_python_names()
+        .with_filter((r"(/tools/[^/]+)/(?:bin|Scripts)/", "$1/[BIN]/"))
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+
+    // Install an older version of `black`.
+    context
+        .tool_install()
+        .arg("black==24.2.0")
+        .assert()
+        .success();
+
+    // With `--outdated`, the installed (older) version should be listed with the latest version.
+    uv_snapshot!(context.filters(), context.tool_list()
+    .args(["--preview-features", "json-output"])
+    .arg("--output-format=json")
+    .arg("--outdated"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "tools": [
+        {
+          "name": "black",
+          "version": "24.2.0",
+          "latest_version": "24.3.0",
+          "path": "[TEMP_DIR]/tools/black",
+          "python": {
+            "path": "[TEMP_DIR]/tools/black/[BIN]/[PYTHON]",
+            "version": "3.12.[X]",
+            "implementation": "cpython",
+            "key": "cpython-3.12.[X]-[PLATFORM]"
+          },
+          "commands": [
+            {
+              "name": "black",
+              "path": "[TEMP_DIR]/bin/black"
+            },
+            {
+              "name": "blackd",
+              "path": "[TEMP_DIR]/bin/blackd"
+            }
+          ],
+          "extras": [],
+          "version_specifiers": "==24.2.0",
+          "with": []
+        }
+      ]
+    }
+    "#);
+}
+
+#[test]
+fn tool_list_json() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_keys()
+        .with_filtered_python_names()
+        .with_filter((r"(/tools/[^/]+)/(?:bin|Scripts)/", "$1/[BIN]/"))
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+
+    // Install `flask` with extras and additional requirements.
+    context
+        .tool_install()
+        .arg("flask[async,dotenv]!=42,<69")
+        .arg("--with")
+        .arg("requests!=69")
+        .arg("--with")
+        .arg("black")
+        .assert()
+        .success();
+
+    let report = uv_snapshot!(context.filters(), context.tool_list()
+    .args(["--preview-features", "json-output"])
+    .arg("--output-format=json"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "tools": [
+        {
+          "name": "flask",
+          "version": "3.0.2",
+          "latest_version": null,
+          "path": "[TEMP_DIR]/tools/flask",
+          "python": {
+            "path": "[TEMP_DIR]/tools/flask/[BIN]/[PYTHON]",
+            "version": "3.12.[X]",
+            "implementation": "cpython",
+            "key": "cpython-3.12.[X]-[PLATFORM]"
+          },
+          "commands": [
+            {
+              "name": "flask",
+              "path": "[TEMP_DIR]/bin/flask"
+            }
+          ],
+          "extras": [
+            "async",
+            "dotenv"
+          ],
+          "version_specifiers": "!=42, <69",
+          "with": [
+            "requests!=69",
+            "black"
+          ]
+        }
+      ]
+    }
+    "#);
+
+    // The text-display flags do not remove information from the JSON report.
+    let all_fields = context
+        .tool_list()
+        .args([
+            "--output-format",
+            "json",
+            "--preview-features",
+            "json-output",
+            "--show-paths",
+            "--show-version-specifiers",
+            "--show-with",
+            "--show-extras",
+            "--show-python",
+        ])
+        .assert()
+        .success();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&report.stdout)?,
+        serde_json::from_slice::<Value>(&all_fields.get_output().stdout)?,
+    );
+
+    Ok(())
 }

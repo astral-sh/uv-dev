@@ -20,8 +20,9 @@ use uv_cli::{
     PipShowArgs, PipSyncArgs, PipTreeArgs, PipUninstallArgs, ProjectDependencyGroupsArgs,
     PythonFindArgs, PythonInstallArgs, PythonListArgs, PythonListFormat, PythonPinArgs,
     PythonUninstallArgs, PythonUpgradeArgs, RemoveArgs, RunArgs, SyncArgs, SyncFormat,
-    ToolAuditArgs, ToolDirArgs, ToolInstallArgs, ToolListArgs, ToolRunArgs, ToolUninstallArgs,
-    TreeArgs, TreeFormat, UpgradeArgs, VenvArgs, VersionArgs, VersionBumpSpec, VersionFormat,
+    ToolAuditArgs, ToolDirArgs, ToolInstallArgs, ToolListArgs, ToolListFormat, ToolRunArgs,
+    ToolUninstallArgs, TreeArgs, TreeFormat, UpgradeArgs, VenvArgs, VersionArgs, VersionBumpSpec,
+    VersionFormat,
 };
 use uv_cli::{
     AuthorFrom, BuildArgs, BuildOptionsArgs, CheckArgs, ExcludeNewerArgs, ExportArgs, FormatArgs,
@@ -1351,6 +1352,7 @@ impl ToolUpgradeSettings {
 pub(crate) struct ToolListSettings {
     pub(crate) output: ToolListOutput,
     pub(crate) outdated: bool,
+    pub(crate) output_format: ToolListFormat,
     pub(crate) args: ResolverInstallerOptions,
     pub(crate) filesystem: ResolverInstallerOptions,
 }
@@ -1369,6 +1371,7 @@ impl ToolListSettings {
             show_python,
             outdated,
             no_outdated,
+            output_format,
             exclude_newer:
                 PackageExcludeNewerArgs {
                     exclude_newer: ExcludeNewerArgs { exclude_newer },
@@ -1402,6 +1405,7 @@ impl ToolListSettings {
         Ok(Self {
             output,
             outdated: flag(outdated, no_outdated, "outdated")?.unwrap_or(false),
+            output_format,
             args: ResolverInstallerOptions {
                 exclude_newer,
                 exclude_newer_package: exclude_newer_package.map(ExcludeNewerPackage::from_iter),
