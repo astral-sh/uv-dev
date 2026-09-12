@@ -913,7 +913,7 @@ impl Display for ConflictingDistributionError {
 
 /// Convert a [`ResolverOutput`] into a [`uv_distribution_types::Resolution`].
 ///
-/// This involves converting [`ResolutionGraphNode`]s into [`Node`]s, which in turn involves
+/// This involves converting `ResolutionGraphNode`s into [`Node`]s, which in turn involves
 /// dropping any extras and dependency groups from the graph nodes. Instead, each package is
 /// collapsed into a single node, with  extras and dependency groups annotating the _edges_, rather
 /// than being represented as separate nodes. This is a more natural representation, but a further

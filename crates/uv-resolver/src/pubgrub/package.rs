@@ -33,7 +33,7 @@ impl From<PubGrubPackageInner> for PubGrubPackage {
 
 /// A PubGrub-compatible wrapper around a "Python package", with two notable characteristics:
 ///
-/// 1. Includes a [`PubGrubPackage::Root`] variant, to satisfy PubGrub's requirement that a
+/// 1. Includes a [`Self::Root`] variant, to satisfy PubGrub's requirement that a
 ///    resolution starts from a single root.
 /// 2. Uses the same strategy as pip and posy to handle extras: for each extra, we create a virtual
 ///    package (e.g., `black[colorama]`), and mark it as a dependency of the real package (e.g.,

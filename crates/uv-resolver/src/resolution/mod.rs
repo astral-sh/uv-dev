@@ -20,7 +20,7 @@ mod output;
 mod requirements_txt;
 
 /// A pinned package with its resolved distribution and metadata. The [`ResolvedDist`] refers to a
-/// specific distribution (e.g., a specific wheel), while the [`Metadata23`] refers to the metadata
+/// specific distribution (e.g., a specific wheel), while the [`Metadata`] refers to the metadata
 /// for the package-version pair.
 #[derive(Debug, Clone)]
 pub(crate) struct AnnotatedDist {

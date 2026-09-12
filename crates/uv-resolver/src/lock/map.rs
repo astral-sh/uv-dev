@@ -2,7 +2,7 @@ use rustc_hash::FxHashMap;
 
 use crate::lock::{Package, PackageId};
 
-/// A map from package to values, indexed by [`PackageId`].
+/// A map from packages to values, keyed by [`Package`] identity.
 #[derive(Debug, Clone)]
 pub struct PackageMap<T>(FxHashMap<PackageId, T>);
 
@@ -13,7 +13,7 @@ impl<T> Default for PackageMap<T> {
 }
 
 impl<T> PackageMap<T> {
-    /// Insert a value by [`PackageId`].
+    /// Insert a value for a [`Package`].
     pub fn insert(&mut self, package: Package, value: T) -> Option<T> {
         self.0.insert(package.id, value)
     }

@@ -50,7 +50,7 @@ pub enum MetadataResponse {
 /// Non-fatal metadata fetching error.
 ///
 /// This is also the unavailability reasons for a package, while version unavailability is separate
-/// in [`UnavailableVersion`].
+/// in `UnavailableVersion`.
 #[derive(Debug, Clone)]
 pub enum MetadataUnavailable {
     /// The wheel metadata was not found in the cache and the network is not available.
@@ -112,7 +112,7 @@ pub trait ResolverProvider {
 }
 
 /// The main IO backend for the resolver, which does cached requests network requests using the
-/// [`RegistryClient`] and [`DistributionDatabase`].
+/// [`uv_client::RegistryClient`] and [`DistributionDatabase`].
 pub struct DefaultResolverProvider<'a, Context: BuildContext> {
     /// The [`DistributionDatabase`] used to build source distributions.
     fetcher: DistributionDatabase<'a, Context>,

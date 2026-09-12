@@ -718,10 +718,10 @@ impl PubGrubReportFormatter<'_> {
         }
     }
 
-    /// Generate the [`PubGrubHints`] for a derivation tree.
+    /// Generate the [`PubGrubHint`] values for a derivation tree.
     ///
-    /// The [`PubGrubHints`] help users resolve errors by providing additional context or modifying
-    /// their requirements.
+    /// The [`PubGrubHint`] values help users resolve errors by providing additional context or
+    /// modifying their requirements.
     pub(crate) fn generate_hints(
         &self,
         derivation_tree: &ErrorTree,
@@ -2492,8 +2492,8 @@ impl PackageRange<'_> {
     }
 
     /// Returns a boolean indicating if the predicate following this package range should
-    /// be singular or plural e.g. if false use "<range> depends on <...>" and
-    /// if true use "<range> depend on <...>"
+    /// be singular or plural e.g. if false use `<range> depends on <...>` and
+    /// if true use `<range> depend on <...>`
     fn plural(&self) -> bool {
         // If a workspace member, always use the singular form (otherwise, it'd be "all versions of")
         if self
