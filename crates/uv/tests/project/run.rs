@@ -1802,13 +1802,11 @@ fn run_with_overlay_interpreter() -> Result<()> {
                 context.read("main"), @r#"
             #![CACHE_DIR]/builds-v0/[TMP]/[BIN]/python
             # -*- coding: utf-8 -*-
+            import re
             import sys
             from foo import main
             if __name__ == "__main__":
-                if sys.argv[0].endswith("-script.pyw"):
-                    sys.argv[0] = sys.argv[0][:-11]
-                elif sys.argv[0].endswith(".exe"):
-                    sys.argv[0] = sys.argv[0][:-4]
+                sys.argv[0] = re.sub(r"(-script\.pyw|\.exe)?$", "", sys.argv[0])
                 sys.exit(main())
             "#
             );
@@ -1910,13 +1908,11 @@ fn run_with_overlay_interpreter() -> Result<()> {
                 context.read("main"), @r#"
             #![CACHE_DIR]/builds-v0/[TMP]/[BIN]/python
             # -*- coding: utf-8 -*-
+            import re
             import sys
             from foo import main
             if __name__ == "__main__":
-                if sys.argv[0].endswith("-script.pyw"):
-                    sys.argv[0] = sys.argv[0][:-11]
-                elif sys.argv[0].endswith(".exe"):
-                    sys.argv[0] = sys.argv[0][:-4]
+                sys.argv[0] = re.sub(r"(-script\.pyw|\.exe)?$", "", sys.argv[0])
                 sys.exit(main())
             "#
             );
@@ -4456,13 +4452,11 @@ fn run_linked_environment_path() -> Result<()> {
             black_entrypoint, @r#"
         #![TEMP_DIR]/target/[BIN]/[PYTHON]
         # -*- coding: utf-8 -*-
+        import re
         import sys
         from black import patched_main
         if __name__ == "__main__":
-            if sys.argv[0].endswith("-script.pyw"):
-                sys.argv[0] = sys.argv[0][:-11]
-            elif sys.argv[0].endswith(".exe"):
-                sys.argv[0] = sys.argv[0][:-4]
+            sys.argv[0] = re.sub(r"(-script\.pyw|\.exe)?$", "", sys.argv[0])
             sys.exit(patched_main())
         "#
         );
