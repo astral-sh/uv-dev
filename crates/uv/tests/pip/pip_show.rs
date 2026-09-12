@@ -4,6 +4,7 @@ use anyhow::Result;
 use assert_cmd::prelude::*;
 use assert_fs::fixture::FileWriteStr;
 use assert_fs::fixture::PathChild;
+use assert_fs::fixture::PathCreateDir;
 use indoc::indoc;
 
 use uv_static::EnvVars;
@@ -408,6 +409,98 @@ fn show_required_by_multiple() -> Result<()> {
     Location: [SITE_PACKAGES]/
     Requires:
     Required-by: anyio, requests
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn show_required_by_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let target = context.temp_dir.child("target");
+
+    for (directory, metadata) in [
+        (
+            "foo_bar-1.0.dist-info",
+            indoc! {r#"
+                Metadata-Version: 2.1
+                Name: foo_bar
+                Version: 1.0
+                Requires-Dist: foo_bar
+                Requires-Dist: zeta_pkg; python_version < "2"
+            "#},
+        ),
+        (
+            "alpha_pkg-1.0.dist-info",
+            indoc! {r#"
+                Metadata-Version: 2.1
+                Name: alpha_pkg
+                Version: 1.0
+                Requires-Dist: foo-bar
+                Requires-Dist: Foo.Bar; python_version >= "3"
+            "#},
+        ),
+        (
+            "zeta_pkg-1.0.dist-info",
+            indoc! {r#"
+                Metadata-Version: 2.1
+                Name: zeta_pkg
+                Version: 1.0
+                Requires-Dist: foo_bar
+                Requires-Dist: foo-bar; python_version >= "3"
+            "#},
+        ),
+        (
+            "hidden_pkg-1.0.dist-info",
+            indoc! {r#"
+                Metadata-Version: 2.1
+                Name: hidden_pkg
+                Version: 1.0
+                Requires-Dist: foo_bar; python_version < "2"
+            "#},
+        ),
+        (
+            "broken_pkg-1.0.dist-info",
+            indoc! {r"
+                Metadata-Version: 2.1
+                Name: broken_pkg
+                Version: 1.0
+                Requires-Dist: !
+            "},
+        ),
+    ] {
+        let dist_info = target.child(directory);
+        dist_info.create_dir_all()?;
+        dist_info.child("METADATA").write_str(metadata)?;
+    }
+
+    uv_snapshot!(context.filters(), context.pip_show()
+        .arg("Foo_Bar")
+        .arg("zeta-pkg")
+        .arg("broken-pkg")
+        .arg("--target")
+        .arg(target.path()), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    Name: broken-pkg
+    Version: 1.0
+    Location: [TEMP_DIR]/target
+    ---
+    Name: foo-bar
+    Version: 1.0
+    Location: [TEMP_DIR]/target
+    Requires: foo-bar
+    Required-by: alpha-pkg, zeta-pkg
+    ---
+    Name: zeta-pkg
+    Version: 1.0
+    Location: [TEMP_DIR]/target
+    Requires: foo-bar
+    Required-by:
+
+    ----- stderr -----
     "
     );
 
