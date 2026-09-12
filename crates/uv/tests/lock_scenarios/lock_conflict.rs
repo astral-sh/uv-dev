@@ -6640,9 +6640,12 @@ fn duplicate_torch_and_sympy_because_of_wrong_inferences() -> Result<()> {
 
 #[test]
 fn overlapping_resolution_markers() -> Result<()> {
-    let cpu = uv_test::packse::PackseServer::new("packages/local-platform-cpu.toml");
-    let context =
-        uv_test::test_context!("3.10").with_packse_index("packages/local-platform-registry.toml");
+    let (registry, cpu) = PackseServer::new_ordered_pair(
+        "packages/local-platform-registry.toml",
+        "packages/local-platform-cpu.toml",
+    )?;
+    let cpu_index_url = cpu.index_url();
+    let context = uv_test::test_context!("3.10").with_default_index(&registry.index_url());
 
     context.temp_dir.child("pyproject.toml").write_str(
         &r#"
@@ -6669,7 +6672,7 @@ fn overlapping_resolution_markers() -> Result<()> {
         url = "[CPU_INDEX]"
         explicit = true
         "#
-        .replace("[CPU_INDEX]", &cpu.index_url()),
+        .replace("[CPU_INDEX]", &cpu_index_url),
     )?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -6679,8 +6682,10 @@ fn overlapping_resolution_markers() -> Result<()> {
     ");
 
     let lock = context.read("uv.lock");
+    let mut lock_filters = vec![(cpu_index_url.as_str(), "http://[CPU-INDEX]/simple/")];
+    lock_filters.extend(context.filters());
     insta::with_settings!({
-        filters => context.filters(),
+        filters => lock_filters,
     }, {
         assert_snapshot!(
             lock,
@@ -6713,9 +6718,9 @@ fn overlapping_resolution_markers() -> Result<()> {
 
         [package.optional-dependencies]
         cpu = [
-            { name = "platform-engine", version = "2.2.2", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-14-marker-project-cpu') or (platform_machine != 'aarch64' and extra == 'extra-14-marker-project-cpu' and extra == 'extra-14-marker-project-cu118') or (platform_python_implementation != 'CPython' and extra == 'extra-14-marker-project-cpu' and extra == 'extra-14-marker-project-cu118') or (sys_platform != 'linux' and extra == 'extra-14-marker-project-cpu' and extra == 'extra-14-marker-project-cu118')" },
             { name = "platform-engine", version = "2.2.2", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "(sys_platform == 'darwin' and extra == 'extra-14-marker-project-cpu') or (extra == 'extra-14-marker-project-cpu' and extra == 'extra-14-marker-project-cu118')" },
-            { name = "platform-engine", version = "2.2.2+cpu", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "(platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-14-marker-project-cpu') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-14-marker-project-cpu') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-14-marker-project-cpu') or (sys_platform == 'darwin' and extra == 'extra-14-marker-project-cpu' and extra == 'extra-14-marker-project-cu118') or (sys_platform == 'linux' and extra == 'extra-14-marker-project-cpu' and extra == 'extra-14-marker-project-cu118')" },
+            { name = "platform-engine", version = "2.2.2", source = { registry = "http://[CPU-INDEX]/simple/" }, marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-14-marker-project-cpu') or (platform_machine != 'aarch64' and extra == 'extra-14-marker-project-cpu' and extra == 'extra-14-marker-project-cu118') or (platform_python_implementation != 'CPython' and extra == 'extra-14-marker-project-cpu' and extra == 'extra-14-marker-project-cu118') or (sys_platform != 'linux' and extra == 'extra-14-marker-project-cpu' and extra == 'extra-14-marker-project-cu118')" },
+            { name = "platform-engine", version = "2.2.2+cpu", source = { registry = "http://[CPU-INDEX]/simple/" }, marker = "(platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-14-marker-project-cpu') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-14-marker-project-cpu') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-14-marker-project-cpu') or (sys_platform == 'darwin' and extra == 'extra-14-marker-project-cpu' and extra == 'extra-14-marker-project-cu118') or (sys_platform == 'linux' and extra == 'extra-14-marker-project-cpu' and extra == 'extra-14-marker-project-cu118')" },
         ]
         cu118 = [
             { name = "platform-engine", version = "2.2.2", source = { registry = "http://[LOCALHOST]/simple/" } },
@@ -6724,7 +6729,7 @@ fn overlapping_resolution_markers() -> Result<()> {
         [package.metadata]
         requires-dist = [
             { name = "platform-engine", marker = "sys_platform == 'darwin' and extra == 'cpu'", specifier = "==2.2.2" },
-            { name = "platform-engine", marker = "sys_platform != 'darwin' and extra == 'cpu'", specifier = "==2.2.2", index = "http://[LOCALHOST]/simple/", conflict = { package = "marker-project", extra = "cpu" } },
+            { name = "platform-engine", marker = "sys_platform != 'darwin' and extra == 'cpu'", specifier = "==2.2.2", index = "http://[CPU-INDEX]/simple/", conflict = { package = "marker-project", extra = "cpu" } },
             { name = "platform-engine", marker = "extra == 'cu118'", specifier = "==2.2.2" },
             { name = "platform-monitor", specifier = "==0.17.6" },
         ]
@@ -6756,20 +6761,6 @@ fn overlapping_resolution_markers() -> Result<()> {
         version = "2.2.2"
         source = { registry = "http://[LOCALHOST]/simple/" }
         resolution-markers = [
-            "platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'",
-        ]
-        dependencies = [
-            { name = "platform-common", marker = "platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'" },
-        ]
-        wheels = [
-            { url = "http://[LOCALHOST]/files/platform_engine-2.2.2-cp310-cp310-manylinux_2_17_aarch64.whl", hash = "sha256:1851623908186ef497f3e624dceef1efd9f2520998e1b1d8a48d357f286be123", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "platform-engine"
-        version = "2.2.2"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        resolution-markers = [
             "extra != 'extra-14-marker-project-cpu' and extra == 'extra-14-marker-project-cu118'",
             "sys_platform == 'darwin' and extra == 'extra-14-marker-project-cpu' and extra != 'extra-14-marker-project-cu118'",
         ]
@@ -6787,8 +6778,22 @@ fn overlapping_resolution_markers() -> Result<()> {
 
         [[package]]
         name = "platform-engine"
+        version = "2.2.2"
+        source = { registry = "http://[CPU-INDEX]/simple/" }
+        resolution-markers = [
+            "platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'",
+        ]
+        dependencies = [
+            { name = "platform-common", marker = "platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/platform_engine-2.2.2-cp310-cp310-manylinux_2_17_aarch64.whl", hash = "sha256:1851623908186ef497f3e624dceef1efd9f2520998e1b1d8a48d357f286be123", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "platform-engine"
         version = "2.2.2+cpu"
-        source = { registry = "http://[LOCALHOST]/simple/" }
+        source = { registry = "http://[CPU-INDEX]/simple/" }
         resolution-markers = [
             "(platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')",
         ]
