@@ -8181,7 +8181,7 @@ fn index_url_in_requirements() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because anyio was not found in the package registry and you require anyio<4, we can conclude that your requirements are unsatisfiable.
+      cause: anyio was not found in the package registry.
     "
     );
 

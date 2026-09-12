@@ -7214,7 +7214,7 @@ async fn install_package_basic_auth_from_keyring_wrong_password() {
     Keyring request for public@http://[LOCALHOST]/basic-auth/simple
     Keyring request for public@[LOCALHOST]
     error: No solution found when resolving dependencies
-      cause: Because anyio was not found in the package registry and you require anyio, we can conclude that your requirements are unsatisfiable.
+      cause: anyio was not found in the package registry.
 
     hint: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
     "
@@ -7256,7 +7256,7 @@ async fn install_package_basic_auth_from_keyring_wrong_username() {
     Keyring request for public@[LOCALHOST]
     Keyring request for public@http://[LOCALHOST]
     error: No solution found when resolving dependencies
-      cause: Because anyio was not found in the package registry and you require anyio, we can conclude that your requirements are unsatisfiable.
+      cause: anyio was not found in the package registry.
 
     hint: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
     "
