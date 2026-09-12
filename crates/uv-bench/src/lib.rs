@@ -238,6 +238,7 @@ pub struct PreparedEnvironment {
     directory: tempfile::TempDir,
     python: PathBuf,
     fixture: EnvironmentFixture,
+    cache: PathBuf,
 }
 
 impl PreparedEnvironment {
@@ -253,6 +254,12 @@ impl PreparedEnvironment {
 
     /// Install a selected frozen graph without building its project checkout.
     pub fn from_fixture(fixture: &EnvironmentFixture) -> Self {
+        let cache = std::path::absolute("../../.cache").expect("Failed to locate benchmark cache");
+        Self::from_fixture_with_cache(fixture, &cache)
+    }
+
+    /// Install a selected frozen graph using an isolated, already populated cache.
+    pub fn from_fixture_with_cache(fixture: &EnvironmentFixture, cache: &Path) -> Self {
         let directory = tempfile::tempdir().expect("Failed to create project directory");
         fs_err::copy(
             fixture_path(&format!("{}.pyproject.toml", fixture.project)),
@@ -268,6 +275,7 @@ impl PreparedEnvironment {
             directory,
             python: PathBuf::new(),
             fixture: fixture.clone(),
+            cache: cache.to_owned(),
         };
         run_command(&mut environment.sync_command());
         let output = environment
@@ -312,7 +320,7 @@ impl PreparedEnvironment {
 
     /// Return an offline command using this project and the pinned managed interpreter.
     pub fn command(&self) -> Command {
-        let mut command = uv_command();
+        let mut command = uv_command_with_cache(&self.cache);
         command
             .env(
                 "UV_PYTHON_INSTALL_DIR",
