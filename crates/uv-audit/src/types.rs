@@ -135,11 +135,6 @@ impl Vulnerability {
         std::iter::once(&self.id).chain(self.aliases.iter())
     }
 
-    /// Returns `true` if any of this vulnerability's identifiers (primary ID or aliases) match the given ID.
-    pub fn matches(&self, id: &VulnerabilityID) -> bool {
-        self.ids().any(|own_id| own_id == id)
-    }
-
     /// Pick the subjectively "best" identifier for this vulnerability.
     /// For our purposes we prefer PYSEC IDs, then GHSA, then CVE, then whatever
     /// primary ID the vulnerability came with.
