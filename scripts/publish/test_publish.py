@@ -117,6 +117,10 @@ urls = { "github" = "https://github.com/astral-sh/uv" }
 [build-system]
 requires = ["pdm-backend"]
 build-backend = "pdm.backend"
+
+# These fixtures must build source distributions, unlike repository tooling.
+[tool.uv]
+no-build = false
 """.lstrip()
 
 cwd = Path(__file__).parent
