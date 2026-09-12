@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use std::str::FromStr;
 
 use itertools::Itertools;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep508::{ExtraOperator, MarkerEnvironment, MarkerExpression, MarkerOperator, MarkerTree};
@@ -81,12 +81,13 @@ pub struct UniversalMarker {
     pep508: MarkerTree,
 }
 
-/// An activated set of projects, extras, and groups, encoded once for repeated
-/// [`UniversalMarker::evaluate_activated`] calls.
-#[derive(Debug)]
-pub(crate) struct ActivatedConflictItems(Vec<ExtraName>);
+/// An indexed set of activated projects, extras and groups for conflict-marker evaluation.
+#[derive(Default)]
+pub(crate) struct ActivatedMarkers {
+    encoded: FxHashSet<ExtraName>,
+}
 
-impl ActivatedConflictItems {
+impl ActivatedMarkers {
     /// Encodes the given activated projects, extras, and groups.
     ///
     /// Each extra and group must be scoped to the particular package that it's enabled for.
@@ -105,7 +106,13 @@ impl ActivatedConflictItems {
             extras.map(|(package, extra)| encode_package_extra(package.borrow(), extra.borrow()));
         let groups =
             groups.map(|(package, group)| encode_package_group(package.borrow(), group.borrow()));
-        Self(projects.chain(extras).chain(groups).collect())
+        Self {
+            encoded: projects.chain(extras).chain(groups).collect(),
+        }
+    }
+
+    pub(crate) fn insert_extra(&mut self, package: &PackageName, extra: &ExtraName) {
+        self.encoded.insert(encode_package_extra(package, extra));
     }
 }
 
@@ -352,17 +359,38 @@ impl UniversalMarker {
         E: Borrow<ExtraName>,
         G: Borrow<GroupName>,
     {
-        let activated = ActivatedConflictItems::new(projects, extras, groups);
+        let activated = ActivatedMarkers::new(projects, extras, groups);
         self.evaluate_activated(env, &activated)
     }
 
-    /// Returns true if this universal marker is satisfied by an already encoded activated set.
+    /// Returns true if this marker is satisfied by an indexed set of activated conflict items.
     pub(crate) fn evaluate_activated(
         self,
         env: &MarkerEnvironment,
-        activated: &ActivatedConflictItems,
+        activated: &ActivatedMarkers,
     ) -> bool {
-        self.marker.evaluate(env, &activated.0)
+        self.marker
+            .evaluate_with_extra(env, |extra| activated.encoded.contains(extra))
+    }
+
+    /// Returns true if this marker is satisfied by an indexed set of activated conflict items and
+    /// any additional extras enabled by the dependency currently being visited.
+    pub(crate) fn evaluate_activated_with_extras<P, E>(
+        self,
+        env: &MarkerEnvironment,
+        activated: &ActivatedMarkers,
+        extras: impl Iterator<Item = (P, E)>,
+    ) -> bool
+    where
+        P: Borrow<PackageName>,
+        E: Borrow<ExtraName>,
+    {
+        let extras = extras
+            .map(|(package, extra)| encode_package_extra(package.borrow(), extra.borrow()))
+            .collect::<Vec<_>>();
+        self.marker.evaluate_with_extra(env, |extra| {
+            activated.encoded.contains(extra) || extras.contains(extra)
+        })
     }
 
     /// Returns true if the marker always evaluates to true if the given set of extras is activated.
@@ -1009,14 +1037,14 @@ mod tests {
         );
         let env = marker_environment();
 
-        let activated = ActivatedConflictItems::new(
+        let activated = ActivatedMarkers::new(
             [&package].into_iter(),
             [(&package, &extra)].into_iter(),
             [(&package, &group)].into_iter(),
         );
         assert!(marker.evaluate_activated(&env, &activated));
 
-        let without_group = ActivatedConflictItems::new(
+        let without_group = ActivatedMarkers::new(
             [&package].into_iter(),
             [(&package, &extra)].into_iter(),
             std::iter::empty::<(&PackageName, &GroupName)>(),
@@ -1152,6 +1180,75 @@ mod tests {
             MarkerTree::from_str("sys_platform == 'darwin'").expect("valid marker expression");
         assert!(!UniversalMarker::from_combined(pep508).has_conflict_marker());
         assert!(UniversalMarker::new(pep508, create_extra_marker("foo")).has_conflict_marker());
+    }
+
+    #[test]
+    fn evaluate_activated_markers() {
+        let package = create_package("pkg");
+        let other = create_package("other");
+        let foo = create_extra("foo");
+        let bar = create_extra("bar");
+        let group = GroupName::from_str("dev").unwrap();
+        let env = MarkerEnvironment::try_from(MarkerEnvironmentBuilder {
+            implementation_name: "cpython",
+            implementation_version: "3.12.0",
+            os_name: "posix",
+            platform_machine: "x86_64",
+            platform_python_implementation: "CPython",
+            platform_release: "",
+            platform_system: "Linux",
+            platform_version: "",
+            python_full_version: "3.12.0",
+            python_version: "3.12",
+            sys_platform: "linux",
+        })
+        .unwrap();
+
+        let projects = [&package, &package];
+        let extras = [(&package, &foo), (&package, &foo)];
+        let groups = [(&package, &group), (&package, &group)];
+        for source in [
+            "extra == 'project-3-pkg'",
+            "extra == 'extra-3-pkg-foo'",
+            "extra != 'extra-3-pkg-foo'",
+            "extra == 'group-3-pkg-dev'",
+            "sys_platform == 'linux' and extra == 'extra-5-other-bar'",
+            "python_full_version < '3.12' or extra == 'extra-5-other-bar'",
+            "'dev' in extras or extra == 'extra-3-pkg-foo'",
+            "'dev' not in dependency_groups and extra != 'extra-5-other-bar'",
+        ] {
+            let mut activated = ActivatedMarkers::new(
+                projects.iter().copied(),
+                extras.iter().copied(),
+                groups.iter().copied(),
+            );
+            let marker = UniversalMarker::from_combined(MarkerTree::from_str(source).unwrap());
+            let expected = marker.evaluate(
+                &env,
+                projects.iter().copied(),
+                extras
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once((&other, &bar))),
+                groups.iter().copied(),
+            );
+            assert_eq!(
+                marker.evaluate_activated_with_extras(
+                    &env,
+                    &activated,
+                    std::iter::once((&other, &bar)),
+                ),
+                expected,
+                "marker: {source}",
+            );
+
+            activated.insert_extra(&other, &bar);
+            assert_eq!(
+                marker.evaluate_activated(&env, &activated),
+                expected,
+                "marker: {source}",
+            );
+        }
     }
 
     #[test]
