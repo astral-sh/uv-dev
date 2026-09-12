@@ -631,7 +631,9 @@ impl<'lock> InstallTarget<'lock> {
                         continue;
                     };
 
-                    if root_kind == InstallableRootKind::Production && groups.prod() {
+                    if root_kind == InstallableRootKind::Production
+                        && groups.includes_non_group_dependencies()
+                    {
                         // Add the root package
                         if seen.insert((name, None)) {
                             queue.push_back((name, None));
