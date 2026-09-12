@@ -145,6 +145,7 @@ jobs:
             [[ "$file" == scripts/extract-github-release-binaries.py* || "$file" == scripts/inject-signed-github-release-binaries.py* || "$file" == scripts/verify-github-release-* ]] && release_build_changed=1
             [[ "$file" == "dist-workspace.toml" || "$file" == scripts/plan-release-signing.py* ]] && release_build_changed=1
             [[ "$file" == scripts/assemble-release-artifacts.py* || "$file" == "scripts/dist-manifest-to-files.sh" ]] && release_build_changed=1
+            [[ "$file" == scripts/*native-installer*.py* || "$file" == scripts/uv-installer.*.in || "$file" == ".github/workflows/check-native-installers.yml" ]] && release_build_changed=1
             [[ "$file" == ".github/workflows/ci.yml" ]] && ci_workflow_changed=1
             [[ "$file" == "uv.schema.json" ]] && schema_changed=1
             [[ "$file" =~ ^crates/uv-publish/ || "$file" =~ ^scripts/publish/ || "$file" == "crates/uv/src/commands/publish.rs" ]] && publish_code_changed=1
