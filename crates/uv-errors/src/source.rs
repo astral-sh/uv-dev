@@ -1406,6 +1406,22 @@ mod tests {
     }
 
     #[test]
+    fn source_urls_keep_quoted_requirement_context() {
+        let text = "dependencies = [\"demo @ https:///user:pa'ss@example.invalid/demo.whl ; python_version >= '3.12'\"], explicit = \"yes\"\n";
+        let source = SourceFile::new("pyproject.toml", text);
+        let snippet = SourceSnippet::new(source.clone()).with_annotation(
+            SourceAnnotation::primary(range_of(text, "\"yes\"")).with_label("expected a boolean"),
+        );
+        assert_snapshot!(render(&[snippet], None), @r#"
+         --> pyproject.toml:1:111
+          |
+        1 | dependencies = ["demo @ https:///user:*****@example.invalid/demo.whl ; python_version >= '3.12'"], explicit = "yes"
+          |                                                                                                               ^^^^^ expected a boolean
+        "#);
+        assert_eq!(source.text(), text);
+    }
+
+    #[test]
     fn source_narrow_width_and_no_wrap() {
         let text = "dependencies = [\"first-package-with-a-long-name\", \"other-package-with-a-long-name\"]\n";
         let snippet = SourceSnippet::new(SourceFile::new("pyproject.toml", text)).with_annotation(

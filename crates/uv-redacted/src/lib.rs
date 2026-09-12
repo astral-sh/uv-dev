@@ -75,21 +75,12 @@ pub struct DisplaySafeUrl(Url);
 /// rather than credentials. This is important for handling nested URLs like proxy URLs:
 /// `git+https://proxy.com/https://github.com/user/repo.git@branch`.
 fn has_credential_like_pattern(s: &str) -> bool {
-    let mut remaining = s;
-    while let Some(colon_pos) = remaining.find(':') {
-        let after_colon = &remaining[colon_pos + 1..];
-        // If the colon is followed by "//", consider it a URL scheme.
-        if after_colon.starts_with("//") {
-            remaining = after_colon;
-            continue;
-        }
-        // Check if there's an @ after this colon.
-        if after_colon.contains('@') {
-            return true;
-        }
-        remaining = after_colon;
-    }
-    false
+    let Some(at) = s.rfind('@') else {
+        return false;
+    };
+    s[..at]
+        .match_indices(':')
+        .any(|(colon, _)| !s[colon + 1..].starts_with("//"))
 }
 
 impl DisplaySafeUrl {
@@ -303,12 +294,18 @@ fn is_generic_git_username(scheme: &str, username: &str, has_password: bool) -> 
         && !has_password
 }
 
+fn is_file_transport(scheme: &str) -> bool {
+    scheme.eq_ignore_ascii_case("file")
+        || scheme
+            .rsplit_once('+')
+            .is_some_and(|(_, transport)| transport.eq_ignore_ascii_case("file"))
+}
+
 /// Select the original bytes masked when a parsed URL has an ambiguous credential-like path.
 fn ambiguous_credential_range(input: &str, url: &Url) -> Option<Range<usize>> {
     // File transports can pair a Windows drive-letter `:` with an `@` revision or path component
     // without carrying network credentials.
-    let scheme = url.scheme();
-    if scheme == "file" || scheme.ends_with("+file") || url.password().is_some() {
+    if is_file_transport(url.scheme()) || url.password().is_some() {
         return None;
     }
     if !has_credential_like_pattern(url.path())
