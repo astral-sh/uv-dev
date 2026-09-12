@@ -344,18 +344,20 @@ fn is_tls_certificate_error(reqwest_err: &reqwest::Error) -> bool {
     }
 }
 
+/// Return an error's source without skipping a custom [`io::Error`] payload.
+fn next_error_source<'a>(err: &'a (dyn Error + 'static)) -> Option<&'a (dyn Error + 'static)> {
+    if let Some(io_error) = err.downcast_ref::<io::Error>()
+        && let Some(inner) = io_error.get_ref()
+    {
+        Some(inner as &(dyn Error + 'static))
+    } else {
+        err.source()
+    }
+}
+
 /// Finds the request URL for diagnostics, including transparent middleware and retry wrappers.
 fn request_error_url<'a>(err: &'a (dyn Error + 'static)) -> Option<&'a Url> {
-    iter::successors(Some(err), |&err| {
-        if let Some(io_error) = err.downcast_ref::<io::Error>()
-            && let Some(inner) = io_error.get_ref()
-        {
-            Some(inner as &(dyn Error + 'static))
-        } else {
-            err.source()
-        }
-    })
-    .find_map(|err| {
+    iter::successors(Some(err), |&err| next_error_source(err)).find_map(|err| {
         err.downcast_ref::<reqwest::Error>()
             .and_then(reqwest::Error::url)
             .or_else(|| {
@@ -379,33 +381,189 @@ fn find_source<E: Error + 'static>(orig: &dyn Error) -> Option<&E> {
         if let Some(concrete_err) = err.downcast_ref() {
             return Some(concrete_err);
         }
-        if let Some(io_err) = err.downcast_ref::<io::Error>()
-            && let Some(inner_err) = io_err.get_ref()
-        {
-            if let Some(concrete_err) = inner_err.downcast_ref() {
-                return Some(concrete_err);
-            }
-            cause = Some(inner_err);
-            continue;
-        }
-        cause = err.source();
+        cause = next_error_source(err);
     }
     None
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fmt;
+    use std::ptr;
+    use std::sync::{Arc, Mutex};
+
     use super::*;
 
     use anyhow::Result;
     use insta::assert_debug_snapshot;
-    use reqwest::Client;
+    use reqwest::{Client, ResponseBuilderExt};
     use reqwest_middleware::ClientWithMiddleware;
     use tracing_test::traced_test;
     use wiremock::matchers::path;
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use crate::{UvRetryableStrategy, retryable_on_request_failure};
+
+    #[derive(Clone, Debug, Default)]
+    struct SourceCalls(Arc<Mutex<Vec<&'static str>>>);
+
+    impl SourceCalls {
+        fn take(&self) -> Vec<&'static str> {
+            std::mem::take(&mut self.0.lock().expect("source-call log is not poisoned"))
+        }
+    }
+
+    #[derive(Debug)]
+    struct SourceError {
+        name: &'static str,
+        calls: SourceCalls,
+        next: Option<Box<dyn Error + Send + Sync>>,
+    }
+
+    impl SourceError {
+        fn new(
+            name: &'static str,
+            calls: &SourceCalls,
+            next: Option<Box<dyn Error + Send + Sync>>,
+        ) -> Self {
+            Self {
+                name,
+                calls: calls.clone(),
+                next,
+            }
+        }
+    }
+
+    impl fmt::Display for SourceError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(self.name)
+        }
+    }
+
+    impl Error for SourceError {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            self.calls
+                .0
+                .lock()
+                .expect("source-call log is not poisoned")
+                .push(self.name);
+            self.next
+                .as_deref()
+                .map(|err| err as &(dyn Error + 'static))
+        }
+    }
+
+    fn status_error(url: &str) -> Result<reqwest::Error> {
+        let response = http::Response::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .url(Url::parse(url)?)
+            .body("")?;
+        Ok(Response::from(response)
+            .error_for_status()
+            .expect_err("expected a 503 response"))
+    }
+
+    #[test]
+    fn find_source_skips_root_and_stops_at_first_match() {
+        let calls = SourceCalls::default();
+        let later = SourceError::new("later", &calls, None);
+        let first = Box::new(SourceError::new("first", &calls, Some(Box::new(later))));
+        let expected = ptr::from_ref(first.as_ref());
+        let root = SourceError::new(
+            "root",
+            &calls,
+            Some(Box::new(io::Error::other(
+                first as Box<dyn Error + Send + Sync>,
+            ))),
+        );
+
+        let found = find_source::<SourceError>(&root).expect("first source is present");
+        assert!(ptr::eq(found, expected));
+        assert_eq!(calls.take(), ["root"]);
+    }
+
+    #[test]
+    fn find_source_preserves_io_root_behavior() {
+        let calls = SourceCalls::default();
+        let root = io::Error::other(SourceError::new("payload", &calls, None));
+
+        // The initial source() call skips an io::Error's payload itself.
+        assert!(find_source::<SourceError>(&root).is_none());
+        assert_eq!(calls.take(), ["payload"]);
+    }
+
+    #[test]
+    fn error_source_walkers_preserve_order() -> Result<()> {
+        let calls = SourceCalls::default();
+        let request = Box::new(status_error("http://127.0.0.1/source")?);
+        let expected_error = ptr::from_ref(request.as_ref());
+        let expected_url = ptr::from_ref(request.url().expect("status error has a URL"));
+        let inner = SourceError::new("inner", &calls, Some(request));
+        let middle = SourceError::new("middle", &calls, Some(Box::new(io::Error::other(inner))));
+        let root = SourceError::new("root", &calls, Some(Box::new(io::Error::other(middle))));
+
+        let found = find_source::<reqwest::Error>(&root).expect("request error is present");
+        assert!(ptr::eq(found, expected_error));
+        assert_eq!(calls.take(), ["root", "middle", "inner"]);
+        let found = request_error_url(&root).expect("request URL is present");
+        assert!(ptr::eq(found, expected_url));
+        assert_eq!(calls.take(), ["root", "middle", "inner"]);
+        Ok(())
+    }
+
+    #[test]
+    fn error_source_walkers_stop_at_end() {
+        let calls = SourceCalls::default();
+        let inner = SourceError::new(
+            "inner",
+            &calls,
+            Some(Box::new(io::Error::from(io::ErrorKind::Other))),
+        );
+        let root = SourceError::new("root", &calls, Some(Box::new(inner)));
+
+        assert!(find_source::<reqwest::Error>(&root).is_none());
+        assert_eq!(calls.take(), ["root", "inner"]);
+        assert!(request_error_url(&root).is_none());
+        assert_eq!(calls.take(), ["root", "inner"]);
+    }
+
+    #[tokio::test]
+    async fn request_error_url_prefers_first_url() -> Result<()> {
+        let inner = status_error("http://127.0.0.1/inner")?;
+        let body =
+            reqwest::Body::wrap_stream(futures::stream::once(async { Err::<Vec<u8>, _>(inner) }));
+        let response = http::Response::builder().body(body)?;
+        let outer = Response::from(response)
+            .bytes()
+            .await
+            .expect_err("response body fails")
+            .with_url(Url::parse("http://127.0.0.1/outer")?);
+
+        let expected = outer.url().expect("outer error has a URL");
+        assert!(ptr::eq(
+            request_error_url(&outer).expect("outer URL is present"),
+            expected
+        ));
+        assert_eq!(
+            request_error_url(outer.source().expect("body error has a source"))
+                .expect("inner URL is present")
+                .path(),
+            "/inner"
+        );
+
+        let middleware = reqwest_middleware::Error::from(outer);
+        assert!(ptr::eq(
+            request_error_url(&middleware).expect("middleware URL is present"),
+            middleware.url().expect("middleware error has a URL")
+        ));
+
+        let wrapped = WrappedReqwestError::from(middleware);
+        assert!(ptr::eq(
+            request_error_url(&wrapped).expect("wrapped URL is present"),
+            wrapped.url().expect("wrapped error has a URL")
+        ));
+        Ok(())
+    }
 
     #[tokio::test]
     #[traced_test]
