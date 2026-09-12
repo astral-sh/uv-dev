@@ -99,12 +99,37 @@ class Fixtures:
 class Server(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, fixtures: Fixtures, delay: float) -> None:
+    def __init__(self, fixtures: Fixtures, delay: float, body_delay: float = 0) -> None:
         super().__init__(("127.0.0.1", 0), Handler)
         self.fixtures = fixtures
         self.delay = delay
+        self.body_delay = body_delay
         self.counts: Counter[str] = Counter()
+        self.active: Counter[str] = Counter()
         self.counts_lock = threading.Lock()
+
+    def begin_counted_request(
+        self, method: str, path: str, file_kind: str | None
+    ) -> tuple[str, ...]:
+        groups = (method,)
+        if file_kind is not None:
+            groups += (f"{method} /files", f"{method} file {file_kind}")
+        with self.counts_lock:
+            self.counts[f"{method} {path}"] += 1
+            for group in groups:
+                self.active[group] += 1
+                peak = f"{group} [max-active]"
+                self.counts[peak] = max(self.counts[peak], self.active[group])
+        return groups
+
+    def end_counted_request(self, groups: tuple[str, ...]) -> None:
+        with self.counts_lock:
+            for group in groups:
+                self.active[group] -= 1
+
+    def record_bytes(self, key: str, size: int) -> None:
+        with self.counts_lock:
+            self.counts[key] += size
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -113,6 +138,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: object) -> None:
         pass
+
+    def handle(self) -> None:
+        try:
+            super().handle()
+        except (BrokenPipeError, ConnectionResetError):
+            # Interrupted-download workloads close both active and keep-alive connections.
+            pass
 
     def do_HEAD(self) -> None:
         self.handle_request(head=True)
@@ -124,6 +156,9 @@ class Handler(BaseHTTPRequestHandler):
         if urlsplit(self.path).path == "/reset":
             with self.server.counts_lock:
                 self.server.counts.clear()
+                for group, active in self.server.active.items():
+                    if active:
+                        self.server.counts[f"{group} [max-active]"] = active
             self.respond(b"{}", "application/json")
         else:
             self.send_error(404)
@@ -132,12 +167,30 @@ class Handler(BaseHTTPRequestHandler):
         path = unquote(urlsplit(self.path).path)
         if path == "/stats":
             with self.server.counts_lock:
-                body = json.dumps(self.server.counts).encode()
+                counts = dict(self.server.counts)
+                counts.update(
+                    {
+                        f"{group} [active]": active
+                        for group, active in self.server.active.items()
+                    }
+                )
+                body = json.dumps(counts).encode()
             self.respond(body, "application/json", head=head)
             return
-        with self.server.counts_lock:
-            self.server.counts[f"{self.command} {path}"] += 1
-        time.sleep(self.server.delay)
+        file_kind = None
+        if path.startswith("/files/"):
+            if path.endswith(".metadata"):
+                file_kind = "metadata"
+            else:
+                file_kind = "ranges" if self.headers.get("Range") else "bodies"
+        groups = self.server.begin_counted_request(self.command, path, file_kind)
+        try:
+            time.sleep(self.server.delay)
+            self.dispatch_request(path, head=head)
+        finally:
+            self.server.end_counted_request(groups)
+
+    def dispatch_request(self, path: str, *, head: bool) -> None:
         parts = path.strip("/").split("/")
         if len(parts) == 2 and parts[0] in {"simple", "simple-a", "simple-b"}:
             body = self.server.fixtures.simple.get(normalize(parts[1]))
@@ -167,6 +220,9 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         if not head:
             self.wfile.write(body)
+            path = unquote(urlsplit(self.path).path)
+            if path not in {"/stats", "/reset"}:
+                self.server.record_bytes(f"{self.command} {path} [bytes]", len(body))
 
     def serve_file(self, path: Path, *, head: bool) -> None:
         size = path.stat().st_size
@@ -187,8 +243,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(416)
                 return
         length = end - start + 1
+        kind = "range" if range_header else "body"
         if not head:
-            kind = "range" if range_header else "body"
             with self.server.counts_lock:
                 self.server.counts[f"GET /files/{path.name} [{kind}]"] += 1
         self.send_response(206 if range_header else 200)
@@ -207,7 +263,12 @@ class Handler(BaseHTTPRequestHandler):
                     if not chunk:
                         raise EOFError(path)
                     self.wfile.write(chunk)
+                    self.server.record_bytes(
+                        f"GET /files/{path.name} [{kind}-bytes]", len(chunk)
+                    )
                     length -= len(chunk)
+                    if length and not range_header and self.server.body_delay:
+                        time.sleep(self.server.body_delay)
 
 
 def main() -> None:
@@ -221,11 +282,14 @@ def main() -> None:
     )
     parser.add_argument("--lockfile", type=Path, action="append", default=[])
     parser.add_argument("--delay-ms", type=float, default=20)
+    parser.add_argument("--body-delay-ms", type=float, default=0)
     args = parser.parse_args()
-    if args.delay_ms < 0:
-        parser.error("--delay-ms must be nonnegative")
+    if args.delay_ms < 0 or args.body_delay_ms < 0:
+        parser.error("request and body delays must be nonnegative")
     server = Server(
-        Fixtures(args.directory, args.manifest, args.lockfile), args.delay_ms / 1000
+        Fixtures(args.directory, args.manifest, args.lockfile),
+        args.delay_ms / 1000,
+        args.body_delay_ms / 1000,
     )
     print(f"http://127.0.0.1:{server.server_port}", flush=True)
     server.serve_forever()

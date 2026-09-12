@@ -28,6 +28,35 @@ immutable lockfile. The server binds an ephemeral loopback port and applies a fi
 delay to model an ordinary remote index without relying on live service timing. Wheel responses
 support byte ranges; only locally prepared artifact bodies can be downloaded.
 
+`qualify-concurrent-downloads.py` runs a finite cache-coordination check against a chosen uv binary
+and Python interpreter. It verifies overlapping independent wheel downloads, one full download for
+concurrent installs sharing a cache, offline reuse of the published files, metadata-request
+amplification, and recovery after terminating an install partway through a wheel body. Its JSON
+report includes binary and fixture hashes, request counts, transferred body bytes, and peak
+concurrency. The reported command timings are local end-to-end measurements, not CodSpeed results.
+
+The qualification only needs four of the immutable fixtures:
+
+```shell
+python3 scripts/benchmark/prepare-fixtures.py \
+  --fixture click-8.4.2-py3-none-any.whl \
+  --fixture flask-3.1.2-py3-none-any.whl \
+  --fixture jupyterlab-4.4.7-py3-none-any.whl \
+  --fixture sympy-1.14.0-py3-none-any.whl
+python3 scripts/benchmark/qualify-concurrent-downloads.py \
+  --uv target/debug/uv \
+  --python /absolute/path/to/python3.11 \
+  --fd-limit 128 \
+  --output download-qualification.json
+```
+
+`--fd-limit` applies a hard descriptor limit to the uv child processes on POSIX systems. Use
+`--preview-feature content-addressed-cache` to exercise the file store, or
+`--expect-coalesced-metadata` when qualifying metadata-request coordination. Running with
+`--downloads 1` is a negative control: the independent-download check must report serialization.
+Repeat `--scenario` to select individual checks when comparing implementations with different cache
+capabilities.
+
 ## Getting Started
 
 From the `scripts/benchmark` directory:
