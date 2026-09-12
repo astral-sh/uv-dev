@@ -799,7 +799,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     });
                 }
                 StaticMetadata::Dynamic => true,
-                StaticMetadata::None => false,
+                StaticMetadata::None | StaticMetadata::Invalid(_) => false,
             };
 
         // If the cache contains compatible metadata, return it.
@@ -1198,7 +1198,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 });
             }
             StaticMetadata::Dynamic => true,
-            StaticMetadata::None => false,
+            StaticMetadata::None | StaticMetadata::Invalid(_) => false,
         };
 
         // If the cache contains compatible metadata, return it.
@@ -1504,26 +1504,28 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .workspace_member_editable(resource.editable);
 
         // If the metadata is static, return it.
-        let dynamic = match StaticMetadata::read(source, resource.install_path, None).await? {
-            StaticMetadata::Some(metadata) => {
-                return Ok(ArchiveMetadata::from(
-                    Metadata::from_workspace(
-                        metadata,
-                        resource.install_path,
-                        None,
-                        self.build_context.locations(),
-                        self.build_context.sources().clone(),
-                        editable,
-                        self.build_context.cache(),
-                        self.build_context.workspace_cache(),
-                        credentials_cache,
-                    )
-                    .await?,
-                ));
-            }
-            StaticMetadata::Dynamic => true,
-            StaticMetadata::None => false,
-        };
+        let (dynamic, invalid_metadata) =
+            match StaticMetadata::read(source, resource.install_path, None).await? {
+                StaticMetadata::Some(metadata) => {
+                    return Ok(ArchiveMetadata::from(
+                        Metadata::from_workspace(
+                            metadata,
+                            resource.install_path,
+                            None,
+                            self.build_context.locations(),
+                            self.build_context.sources().clone(),
+                            editable,
+                            self.build_context.cache(),
+                            self.build_context.workspace_cache(),
+                            credentials_cache,
+                        )
+                        .await?,
+                    ));
+                }
+                StaticMetadata::Dynamic => (true, None),
+                StaticMetadata::None => (false, None),
+                StaticMetadata::Invalid(err) => (false, Some(err)),
+            };
 
         let cache_shard = self.build_context.cache().shard(
             CacheBucket::SourceDistributions,
@@ -1594,7 +1596,11 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 self.build_context.sources().clone(),
             )
             .boxed_local()
-            .await?
+            .await
+            .map_err(|err| match (err, invalid_metadata) {
+                (Error::NoBuild | Error::NoBuildPackage(_), Some(err)) => Error::PyprojectToml(err),
+                (err, _) => err,
+            })?
         {
             // Store the metadata.
             fs::create_dir_all(metadata_entry.dir())
@@ -2017,7 +2023,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 });
             }
             StaticMetadata::Dynamic => true,
-            StaticMetadata::None => false,
+            StaticMetadata::None | StaticMetadata::Invalid(_) => false,
         };
 
         // If the cache contains compatible metadata, return it.
@@ -2388,7 +2394,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     ));
                 }
                 StaticMetadata::Dynamic => true,
-                StaticMetadata::None => false,
+                StaticMetadata::None | StaticMetadata::Invalid(_) => false,
             };
 
         // If the cache contains compatible metadata, return it.
@@ -3286,6 +3292,8 @@ enum StaticMetadata {
     Dynamic,
     /// The metadata was not found.
     None,
+    /// The static requirements were invalid, but cached or built metadata may still be usable.
+    Invalid(uv_pypi_types::MetadataError),
 }
 
 impl StaticMetadata {
@@ -3316,6 +3324,7 @@ impl StaticMetadata {
         });
 
         // Attempt to read static metadata from the `pyproject.toml`.
+        let mut invalid_metadata = None;
         if let Some(pyproject_toml) = pyproject_toml {
             match ResolutionMetadata::parse_pyproject_toml(pyproject_toml, source.version()) {
                 Ok(metadata) => {
@@ -3338,6 +3347,9 @@ impl StaticMetadata {
                     | uv_pypi_types::MetadataError::PoetrySyntax),
                 ) => {
                     debug!("No static `pyproject.toml` available for: {source} ({err:?})");
+                    if matches!(&err, uv_pypi_types::MetadataError::Pep508Error(_)) {
+                        invalid_metadata = Some(err);
+                    }
                 }
                 Err(err) => return Err(Error::PyprojectToml(err)),
             }
@@ -3346,7 +3358,11 @@ impl StaticMetadata {
         // If the source distribution is a source tree, avoid reading `PKG-INFO`, since it could be
         // out-of-date.
         if source.is_source_tree() {
-            return Ok(if dynamic { Self::Dynamic } else { Self::None });
+            return Ok(if dynamic {
+                Self::Dynamic
+            } else {
+                invalid_metadata.map_or(Self::None, Self::Invalid)
+            });
         }
 
         // Attempt to read static metadata from the `PKG-INFO` file.
@@ -3387,7 +3403,7 @@ impl StaticMetadata {
             Err(err) => return Err(err),
         }
 
-        Ok(Self::None)
+        Ok(invalid_metadata.map_or(Self::None, Self::Invalid))
     }
 }
 
@@ -3668,4 +3684,90 @@ fn read_wheel_metadata(
     let dist_info = read_archive_metadata(filename, reader)
         .map_err(|err| Error::WheelMetadata(wheel.to_path_buf(), Box::new(err)))?;
     Ok(ResolutionMetadata::parse_metadata(&dist_info)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    use indoc::indoc;
+
+    use uv_distribution_types::PathSourceDist;
+    use uv_pep508::VerbatimUrl;
+
+    use super::{
+        BuildableSource, DirectorySourceUrl, SourceDist, SourceDistExtension, SourceUrl,
+        StaticMetadata,
+    };
+
+    #[tokio::test]
+    async fn static_metadata_fallback_precedence() -> Result<()> {
+        let source_tree = tempfile::tempdir()?;
+        let url = uv_redacted::DisplaySafeUrl::from_file_path(source_tree.path())
+            .map_err(|()| anyhow::anyhow!("temporary directory must be an absolute path"))?;
+        let directory = BuildableSource::Url(SourceUrl::Directory(DirectorySourceUrl {
+            url: &url,
+            install_path: source_tree.path(),
+            editable: None,
+        }));
+        let archive_path = source_tree.path().join("project-0.1.0.tar.gz");
+        let archive_url = uv_redacted::DisplaySafeUrl::from_file_path(&archive_path)
+            .map_err(|()| anyhow::anyhow!("temporary archive must be an absolute path"))?;
+        let archive = SourceDist::Path(PathSourceDist {
+            name: "project".parse()?,
+            version: Some("0.1.0".parse()?),
+            install_path: archive_path.into_boxed_path(),
+            ext: SourceDistExtension::TarGz,
+            url: VerbatimUrl::from_url(archive_url),
+        });
+        let archive = BuildableSource::Dist(&archive);
+
+        fs_err::write(
+            source_tree.path().join("pyproject.toml"),
+            indoc! {r#"
+                [project]
+                name = "project"
+                version = "0.1.0"
+                dependencies = ["uv-invalid-requirement<2.6>"]
+            "#},
+        )?;
+        fs_err::write(
+            source_tree.path().join("PKG-INFO"),
+            "Metadata-Version: 2.2\nName: project\nVersion: 0.1.0\n",
+        )?;
+
+        // Source trees ignore potentially stale PKG-INFO, while source archives may use it.
+        assert!(matches!(
+            StaticMetadata::read(&directory, source_tree.path(), None).await?,
+            StaticMetadata::Invalid(uv_pypi_types::MetadataError::Pep508Error(_))
+        ));
+        let StaticMetadata::Some(metadata) =
+            StaticMetadata::read(&archive, source_tree.path(), None).await?
+        else {
+            anyhow::bail!("source archive should use PKG-INFO");
+        };
+        assert!(metadata.requires_dist.is_empty());
+        assert!(!metadata.dynamic);
+
+        fs_err::write(
+            source_tree.path().join("pyproject.toml"),
+            indoc! {r#"
+                [project]
+                name = "project"
+                dynamic = ["version"]
+                dependencies = ["uv-invalid-requirement<2.6>"]
+            "#},
+        )?;
+        assert!(matches!(
+            StaticMetadata::read(&directory, source_tree.path(), None).await?,
+            StaticMetadata::Dynamic
+        ));
+        let StaticMetadata::Some(metadata) =
+            StaticMetadata::read(&archive, source_tree.path(), None).await?
+        else {
+            anyhow::bail!("source archive should use PKG-INFO");
+        };
+        assert!(metadata.dynamic);
+
+        Ok(())
+    }
 }
