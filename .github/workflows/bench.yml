@@ -82,6 +82,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.benchmarks-walltime-build.outputs.matrix) }}
+    env:
+      BENCHMARK_SHARD: ${{ matrix.index }}
     permissions:
       contents: read
       id-token: write # for codspeed authentication
@@ -111,12 +113,12 @@ jobs:
         id: profiles
         # Only public main pushes produce reusable baseline profiles.
         if: ${{ github.repository == 'astral-sh/uv' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        run: ./target/debug/uv run --script scripts/codspeed-profiles.py start "$RUNNER_TEMP/codspeed-walltime" walltime-${{ matrix.index }} >> "$GITHUB_OUTPUT"
+        run: ./target/debug/uv run --script scripts/codspeed-profiles.py start "$RUNNER_TEMP/codspeed-walltime" "walltime-$BENCHMARK_SHARD" >> "$GITHUB_OUTPUT"
 
       - name: "Run benchmarks"
         uses: CodSpeedHQ/action@4296e51e7041e24dadb86d1d6e8b9320d223dbe8 # v5.0.3
         with:
-          run: python3 scripts/benchmark/walltime-shards.py run ${{ matrix.index }}
+          run: python3 scripts/benchmark/walltime-shards.py run "$BENCHMARK_SHARD"
           mode: walltime
           upload-url: ${{ steps.profiles.outputs.upload-url }}
 
