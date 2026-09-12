@@ -514,7 +514,8 @@ pub(crate) fn create(
             )),
             // Note: `activate.ps1` is already relocatable by default.
             _ => escape_posix_for_single_quotes(location_string),
-        };
+        }
+        .into_owned();
 
         let virtual_prompt = prompt.as_deref().unwrap_or_default();
         let virtual_prompt = match *name {
