@@ -8,7 +8,7 @@ use indexmap::IndexSet;
 use itertools::Itertools;
 use jiff::Timestamp;
 use owo_colors::OwoColorize;
-use pubgrub::{DerivationTree, Derived, External, Map, ReportFormatter, Term};
+use pubgrub::{DerivationTree, Derived, External, Map, Ranges, ReportFormatter, Term};
 use reqwest::StatusCode;
 use rustc_hash::FxHashMap;
 
@@ -18,7 +18,7 @@ use uv_distribution_types::{
     IndexLocations, IndexMetadata, IndexUrl, RequiresPython,
 };
 use uv_normalize::PackageName;
-use uv_pep440::{Version, VersionSpecifier, VersionSpecifiers};
+use uv_pep440::{Operator, Version, VersionSpecifier, VersionSpecifiers};
 use uv_pep508::{MarkerEnvironment, MarkerExpression, MarkerTree, MarkerValueVersion};
 use uv_platform_tags::{AbiTag, IncompatibleTag, LanguageTag, PlatformTag, Tags};
 
@@ -2669,6 +2669,10 @@ impl std::fmt::Display for PackageRange<'_> {
                 (Bound::Included(v), Bound::Excluded(b)) => {
                     if let Some(prefix) = PrefixMatch::from_range(*lower, *upper) {
                         write!(f, "{package}{prefix}")?;
+                    } else if self.kind == PackageRangeKind::Dependency
+                        && let Some(specifier) = compatible_release_from_range(*lower, *upper)
+                    {
+                        write!(f, "{package}{specifier}")?;
                     } else {
                         write!(f, "{package}>={v},<{b}")?;
                     }
@@ -2683,6 +2687,30 @@ impl std::fmt::Display for PackageRange<'_> {
         }
         Ok(())
     }
+}
+
+/// Represent a dependency interval with `~=` only when its exact bounds round-trip.
+fn compatible_release_from_range(
+    lower: Bound<&Version>,
+    upper: Bound<&Version>,
+) -> Option<VersionSpecifier> {
+    let (Bound::Included(lower), Bound::Excluded(upper)) = (lower, upper) else {
+        return None;
+    };
+    let release = lower.release();
+    let [.., penultimate, _] = &*release else {
+        return None;
+    };
+    // The compatible-release encoding increments the penultimate release component.
+    penultimate.checked_add(1)?;
+    let specifier = VersionSpecifier::from_version(Operator::TildeEqual, lower.clone()).ok()?;
+    // Internal min/max sentinels are not printed, so compare the actual PEP 440 spelling.
+    let specifier = specifier.to_string().parse::<VersionSpecifier>().ok()?;
+    let expected = Ranges::from_range_bounds((
+        Bound::Included(lower.clone()),
+        Bound::Excluded(upper.clone()),
+    ));
+    (Ranges::from(specifier.clone()) == expected).then_some(specifier)
 }
 
 impl PackageRange<'_> {
@@ -2842,6 +2870,131 @@ mod tests {
                 tags: None,
             }
         }
+    }
+
+    #[test]
+    fn compatible_release_intervals_round_trip() {
+        for text in [
+            "~=1.4",
+            "~=1.4.0",
+            "~=1.4.5",
+            "~=1.4.5.0",
+            "~=1.4a1",
+            "~=1.4.post2",
+            "~=1.4.dev3",
+            "~=2!1.4.5",
+            "~=2!1.4.5rc1.post2.dev3",
+            "~=0.0",
+            "~=0.0.0",
+            "~=18446744073709551614.0",
+            "~=1.18446744073709551614.0",
+        ] {
+            let specifier = text
+                .parse::<VersionSpecifier>()
+                .expect("valid compatible-release specifier");
+            let encoded = Ranges::from(specifier.clone());
+            let mut segments = encoded.iter();
+            let (lower, upper) = segments.next().expect("compatible-release interval");
+            assert!(segments.next().is_none());
+            assert_eq!(
+                compatible_release_from_range(lower, upper),
+                Some(specifier),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_nonrepresentable_compatible_release_intervals() {
+        let version = |text: &str| text.parse::<Version>().expect("valid version");
+        for (lower, upper) in [
+            ("1", "2.dev0"),
+            ("1.4+local", "2.dev0"),
+            ("1.4", "2"),
+            ("1.4", "2.dev1"),
+            ("1.4", "3.dev0"),
+            ("2!1.4", "3!2.dev0"),
+            ("1.4.5", "2.dev0"),
+            ("1.4.5.0", "1.5.dev0"),
+        ] {
+            assert!(
+                compatible_release_from_range(
+                    Bound::Included(&version(lower)),
+                    Bound::Excluded(&version(upper)),
+                )
+                .is_none(),
+                "{lower}, {upper}"
+            );
+        }
+        let lower = version("1.4");
+        let upper = version("2.dev0");
+        for (lower, upper) in [
+            (Bound::Excluded(&lower), Bound::Excluded(&upper)),
+            (Bound::Included(&lower), Bound::Included(&upper)),
+            (Bound::Unbounded, Bound::Excluded(&upper)),
+            (Bound::Included(&lower), Bound::Unbounded),
+        ] {
+            assert!(compatible_release_from_range(lower, upper).is_none());
+        }
+        assert!(
+            compatible_release_from_range(
+                Bound::Included(&Version::new([1, u64::MAX, 0])),
+                Bound::Excluded(&upper),
+            )
+            .is_none()
+        );
+        for lower in [
+            version("1.4").with_min(Some(0)),
+            version("1.4").with_max(Some(0)),
+        ] {
+            assert!(
+                compatible_release_from_range(Bound::Included(&lower), Bound::Excluded(&upper))
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn compatible_release_display_is_dependency_only() {
+        let package = PubGrubPackage::base("example".parse().expect("valid package name"));
+        let range = |specifier: &str| {
+            Range::from(
+                specifier
+                    .parse::<VersionSpecifiers>()
+                    .expect("valid version specifiers"),
+            )
+        };
+        let compatible = range("~=1.4.5");
+        assert_eq!(
+            PackageRange::dependency(&package, &compatible, None).to_string(),
+            "example~=1.4.5"
+        );
+        assert_eq!(
+            PackageRange::compatibility(&package, &compatible, None).to_string(),
+            "example>=1.4.5,<1.5.dev0"
+        );
+        assert_eq!(
+            PackageRange::availability(&package, &compatible, None).to_string(),
+            "example>=1.4.5,<1.5.dev0"
+        );
+
+        // Keep the established spelling when a prefix match is also representable.
+        assert_eq!(
+            PackageRange::dependency(&package, &range("==1.4.*"), None).to_string(),
+            "example==1.4.*"
+        );
+        assert_eq!(
+            PackageRange::dependency(&package, &range(">=1.4.5,<1.5.dev1"), None).to_string(),
+            "example>=1.4.5,<1.5.dev1"
+        );
+        insta::assert_snapshot!(
+            PackageRange::dependency(&package, &compatible.union(&range(">=3")), None).to_string(),
+            @"
+        one of:
+            example~=1.4.5
+            example>=3
+        "
+        );
     }
 
     #[test]
