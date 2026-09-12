@@ -64,6 +64,11 @@ commit. Their complete reachable history lets the ordinary Git client fetch bran
 without requiring special handling for a shallow remote. Git workloads use these local repositories
 without fetching live upstream data while timing.
 
+Run `python3 scripts/benchmark/prepare-git-tags.py` to prepare the release refs in `git-tags.json`.
+The manifest captures the real tags created by each pinned source snapshot's date: zero for
+sampleproject, 67 for Flask, and 477 for Django. Git cache-key workloads use real checkouts and
+compare commit-only keys with tag-sensitive keys in both loose-ref and packed-ref layouts.
+
 Run `scripts/benchmark/prepare-sources.py` with Python 3.12.11 or newer after the fixture and Git
 preparation steps to export the project trees in `sources.json` under `.cache/bench-sources`. CI
 uses the pinned managed interpreter so archive link handling is consistent across runners. These
