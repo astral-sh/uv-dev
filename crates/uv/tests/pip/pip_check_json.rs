@@ -327,10 +327,10 @@ fn pip_check_json_omits_invalid_metadata_values() -> Result<()> {
         &package,
         "diag-values",
         "1.0.0",
-        indoc! {r#"
+        indoc! {r"
             Requires-Dist: diag-direct @ 'https://user:check-secret@example.com/diag_direct-1.0.0-py3-none-any.whl?X-Amz-Signature=signature-secret'
             Provides-Extra: https://user:extra-secret@example.com/private.whl?sig=extra-signature
-        "#},
+        "},
     )?;
     let original = fs_err::read(&metadata)?;
     let repaired = check_json(&context)
