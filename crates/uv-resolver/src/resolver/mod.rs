@@ -25,8 +25,8 @@ use uv_distribution::{ArchiveMetadata, DistributionDatabase};
 use uv_distribution_types::{
     BuiltDist, CompatibleDist, DerivationChain, Dist, DistErrorKind, Identifier, IncompatibleDist,
     IncompatibleSource, IncompatibleWheel, IndexCapabilities, IndexLocations, IndexMetadata,
-    IndexUrl, InstalledDist, Name, PythonRequirementKind, RemoteSource, Requirement, ResolvedDist,
-    ResolvedDistRef, SourceDist, VersionOrUrlRef, implied_markers,
+    IndexUrl, InstalledDist, Name, PythonRequirementKind, RemoteSource, RequestedDist, Requirement,
+    ResolvedDist, ResolvedDistRef, VersionOrUrlRef, implied_markers,
 };
 use uv_git::GitResolver;
 use uv_normalize::{ExtraName, GroupName, PackageName};
@@ -3802,37 +3802,9 @@ pub(crate) enum Request {
 
 impl<'a> From<ResolvedDistRef<'a>> for Request {
     fn from(dist: ResolvedDistRef<'a>) -> Self {
-        // N.B. This is almost identical to `ResolvedDistRef::to_owned`, but
-        // creates a `Request` instead of a `ResolvedDist`. There's probably
-        // some room for DRYing this up a bit. The obvious way would be to
-        // add a method to create a `Dist`, but a `Dist` cannot be represented
-        // as an installed dist.
-        match dist {
-            ResolvedDistRef::InstallableRegistrySourceDist { sdist, prioritized } => {
-                // This is okay because we're only here if the prioritized dist
-                // has an sdist, so this always succeeds.
-                let source = prioritized.source_dist().expect("a source distribution");
-                assert_eq!(
-                    (&sdist.name, &sdist.version),
-                    (&source.name, &source.version),
-                    "expected chosen sdist to match prioritized sdist"
-                );
-                Self::Dist(Dist::Source(SourceDist::Registry(source)))
-            }
-            ResolvedDistRef::InstallableRegistryBuiltDist {
-                wheel, prioritized, ..
-            } => {
-                assert_eq!(
-                    Some(&wheel.filename),
-                    prioritized.best_wheel().map(|(wheel, _)| &wheel.filename),
-                    "expected chosen wheel to match best wheel"
-                );
-                // This is okay because we're only here if the prioritized dist
-                // has at least one wheel, so this always succeeds.
-                let built = prioritized.built_dist().expect("at least one wheel");
-                Self::Dist(Dist::Built(BuiltDist::Registry(built)))
-            }
-            ResolvedDistRef::Installed { dist } => Self::Installed(dist.clone()),
+        match RequestedDist::from(&dist) {
+            RequestedDist::Installable(dist) => Self::Dist(dist),
+            RequestedDist::Installed(dist) => Self::Installed(dist),
         }
     }
 }
