@@ -16,6 +16,15 @@ pub(crate) struct PyPIPublishingService<'a> {
     registry: &'a DisplaySafeUrl,
 }
 
+pub(crate) fn is_official_registry(registry: &DisplaySafeUrl) -> bool {
+    registry.scheme() == "https"
+        && registry.port_or_known_default() == Some(443)
+        && matches!(
+            registry.host_str(),
+            Some("pypi.org" | "upload.pypi.org" | "test.pypi.org")
+        )
+}
+
 impl<'a> PyPIPublishingService<'a> {
     pub(crate) fn new(registry: &'a DisplaySafeUrl, client: &'a BaseClient) -> Self {
         Self {
@@ -151,6 +160,37 @@ impl TrustedPublishingService for PyPIPublishingService<'_> {
                     ))
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use uv_redacted::DisplaySafeUrl;
+
+    use super::is_official_registry;
+
+    #[test]
+    fn official_registry() {
+        for registry in [
+            "https://pypi.org/legacy/",
+            "https://upload.pypi.org/legacy/",
+            "https://test.pypi.org/legacy/",
+        ] {
+            assert!(is_official_registry(
+                &DisplaySafeUrl::parse(registry).unwrap()
+            ));
+        }
+
+        for registry in [
+            "http://upload.pypi.org/legacy/",
+            "https://upload.pypi.org:8443/legacy/",
+            "https://upload.pypi.org.example.com/legacy/",
+            "https://example.com/legacy/",
+        ] {
+            assert!(!is_official_registry(
+                &DisplaySafeUrl::parse(registry).unwrap()
+            ));
         }
     }
 }
