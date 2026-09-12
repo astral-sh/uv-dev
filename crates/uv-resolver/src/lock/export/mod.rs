@@ -491,10 +491,8 @@ fn conflict_marker_reachability<'lock>(
             let mut parent_marker = reachability[&parent_index];
 
             // The marker for all paths to the child through the parent.
-            let mut parent_map = conflict_maps
-                .get(&parent_index)
-                .cloned()
-                .unwrap_or_else(|| known_conflicts.clone());
+            let parent_conflicts = conflict_maps.get(&parent_index).unwrap_or(known_conflicts);
+            let mut parent_map = parent_conflicts.clone();
 
             if let Node::Package(child) = graph[child_edge.target()] {
                 for extra in child_edge.weight().dep_extras() {
@@ -519,7 +517,13 @@ fn conflict_marker_reachability<'lock>(
                     // the dependency marker as redundant when the lockfile is written.
                     let active_marker = if let Node::Package(parent) = graph[parent_index] {
                         let item = ConflictItem::from((parent.name().clone(), (*extra).clone()));
-                        *parent_map.entry(item).or_insert(parent_marker)
+                        // Only an incoming path or a selected root can activate this extra.
+                        // In particular, an edge that requests the same extra on its child must
+                        // not use that request to activate itself.
+                        parent_conflicts
+                            .get(&item)
+                            .copied()
+                            .unwrap_or(MarkerTree::FALSE)
                     } else {
                         parent_marker
                     };
@@ -550,15 +554,21 @@ fn conflict_marker_reachability<'lock>(
             parent_marker = parent_marker.and(marker);
 
             // Combine the inferred conflicts with the existing conflicts on the node.
+            let mut changed = false;
             match conflict_maps.entry(child_edge.target()) {
                 Entry::Occupied(mut existing) => {
                     let child_map = existing.get_mut();
                     for (key, value) in parent_map {
                         let child_marker = child_map.entry(key).or_insert(MarkerTree::FALSE);
-                        *child_marker = child_marker.or(value);
+                        let combined = child_marker.or(value);
+                        if combined != *child_marker {
+                            *child_marker = combined;
+                            changed = true;
+                        }
                     }
                 }
                 Entry::Vacant(vacant) => {
+                    changed = parent_map.values().any(|marker| !marker.is_false());
                     vacant.insert(parent_map);
                 }
             }
@@ -566,18 +576,24 @@ fn conflict_marker_reachability<'lock>(
             // Combine the inferred marker with the existing marker on the node.
             match reachability.entry(child_edge.target()) {
                 Entry::Occupied(mut existing) => {
-                    // If the marker is a subset of the existing marker (A ⊆ B exactly if
-                    // A ∪ B = A), updating the child wouldn't change child's marker.
+                    // If the marker is a subset of the existing marker, updating the child
+                    // would not change its reachability.
                     parent_marker = parent_marker.or(*existing.get());
                     if parent_marker != *existing.get() {
                         existing.insert(parent_marker);
-                        queue.push(child_edge.target());
+                        changed = true;
                     }
                 }
                 Entry::Vacant(vacant) => {
                     vacant.insert(parent_marker);
-                    queue.push(child_edge.target());
+                    changed = true;
                 }
+            }
+
+            // An extra can become reachable after its base package is already unconditional.
+            // Propagate either kind of growth so those optional dependencies are not skipped.
+            if changed {
+                queue.push(child_edge.target());
             }
         }
     }
