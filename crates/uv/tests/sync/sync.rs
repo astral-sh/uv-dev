@@ -951,6 +951,7 @@ fn sync_json() -> Result<()> {
     )?;
 
     sync_json_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "json-output"])
         .arg("--output-format").arg("json"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
@@ -1001,6 +1002,7 @@ fn sync_json() -> Result<()> {
     assert!(context.temp_dir.child("uv.lock").exists());
 
     sync_json_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "json-output"])
         .arg("--frozen")
         .arg("--output-format").arg("json"), @r#"
     exit_code: 0 (success)
@@ -1041,6 +1043,7 @@ fn sync_json() -> Result<()> {
     "#);
 
     sync_json_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "json-output"])
         .arg("--locked")
         .arg("--output-format").arg("json"), @r#"
     exit_code: 0 (success)
@@ -1094,6 +1097,7 @@ fn sync_json() -> Result<()> {
     )?;
 
     sync_json_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "json-output"])
         .arg("--locked")
         .arg("--output-format").arg("json"), @"
     exit_code: 1 (failure)
@@ -1106,6 +1110,7 @@ fn sync_json() -> Result<()> {
 
     // Test that JSON output is shown even with --quiet flag
     sync_json_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "json-output"])
         .arg("--quiet")
         .arg("--frozen")
         .arg("--output-format").arg("json"), @r#"
@@ -1165,6 +1170,7 @@ fn sync_json_check_outdated_environment() -> Result<()> {
     )?;
 
     sync_json_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "json-output"])
         .arg("--check")
         .arg("--output-format").arg("json"), @r#"
     exit_code: 1 (failure)
@@ -1238,6 +1244,7 @@ fn sync_dry_json() -> Result<()> {
 
     // Running `uv sync` should report intent to create the environment and lockfile
     sync_json_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "json-output"])
         .arg("--output-format").arg("json")
         .arg("--dry-run"), @r#"
     exit_code: 0 (success)
@@ -7449,6 +7456,7 @@ fn sync_active_script_environment_json() -> Result<()> {
 
     // Running `uv sync --script` with `VIRTUAL_ENV` should warn
     sync_json_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "json-output"])
         .arg("--script").arg("script.py")
         .arg("--output-format").arg("json")
         .env(EnvVars::VIRTUAL_ENV, "foo"), @r#"
@@ -7512,6 +7520,7 @@ fn sync_active_script_environment_json() -> Result<()> {
 
     // Using `--active` should create the environment
     sync_json_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "json-output"])
         .arg("--script").arg("script.py")
         .arg("--output-format").arg("json")
         .env(EnvVars::VIRTUAL_ENV, "foo").arg("--active"), @r#"
@@ -7582,6 +7591,7 @@ fn sync_active_script_environment_json() -> Result<()> {
 
     // Requesting another Python version will invalidate the environment
     sync_json_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "json-output"])
         .arg("--script").arg("script.py")
         .arg("--output-format").arg("json")
         .env(EnvVars::VIRTUAL_ENV, "foo")
