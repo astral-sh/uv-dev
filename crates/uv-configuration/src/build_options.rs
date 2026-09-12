@@ -129,21 +129,9 @@ impl NoBinary {
 
     /// Combine a set of [`NoBinary`] values.
     #[must_use]
-    pub fn combine(self, other: Self) -> Self {
-        match (self, other) {
-            // If both are `None`, the result is `None`.
-            (Self::None, Self::None) => Self::None,
-            // If either is `All`, the result is `All`.
-            (Self::All, _) | (_, Self::All) => Self::All,
-            // If one is `None`, the result is the other.
-            (Self::Packages(a), Self::None) => Self::Packages(a),
-            (Self::None, Self::Packages(b)) => Self::Packages(b),
-            // If both are `Packages`, the result is the union of the two.
-            (Self::Packages(mut a), Self::Packages(b)) => {
-                a.extend(b);
-                Self::Packages(a)
-            }
-        }
+    pub fn combine(mut self, other: Self) -> Self {
+        self.extend(other);
+        self
     }
 
     /// Extend a [`NoBinary`] value with another.
@@ -229,21 +217,9 @@ impl NoBuild {
 
     /// Combine a set of [`NoBuild`] values.
     #[must_use]
-    pub fn combine(self, other: Self) -> Self {
-        match (self, other) {
-            // If both are `None`, the result is `None`.
-            (Self::None, Self::None) => Self::None,
-            // If either is `All`, the result is `All`.
-            (Self::All, _) | (_, Self::All) => Self::All,
-            // If one is `None`, the result is the other.
-            (Self::Packages(a), Self::None) => Self::Packages(a),
-            (Self::None, Self::Packages(b)) => Self::Packages(b),
-            // If both are `Packages`, the result is the union of the two.
-            (Self::Packages(mut a), Self::Packages(b)) => {
-                a.extend(b);
-                Self::Packages(a)
-            }
-        }
+    pub fn combine(mut self, other: Self) -> Self {
+        self.extend(other);
+        self
     }
 
     /// Extend a [`NoBuild`] value with another.
