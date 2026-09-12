@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::indoc;
@@ -12,6 +12,7 @@ use wiremock::{
     matchers::{method, path},
 };
 
+use url::Url;
 use uv_static::EnvVars;
 
 use uv_test::{uv_snapshot, venv_bin_path};
@@ -686,6 +687,7 @@ fn tool_upgrade_pinned_hint() {
     Modified babel environment
      - pytz==2018.5
      + pytz==2024.1
+    Installed 1 executable: pybabel
 
     hint: `babel` is pinned to `2.6.0` (installed with an exact version pin); reinstall with `uv tool install babel@latest` to upgrade to a new version.
     ");
@@ -727,6 +729,7 @@ fn tool_upgrade_pinned_hint_with_mixed_constraint() {
     Modified babel environment
      - pytz==2018.5
      + pytz==2024.1
+    Installed 1 executable: pybabel
 
     hint: `babel` is pinned to `2.6.0` (installed with an exact version pin); reinstall with `uv tool install babel@latest` to upgrade to a new version.
     ");
@@ -1157,9 +1160,109 @@ fn tool_upgrade_with() {
     Modified babel environment
      - pytz==2018.5
      + pytz==2024.1
+    Installed 1 executable: pybabel
 
     hint: `babel` is pinned to `2.6.0` (installed with an exact version pin); reinstall with `uv tool install babel@latest` to upgrade to a new version.
     ");
+}
+
+#[test]
+fn tool_upgrade_refreshes_dependency_entrypoints() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+
+    let tool = context.temp_dir.child("tool");
+    tool.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "tool-root"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [project.scripts]
+        root = "tool_root:main"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    tool.child("src")
+        .child("tool_root")
+        .child("__init__.py")
+        .write_str("def main(): pass\n")?;
+
+    let provider = context.temp_dir.child("provider");
+    let provider_pyproject = provider.child("pyproject.toml");
+    provider_pyproject.write_str(indoc! {r#"
+        [project]
+        name = "tool-provider"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [project.scripts]
+        old-command = "tool_provider:main"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    provider
+        .child("src")
+        .child("tool_provider")
+        .child("__init__.py")
+        .write_str("def main(): pass\n")?;
+
+    let provider_requirement = format!(
+        "tool-provider @ {}",
+        Url::from_directory_path(provider.path())
+            .map_err(|()| anyhow!("Failed to convert provider path to file URL"))?
+    );
+    context
+        .tool_install()
+        .arg(tool.path())
+        .arg("--with-executables-from")
+        .arg(provider_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let old = bin_dir.child(format!("old-command{}", std::env::consts::EXE_SUFFIX));
+    let new = bin_dir.child(format!("new-command{}", std::env::consts::EXE_SUFFIX));
+    old.assert(predicate::path::exists());
+    new.assert(predicate::path::missing());
+
+    provider_pyproject.write_str(indoc! {r#"
+        [project]
+        name = "tool-provider"
+        version = "2.0.0"
+        requires-python = ">=3.12"
+
+        [project.scripts]
+        new-command = "tool_provider:main"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+
+    context
+        .tool_upgrade()
+        .arg("tool-root")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    old.assert(predicate::path::missing());
+    new.assert(predicate::path::exists());
+    bin_dir
+        .child(format!("root{}", std::env::consts::EXE_SUFFIX))
+        .assert(predicate::path::exists());
+
+    Ok(())
 }
 
 #[test]
