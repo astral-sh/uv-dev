@@ -2825,6 +2825,7 @@ impl VersionSettings {
 /// The resolved settings to use for a `tree` invocation.
 #[derive(Debug, Clone)]
 pub(crate) struct TreeSettings {
+    pub(super) show_version_specifiers: bool,
     pub(super) groups: DependencyGroups,
     pub(super) lock_check: LockCheck,
     pub(super) frozen: Option<FrozenSource>,
@@ -2854,6 +2855,7 @@ impl TreeSettings {
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let TreeArgs {
+            show_version_specifiers,
             tree,
             universal,
             format,
@@ -2900,7 +2902,12 @@ impl TreeSettings {
             Some(environment.no_dev),
         );
 
+        if show_version_specifiers && matches!(format, TreeFormat::Json) {
+            anyhow::bail!("`--show-version-specifiers` is not supported with `--format json`");
+        }
+
         Ok(Self {
+            show_version_specifiers,
             groups: DependencyGroups::from_args(
                 DevMode::from_args(dev.into(), no_dev.into(), only_dev),
                 group,
