@@ -760,6 +760,9 @@ impl InstallationPlan {
     ) -> Result<Changelog, Error> {
         let (plan, start) = self.into_parts();
 
+        // Bytecode-enabled installs compile the complete environment.
+        let compile = compile.map(|_| BytecodeCompilation::All);
+
         if dry_run.enabled() {
             return report_dry_run(
                 dry_run,
