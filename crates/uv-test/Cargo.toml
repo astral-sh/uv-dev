@@ -18,6 +18,8 @@ workspace = true
 [features]
 # When enabled, git tests are run and the git CLI is allowed.
 git = []
+# When enabled, command output can be checked against JSON Schemas.
+jsonschema = ["dep:jsonschema"]
 # When enabled, tracing duration export is supported.
 tracing-durations-export = []
 
@@ -49,6 +51,7 @@ ignore = { workspace = true }
 indoc = { workspace = true }
 insta = { workspace = true, features = ["filters"] }
 itertools = { workspace = true }
+jsonschema = { workspace = true, optional = true }
 predicates = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }

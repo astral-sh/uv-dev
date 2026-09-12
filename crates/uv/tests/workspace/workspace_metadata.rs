@@ -11,35 +11,22 @@ use indoc::{formatdoc, indoc};
 use url::Url;
 
 use uv_static::EnvVars;
+use uv_test::json_schema::JsonSchema;
 use uv_test::{copy_dir_ignore, uv_snapshot};
 
-static METADATA_SCHEMA: LazyLock<std::result::Result<jsonschema::Validator, String>> =
-    LazyLock::new(|| {
-        let schema: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../docs/reference/internals/metadata.schema.json"
-        ))
-        .map_err(|error| error.to_string())?;
-        jsonschema::draft7::options()
-            .should_validate_formats(true)
-            .build(&schema)
-            .map_err(|error| error.to_string())
-    });
+static METADATA_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> = LazyLock::new(|| {
+    JsonSchema::new(include_str!(
+        "../../../../docs/reference/internals/metadata.schema.json"
+    ))
+    .map_err(|error| error.to_string())
+});
 
 fn parse_metadata(contents: &[u8]) -> Result<serde_json::Value> {
-    let metadata = serde_json::from_slice(contents)?;
-    let validator = METADATA_SCHEMA
+    METADATA_SCHEMA
         .as_ref()
-        .map_err(|error| anyhow::anyhow!("invalid workspace metadata schema: {error}"))?;
-    let errors = validator
-        .iter_errors(&metadata)
-        .map(|error| format!("{}: {error}", error.instance_path()))
-        .collect::<Vec<_>>();
-    anyhow::ensure!(
-        errors.is_empty(),
-        "workspace metadata violates its schema:\n{}",
-        errors.join("\n")
-    );
-    Ok(metadata)
+        .map_err(|error| anyhow::anyhow!("invalid workspace metadata schema: {error}"))?
+        .parse(contents)
+        .context("workspace metadata schema mismatch")
 }
 
 macro_rules! metadata_snapshot {

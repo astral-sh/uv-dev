@@ -1,15 +1,96 @@
-use anyhow::Result;
+use std::sync::LazyLock;
+
+use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::PathChild;
 use fs_err as fs;
 use insta::assert_snapshot;
 use serde_json::Value;
 use uv_static::EnvVars;
+use uv_test::json_schema::JsonSchema;
 use uv_test::uv_snapshot;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
 };
+
+static TOOL_LIST_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> = LazyLock::new(|| {
+    JsonSchema::new(include_str!(
+        "../../../../docs/reference/internals/tool-list.schema.json"
+    ))
+    .map_err(|error| error.to_string())
+});
+
+fn parse_tool_list(contents: &[u8]) -> Result<Value> {
+    TOOL_LIST_SCHEMA
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!("invalid tool-list schema: {error}"))?
+        .parse(contents)
+        .context("tool-list schema mismatch")
+}
+
+macro_rules! tool_list_json_snapshot {
+    ($($args:tt)*) => {{
+        let output = uv_snapshot!($($args)*);
+        if output.status.success() && !output.stdout.is_empty() {
+            let result = parse_tool_list(&output.stdout);
+            assert!(result.is_ok(), "tool-list schema mismatch: {result:?}");
+        }
+        output
+    }};
+}
+
+#[test]
+fn tool_list_schema_rejects_invalid_output() -> Result<()> {
+    let report = serde_json::json!({
+        "schema": {"version": "preview"},
+        "tools": [{
+            "name": "example",
+            "version": "1.0",
+            "latest_version": null,
+            "path": "/tools/example",
+            "python": {
+                "path": "/tools/example/bin/python",
+                "version": "3.12.14",
+                "implementation": "cpython",
+                "key": "cpython-3.12.14-linux-x86_64-gnu"
+            },
+            "commands": [{"name": "example", "path": "/bin/example"}],
+            "extras": [],
+            "version_specifiers": "",
+            "with": []
+        }]
+    });
+    parse_tool_list(&serde_json::to_vec(&report)?)?;
+
+    let mut invalid = report.clone();
+    invalid["schema"]["version"] = serde_json::json!(1);
+    assert!(parse_tool_list(&serde_json::to_vec(&invalid)?).is_err());
+
+    let mut invalid = report.clone();
+    invalid["tools"][0]["latest_version"] = serde_json::json!(1);
+    assert!(parse_tool_list(&serde_json::to_vec(&invalid)?).is_err());
+
+    let mut invalid = report.clone();
+    invalid["tools"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("latest_version");
+    assert!(parse_tool_list(&serde_json::to_vec(&invalid)?).is_err());
+
+    let mut invalid = report.clone();
+    invalid["tools"][0]["python"]["key"] = serde_json::json!(1);
+    assert!(parse_tool_list(&serde_json::to_vec(&invalid)?).is_err());
+
+    let mut invalid = report;
+    invalid["tools"][0]["commands"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("path");
+    assert!(parse_tool_list(&serde_json::to_vec(&invalid)?).is_err());
+
+    Ok(())
+}
 
 #[test]
 fn tool_list() {
@@ -283,7 +364,7 @@ fn tool_list_missing_receipt() {
     warning: Ignoring malformed tool `black` (run `uv tool uninstall black` to remove)
     ");
 
-    uv_snapshot!(context.filters(), context.tool_list()
+    tool_list_json_snapshot!(context.filters(), context.tool_list()
     .args(["--output-format", "json", "--preview-features", "json-output"]), @r#"
     exit_code: 0 (success)
     ----- stdout -----
@@ -695,7 +776,7 @@ fn tool_list_empty_json() {
         .with_filtered_exe_suffix()
         .with_tool_dirs();
 
-    uv_snapshot!(context.filters(), context.tool_list()
+    tool_list_json_snapshot!(context.filters(), context.tool_list()
     .arg("--output-format=json"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
@@ -718,7 +799,7 @@ fn tool_list_outdated_empty_json() {
         .with_tool_dirs();
 
     // With no tools installed, `--outdated` should produce the same output as the base case.
-    uv_snapshot!(context.filters(), context.tool_list()
+    tool_list_json_snapshot!(context.filters(), context.tool_list()
     .args(["--preview-features", "json-output"])
     .arg("--output-format=json")
     .arg("--outdated"), @r#"
@@ -738,7 +819,7 @@ fn tool_list_initialized_empty_json() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_tool_dirs();
     fs::create_dir_all(context.temp_dir.child("tools"))?;
 
-    uv_snapshot!(context.filters(), context.tool_list()
+    tool_list_json_snapshot!(context.filters(), context.tool_list()
     .args(["--output-format", "json", "--preview-features", "json-output"]), @r#"
     exit_code: 0 (success)
     ----- stdout -----
@@ -774,7 +855,7 @@ fn tool_list_json_quiet() -> Result<()> {
             .success();
         assert_eq!(default.get_output().stdout, quiet.get_output().stdout);
         assert_eq!(
-            serde_json::from_slice::<Value>(&quiet.get_output().stdout)?,
+            parse_tool_list(&quiet.get_output().stdout)?,
             serde_json::json!({"schema": {"version": "preview"}, "tools": []}),
         );
         list()
@@ -813,7 +894,7 @@ fn tool_list_outdated_json() {
         .success();
 
     // With `--outdated`, the installed (older) version should be listed with the latest version.
-    uv_snapshot!(context.filters(), context.tool_list()
+    tool_list_json_snapshot!(context.filters(), context.tool_list()
     .args(["--preview-features", "json-output"])
     .arg("--output-format=json")
     .arg("--outdated"), @r#"
@@ -874,7 +955,7 @@ fn tool_list_json() -> Result<()> {
         .assert()
         .success();
 
-    let report = uv_snapshot!(context.filters(), context.tool_list()
+    let report = tool_list_json_snapshot!(context.filters(), context.tool_list()
     .args(["--preview-features", "json-output"])
     .arg("--output-format=json"), @r#"
     exit_code: 0 (success)
@@ -932,8 +1013,8 @@ fn tool_list_json() -> Result<()> {
         .assert()
         .success();
     assert_eq!(
-        serde_json::from_slice::<Value>(&report.stdout)?,
-        serde_json::from_slice::<Value>(&all_fields.get_output().stdout)?,
+        parse_tool_list(&report.stdout)?,
+        parse_tool_list(&all_fields.get_output().stdout)?,
     );
 
     let quiet = context
