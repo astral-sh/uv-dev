@@ -22,6 +22,14 @@ from the same lockfile and cached package artifacts.
 Pass `--discovery` to also install the pinned Python 3.10, 3.12, and 3.13 interpreters used by the
 Python discovery workloads.
 
+Use `--discovery-only` to prepare those interpreters without the package-environment fixtures. The
+existing `python_discovery` suite also searches one, two, and four real installations on `PATH`,
+with the requested version last. It reports untimed interpreter-query, cache-hit, and metadata-skip
+counts before measuring warm and cold discovery. When `CRITERION_HOME` is set, the counts are also
+saved in `python-discovery-probes.json` beside the Criterion measurements. Set `UV_BENCH_BINARY` to
+an absolute uv binary path to compare revisions against the same prepared interpreters; measured
+commands do not enable tracing.
+
 ## Getting Started
 
 From the `scripts/benchmark` directory:

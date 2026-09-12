@@ -15,8 +15,13 @@ PYTHON = "3.11.13"
 def main() -> None:
     root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--uv", type=Path, default=root / "target/profiling/uv")
+    parser.add_argument(
+        "--uv",
+        type=Path,
+        default=root / "target/profiling" / ("uv.exe" if os.name == "nt" else "uv"),
+    )
     parser.add_argument("--discovery", action="store_true")
+    parser.add_argument("--discovery-only", action="store_true")
     args = parser.parse_args()
     cache = root / ".cache"
     fixtures = cache / "bench-fixtures"
@@ -27,12 +32,18 @@ def main() -> None:
     }
     environment["UV_PYTHON_INSTALL_DIR"] = str(cache / "bench-python")
     command = [str(args.uv.resolve()), "--no-config", "--cache-dir", str(cache)]
-    versions = ["3.10.18", PYTHON, "3.12.11", "3.13.4"] if args.discovery else [PYTHON]
+    versions = (
+        ["3.10.18", PYTHON, "3.12.11", "3.13.4"]
+        if args.discovery or args.discovery_only
+        else [PYTHON]
+    )
     subprocess.run(
         [*command, "python", "install", "--no-bin", "--no-registry", *versions],
         env=environment,
         check=True,
     )
+    if args.discovery_only:
+        return
     environment["UV_PYTHON_DOWNLOADS"] = "never"
     temporary_root = root / "target"
     temporary_root.mkdir(exist_ok=True)
