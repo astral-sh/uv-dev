@@ -94,6 +94,7 @@ mod project;
 mod publish;
 mod pylock;
 mod python;
+mod report;
 pub(crate) mod reporters;
 #[cfg(feature = "self-update")]
 mod self_update;
