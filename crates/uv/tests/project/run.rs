@@ -3572,6 +3572,25 @@ fn run_stdin() -> Result<()> {
 }
 
 #[test]
+#[cfg(windows)]
+fn run_stdin_invalid_utf8_windows() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let script = context.temp_dir.child("script");
+    fs_err::write(script.path(), b"print('Hello, world!') # \xff\n")?;
+
+    uv_snapshot!(context.filters(), context.run().arg("-").stdin(std::fs::File::open(script)?), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    Hello, world!
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
+#[test]
 fn run_package() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
