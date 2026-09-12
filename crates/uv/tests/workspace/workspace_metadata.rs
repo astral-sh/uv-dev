@@ -5,6 +5,7 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileWriteStr, PathChild, PathCreateDir};
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
+use fs_err::File;
 use futures::executor::block_on;
 use indoc::{formatdoc, indoc};
 use url::Url;
@@ -410,6 +411,315 @@ print("Hello, world!")
     );
 
     assert!(!context.temp_dir.child("script.py.lock").exists());
+
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_script_stdin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let script = context.temp_dir.child("script.py");
+    script.write_str(
+        r#"# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+
+print("Hello, world!")
+"#,
+    )?;
+
+    let lockfile = context.temp_dir.child("-.lock");
+    lockfile.write_str("invalid lockfile")?;
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .workspace_metadata()
+            .arg("--script")
+            .arg("-")
+            .stdin(File::open(script.path())?.into_file()),
+        @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "script": {
+        "path": "[TEMP_DIR]/-",
+        "id": "script+[TEMP_DIR]/-"
+      },
+      "requires_python": ">=3.12",
+      "conflicts": {
+        "sets": []
+      },
+      "resolution": {
+        "script+[TEMP_DIR]/-": {
+          "kind": "script",
+          "path": "[TEMP_DIR]/-",
+          "dependencies": []
+        }
+      }
+    }
+
+    ----- stderr -----
+    warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
+    Resolved in [TIME]
+    "#
+    );
+
+    assert_eq!(fs_err::read_to_string(lockfile.path())?, "invalid lockfile");
+    assert!(!context.temp_dir.child("-").exists());
+
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_script_stdin_missing_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let script = context.temp_dir.child("script.py");
+    script.write_str("print('Hello, world!')\n")?;
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .workspace_metadata()
+            .arg("--script")
+            .arg("-")
+            .stdin(File::open(script.path())?.into_file()),
+        @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The script provided on stdin does not contain a PEP 723 metadata tag
+    "#
+    );
+
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_script_stdin_includes_existing_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    let script = context.temp_dir.child("script.py");
+    script.write_str(
+        r#"# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+"#,
+    )?;
+
+    context
+        .run()
+        .arg("-")
+        .stdin(File::open(script.path())?.into_file())
+        .assert()
+        .success();
+
+    let assert = context
+        .workspace_metadata()
+        .arg("--script")
+        .arg("-")
+        .stdin(File::open(script.path())?.into_file())
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+
+    let mut filters = context.filters();
+    filters.push((r"/environments-v2/[a-f0-9]{16}", "/environments-v2/[HASH]"));
+
+    insta::with_settings!({ filters => filters }, {
+        insta::assert_json_snapshot!(metadata["environment"], @r#"
+        {
+          "python": {
+            "implementation": "cpython",
+            "path": "[CACHE_DIR]/environments-v2/[HASH]/[BIN]/[PYTHON]",
+            "version": "3.12.[X]"
+          },
+          "root": "[CACHE_DIR]/environments-v2/[HASH]"
+        }
+        "#);
+    });
+
+    assert!(!context.temp_dir.child("-.lock").exists());
+
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_script_stdin_sync() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    let wheel = context
+        .temp_dir
+        .child("metadata_stdin-0.1.0-py3-none-any.whl");
+    write_wheel(
+        wheel.path(),
+        "metadata-stdin",
+        "metadata_stdin-0.1.0",
+        &[("metadata_stdin/__init__.py", "")],
+    )?;
+    let wheel_url = Url::from_file_path(wheel.path())
+        .map_err(|()| anyhow::anyhow!("failed to convert wheel path to file URL"))?;
+
+    let script = context.temp_dir.child("script.py");
+    script.write_str(&format!(
+        r#"# /// script
+# requires-python = ">=3.12"
+# dependencies = ["metadata-stdin @ {wheel_url}"]
+# ///
+"#
+    ))?;
+
+    let assert = context
+        .workspace_metadata()
+        .arg("--script")
+        .arg("-")
+        .arg("--sync")
+        .stdin(File::open(script.path())?.into_file())
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+
+    let mut filters = context.filters();
+    filters.push((r"/environments-v2/[a-f0-9]{16}", "/environments-v2/[HASH]"));
+
+    insta::with_settings!({ filters => filters }, {
+        insta::assert_json_snapshot!(serde_json::json!({
+            "environment": metadata["environment"],
+            "module_owners": metadata["module_owners"],
+            "script": metadata["script"],
+        }), @r#"
+        {
+          "environment": {
+            "python": {
+              "implementation": "cpython",
+              "path": "[CACHE_DIR]/environments-v2/[HASH]/[BIN]/[PYTHON]",
+              "version": "3.12.[X]"
+            },
+            "root": "[CACHE_DIR]/environments-v2/[HASH]"
+          },
+          "module_owners": {
+            "metadata_stdin": [
+              {
+                "package_id": "metadata-stdin==0.1.0@path+[TEMP_DIR]/metadata_stdin-0.1.0-py3-none-any.whl"
+              }
+            ]
+          },
+          "script": {
+            "id": "script+[TEMP_DIR]/-",
+            "path": "[TEMP_DIR]/-"
+          }
+        }
+        "#);
+    });
+
+    assert!(!context.temp_dir.child("-.lock").exists());
+
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_script_stdin_rejects_lockfile_modes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let script = context.temp_dir.child("script.py");
+    script.write_str(
+        r#"# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+"#,
+    )?;
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .workspace_metadata()
+            .arg("--script")
+            .arg("-")
+            .arg("--locked")
+            .stdin(File::open(script.path())?.into_file()),
+        @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Unable to find lockfile for Python script, but `--locked` was provided. To create a lockfile, run `uv lock --script`.
+    "#
+    );
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .workspace_metadata()
+            .arg("--script")
+            .arg("-")
+            .arg("--frozen")
+            .stdin(File::open(script.path())?.into_file()),
+        @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Unable to find lockfile for Python script, but `--frozen` was provided. To create a lockfile, run `uv lock --script`.
+    "#
+    );
+
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_script_stdin_ignores_environment_lockfile_modes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let script = context.temp_dir.child("script.py");
+    script.write_str(
+        r#"# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+"#,
+    )?;
+
+    let locked = context
+        .workspace_metadata()
+        .arg("--script")
+        .arg("-")
+        .env(EnvVars::UV_LOCKED, "1")
+        .stdin(File::open(script.path())?.into_file())
+        .assert()
+        .success();
+    let frozen = context
+        .workspace_metadata()
+        .arg("--script")
+        .arg("-")
+        .env(EnvVars::UV_FROZEN, "1")
+        .stdin(File::open(script.path())?.into_file())
+        .assert()
+        .success();
+
+    let locked = String::from_utf8(locked.get_output().stderr.clone())?;
+    let frozen = String::from_utf8(frozen.get_output().stderr.clone())?;
+
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(serde_json::json!({
+            "frozen": frozen.lines().collect::<Vec<_>>(),
+            "locked": locked.lines().collect::<Vec<_>>(),
+        }), @r#"
+        {
+          "frozen": [
+            "warning: No lockfile found for Python script (ignoring `--frozen`); run `uv lock --script` to generate a lockfile",
+            "warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.",
+            "Resolved in [TIME]"
+          ],
+          "locked": [
+            "warning: No lockfile found for Python script (ignoring `UV_LOCKED=1`); run `uv lock --script` to generate a lockfile",
+            "warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.",
+            "Resolved in [TIME]"
+          ]
+        }
+        "#);
+    });
 
     Ok(())
 }

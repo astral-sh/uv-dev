@@ -4,6 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use anyhow::bail;
 use itertools::Itertools;
 use owo_colors::OwoColorize;
 use tracing::{debug, trace, warn};
@@ -65,7 +66,8 @@ use crate::commands::reporters::{PythonDownloadReporter, ResolverReporter};
 use crate::commands::{capitalize, conjunction, pip};
 use crate::printer::Printer;
 use crate::settings::{
-    FrozenSource, InstallerSettingsRef, LockedSource, ResolverInstallerSettings, ResolverSettings,
+    FrozenSource, InstallerSettingsRef, LockCheck, LockedSource, ResolverInstallerSettings,
+    ResolverSettings,
 };
 
 pub(crate) mod add;
@@ -114,6 +116,48 @@ impl From<FrozenSource> for MissingLockfileSource {
     fn from(source: FrozenSource) -> Self {
         Self::Frozen(source)
     }
+}
+
+/// Report lockfile requirements for a Python script without an existing lockfile.
+pub(crate) fn handle_missing_script_lockfile(
+    lock_check: LockCheck,
+    frozen: Option<FrozenSource>,
+) -> anyhow::Result<()> {
+    if let LockCheck::Enabled(lock_check) = lock_check {
+        match lock_check {
+            LockedSource::Cli(_) => {
+                bail!(
+                    "Unable to find lockfile for Python script, but `{lock_check}` was provided. To create a lockfile, run `{}`.",
+                    "uv lock --script".green(),
+                );
+            }
+            LockedSource::Env => {
+                warn_user!(
+                    "No lockfile found for Python script (ignoring `{lock_check}`); run `{}` to generate a lockfile",
+                    "uv lock --script".green(),
+                );
+            }
+        }
+    }
+
+    if let Some(frozen_source) = frozen {
+        match frozen_source {
+            FrozenSource::Cli(_) => {
+                bail!(
+                    "Unable to find lockfile for Python script, but `{frozen_source}` was provided. To create a lockfile, run `{}`.",
+                    "uv lock --script".green(),
+                );
+            }
+            FrozenSource::Env => {
+                warn_user!(
+                    "No lockfile found for Python script (ignoring `--frozen`); run `{}` to generate a lockfile",
+                    "uv lock --script".green(),
+                );
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(thiserror::Error, Debug)]
