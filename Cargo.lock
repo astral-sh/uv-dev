@@ -7694,6 +7694,7 @@ dependencies = [
  "assert_fs",
  "clap",
  "fs-err",
+ "futures",
  "glob",
  "ignore",
  "insta",
