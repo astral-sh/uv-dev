@@ -195,6 +195,11 @@ pub fn uv_command_with_cache(cache: &Path) -> Command {
             root.join("target/profiling")
                 .join(format!("uv{}", std::env::consts::EXE_SUFFIX))
         });
+    uv_command_with_binary(&binary, cache)
+}
+
+/// Run a selected optimized uv binary with an isolated cache directory.
+pub fn uv_command_with_binary(binary: &Path, cache: &Path) -> Command {
     assert!(
         binary.is_file(),
         "Missing benchmark binary {}. Run `cargo build --locked --profile profiling --bin uv`.",
