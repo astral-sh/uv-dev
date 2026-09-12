@@ -59,6 +59,7 @@ use crate::settings::{
     PipInstallSettings, PipListSettings, PipShowSettings, PipSyncSettings, PipUninstallSettings,
     PublishSettings, resolve_color,
 };
+use crate::verbosity::Verbosity;
 
 pub(crate) mod child;
 pub mod commands;
@@ -67,6 +68,7 @@ mod install_source;
 mod logging;
 pub(crate) mod printer;
 pub(crate) mod settings;
+mod verbosity;
 
 /// Construct the shared HTTP client builder from the resolved global settings.
 pub(crate) fn base_client_builder<'a>(globals: &GlobalSettings) -> BaseClientBuilder<'a> {
@@ -131,9 +133,21 @@ impl uv_errors::Hinted for ExternallyInstalledError {
     }
 }
 
-#[instrument(skip_all)]
 #[doc(hidden)]
 pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Result<ExitStatus> {
+    let verbosity = Verbosity::from_args(&cli.top_level.global_args)?;
+    Box::pin(run_with_verbosity(cli, global_initialization, verbosity)).await
+}
+
+#[instrument(name = "run", skip_all)]
+async fn run_with_verbosity(
+    mut cli: Cli,
+    global_initialization: GlobalInitialization,
+    verbosity: Verbosity,
+) -> Result<ExitStatus> {
+    cli.top_level.global_args.quiet = verbosity.quiet;
+    cli.top_level.global_args.verbose = verbosity.verbose;
+
     let config_discovery = ConfigDiscovery::from_args(cli.top_level.no_config);
 
     // Configure color before resolving settings so argument errors retain their styling.
@@ -3045,11 +3059,16 @@ where
         }
     };
 
+    let verbosity = match Verbosity::from_args(&cli.top_level.global_args) {
+        Ok(verbosity) => verbosity,
+        Err(err) => err.exit(),
+    };
+
     // Configure a printer for failures that escape command execution. The resolved `no_progress`
     // setting can differ due to environment variables, but it does not affect important stderr.
     let printer = Printer::new(
-        cli.top_level.global_args.quiet,
-        cli.top_level.global_args.verbose,
+        verbosity.quiet,
+        verbosity.verbose,
         cli.top_level.global_args.no_progress,
     );
 
@@ -3062,7 +3081,11 @@ where
             .build()
             .expect("Failed building the Runtime");
         // Box the large main future to avoid stack overflows.
-        let result = runtime.block_on(Box::pin(run(cli, GlobalInitialization::Initialize)));
+        let result = runtime.block_on(Box::pin(run_with_verbosity(
+            cli,
+            GlobalInitialization::Initialize,
+            verbosity,
+        )));
         // Avoid waiting for pending tasks to complete.
         //
         // The resolver may have kicked off HTTP requests during resolution that
