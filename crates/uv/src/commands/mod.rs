@@ -81,6 +81,7 @@ use crate::commands::pip::operations::ChangedDist;
 use crate::printer::Printer;
 
 mod auth;
+mod binary;
 pub(crate) mod build_backend;
 mod build_frontend;
 mod cache_clean;
