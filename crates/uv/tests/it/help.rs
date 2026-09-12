@@ -3,6 +3,18 @@ use uv_static::EnvVars;
 use uv_test::uv_snapshot;
 
 #[test]
+fn pip_install_user_suggests_tool_install() {
+    let context = uv_test::test_context_with_versions!(&[]);
+
+    uv_snapshot!(context.filters(), context.command()
+        .args(["--offline", "--no-python-downloads", "pip", "install", "--no-index", "--user", "uv-user-install-placeholder"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: pip's `--user` is unsupported (use `uv venv` to create a virtual environment, or use `uv tool install` to install a command-line tool)
+    ");
+}
+
+#[test]
 fn cert_is_limited_to_pip() {
     let context = uv_test::test_context_with_versions!(&[]);
 
