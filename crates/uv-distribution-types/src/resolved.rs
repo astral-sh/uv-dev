@@ -8,8 +8,8 @@ use uv_pypi_types::Yanked;
 
 use crate::{
     BuiltDist, Dist, DistributionId, DistributionMetadata, Identifier, IndexUrl, InstalledDist,
-    Name, PrioritizedDist, RegistryBuiltWheel, RegistrySourceDist, ResourceId, SourceDist,
-    VersionId, VersionOrUrlRef,
+    Name, PrioritizedDist, RegistryBuiltWheel, RegistrySourceDist, RequestedDist, ResourceId,
+    SourceDist, VersionId, VersionOrUrlRef,
 };
 
 /// A distribution that can be used for resolution and installation.
@@ -104,39 +104,18 @@ impl ResolvedDist {
 
 impl ResolvedDistRef<'_> {
     pub fn to_owned(&self) -> ResolvedDist {
-        match self {
-            Self::InstallableRegistrySourceDist { sdist, prioritized } => {
-                // This is okay because we're only here if the prioritized dist
-                // has an sdist, so this always succeeds.
-                let source = prioritized.source_dist().expect("a source distribution");
-                assert_eq!(
-                    (&sdist.name, &sdist.version),
-                    (&source.name, &source.version),
-                    "expected chosen sdist to match prioritized sdist"
-                );
-                ResolvedDist::Installable {
-                    dist: Arc::new(Dist::Source(SourceDist::Registry(source))),
-                    version: Some(sdist.version.clone()),
-                }
-            }
-            Self::InstallableRegistryBuiltDist {
-                wheel, prioritized, ..
-            } => {
-                assert_eq!(
-                    Some(&wheel.filename),
-                    prioritized.best_wheel().map(|(wheel, _)| &wheel.filename),
-                    "expected chosen wheel to match best wheel"
-                );
-                // This is okay because we're only here if the prioritized dist
-                // has at least one wheel, so this always succeeds.
-                let built = prioritized.built_dist().expect("at least one wheel");
-                ResolvedDist::Installable {
-                    dist: Arc::new(Dist::Built(BuiltDist::Registry(built))),
-                    version: Some(wheel.filename.version.clone()),
-                }
-            }
-            Self::Installed { dist } => ResolvedDist::Installed {
-                dist: Arc::new((*dist).clone()),
+        let selected_version = match self {
+            Self::InstallableRegistrySourceDist { sdist, .. } => Some(&sdist.version),
+            Self::InstallableRegistryBuiltDist { wheel, .. } => Some(&wheel.filename.version),
+            Self::Installed { .. } => None,
+        };
+        match RequestedDist::from(self) {
+            RequestedDist::Installable(dist) => ResolvedDist::Installable {
+                dist: Arc::new(dist),
+                version: selected_version.cloned(),
+            },
+            RequestedDist::Installed(dist) => ResolvedDist::Installed {
+                dist: Arc::new(dist),
             },
         }
     }
