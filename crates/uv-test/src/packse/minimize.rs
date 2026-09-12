@@ -83,6 +83,30 @@ pub struct MinimizedScenario<Failure = ScenarioFailureKind> {
 /// A replayable universal lockfile counterexample.
 pub type MinimizedLockScenario = MinimizedScenario<LockScenarioFailureKind>;
 
+/// The exact inputs retained when a candidate fails without a classified semantic mismatch.
+///
+/// Both documents retain their original fixture metadata. Their recorded expectations are not a
+/// new claim about the candidate; replaying either document recomputes the oracle's result.
+#[derive(Debug)]
+pub struct InterruptedReduction {
+    pub candidate: ScenarioDocument,
+    pub last_reproducer: ScenarioDocument,
+    pub attempts: usize,
+    pub accepted: usize,
+}
+
+impl fmt::Display for InterruptedReduction {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "reduction stopped after {} candidate checks",
+            self.attempts
+        )
+    }
+}
+
+impl std::error::Error for InterruptedReduction {}
+
 /// Remove graph elements while preserving the initial semantic failure kind.
 ///
 /// `check` must run the real fixed-environment comparison with fresh state for each candidate.
@@ -249,9 +273,12 @@ fn reduce_document<Failure: Copy + Eq>(
                     }
                     Some(_) => {}
                     None => {
-                        return Err(error.context(format!(
-                            "reduction stopped after {attempts} candidate checks"
-                        )));
+                        return Err(error.context(InterruptedReduction {
+                            candidate,
+                            last_reproducer: current,
+                            attempts,
+                            accepted,
+                        }));
                     }
                 },
             }
@@ -756,8 +783,9 @@ packages = { a = "1" }
 
     #[test]
     fn lock_reduction_stops_on_unclassified_candidate_errors() -> Result<()> {
+        let document = document()?;
         let mut checks = 0;
-        let error = minimize_lock_scenario(&document()?, &[target()], 100, 100, |_| {
+        let error = minimize_lock_scenario(&document, &[target()], 100, 100, |_| {
             checks += 1;
             if checks == 1 {
                 Err(anyhow::anyhow!("fresh lock was rejected")
@@ -770,6 +798,16 @@ packages = { a = "1" }
         assert_eq!(LockScenarioFailureKind::from_error(&error), None);
         assert_eq!(checks, 2);
         insta::assert_snapshot!(error, @"reduction stopped after 1 candidate checks");
+        let interrupted = error
+            .downcast_ref::<InterruptedReduction>()
+            .expect("the unclassified candidate is retained");
+        assert_eq!(interrupted.attempts, 1);
+        assert_eq!(interrupted.accepted, 0);
+        assert_eq!(interrupted.last_reproducer.to_toml()?, document.to_toml()?);
+        assert_eq!(
+            interrupted.candidate.scenario()?.root.requires.len() + 1,
+            document.scenario()?.root.requires.len()
+        );
         Ok(())
     }
 }

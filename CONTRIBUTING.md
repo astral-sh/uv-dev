@@ -187,7 +187,10 @@ cargo dev minimize-scenario --uv target/debug/uv --lock --project-selections --p
 
 The reducer removes root requirements, packages, versions, extras, and dependency edges while
 retaining the original kind of semantic mismatch. Each candidate uses a fresh cache. Unrelated
-command failures stop the reduction, and `--max-attempts` bounds the number of candidate checks. A
+command failures stop the reduction, and `--max-attempts` bounds the number of candidate checks. If
+an unclassified candidate stops the reduction, a neighboring `.interrupted` directory retains that
+raw candidate, the last reproducing input, and the failure. Re-run the candidate with
+`check-scenarios` and a new `--failure-dir` to capture its commands and served distributions. A
 deletion-minimal result only means that no supported single deletion retains the mismatch, not that
 the graph is globally minimal. The output records the concrete Python and platform target and avoids
 claiming a preferred solution or universal satisfiability from one environment.
