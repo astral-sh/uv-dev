@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use itertools::Itertools;
 use reqwest::{Certificate, Identity};
-use rustls_native_certs::{CertificateResult, load_certs_from_paths};
+use rustls_native_certs::{CertificateResult, load_certs_from_paths, load_native_certs};
 use rustls_pki_types::CertificateDer;
 use tracing::{debug, warn};
 use webpki::{Error as WebPkiError, anchor_from_trusted_cert};
@@ -210,6 +210,31 @@ impl Certificates {
         // Each [`CertificateDer`] in [`webpki_root_certs::TLS_SERVER_ROOT_CERTS`] borrows from static
         // data, so cloning into the [`Vec`] only copies the fat pointer, not the certificate bytes.
         Self(webpki_root_certs::TLS_SERVER_ROOT_CERTS.to_vec())
+    }
+
+    /// Load system certificates for platforms where uv cannot use the native verifier.
+    ///
+    /// Returns `None` if no usable trust anchors were found.
+    pub(crate) fn from_system() -> Option<Self> {
+        let result = load_native_certs();
+        for error in &result.errors {
+            warn!("Failed to load system certificate: {error}");
+        }
+
+        let mut certs = Self::from(result);
+        certs.0.retain(|cert| {
+            if let Err(error) = anchor_from_trusted_cert(cert) {
+                warn!("Ignoring invalid system certificate: {error}");
+                return false;
+            }
+            true
+        });
+        certs.dedup();
+
+        if certs.0.is_empty() {
+            return None;
+        }
+        Some(certs)
     }
 
     /// Load a custom CA certificate bundle from an explicit path.
@@ -503,11 +528,61 @@ pub(crate) fn read_identity(
 mod tests {
     use std::ffi::OsString;
 
+    use anyhow::Result;
+
     use super::*;
 
     fn generate_cert_pem() -> String {
         let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
         cert.cert.pem()
+    }
+
+    /// System stores can contain duplicate and unusable certificates alongside valid roots.
+    #[test]
+    fn test_from_system_valid_bundle() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let cert_path = dir.path().join("cert.pem");
+        let cert = generate_cert_pem();
+        fs_err::write(
+            &cert_path,
+            format!(
+                "{cert}\n{cert}\n-----BEGIN CERTIFICATE-----\nAAE=\n-----END CERTIFICATE-----\n"
+            ),
+        )?;
+
+        temp_env::with_vars(
+            [
+                (EnvVars::SSL_CERT_FILE, Some(cert_path.as_os_str())),
+                (EnvVars::SSL_CERT_DIR, None),
+            ],
+            || {
+                let certs = Certificates::from_system().expect("valid root should be loaded");
+                assert_eq!(certs.iter().count(), 1);
+            },
+        );
+        Ok(())
+    }
+
+    /// An unusable system store must not fall back to bundled certificate roots.
+    #[test]
+    fn test_from_system_empty_or_invalid_returns_none() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let cert_path = dir.path().join("cert.pem");
+
+        for contents in [
+            "",
+            "-----BEGIN CERTIFICATE-----\nAAE=\n-----END CERTIFICATE-----\n",
+        ] {
+            fs_err::write(&cert_path, contents)?;
+            temp_env::with_vars(
+                [
+                    (EnvVars::SSL_CERT_FILE, Some(cert_path.as_os_str())),
+                    (EnvVars::SSL_CERT_DIR, None),
+                ],
+                || assert!(Certificates::from_system().is_none()),
+            );
+        }
+        Ok(())
     }
 
     #[test]

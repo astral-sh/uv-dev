@@ -30,6 +30,10 @@ When using system certificates, certificate verification is performed by
 [`rustls-platform-verifier`](https://github.com/rustls/rustls-platform-verifier), which delegates to
 the operating system's certificate verifier.
 
+On Android, uv instead loads certificate files, including Termux's CA bundle, and verifies
+certificates with `rustls`. Android's Java-based certificate verifier is unavailable to standalone
+executables.
+
 ## Custom certificates
 
 To use custom CA certificates, set the
