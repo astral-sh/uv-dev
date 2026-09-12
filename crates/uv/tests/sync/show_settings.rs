@@ -4653,6 +4653,43 @@ fn run_pep723_script_preview_features() -> anyhow::Result<()> {
     windows,
     ignore = "Configuration tests are not yet supported on Windows"
 )]
+fn isolated_env_ignores_config() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let baseline = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.pip_compile())
+            .arg("--show-settings")
+            .arg("requirements.in")
+    );
+
+    let config = context.temp_dir.child("uv.toml");
+    config.write_str(indoc::indoc! {r#"
+        [pip]
+        resolution = "lowest-direct"
+    "#})?;
+
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.pip_compile())
+        .arg("--show-settings")
+        .arg("requirements.in")
+        .env(EnvVars::UV_ISOLATED, "1"), @"
+    ...
+     }
+
+     ----- stderr -----
+    +warning: The `UV_ISOLATED` environment variable is deprecated. Instead, unset `UV_ISOLATED` and use `--no-config` to prevent uv from discovering configuration files.
+    ...
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
 fn system_certs_cli_aliases_override_env() {
     let context = uv_test::test_context!("3.12");
 
