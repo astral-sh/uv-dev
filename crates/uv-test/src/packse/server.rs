@@ -8,6 +8,7 @@
 //! `/files/*` routes as scenario packages.
 
 use std::collections::HashMap;
+use std::net::{Ipv4Addr, TcpListener};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -86,6 +87,27 @@ impl PackseServer {
         Self::from_scenario(&scenario)
     }
 
+    /// Start two different scenarios whose index URLs sort in the given order.
+    ///
+    /// Lockfiles use registry URLs to order otherwise-identical package versions. Reserving both
+    /// ports before assigning scenarios keeps that order independent of ephemeral port allocation.
+    pub fn new_ordered_pair(first: &str, second: &str) -> anyhow::Result<(Self, Self)> {
+        let first = Scenario::from_path(&scenarios_dir().join(first))?;
+        let second = Scenario::from_path(&scenarios_dir().join(second))?;
+        let mut listeners = [
+            TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?,
+            TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?,
+        ];
+        if listeners[0].local_addr()?.to_string() > listeners[1].local_addr()?.to_string() {
+            listeners.swap(0, 1);
+        }
+        let [first_listener, second_listener] = listeners;
+        Ok((
+            Self::start_index_on(build_server_index(&first), true, Some(first_listener)),
+            Self::start_index_on(build_server_index(&second), true, Some(second_listener)),
+        ))
+    }
+
     /// Start a mock server with no packages (only cached build dependencies).
     ///
     /// Useful as a dummy index that will 404 for any non-cached package lookup.
@@ -127,11 +149,19 @@ impl PackseServer {
     }
 
     fn start_index(index: ServerIndex, hashes: bool) -> Self {
+        Self::start_index_on(index, hashes, None)
+    }
+
+    fn start_index_on(index: ServerIndex, hashes: bool, listener: Option<TcpListener>) -> Self {
         let index = Arc::new(index);
         let server_index = Arc::clone(&index);
-        let server = HttpServer::start(move |request, server_uri| {
+        let handler = move |request: &Request, server_uri: &str| {
             handle_request(request, server_uri, &server_index, hashes)
-        });
+        };
+        let server = match listener {
+            Some(listener) => HttpServer::start_with_listener(listener, handler),
+            None => HttpServer::start(handler),
+        };
 
         Self { server, index }
     }
@@ -461,6 +491,36 @@ mod tests {
         let _index = build_server_index(&Scenario::empty());
 
         assert!(vendor_artifacts().all(|artifact| !artifact.is_loaded()));
+    }
+
+    #[tokio::test]
+    async fn ordered_pair_keeps_scenario_contents_distinct() -> Result<()> {
+        let (first, second) =
+            PackseServer::new_ordered_pair("packages/tool-list.toml", "packages/workflow.toml")?;
+        assert!(first.index_url() < second.index_url());
+        let client = reqwest::Client::builder().no_proxy().build()?;
+        for (server, present, absent) in [
+            (&first, "list-tool", "workflow-direct"),
+            (&second, "workflow-direct", "list-tool"),
+        ] {
+            assert_eq!(
+                client
+                    .get(format!("{}{present}/", server.index_url()))
+                    .send()
+                    .await?
+                    .status(),
+                StatusCode::OK,
+            );
+            assert_eq!(
+                client
+                    .get(format!("{}{absent}/", server.index_url()))
+                    .send()
+                    .await?
+                    .status(),
+                StatusCode::NOT_FOUND,
+            );
+        }
+        Ok(())
     }
 
     #[test]
