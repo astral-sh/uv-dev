@@ -270,7 +270,7 @@ impl CandidateSelector {
                 let installed_dists = installed_packages.get_packages(package_name);
                 match installed_dists.as_slice() {
                     [] => {}
-                    [dist] => {
+                    [dist] if !dist.has_invalid_installer_metadata() => {
                         if dist.version() == version {
                             debug!(
                                 "Found installed version of {dist} that satisfies preference in {range}"
@@ -296,6 +296,9 @@ impl CandidateSelector {
                                 choice_kind: VersionChoiceKind::Preference,
                             });
                         }
+                    }
+                    [dist] => {
+                        debug!("Ignoring installed {dist}: invalid installer metadata");
                     }
                     // We do not consider installed distributions with multiple versions because
                     // during installation these must be reinstalled from the remote
@@ -380,7 +383,7 @@ impl CandidateSelector {
         let installed_dists = installed_packages.get_packages(package_name);
         match installed_dists.as_slice() {
             [] => {}
-            [dist] => {
+            [dist] if !dist.has_invalid_installer_metadata() => {
                 let version = dist.version();
 
                 // Respect the version range for this requirement.
@@ -405,6 +408,9 @@ impl CandidateSelector {
                     dist: CandidateDist::Compatible(CompatibleDist::InstalledDist(dist)),
                     choice_kind: VersionChoiceKind::Installed,
                 });
+            }
+            [dist] => {
+                debug!("Ignoring installed {dist}: invalid installer metadata");
             }
             // We do not consider installed distributions with multiple versions because
             // during installation these must be reinstalled from the remote
