@@ -1,4 +1,6 @@
 use std::path::Path;
+#[cfg(unix)]
+use std::sync::{Arc, OnceLock};
 
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
@@ -8,6 +10,10 @@ use async_zip::{Compression, ZipEntryBuilder};
 use futures::executor::block_on;
 use indoc::{formatdoc, indoc};
 use url::Url;
+#[cfg(unix)]
+use wiremock::matchers::{method, path};
+#[cfg(unix)]
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_static::EnvVars;
 use uv_test::{copy_dir_ignore, uv_snapshot};
@@ -454,6 +460,87 @@ fn workspace_metadata_script_includes_existing_environment() -> Result<()> {
           },
           "root": "[CACHE_DIR]/environments-v2/script-[HASH]"
         }
+        "#);
+    });
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn workspace_metadata_script_reuses_resolution_interpreter() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    let [(_, resolution_python), (_, later_python)] = context.python_versions.as_slice() else {
+        return Err(anyhow::anyhow!("expected Python 3.12 and 3.11"));
+    };
+
+    let resolution_python_dir = context.temp_dir.join("resolution-python");
+    fs_err::create_dir_all(&resolution_python_dir)?;
+    uv_fs::create_symlink(resolution_python, resolution_python_dir.join("python3"))?;
+
+    let staged_python_dir = context.temp_dir.join("staged-python");
+    fs_err::create_dir_all(&staged_python_dir)?;
+    uv_fs::create_symlink(later_python, staged_python_dir.join("python3"))?;
+    let later_python_dir = context.temp_dir.join("later-python");
+
+    let wheel = context
+        .temp_dir
+        .child("changing_python-0.1.0-py3-none-any.whl");
+    write_wheel(
+        wheel.path(),
+        "changing-python",
+        "changing_python-0.1.0",
+        &[("changing_python.py", "")],
+    )?;
+    let wheel_bytes = fs_err::read(wheel.path())?;
+
+    let server = MockServer::start().await;
+    let published = Arc::new(OnceLock::new());
+    let publish_once = Arc::clone(&published);
+    let staged_python_dir_for_server = staged_python_dir.clone();
+    let later_python_dir_for_server = later_python_dir.clone();
+    Mock::given(method("GET"))
+        .and(path("/changing_python-0.1.0-py3-none-any.whl"))
+        .respond_with(move |_: &wiremock::Request| {
+            let publish_result = publish_once.get_or_init(|| {
+                fs_err::rename(&staged_python_dir_for_server, &later_python_dir_for_server)
+                    .map_err(|error| error.to_string())
+            });
+            if let Err(error) = publish_result {
+                return ResponseTemplate::new(500).set_body_string(error.clone());
+            }
+            ResponseTemplate::new(200).set_body_bytes(wheel_bytes.clone())
+        })
+        .mount(&server)
+        .await;
+
+    let script = context.temp_dir.child("script.py");
+    script.write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["changing-python @ {server}/changing_python-0.1.0-py3-none-any.whl"]
+        # ///
+        "#,
+        server = server.uri(),
+    })?;
+    // The first search path entry appears while resolution fetches the wheel above.
+    let python_search_path = std::env::join_paths([&later_python_dir, &resolution_python_dir])?;
+
+    let assert = context
+        .workspace_metadata()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--sync")
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, python_search_path)
+        .assert()
+        .success();
+    assert!(published.get().is_some_and(Result::is_ok));
+
+    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(metadata["environment"]["python"]["version"], @r#"
+        "3.12.[X]"
         "#);
     });
 

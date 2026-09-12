@@ -2123,6 +2123,7 @@ impl ScriptEnvironment {
     pub(crate) async fn get_or_init(
         script: Pep723ItemRef<'_>,
         python_request: Option<PythonRequest>,
+        interpreter_request: Option<PythonRequest>,
         client_builder: &BaseClientBuilder<'_>,
         python_preference: PythonPreference,
         python_downloads: PythonDownloads,
@@ -2145,6 +2146,9 @@ impl ScriptEnvironment {
         let upgradeable = python_request
             .as_ref()
             .is_none_or(|request| !request.includes_patch());
+        // An interpreter selected by an earlier operation should constrain discovery without
+        // changing whether the environment can follow managed Python patch upgrades.
+        let python_request = interpreter_request.or(python_request);
 
         match ScriptInterpreter::discover(
             script,
