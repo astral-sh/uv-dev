@@ -165,6 +165,77 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  benchmarks-macos:
+    name: "walltime on macos"
+    runs-on: namespace-profile-macos-15
+    if: ${{ github.repository == 'astral-sh/uv' || (github.repository == 'astral-sh/uv-dev' && github.ref != 'refs/heads/main') }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write # for codspeed authentication
+    steps:
+      - name: "Checkout Branch"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ inputs.save-rust-cache == 'true' }}
+
+      - name: "Install Rust toolchain"
+        run: rustup show
+
+      - name: "Install codspeed"
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
+        with:
+          tool: cargo-codspeed
+
+      - name: "Build optimized benchmark command"
+        run: cargo build --locked --profile profiling --bin uv
+
+      - name: "Prepare immutable benchmark fixtures"
+        run: |
+          python3 scripts/benchmark/prepare-fixtures.py
+          UV_PYTHON_INSTALL_DIR=.cache/bench-python ./target/profiling/uv --no-config python install --no-bin --no-registry 3.11.13
+
+      - name: "Check profile import compatibility"
+        run: >-
+          UV_PYTHON_INSTALL_DIR=.cache/bench-python ./target/profiling/uv
+          --no-config --offline run --no-project --managed-python --python 3.11.13
+          -m unittest discover -s scripts/tests -p test_codspeed_profiles.py
+
+      - name: "Build benchmarks"
+        run: cargo codspeed build -m walltime --profile profiling -p uv-bench --bench system_certificates
+
+      - name: "Retain benchmark profiles"
+        id: profiles
+        if: ${{ github.repository == 'astral-sh/uv' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: ./target/profiling/uv run --script scripts/codspeed-profiles.py start "$RUNNER_TEMP/codspeed-walltime-macos" walltime-macos >> "$GITHUB_OUTPUT"
+
+      - name: "Run benchmarks"
+        uses: CodSpeedHQ/action@4296e51e7041e24dadb86d1d6e8b9320d223dbe8 # v5.0.3
+        with:
+          run: cargo codspeed run
+          mode: walltime
+          upload-url: ${{ steps.profiles.outputs.upload-url }}
+
+      - name: "Finish profile capture"
+        if: ${{ always() && steps.profiles.outcome == 'success' }}
+        run: ./target/profiling/uv run --script scripts/codspeed-profiles.py finish "$RUNNER_TEMP/codspeed-walltime-macos"
+
+      - name: "Upload benchmark profiles"
+        if: ${{ steps.profiles.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codspeed-profiles-walltime-macos
+          path: |
+            ${{ runner.temp }}/codspeed-walltime-macos/metadata.json
+            ${{ runner.temp }}/codspeed-walltime-macos/profile.tar
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 30
+
   benchmarks-simulated:
     name: "simulated"
     runs-on: depot-ubuntu-24.04-4
