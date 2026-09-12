@@ -291,13 +291,15 @@ jobs:
         run: UV_PYTHON_INSTALL_DIR=.cache/bench-python ./.cache/bench-release/pgo/uv --no-config python install --no-bin --no-registry 3.11.13
 
       - name: "Prime application resolutions"
-        run: python scripts/benchmark/prepare-incremental-locks.py --uv .cache/bench-release/pgo/uv
+        run: |
+          python scripts/benchmark/prepare-incremental-locks.py --uv .cache/bench-release/pgo/uv
+          python scripts/benchmark/prepare-release-workloads.py
 
       - name: "Build benchmarks"
         run: cargo codspeed build -m walltime --profile profiling -p uv-bench --bench release_runtime
 
       - name: "Create artifact archive"
-        run: tar -cvf benchmarks-release.tar target/codspeed .cache/bench-release .cache/bench-incremental-locks .cache/bench-python
+        run: tar -cvf benchmarks-release.tar target/codspeed .cache/bench-release .cache/bench-incremental-locks .cache/bench-release-workloads .cache/bench-python
 
       - name: "Upload benchmark artifacts"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
