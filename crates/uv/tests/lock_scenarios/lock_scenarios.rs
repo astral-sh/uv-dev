@@ -3011,9 +3011,9 @@ fn fork_non_fork_marker_transitive() -> Result<()> {
 }
 
 /// This is like `non-local-fork-marker-transitive`, but the marker expressions are
-/// placed on sibling dependency specifications. However, the actual dependency on
-/// `c` is indirect, and thus, there's no fork detected by the universal resolver.
-/// This in turn results in an unresolvable conflict on `c`.
+/// placed on sibling dependency specifications. The actual dependency on `c` is
+/// indirect, so eager dependency forking cannot see the conflict. Retrying the
+/// failed approximation with the disjoint root markers yields a valid resolution.
 ///
 ///
 /// ```text
@@ -3062,27 +3062,109 @@ fn fork_non_local_fork_marker_direct() -> Result<()> {
     cmd.env_remove(EnvVars::UV_EXCLUDE_NEWER);
     cmd.arg("--index-url").arg(server.index_url());
     uv_snapshot!(filters, cmd, @"
-    exit_code: 1 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
-    error: No solution found when resolving dependencies
-      cause: Because all versions of b depend on c>=2.0.0 and all versions of a depend on c<2.0.0, we can conclude that all versions of a and all versions of b are incompatible.
-             And because your project depends on a{sys_platform == 'linux'}==1.0.0 and b{sys_platform == 'darwin'}==1.0.0, we can conclude that your project's requirements are unsatisfiable.
+    Resolved 5 packages in [TIME]
     "
     );
+
+    let lock = context.read("uv.lock");
+    insta::with_settings!({
+        filters => filters,
+    }, {
+        assert_snapshot!(
+            lock, @r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+        resolution-markers = [
+            "sys_platform == 'darwin'",
+            "sys_platform != 'darwin'",
+        ]
+
+        [[package]]
+        name = "a"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "c", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" } },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/a-1.0.0.tar.gz", hash = "sha256:c0663f06e9c7256235e4579393e732691d5bcd8b79ba1a8eecafcca55f0b5d9d", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl", hash = "sha256:5d2c4c4727710bbebc7686abcd3141bf9d319d7db186e865224ddeff31d9c1a8", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "b"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "c", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" } },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/b-1.0.0.tar.gz", hash = "sha256:b6213768869eb03524367c295dac83900998623a732b5ddaa42031af47ad4d96", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/b-1.0.0-py3-none-any.whl", hash = "sha256:ab4a9932efe8c9f85aa2a86aea036a1b234272ca079955bd0577b4e728c7e242", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "c"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "sys_platform != 'darwin'",
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/c-1.0.0.tar.gz", hash = "sha256:699a07ff61aab66fcba4883a94c6d2b61afb7797fa956ae36f2efdf30d9dfbc7", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/c-1.0.0-py3-none-any.whl", hash = "sha256:78c0da7c5681d751d38b2e60c78d1e29d6125d91e68e5aeb22372fa66527ff95", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "c"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "sys_platform == 'darwin'",
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/c-2.0.0.tar.gz", hash = "sha256:98b5a57ae857516af05cd6bc5c3f74d31a78cd6559594a51b00b45c4e3891905", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/c-2.0.0-py3-none-any.whl", hash = "sha256:4a585f74490e3c09faafdb7df1ebb51d5e41c67b82ef08b5b5fd2f4c251b4b23", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "a", marker = "sys_platform == 'linux'" },
+            { name = "b", marker = "sys_platform == 'darwin'" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "a", marker = "sys_platform == 'linux'", specifier = "==1.0.0" },
+            { name = "b", marker = "sys_platform == 'darwin'", specifier = "==1.0.0" },
+        ]
+        "#
+        );
+    });
+
+    // Assert the idempotence of `uv lock` when resolving from the lockfile (`--locked`).
+    context
+        .lock()
+        .arg("--locked")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
 
     Ok(())
 }
 
-/// This setup introduces dependencies on two distinct versions of `c`, where
-/// each such dependency has a marker expression attached that would normally
-/// make them disjoint. In a non-universal resolver, this is no problem. But in a
-/// forking resolver that tries to create one universal resolution, this can lead
-/// to two distinct versions of `c` in the resolution. This is in and of itself
-/// not a problem, since that is an expected scenario for universal resolution.
-/// The problem in this case is that because the dependency specifications for
-/// `c` occur in two different points (i.e., they are not sibling dependency
-/// specifications) in the dependency graph, the forking resolver does not "detect"
-/// it, and thus never forks and thus this results in "no resolution."
+/// The incompatible requirements on `c` occur in two different packages. Their
+/// disjoint platform markers permit one version of `c` in each environment.
+/// Retrying a failed universal approximation with those markers must find both
+/// versions even though eager dependency forking cannot see the conflict.
 ///
 ///
 /// ```text
@@ -3131,13 +3213,101 @@ fn fork_non_local_fork_marker_transitive() -> Result<()> {
     cmd.env_remove(EnvVars::UV_EXCLUDE_NEWER);
     cmd.arg("--index-url").arg(server.index_url());
     uv_snapshot!(filters, cmd, @"
-    exit_code: 1 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
-    error: No solution found when resolving dependencies
-      cause: Because all versions of b depend on c{sys_platform == 'darwin'}>=2.0.0 and all versions of a depend on c{sys_platform == 'linux'}<2.0.0, we can conclude that all versions of a and all versions of b are incompatible.
-             And because your project depends on a==1.0.0 and b==1.0.0, we can conclude that your project's requirements are unsatisfiable.
+    Resolved 5 packages in [TIME]
     "
     );
+
+    let lock = context.read("uv.lock");
+    insta::with_settings!({
+        filters => filters,
+    }, {
+        assert_snapshot!(
+            lock, @r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+        resolution-markers = [
+            "sys_platform == 'darwin'",
+            "sys_platform != 'darwin'",
+        ]
+
+        [[package]]
+        name = "a"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "c", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "sys_platform == 'linux'" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/a-1.0.0.tar.gz", hash = "sha256:f700bd6cf6c929a9d282bbf9d200a56849d71b93f059c46a5ac7a7ed694ac275", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl", hash = "sha256:ab8794308294fb0d64fe339a642386da4ae976baf370068e087a0a173f76b75a", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "b"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "c", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "sys_platform == 'darwin'" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/b-1.0.0.tar.gz", hash = "sha256:d6993f77c784de42e150f111902a2c88a867c555077dacaa6c3a1b71398784a4", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/b-1.0.0-py3-none-any.whl", hash = "sha256:8cb0c9eaa95e2cf767bf5e6caf4fecfa1b2b9fc09be53c5768372704574ac244", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "c"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "sys_platform != 'darwin'",
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/c-1.0.0.tar.gz", hash = "sha256:699a07ff61aab66fcba4883a94c6d2b61afb7797fa956ae36f2efdf30d9dfbc7", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/c-1.0.0-py3-none-any.whl", hash = "sha256:78c0da7c5681d751d38b2e60c78d1e29d6125d91e68e5aeb22372fa66527ff95", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "c"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "sys_platform == 'darwin'",
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/c-2.0.0.tar.gz", hash = "sha256:98b5a57ae857516af05cd6bc5c3f74d31a78cd6559594a51b00b45c4e3891905", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/c-2.0.0-py3-none-any.whl", hash = "sha256:4a585f74490e3c09faafdb7df1ebb51d5e41c67b82ef08b5b5fd2f4c251b4b23", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "a" },
+            { name = "b" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "a", specifier = "==1.0.0" },
+            { name = "b", specifier = "==1.0.0" },
+        ]
+        "#
+        );
+    });
+
+    // Assert the idempotence of `uv lock` when resolving from the lockfile (`--locked`).
+    context
+        .lock()
+        .arg("--locked")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
 
     Ok(())
 }

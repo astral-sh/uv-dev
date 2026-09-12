@@ -236,6 +236,30 @@ pub(crate) fn derivation_tree_packages(
     packages.into_iter()
 }
 
+/// Whether a no-solution proof depends on metadata that could not be retrieved or read.
+pub(crate) fn derivation_tree_has_metadata_failure(derivation_tree: &ErrorTree) -> bool {
+    let mut trees = vec![derivation_tree];
+    while let Some(tree) = trees.pop() {
+        match tree {
+            DerivationTree::External(external) => match external {
+                External::Custom(_, _, reason) => {
+                    if reason.is_metadata_failure() {
+                        return true;
+                    }
+                }
+                External::FromDependencyOf(..)
+                | External::NoVersions(..)
+                | External::NotRoot(..) => {}
+            },
+            DerivationTree::Derived(derived) => {
+                trees.push(&derived.cause1);
+                trees.push(&derived.cause2);
+            }
+        }
+    }
+    false
+}
+
 /// Drop an exclusively owned derivation tree without recursing through its children.
 ///
 /// Shared [`Arc`] children are left for their remaining owners; once the last owner is processed,

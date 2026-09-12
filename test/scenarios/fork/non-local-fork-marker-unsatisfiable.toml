@@ -1,0 +1,42 @@
+name = "fork-non-local-fork-marker-unsatisfiable"
+description = '''
+The requirements on `c` are compatible in their disjoint Linux and macOS
+environments. The remaining environment still requires `d`, which has an
+unconditionally missing dependency. Retrying the first conflict must not omit
+that remaining environment.
+'''
+
+[testgen]
+disable = true
+
+[resolver_options]
+universal = true
+
+[expected]
+satisfiable = false
+
+[root]
+requires_python = ">=3.12,<3.15"
+requires = [
+  "a==1; sys_platform == 'linux'",
+  "b==1; sys_platform == 'darwin'",
+  "d; sys_platform != 'linux' and sys_platform != 'darwin'",
+]
+
+[packages.a.versions."1.0.0"]
+requires = ["c<2"]
+sdist = false
+
+[packages.b.versions."1.0.0"]
+requires = ["c>=2"]
+sdist = false
+
+[packages.c.versions."1.0.0"]
+sdist = false
+
+[packages.c.versions."2.0.0"]
+sdist = false
+
+[packages.d.versions."1.0.0"]
+requires = ["missing"]
+sdist = false

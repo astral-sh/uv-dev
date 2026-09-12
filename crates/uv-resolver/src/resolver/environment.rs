@@ -2,15 +2,18 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use itertools::Itertools;
+use rustc_hash::FxHashSet;
 use tracing::trace;
 
 use uv_distribution_types::{RequiresPython, RequiresPythonRange};
+use uv_normalize::PackageName;
 use uv_pep440::VersionSpecifiers;
-use uv_pep508::{MarkerEnvironment, MarkerTree};
+use uv_pep508::{MarkerEnvironment, MarkerTree, MarkerTreeKind};
 use uv_pypi_types::{
     ConflictItem, ConflictItemRef, ConflictKind, ConflictKindRef, ResolverMarkerEnvironment,
 };
 
+use crate::error::{ErrorTree, derivation_tree_has_metadata_failure, derivation_tree_packages};
 use crate::pubgrub::{PubGrubDependency, PubGrubPackage};
 use crate::resolver::ForkState;
 use crate::universal_marker::{ConflictMarker, UniversalMarker};
@@ -702,15 +705,115 @@ pub(crate) fn fork_version_by_marker(
     Some((with_marker, without_marker))
 }
 
+/// Find a strict environment partition for a semantic no-solution proof.
+///
+/// An unavailable-metadata failure is not evidence that dependency markers conflict. Proxy
+/// packages can lose the original unavailable reason in a `NoVersions` leaf, so callers also
+/// provide the metadata-failure state for every package named in the proof.
+pub(crate) fn fork_on_no_solution(
+    env: &ResolverEnvironment,
+    python_requirement: &PythonRequirement,
+    error: &ErrorTree,
+    has_metadata_failure: impl Fn(&PackageName) -> bool,
+) -> Option<(ResolverEnvironment, ResolverEnvironment)> {
+    env.fork_markers()?;
+    if derivation_tree_has_metadata_failure(error) {
+        return None;
+    }
+    let packages: Vec<_> = derivation_tree_packages(error).collect();
+    if packages
+        .iter()
+        .filter_map(|package| package.name_no_root())
+        .any(has_metadata_failure)
+    {
+        return None;
+    }
+    fork_on_disjoint_markers(
+        env,
+        python_requirement,
+        packages.into_iter().map(PubGrubPackage::marker),
+    )
+}
+
+/// Find a strict environment partition that separates disjoint markers from a failed resolution.
+///
+/// Dependency forking is deliberately conservative: requirements for the same package that occur
+/// on different edges might be combined even when their markers never hold together. A failure
+/// proof containing such markers can be retried in narrower environments. The two proof markers
+/// need not cover the parent, so the partition is always a marker and its complement.
+fn fork_on_disjoint_markers(
+    env: &ResolverEnvironment,
+    python_requirement: &PythonRequirement,
+    markers: impl IntoIterator<Item = MarkerTree>,
+) -> Option<(ResolverEnvironment, ResolverEnvironment)> {
+    let effective = env.fork_markers()?.and(python_requirement.to_marker_tree());
+    let markers: BTreeSet<_> = markers
+        .into_iter()
+        .filter(|&marker| {
+            is_environment_marker(marker)
+                && !effective.is_disjoint(marker)
+                && !effective.is_disjoint(marker.negate())
+        })
+        .collect();
+
+    // Use structural marker order, not proof traversal or BDD allocation order. Requiring both
+    // intersections to be nonempty makes each child strictly narrower; this predicate therefore
+    // cannot be selected again in either child.
+    for &marker in &markers {
+        let included = effective.and(marker);
+        if markers.iter().any(|&other| included.is_disjoint(other)) {
+            return fork_version_by_marker(env, marker);
+        }
+    }
+    None
+}
+
+/// Whether a marker depends only on the concrete Python environment.
+///
+/// Extra, group, and conflict selections have their own resolver state and cannot be split by
+/// treating them as independent environment variables.
+fn is_environment_marker(marker: MarkerTree) -> bool {
+    let mut pending = vec![marker];
+    let mut visited = FxHashSet::default();
+    while let Some(marker) = pending.pop() {
+        if !visited.insert(marker) {
+            continue;
+        }
+        match marker.kind() {
+            MarkerTreeKind::True | MarkerTreeKind::False => {}
+            MarkerTreeKind::Version(marker) => {
+                pending.extend(marker.edges().map(|(_, child)| child));
+            }
+            MarkerTreeKind::String(marker) => {
+                pending.extend(marker.children().map(|(_, child)| child));
+            }
+            MarkerTreeKind::In(marker) => {
+                pending.extend(marker.children().map(|(_, child)| child));
+            }
+            MarkerTreeKind::Contains(marker) => {
+                pending.extend(marker.children().map(|(_, child)| child));
+            }
+            MarkerTreeKind::List(_) | MarkerTreeKind::Extra(_) => return false,
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use std::ops::Bound;
     use std::sync::LazyLock;
 
+    use pubgrub::{Derived, External, Map};
+    use reqwest::StatusCode;
+    use uv_normalize::{ExtraName, GroupName};
     use uv_pep440::{LowerBound, UpperBound, Version};
     use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder};
 
     use uv_distribution_types::{RequiresPython, RequiresPythonRange};
+
+    use crate::pubgrub::Range;
+    use crate::resolver::{UnavailablePackage, UnavailableReason, UnavailableVersion};
 
     use super::*;
 
@@ -835,5 +938,239 @@ mod tests {
             resolver_env.narrow_python_requirement(&pyreq),
             Some(python_requirement("3.11")),
         );
+    }
+
+    #[test]
+    fn disjoint_marker_recovery_partitions_the_whole_environment() {
+        let python_requirement = python_requirement("3.12");
+        let env = ResolverEnvironment::universal(vec![]).narrow_environment(marker(
+            "python_version >= '3.12' and sys_platform != 'win32'",
+        ));
+        let markers = [
+            marker("sys_platform == 'linux'"),
+            marker("sys_platform == 'darwin'"),
+        ];
+        let (left, right) = fork_on_disjoint_markers(&env, &python_requirement, markers)
+            .expect("the proof has disjoint markers");
+        let parent = env.fork_markers().expect("universal environment");
+        let left_marker = left.fork_markers().expect("universal environment");
+        let right_marker = right.fork_markers().expect("universal environment");
+        assert_eq!(left_marker.or(right_marker), parent);
+        assert!(left_marker.is_disjoint(right_marker));
+        assert_ne!(left_marker, parent);
+        assert_ne!(right_marker, parent);
+        assert!(!left_marker.is_disjoint(python_requirement.to_marker_tree()));
+        assert!(!right_marker.is_disjoint(python_requirement.to_marker_tree()));
+
+        assert_eq!(
+            fork_on_disjoint_markers(&env, &python_requirement, markers.into_iter().rev()),
+            Some((left.clone(), right.clone()))
+        );
+        assert_eq!(
+            fork_on_disjoint_markers(&left, &python_requirement, markers),
+            None
+        );
+        assert_eq!(
+            fork_on_disjoint_markers(&right, &python_requirement, markers),
+            None
+        );
+    }
+
+    #[test]
+    fn disjoint_marker_recovery_respects_requires_python() {
+        let python_requirement = PythonRequirement::from_marker_environment(
+            &MARKER_ENV,
+            RequiresPython::from_specifiers(">=3.12,<3.15".parse().expect("valid Python range")),
+        );
+        let env = ResolverEnvironment::universal(vec![]);
+        for boundary in ["3.12", "3.15"] {
+            assert_eq!(
+                fork_on_disjoint_markers(
+                    &env,
+                    &python_requirement,
+                    [
+                        marker(&format!("python_version < '{boundary}'")),
+                        marker(&format!("python_version >= '{boundary}'")),
+                    ],
+                ),
+                None
+            );
+        }
+
+        // These predicates overlap outside the supported Python range, but not inside it.
+        let markers = [
+            marker("python_version >= '3.15' or sys_platform == 'linux'"),
+            marker("python_version >= '3.15' or sys_platform == 'darwin'"),
+        ];
+        assert!(!markers[0].is_disjoint(markers[1]));
+        let (left, right) = fork_on_disjoint_markers(&env, &python_requirement, markers)
+            .expect("the supported domain makes the markers disjoint");
+        for child in [left, right] {
+            assert!(child.included_by_marker(python_requirement.to_marker_tree()));
+        }
+    }
+
+    #[test]
+    fn disjoint_marker_recovery_preserves_conflict_rules() {
+        let package: PackageName = "project".parse().expect("valid package");
+        let extra: ExtraName = "feature".parse().expect("valid extra");
+        let group: GroupName = "dev".parse().expect("valid group");
+        let include = ConflictItem::from((package.clone(), extra));
+        let exclude = ConflictItem::from((package, group));
+        let env = ResolverEnvironment::universal(vec![])
+            .filter_by_group([Ok(include.clone()), Err(exclude.clone())])
+            .expect("consistent conflict rules");
+        let (left, right) = fork_on_disjoint_markers(
+            &env,
+            &python_requirement("3.12"),
+            [
+                marker("sys_platform == 'win32'"),
+                marker("sys_platform != 'win32'"),
+            ],
+        )
+        .expect("the proof has disjoint markers");
+        for child in [left, right] {
+            assert!(child.included_by_group(include.as_ref()));
+            assert!(!child.included_by_group(exclude.as_ref()));
+            assert_eq!(
+                child
+                    .try_universal_markers()
+                    .expect("universal environment")
+                    .conflict(),
+                env.try_universal_markers()
+                    .expect("universal environment")
+                    .conflict()
+            );
+        }
+    }
+
+    #[test]
+    fn disjoint_marker_recovery_excludes_selection_markers() {
+        let env = ResolverEnvironment::universal(vec![]);
+        let python_requirement = python_requirement("3.12");
+        for selection in [
+            "extra == 'feature'",
+            "'feature' in extras",
+            "'dev' in dependency_groups",
+        ] {
+            let selection = marker(selection);
+            assert!(!is_environment_marker(selection));
+            assert_eq!(
+                fork_on_disjoint_markers(
+                    &env,
+                    &python_requirement,
+                    [selection, selection.negate()],
+                ),
+                None
+            );
+        }
+        assert!(is_environment_marker(marker(
+            "python_version >= '3.12' and (sys_platform in 'linux, win32' or 'arm' in platform_machine)"
+        )));
+    }
+
+    #[test]
+    fn disjoint_marker_recovery_requires_universal_disjointness() {
+        let python_requirement = python_requirement("3.12");
+        let markers = [
+            marker("sys_platform == 'win32'"),
+            marker("sys_platform != 'win32'"),
+        ];
+        let specific =
+            ResolverEnvironment::specific(ResolverMarkerEnvironment::from(MARKER_ENV.clone()));
+        assert_eq!(
+            fork_on_disjoint_markers(&specific, &python_requirement, markers),
+            None
+        );
+        assert_eq!(
+            fork_on_disjoint_markers(
+                &ResolverEnvironment::universal(vec![]),
+                &python_requirement,
+                [
+                    marker("python_version >= '3.13'"),
+                    marker("sys_platform == 'win32'"),
+                ],
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn no_solution_recovery_excludes_metadata_failures() {
+        let env = ResolverEnvironment::universal(vec![]);
+        let python_requirement = python_requirement("3.12");
+        let parent = PubGrubPackage::from_package(
+            "a".parse().expect("valid package"),
+            None,
+            None,
+            marker("sys_platform == 'win32'"),
+        );
+        let missing = PubGrubPackage::from_package(
+            "missing".parse().expect("valid package"),
+            None,
+            None,
+            marker("sys_platform != 'win32'"),
+        );
+        let proof = |reason| {
+            ErrorTree::Derived(Derived {
+                terms: Map::default(),
+                shared_id: None,
+                cause1: Arc::new(ErrorTree::External(External::FromDependencyOf(
+                    parent.clone(),
+                    Range::full(),
+                    missing.clone(),
+                    Range::full(),
+                ))),
+                cause2: Arc::new(ErrorTree::External(External::Custom(
+                    missing.clone(),
+                    Range::full(),
+                    reason,
+                ))),
+            })
+        };
+
+        let absent = proof(UnavailableReason::Package(UnavailablePackage::NotFound));
+        assert!(fork_on_no_solution(&env, &python_requirement, &absent, |_| false).is_some());
+        // A proxy's `NoVersions` leaf can hide a package-level retrieval failure.
+        let masked = ErrorTree::Derived(Derived {
+            terms: Map::default(),
+            shared_id: None,
+            cause1: Arc::new(ErrorTree::External(External::FromDependencyOf(
+                parent.clone(),
+                Range::full(),
+                missing.clone(),
+                Range::full(),
+            ))),
+            cause2: Arc::new(ErrorTree::External(External::NoVersions(
+                missing.clone(),
+                Range::full(),
+            ))),
+        });
+        assert_eq!(
+            fork_on_no_solution(&env, &python_requirement, &masked, |name| {
+                name == missing.name_no_root().expect("named package")
+            }),
+            None
+        );
+
+        for reason in [
+            UnavailableReason::Package(UnavailablePackage::Offline),
+            UnavailableReason::Package(UnavailablePackage::Network(StatusCode::FORBIDDEN)),
+            UnavailableReason::Version(UnavailableVersion::InvalidMetadata),
+            UnavailableReason::Version(UnavailableVersion::InconsistentMetadata),
+            UnavailableReason::Version(UnavailableVersion::InvalidStructure),
+            UnavailableReason::Version(UnavailableVersion::Offline),
+            UnavailableReason::Version(UnavailableVersion::RequiresPython(
+                ">=3.13".parse().expect("valid Python range"),
+            )),
+            UnavailableReason::Version(UnavailableVersion::Network(
+                StatusCode::SERVICE_UNAVAILABLE,
+            )),
+        ] {
+            assert_eq!(
+                fork_on_no_solution(&env, &python_requirement, &proof(reason), |_| false),
+                None
+            );
+        }
     }
 }

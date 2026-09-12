@@ -6,6 +6,8 @@ use async_zip::base::write::ZipFileWriter;
 #[cfg(feature = "test-universal")]
 use async_zip::{Compression, ZipEntryBuilder};
 use indoc::{formatdoc, indoc};
+#[cfg(feature = "test-universal")]
+use insta::allow_duplicates;
 use insta::assert_snapshot;
 #[cfg(feature = "test-universal")]
 use serde_json::json;
@@ -18581,6 +18583,185 @@ fn lock_omits_impossible_group_edges() -> Result<()> {
         .assert()
         .success();
     assert_eq!(context.read("uv.lock"), initial);
+    Ok(())
+}
+
+/// Disjoint markers on different dependency edges must not require an unreachable package.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_recovers_disjoint_transitive_markers() -> Result<()> {
+    let server = PackseServer::new("fork/non-local-fork-marker-unreachable.toml");
+    allow_duplicates! {
+        for (requirements, selection) in [
+            ("dependencies = [\"a; sys_platform == 'win32'\"]", &[][..]),
+            (
+                "[project.optional-dependencies]\nfeature = [\"a; sys_platform == 'win32'\"]",
+                &["--extra", "feature"][..],
+            ),
+            (
+                "[dependency-groups]\ndev = [\"a; sys_platform == 'win32'\"]",
+                &["--group", "dev"][..],
+            ),
+        ] {
+            let context = uv_test::test_context!("3.12");
+            context
+                .temp_dir
+                .child("pyproject.toml")
+                .write_str(&formatdoc! {r#"
+                    [project]
+                    name = "project"
+                    version = "0.1.0"
+                    requires-python = ">=3.12,<3.15"
+                    {requirements}
+                "#})?;
+            let command = || {
+                let mut command = context.lock();
+                command
+                    .arg("--no-config")
+                    .arg("--index-url")
+                    .arg(server.index_url())
+                    .arg("--no-build")
+                    .env_remove(EnvVars::UV_EXCLUDE_NEWER);
+                command
+            };
+
+            uv_snapshot!(context.filters(), command(), @"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Resolved 2 packages in [TIME]
+            ");
+            let initial = context.read("uv.lock");
+
+            uv_snapshot!(context.filters(), command().arg("--check").arg("--refresh").arg("--preview-features").arg("lockfile-format-check"), @"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Resolved 2 packages in [TIME]
+            ");
+            assert_eq!(context.read("uv.lock"), initial);
+
+            uv_snapshot!(context.filters(), context.export()
+                .arg("--frozen")
+                .arg("--no-default-groups")
+                .arg("--no-emit-project")
+                .arg("--no-header")
+                .arg("--no-hashes")
+                .arg("--no-annotate")
+                .args(selection), @"
+            exit_code: 0 (success)
+            ----- stdout -----
+            a==1.0.0 ; sys_platform == 'win32'
+            ");
+        }
+        Ok::<(), anyhow::Error>(())
+    }?;
+    Ok(())
+}
+
+/// Restarted marker forks must rediscover explicit index constraints from the project roots.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_disjoint_marker_recovery_reconstructs_sources() -> Result<()> {
+    let server = PackseServer::new("fork/non-local-fork-marker-unreachable.toml");
+    let empty_index = PackseServer::empty();
+    let index_url = server.index_url();
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12,<3.15"
+            dependencies = ["a; sys_platform == 'win32'"]
+
+            [tool.uv.sources]
+            a = {{ index = "fixture" }}
+
+            [[tool.uv.index]]
+            name = "fixture"
+            url = "{index_url}"
+            explicit = true
+        "#})?;
+    let command = || {
+        let mut command = context.lock();
+        command
+            .arg("--default-index")
+            .arg(empty_index.index_url())
+            .arg("--no-build")
+            .env_remove(EnvVars::UV_EXCLUDE_NEWER);
+        command
+    };
+
+    uv_snapshot!(context.filters(), command(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let initial = context.read("uv.lock");
+    let lock = toml::from_str::<toml::Value>(&initial)?;
+    let package = lock["package"]
+        .as_array()
+        .expect("locked packages")
+        .iter()
+        .find(|package| package["name"].as_str() == Some("a"))
+        .expect("a is locked");
+    assert_eq!(
+        package["source"]["registry"].as_str(),
+        Some(index_url.as_str())
+    );
+
+    uv_snapshot!(context.filters(), command().arg("--check").arg("--refresh").arg("--preview-features").arg("lockfile-format-check"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), initial);
+    Ok(())
+}
+
+/// A retry must retain the region outside the disjoint markers in the first failed proof.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_disjoint_marker_recovery_keeps_unsatisfiable_regions() -> Result<()> {
+    let server = PackseServer::new("fork/non-local-fork-marker-unsatisfiable.toml");
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12,<3.15"
+            dependencies = [
+                "a==1; sys_platform == 'linux'",
+                "b==1; sys_platform == 'darwin'",
+                "d; sys_platform != 'linux' and sys_platform != 'darwin'",
+            ]
+        "#})?;
+
+    let filters: Vec<_> = context
+        .filters()
+        .into_iter()
+        .chain([(
+            // This hint is only shown when the current platform doesn't match the target.
+            r"\nhint: The resolution failed for an environment that is not the current one[^\n]*",
+            "",
+        )])
+        .collect();
+
+    uv_snapshot!(filters, context.lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("--no-build")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies for split (markers: sys_platform != 'darwin')
+      cause: Because missing was not found in the package registry and all versions of d depend on missing, we can conclude that all versions of d cannot be used.
+             And because your project depends on d{sys_platform != 'darwin' and sys_platform != 'linux'}, we can conclude that your project's requirements are unsatisfiable.
+    ");
     Ok(())
 }
 
