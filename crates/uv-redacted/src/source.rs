@@ -224,15 +224,16 @@ fn redact_url_token(
         let mut has_password = false;
         if let Some(at) = authority.rfind('@') {
             let userinfo = &authority[..at];
-            if let Some(colon) = userinfo.find(':') {
-                has_password = true;
-                let start = authority_start + colon + 1;
+            let (username, password) = userinfo.split_once(':').unwrap_or((userinfo, ""));
+            // URL parsing removes an empty password delimiter, so its username follows the
+            // passwordless policy even though the original source spelling retains the colon.
+            has_password = !password.is_empty();
+            if has_password {
+                let start = authority_start + username.len() + 1;
                 let end = authority_start + at;
-                if start < end {
-                    ranges.push(offset + start..offset + end);
-                }
-            } else if !userinfo.is_empty() && !is_generic_git_username(scheme, userinfo, false) {
-                ranges.push(offset + authority_start..offset + authority_start + at);
+                ranges.push(offset + start..offset + end);
+            } else if !username.is_empty() && !is_generic_git_username(scheme, username, false) {
+                ranges.push(offset + authority_start..offset + authority_start + username.len());
             }
         }
 
@@ -360,6 +361,46 @@ mod tests {
             ),
             ["git", "secret"],
         );
+    }
+
+    #[test]
+    fn source_url_empty_password_uses_username_policy() {
+        let token = "https://token:@example.invalid/";
+        assert_eq!(components(token), ["token"]);
+        assert_eq!(
+            DisplaySafeUrl::parse(token)
+                .expect("a URL with an empty password is valid")
+                .to_string(),
+            "https://****@example.invalid/",
+        );
+        assert!(components("https://:@example.invalid/").is_empty());
+        assert!(components("https://@example.invalid/").is_empty());
+        assert_eq!(
+            components("https://token@part:@example.invalid/"),
+            ["token@part"],
+        );
+        assert_eq!(components("https://:secret@example.invalid/"), ["secret"]);
+        assert_eq!(
+            components("https://user:secret@example.invalid/"),
+            ["secret"],
+        );
+
+        let git = "ssh://git:@example.invalid/repo";
+        assert!(components(git).is_empty());
+        assert_eq!(
+            DisplaySafeUrl::parse(git)
+                .expect("a Git URL with an empty password is valid")
+                .to_string(),
+            "ssh://git@example.invalid/repo",
+        );
+        assert!(components("git+ssh://git:@example.invalid/repo").is_empty());
+        assert!(components("git+https://git:@example.invalid/repo").is_empty());
+        assert_eq!(components("https://git:@example.invalid/repo"), ["git"]);
+        assert_eq!(
+            components("ssh://git:secret@example.invalid/repo"),
+            ["secret"],
+        );
+        assert_eq!(components("ssh://git::@example.invalid/repo"), [":"]);
     }
 
     #[test]
