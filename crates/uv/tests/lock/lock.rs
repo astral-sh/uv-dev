@@ -18768,6 +18768,57 @@ fn lock_eager_environment_restart_keeps_unsatisfiable_regions() -> Result<()> {
     Ok(())
 }
 
+/// Repeated conflicts must not attempt to reprioritize the virtual Python constraint.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_conflicts_keep_fixed_python_priority() -> Result<()> {
+    let server = PackseServer::new("fork/conflict-priority-python-restart.toml");
+    let context = uv_test::test_context!("3.13");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.13,<3.15"
+            dependencies = [
+                "a==1; python_full_version < '3.14'",
+                "b>=1,<3; sys_platform == 'win32'",
+                "b<2; sys_platform != 'win32'",
+            ]
+        "#})?;
+
+    let filters: Vec<_> = context
+        .filters()
+        .into_iter()
+        .chain([(
+            // This hint is only shown when the current platform doesn't match the target.
+            r"\nhint: The resolution failed for an environment that is not the current one[^\n]*\n",
+            "",
+        )])
+        .collect();
+
+    uv_snapshot!(filters, context.lock()
+        .arg("--no-config")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("--no-build")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies for split (markers: python_full_version == '3.13.*' and sys_platform == 'win32')
+      cause: Because the requested Python version (>=3.13, <3.15) does not satisfy Python>=3.14 and c==1.0.0 depends on Python>=3.14, we can conclude that c==1.0.0 cannot be used.
+             And because only c>=1.0.0 is available, we can conclude that c<=1.0.0 cannot be used.
+             And because all versions of a depend on c and c>=2.0.0 depends on b<2, we can conclude that all versions of a depend on b<2.
+             And because your project depends on a{python_full_version < '3.14'}==1.0.0 and b{sys_platform == 'win32'}==2.0.0, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: The `requires-python` value (>=3.13, <3.15) includes Python versions that are not supported by your dependencies (e.g., c==1.0.0 only supports >=3.14). Consider using a more restrictive `requires-python` value (like >=3.14).
+    ");
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    Ok(())
+}
+
 /// Restarted marker forks must rediscover explicit index constraints from the project roots.
 #[cfg(feature = "test-universal")]
 #[test]
