@@ -49,7 +49,7 @@ For more information, see: https://developer.apple.com/xcode/")]
 
 impl Error {
     /// Emit a user-friendly warning about the patching failure.
-    pub fn warn_user(&self, installation: &ManagedPythonInstallation) {
+    pub(crate) fn warn_user(&self, installation: &ManagedPythonInstallation) {
         let error = if tracing::enabled!(tracing::Level::DEBUG) {
             format!("\nUnderlying error: {self}")
         } else {

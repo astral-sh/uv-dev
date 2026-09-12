@@ -521,7 +521,7 @@ impl ManagedPythonInstallation {
     }
 
     /// Ensure the environment contains the canonical Python executable names.
-    pub fn ensure_canonical_executables(&self) -> Result<(), Error> {
+    fn ensure_canonical_executables(&self) -> Result<(), Error> {
         let python = self.executable(false);
 
         let canonical_names = &["python"];
@@ -580,7 +580,7 @@ impl ManagedPythonInstallation {
 
     /// Ensure the environment is marked as externally managed with the
     /// standard `EXTERNALLY-MANAGED` file.
-    pub fn ensure_externally_managed(&self) -> Result<(), Error> {
+    fn ensure_externally_managed(&self) -> Result<(), Error> {
         if self.key.os().is_emscripten() {
             // Emscripten's stdlib is a zip file so we can't put an
             // EXTERNALLY-MANAGED inside.
@@ -608,11 +608,7 @@ impl ManagedPythonInstallation {
         Ok(())
     }
 
-    /// Ensure that the `sysconfig` data is patched to match the installation path.
-    pub fn ensure_sysconfig_patched(&self) -> Result<(), Error> {
-        self.ensure_sysconfig_patched_at(self.path())
-    }
-
+    /// Ensure that the `sysconfig` data is patched to match the final installation path.
     fn ensure_sysconfig_patched_at(&self, install_root: &Path) -> Result<(), Error> {
         if cfg!(unix) && !self.key.os().is_windows() {
             if self.key.os().is_emscripten() {
@@ -639,10 +635,6 @@ impl ManagedPythonInstallation {
     /// link to the correct location for the Python library.
     ///
     /// See <https://github.com/astral-sh/uv/issues/10598> for more information.
-    pub fn ensure_dylib_patched(&self) -> Result<(), macos_dylib::Error> {
-        self.ensure_dylib_patched_at(self.path())
-    }
-
     fn ensure_dylib_patched_at(&self, install_root: &Path) -> Result<(), macos_dylib::Error> {
         if cfg!(target_os = "macos") {
             if self.key().os().is_like_darwin() {
@@ -668,7 +660,7 @@ impl ManagedPythonInstallation {
     }
 
     /// Ensure the build version is written to a BUILD file in the installation directory.
-    pub fn ensure_build_file(&self) -> Result<(), Error> {
+    fn ensure_build_file(&self) -> Result<(), Error> {
         if let Some(ref build) = self.build {
             let build_file = self.path.join("BUILD");
             fs::write(&build_file, build.as_ref())?;
