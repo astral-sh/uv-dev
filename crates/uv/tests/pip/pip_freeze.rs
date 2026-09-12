@@ -7,16 +7,14 @@ use url::Url;
 use uv_test::uv_snapshot;
 
 #[test]
-fn freeze_many() -> Result<()> {
+fn freeze_many() {
     let context = uv_test::test_context!("3.12");
 
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
-
-    // Run `pip sync`.
+    // Install packages.
     context
-        .pip_sync()
-        .arg(requirements_txt.path())
+        .pip_install()
+        .args(["MarkupSafe==2.1.3", "tomli==2.0.1"])
+        .arg("--no-deps")
         .assert()
         .success();
 
@@ -29,8 +27,6 @@ fn freeze_many() -> Result<()> {
     tomli==2.0.1
     "
     );
-
-    Ok(())
 }
 
 /// List a package with multiple installed distributions in a virtual environment.
@@ -39,27 +35,23 @@ fn freeze_many() -> Result<()> {
 fn freeze_duplicate() -> Result<()> {
     use uv_fs::copy_dir_all;
 
-    // Sync a version of `pip` into a virtual environment.
+    // Install a version of `pip` into a virtual environment.
     let context1 = uv_test::test_context!("3.12");
-    let requirements_txt = context1.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("pip==21.3.1")?;
 
-    // Run `pip sync`.
     context1
-        .pip_sync()
-        .arg(requirements_txt.path())
+        .pip_install()
+        .arg("pip==21.3.1")
+        .arg("--no-deps")
         .assert()
         .success();
 
-    // Sync a different version of `pip` into a virtual environment.
+    // Install a different version of `pip` into a virtual environment.
     let context2 = uv_test::test_context!("3.12");
-    let requirements_txt = context2.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("pip==22.1.1")?;
 
-    // Run `pip sync`.
     context2
-        .pip_sync()
-        .arg(requirements_txt.path())
+        .pip_install()
+        .arg("pip==22.1.1")
+        .arg("--no-deps")
         .assert()
         .success();
 
@@ -88,16 +80,15 @@ fn freeze_duplicate() -> Result<()> {
 
 /// List a direct URL package in a virtual environment.
 #[test]
-fn freeze_url() -> Result<()> {
+fn freeze_url() {
     let context = uv_test::test_context!("3.12");
 
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio\niniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl")?;
-
-    // Run `pip sync`.
+    // Install packages without their dependencies.
     context
-        .pip_sync()
-        .arg(requirements_txt.path())
+        .pip_install()
+        .arg("anyio")
+        .arg("iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl")
+        .arg("--no-deps")
         .assert()
         .success();
 
@@ -114,8 +105,6 @@ fn freeze_url() -> Result<()> {
     warning: The package `anyio` requires `sniffio>=1.1`, but it's not installed
     "
     );
-
-    Ok(())
 }
 
 /// Preserve archive hashes recorded by another installer in `direct_url.json` so that frozen
@@ -221,22 +210,16 @@ fn freeze_direct_archive_hash_roundtrip() -> Result<()> {
 }
 
 #[test]
-fn freeze_with_editable() -> Result<()> {
+fn freeze_with_editable() {
     let context = uv_test::test_context!("3.12");
 
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(&format!(
-        "anyio\n-e {}",
-        context
-            .workspace_root
-            .join("test/packages/poetry_editable")
-            .display()
-    ))?;
-
-    // Run `pip sync`.
+    // Install packages without their dependencies.
     context
-        .pip_sync()
-        .arg(requirements_txt.path())
+        .pip_install()
+        .arg("anyio")
+        .arg("--editable")
+        .arg(context.workspace_root.join("test/packages/poetry_editable"))
+        .arg("--no-deps")
         .assert()
         .success();
 
@@ -267,8 +250,6 @@ fn freeze_with_editable() -> Result<()> {
     warning: The package `anyio` requires `sniffio>=1.1`, but it's not installed
     "
     );
-
-    Ok(())
 }
 
 /// Show an `.egg-info` package in a virtual environment.
@@ -440,18 +421,16 @@ Version: 0.22.0
 }
 
 #[test]
-fn freeze_path() -> Result<()> {
+fn freeze_path() {
     let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
 
     let target = context.temp_dir.child("install-path");
 
-    // Run `pip sync`.
+    // Install packages.
     context
-        .pip_sync()
-        .arg(requirements_txt.path())
+        .pip_install()
+        .args(["MarkupSafe==2.1.3", "tomli==2.0.1"])
+        .arg("--no-deps")
         .arg("--target")
         .arg(target.path())
         .assert()
@@ -466,31 +445,24 @@ fn freeze_path() -> Result<()> {
     markupsafe==2.1.3
     tomli==2.0.1
     ");
-
-    Ok(())
 }
 
 #[test]
-fn freeze_multiple_paths() -> Result<()> {
+fn freeze_multiple_paths() {
     let context = uv_test::test_context!("3.12");
-
-    let requirements_txt1 = context.temp_dir.child("requirements1.txt");
-    requirements_txt1.write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
-
-    let requirements_txt2 = context.temp_dir.child("requirements2.txt");
-    requirements_txt2.write_str("MarkupSafe==2.1.3\nrequests==2.31.0")?;
 
     let target1 = context.temp_dir.child("install-path1");
     let target2 = context.temp_dir.child("install-path2");
 
-    // Run `pip sync`.
-    for (target, requirements_txt) in [
-        (target1.path(), requirements_txt1),
-        (target2.path(), requirements_txt2),
+    // Install packages without their dependencies.
+    for (target, requirements) in [
+        (target1.path(), ["MarkupSafe==2.1.3", "tomli==2.0.1"]),
+        (target2.path(), ["MarkupSafe==2.1.3", "requests==2.31.0"]),
     ] {
         context
-            .pip_sync()
-            .arg(requirements_txt.path())
+            .pip_install()
+            .args(requirements)
+            .arg("--no-deps")
             .arg("--target")
             .arg(target)
             .assert()
@@ -505,8 +477,6 @@ fn freeze_multiple_paths() -> Result<()> {
     requests==2.31.0
     tomli==2.0.1
     ");
-
-    Ok(())
 }
 
 // We follow pip in just ignoring nonexistent paths
@@ -529,16 +499,14 @@ fn freeze_nonexistent_path() {
 }
 
 #[test]
-fn freeze_with_quiet_flag() -> Result<()> {
+fn freeze_with_quiet_flag() {
     let context = uv_test::test_context!("3.12");
 
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
-
-    // Run `pip sync`.
+    // Install packages.
     context
-        .pip_sync()
-        .arg(requirements_txt.path())
+        .pip_install()
+        .args(["MarkupSafe==2.1.3", "tomli==2.0.1"])
+        .arg("--no-deps")
         .assert()
         .success();
 
@@ -550,24 +518,18 @@ fn freeze_with_quiet_flag() -> Result<()> {
     tomli==2.0.1
     "
     );
-
-    Ok(())
 }
 
 #[test]
-fn freeze_target() -> Result<()> {
+fn freeze_target() {
     let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
 
     let target = context.temp_dir.child("target");
 
     // Install packages to a target directory.
     context
         .pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
+        .args(["MarkupSafe==2.1.3", "tomli==2.0.1"])
         .arg("--target")
         .arg(target.path())
         .assert()
@@ -589,24 +551,18 @@ fn freeze_target() -> Result<()> {
     exit_code: 0 (success)
     "
     );
-
-    Ok(())
 }
 
 #[test]
-fn freeze_prefix() -> Result<()> {
+fn freeze_prefix() {
     let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
 
     let prefix = context.temp_dir.child("prefix");
 
     // Install packages to a prefix directory.
     context
         .pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
+        .args(["MarkupSafe==2.1.3", "tomli==2.0.1"])
         .arg("--prefix")
         .arg(prefix.path())
         .assert()
@@ -628,8 +584,6 @@ fn freeze_prefix() -> Result<()> {
     exit_code: 0 (success)
     "
     );
-
-    Ok(())
 }
 
 #[test]
