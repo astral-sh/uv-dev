@@ -41,6 +41,21 @@ pub struct GitFixture {
     pub reference: String,
 }
 
+impl GitFixture {
+    /// Return the prepared bare repository without consulting the network.
+    pub fn path(&self) -> PathBuf {
+        let path = std::path::absolute(
+            Path::new("../../.cache/bench-git").join(format!("{}.git", self.name)),
+        )
+        .expect("Failed to locate Git fixture");
+        assert!(
+            path.join("HEAD").is_file(),
+            "Missing Git fixture. Run `python3 scripts/benchmark/prepare-git.py`."
+        );
+        path
+    }
+}
+
 /// Git sources spanning small packaging examples and larger Python projects.
 pub fn git_fixtures() -> Vec<GitFixture> {
     serde_json::from_str(include_str!("../../../scripts/benchmark/git.json"))
