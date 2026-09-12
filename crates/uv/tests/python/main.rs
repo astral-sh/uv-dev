@@ -2,7 +2,6 @@
 
 mod python_dir;
 
-#[cfg(unix)]
 mod python_install_cleanup;
 
 #[cfg(feature = "test-python")]
