@@ -11,6 +11,8 @@ cache-mode: read
 
 jobs:
   plan:
+    # Cache transfer is best-effort and must not fail the upstream CI run.
+    continue-on-error: true
     if: ${{ github.repository == 'astral-sh/uv' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: github-ubuntu-24.04-x86_64-2
     timeout-minutes: 15
@@ -36,6 +38,7 @@ jobs:
           retention-days: 2
 
   export:
+    continue-on-error: true
     needs: plan
     if: ${{ needs.plan.outputs.has-entries == 'true' }}
     runs-on: github-ubuntu-24.04-x86_64-2

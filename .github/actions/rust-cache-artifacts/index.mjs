@@ -13,6 +13,7 @@ const DESTINATION = "astral-sh/uv-dev";
 const REF = "refs/heads/main";
 const CACHE_ACTION = "6323deb102c322ba6fcbdcafc7e3dddab59af2b6";
 const PRODUCERS = new Set([
+  "bench",
   "check-lint",
   "check-docs",
   "check-publish",
@@ -708,6 +709,10 @@ async function main() {
   const github = new GitHub();
   const run = input("source-run");
   const sha = input("source-sha") || process.env.GITHUB_SHA;
+  check(
+    SHA.test(sha) && (!run || /^\d+$/.test(run)),
+    "Invalid source identity",
+  );
   if (mode === "plan-export") {
     requireContext(SOURCE);
     check(
@@ -746,13 +751,25 @@ async function main() {
       await fsp.readFile(path.join(directory, "index.json"), "utf8"),
     );
     validateIndex(index, run, sha);
-    const existing = new Set(
-      (await github.caches(DESTINATION)).map(
-        (entry) => `${entry.key}\0${entry.version}`,
+    const [caches, artifacts] = await Promise.all([
+      github.caches(DESTINATION),
+      github.pages(
+        `repos/${SOURCE}/actions/runs/${run}/artifacts`,
+        "artifacts",
       ),
+    ]);
+    const existing = new Set(
+      caches.map((entry) => `${entry.key}\0${entry.version}`),
+    );
+    const available = new Set(
+      artifacts
+        .filter((artifact) => !artifact.expired)
+        .map((artifact) => artifact.name),
     );
     const entries = index.entries.filter(
-      (entry) => !existing.has(`${entry.key}\0${entry.destinationVersion}`),
+      (entry) =>
+        !existing.has(`${entry.key}\0${entry.destinationVersion}`) &&
+        available.has(entry.artifact),
     );
     output("matrix", JSON.stringify({ include: entries }));
     output("has-entries", String(entries.length !== 0));

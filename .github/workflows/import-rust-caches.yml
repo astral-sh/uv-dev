@@ -37,11 +37,19 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Verify source is in the mirror
+        id: ancestry
         env:
           SOURCE_SHA: ${{ inputs.source-sha || github.sha }}
-        run: git merge-base --is-ancestor "$SOURCE_SHA" HEAD
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if git merge-base --is-ancestor "$SOURCE_SHA" HEAD 2>/dev/null; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+          fi
       - uses: ./.github/actions/rust-cache-artifacts
         id: source
+        if: ${{ steps.ancestry.outputs.present == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         with:
@@ -84,6 +92,9 @@ jobs:
     runs-on: github-ubuntu-24.04-x86_64-2
     timeout-minutes: 30
     environment: automations
+    concurrency:
+      group: import-rust-cache-${{ matrix.artifact }}
+      cancel-in-progress: false
     permissions:
       contents: read
       actions: read
