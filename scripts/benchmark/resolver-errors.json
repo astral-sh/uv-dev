@@ -1,0 +1,20 @@
+[
+  {
+    "name": "rooster",
+    "size": "small",
+    "python": "3.10",
+    "requirements": ["rooster-blue"]
+  },
+  {
+    "name": "httpx",
+    "size": "medium",
+    "python": "3.6",
+    "requirements": ["httpx>=0.23"]
+  },
+  {
+    "name": "numpy",
+    "size": "large",
+    "python": "3.7",
+    "requirements": ["numpy>=1.22"]
+  }
+]
