@@ -673,7 +673,7 @@ fn tool_run_cache() {
     Resolved [N] packages in [TIME]
     ");
 
-    // Verify that `--refresh` allows cache reuse.
+    // Verify that `--refresh` recreates the cached environment.
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("-p")
         .arg("3.12")
@@ -687,6 +687,14 @@ fn tool_run_cache() {
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + black==24.3.0
+     + click==8.1.7
+     + mypy-extensions==1.0.0
+     + packaging==24.0
+     + pathspec==0.12.1
+     + platformdirs==4.2.0
     ");
 
     // Verify that `--refresh-package` allows cache reuse.
