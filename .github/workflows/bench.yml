@@ -75,7 +75,7 @@ jobs:
     name: "walltime on x86_64 linux"
     runs-on: codspeed-macro-x64-ryzen-9950x-ubuntu-24-04
     needs: benchmarks-walltime-build
-    timeout-minutes: 45
+    timeout-minutes: 180
     permissions:
       contents: read
       id-token: write # for codspeed authentication
