@@ -145,12 +145,10 @@ fn patch_sysconfigdata(mut data: SysconfigData, real_prefix: &Path) -> Sysconfig
     fn update_prefix(s: &str, real_prefix: &Path) -> String {
         s.split_whitespace()
             .map(|part| {
-                if let Some(rest) = part.strip_prefix("/install") {
-                    if rest.is_empty() {
-                        real_prefix.display().to_string()
-                    } else {
-                        real_prefix.join(&rest[1..]).display().to_string()
-                    }
+                if part == "/install" {
+                    real_prefix.display().to_string()
+                } else if let Some(rest) = part.strip_prefix("/install/") {
+                    real_prefix.join(rest).display().to_string()
                 } else {
                     part.to_string()
                 }
@@ -297,6 +295,10 @@ mod tests {
             ("prefix", "/install/prefix"),
             ("exec_prefix", "/install/exec_prefix"),
             ("base", "/install/base"),
+            ("exact", "/install"),
+            ("child", "/install/lib"),
+            ("similar", "/installer"),
+            ("unicode", "/installé"),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), Value::String(v.to_string())))
@@ -315,8 +317,12 @@ mod tests {
             "BUILDPYTHON": "python.exe",
             "PYTHON_BUILD_STANDALONE": 1,
             "base": "/real/prefix/base",
+            "child": "/real/prefix/lib",
+            "exact": "/real/prefix",
             "exec_prefix": "/real/prefix/exec_prefix",
-            "prefix": "/real/prefix/prefix"
+            "prefix": "/real/prefix/prefix",
+            "similar": "/installer",
+            "unicode": "/installé"
         }
         "#);
 
