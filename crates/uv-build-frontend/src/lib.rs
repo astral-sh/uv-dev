@@ -178,7 +178,14 @@ struct Pep517Backend {
 impl Pep517Backend {
     fn backend_import(&self) -> String {
         let import = if let Some((path, object)) = self.backend.split_once(':') {
-            format!("from {path} import {object} as backend")
+            if object.contains('.') {
+                let object = object.replace('\\', "\\\\").replace('"', "\\\"");
+                format!(
+                    "import {path} as backend\nfor attribute in \"{object}\".split(\".\"):\n    backend = getattr(backend, attribute)"
+                )
+            } else {
+                format!("from {path} import {object} as backend")
+            }
         } else {
             format!("import {} as backend", self.backend)
         };
