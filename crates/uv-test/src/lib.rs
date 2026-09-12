@@ -259,10 +259,10 @@ impl TestContext {
 
     /// Serve the real in-tree `uv_build` Python shim, backed by this context's uv executable.
     pub fn with_uv_build_backend(mut self) -> anyhow::Result<Self> {
-        let shim = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../uv-build/python/uv_build/__init__.py"
-        ));
+        let shim = fs_err::read_to_string(
+            self.workspace_root
+                .join("crates/uv-build/python/uv_build/__init__.py"),
+        )?;
         anyhow::ensure!(shim.contains("USE_UV_EXECUTABLE = False"));
         let shim = shim.replace("USE_UV_EXECUTABLE = False", "USE_UV_EXECUTABLE = True");
         let mut scenario = Scenario::empty();
