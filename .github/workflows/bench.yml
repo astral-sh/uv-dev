@@ -56,6 +56,9 @@ jobs:
       - name: "Prepare immutable benchmark fixtures"
         run: python3 scripts/benchmark/prepare-fixtures.py
 
+      - name: "Prepare immutable Git fixtures"
+        run: python3 scripts/benchmark/prepare-git.py
+
       - name: "Build optimized benchmark command"
         run: cargo build --locked --profile profiling --bin uv
 
