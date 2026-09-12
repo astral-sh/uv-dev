@@ -28,9 +28,9 @@ its parsed [core metadata](https://packaging.python.org/en/latest/specifications
 Requirements are normalized PEP 508 strings with unevaluated markers and redacted URL credentials.
 They are declarations, not edges resolved against the lockfile or the currently installed packages.
 Likewise, a declared extra does not establish that the extra was requested. Empty dependency and
-extra lists are emitted as arrays. If the required metadata cannot be read or parsed, inspection
-fails with its path instead of reporting an empty dependency list. Parser diagnostics identify a
-missing or invalid field where possible without reproducing its value.
+extra lists are emitted as arrays. For a discovered installed distribution, unreadable or invalid
+required metadata fails inspection with its path instead of producing an empty dependency list.
+Parser diagnostics identify a missing or invalid field where possible without reproducing its value.
 
 `environment.selected_packages` gives the locked package nodes selected for the environment's
 interpreter, keyed by normalized package name. Its values are identifiers in `resolution`. For

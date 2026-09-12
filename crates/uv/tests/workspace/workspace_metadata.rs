@@ -1893,6 +1893,169 @@ fn workspace_metadata_reports_legacy_installed_requirements() -> Result<()> {
 }
 
 #[test]
+fn workspace_metadata_legacy_discovery_omits_invalid_values() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "metadata-root"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = []
+        "#})?;
+    context.lock().arg("--offline").assert().success();
+
+    let directory = context
+        .site_packages()
+        .join("legacy_discovery_directory.egg-info");
+    let file = context
+        .site_packages()
+        .join("legacy_discovery_file.egg-info");
+    let editable_source = context.temp_dir.join("legacy-discovery-editable");
+    let editable_info = editable_source.join("legacy_discovery_editable.egg-info");
+    fs_err::create_dir_all(&directory)?;
+    fs_err::create_dir_all(&editable_info)?;
+    fs_err::write(
+        context
+            .site_packages()
+            .join("legacy-discovery-editable.egg-link"),
+        format!("{}\n", editable_source.display()),
+    )?;
+    let entries = [
+        (
+            "legacy-discovery-file",
+            file,
+            "legacy_discovery_file.egg-info",
+            false,
+        ),
+        (
+            "legacy-discovery-directory",
+            directory.join("PKG-INFO"),
+            "legacy_discovery_directory.egg-info",
+            false,
+        ),
+        (
+            "legacy-discovery-editable",
+            editable_info.join("PKG-INFO"),
+            "legacy_discovery_editable.egg-info",
+            true,
+        ),
+    ];
+    let contents = |name: &str, version: &str| {
+        formatdoc! {r#"
+            Metadata-Version: 2.1
+            Name: {name}
+            Version: {version}
+            Requires-Dist: metadata-base >=1
+            Provides-Extra: Legacy
+        "#}
+    };
+    for (name, path, _, _) in &entries {
+        fs_err::write(path, contents(name, "1.0.0"))?;
+    }
+
+    let assert = context
+        .workspace_metadata()
+        .arg("--frozen")
+        .arg("--offline")
+        .assert()
+        .success();
+    let metadata = parse_metadata(&assert.get_output().stdout)?;
+    let packages = metadata["environment"]["packages"]
+        .as_object()
+        .context("missing installed package inventory")?;
+    for (name, path, _, editable) in &entries {
+        let package = packages
+            .values()
+            .find(|package| package["name"] == *name)
+            .context("missing legacy installed distribution")?;
+        assert_eq!(package["version"], "1.0.0");
+        assert_eq!(package["editable"], *editable);
+        assert_eq!(
+            package["requires_dist"],
+            serde_json::json!(["metadata-base>=1"])
+        );
+        assert_eq!(package["provides_extra"], serde_json::json!(["legacy"]));
+        assert_eq!(fs_err::read_to_string(path)?, contents(name, "1.0.0"));
+    }
+
+    let mut leaked_fields = Vec::new();
+    for (name, path, diagnostic_path, _) in &entries {
+        for (field, invalid, ignored, reason) in [
+            (
+                "Name",
+                contents(
+                    "https://user:discovery-secret@example.com/private.whl?sig=discovery-signature",
+                    "1.0.0",
+                ),
+                true,
+                "invalid `Name` field",
+            ),
+            (
+                "Version",
+                contents(
+                    name,
+                    "1.0.0https://user:discovery-secret@example.com/private.whl?sig=discovery-signature",
+                ),
+                false,
+                "Invalid `Version` field in installed metadata",
+            ),
+        ] {
+            fs_err::write(path, &invalid)?;
+            let assert = context
+                .workspace_metadata()
+                .arg("--frozen")
+                .arg("--offline")
+                .env(EnvVars::RUST_LOG, "warn")
+                .assert()
+                .code(if ignored { 0 } else { 2 });
+            let output = assert.get_output();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if ignored {
+                let metadata = parse_metadata(&output.stdout)?;
+                let packages = metadata["environment"]["packages"]
+                    .as_object()
+                    .context("missing installed package inventory")?;
+                for (other_name, _, _, _) in &entries {
+                    assert_eq!(
+                        packages
+                            .values()
+                            .any(|package| package["name"] == *other_name),
+                        other_name != name
+                    );
+                }
+            } else {
+                assert!(output.stdout.is_empty());
+            }
+            if [&stdout, &stderr].iter().any(|output| {
+                output.contains("discovery-secret") || output.contains("discovery-signature")
+            }) {
+                leaked_fields.push((*name, field));
+            } else {
+                assert!(stderr.contains(reason), "{stderr}");
+                assert!(stderr.contains(*diagnostic_path), "{stderr}");
+            }
+            assert_eq!(fs_err::read_to_string(path)?, invalid);
+            fs_err::write(path, contents(name, "1.0.0"))?;
+        }
+    }
+    assert!(
+        leaked_fields.is_empty(),
+        "raw legacy metadata leaked for {leaked_fields:?}"
+    );
+    context
+        .workspace_metadata()
+        .arg("--frozen")
+        .arg("--offline")
+        .assert()
+        .success();
+    Ok(())
+}
+
+#[test]
 fn workspace_metadata_includes_existing_environment() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_python_keys()
