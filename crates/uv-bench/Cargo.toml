@@ -69,6 +69,11 @@ path = "benches/build_frontend.rs"
 harness = false
 
 [[bench]]
+name = "native_source_install"
+path = "benches/native_source_install.rs"
+harness = false
+
+[[bench]]
 name = "core_metadata"
 path = "benches/core_metadata.rs"
 harness = false
