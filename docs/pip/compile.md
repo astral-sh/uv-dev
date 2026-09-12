@@ -154,6 +154,18 @@ $ uv pip compile requirements.in --constraint constraints.txt
 
 Note that multiple constraints can be defined in each file and multiple files can be used.
 
+To keep production and development requirements consistent, compile the production dependencies
+first, then pass that output as a [`--constraint`](../reference/cli.md#uv-pip-compile--constraints)
+when compiling the development dependencies:
+
+```console
+$ uv pip compile pyproject.toml -o requirements-prod.txt
+$ uv pip compile pyproject.toml requirements-dev.in -c requirements-prod.txt -o requirements-dev.txt
+```
+
+The development output includes both the project and development dependencies, but shared
+dependencies remain at the versions selected for production.
+
 uv will also read `constraint-dependencies` from the `pyproject.toml` at the workspace root, and
 append them to those specified in the constraints file.
 
