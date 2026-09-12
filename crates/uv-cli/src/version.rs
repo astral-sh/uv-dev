@@ -92,16 +92,6 @@ impl fmt::Display for ProjectVersionInfo {
     }
 }
 
-impl fmt::Display for CommitInfo {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.commits_since_last_tag > 0 {
-            write!(f, "+{}", self.commits_since_last_tag)?;
-        }
-        write!(f, " ({} {})", self.short_commit_hash, self.commit_date)?;
-        Ok(())
-    }
-}
-
 impl From<SelfVersionInfo> for clap::builder::Str {
     fn from(val: SelfVersionInfo) -> Self {
         val.to_string().into()
