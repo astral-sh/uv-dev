@@ -176,13 +176,7 @@ impl UniversalMarker {
         for conflict_set in conflict_sets {
             let mut marker = self.marker;
             for inference in conflict_set {
-                let extra = encode_conflict_item(&inference.item);
-
-                marker = if inference.included {
-                    marker.simplify_extras_with(|candidate| *candidate == extra)
-                } else {
-                    marker.simplify_not_extras_with(|candidate| *candidate == extra)
-                };
+                marker = simplify_with_inference(marker, inference);
             }
             if let Some(previous_marker) = &previous_marker {
                 if previous_marker != &marker {
@@ -197,6 +191,12 @@ impl UniversalMarker {
             self.marker = all_branches_marker;
             self.pep508 = self.marker.without_extras();
         }
+    }
+
+    /// Assume that a conflict item is included or excluded, as inferred from the graph.
+    pub(crate) fn assume_inference(&mut self, inference: &Inference) {
+        self.marker = simplify_with_inference(self.marker, inference);
+        self.pep508 = self.marker.without_extras();
     }
 
     /// Assumes that a given extra/group for the given package is activated.
@@ -594,6 +594,16 @@ impl std::fmt::Debug for ConflictMarker {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         // This is a little more succinct than the default.
         write!(f, "ConflictMarker({:?})", self.marker)
+    }
+}
+
+/// Simplifies a marker using the inferred polarity of a conflict item.
+fn simplify_with_inference(marker: MarkerTree, inference: &Inference) -> MarkerTree {
+    let extra = encode_conflict_item(&inference.item);
+    if inference.included {
+        marker.simplify_extras_with(|candidate| *candidate == extra)
+    } else {
+        marker.simplify_not_extras_with(|candidate| *candidate == extra)
     }
 }
 
@@ -1144,6 +1154,103 @@ mod tests {
         marker.imbibe(ConflictMarker::TRUE);
 
         assert_eq!(marker, expected);
+    }
+
+    #[test]
+    fn assume_each_conflict_item_polarity() {
+        let package = create_package("pkg");
+        let pep508 =
+            MarkerTree::from_str("sys_platform == 'darwin'").expect("valid marker expression");
+        let other = create_extra_marker("other");
+        let items = [
+            ConflictItem::from(package.clone()),
+            ConflictItem::from((package.clone(), create_extra("feature"))),
+            ConflictItem::from((
+                package,
+                GroupName::from_str("dev").expect("valid group name"),
+            )),
+        ];
+
+        for item in items {
+            for included in [true, false] {
+                let mut marker = UniversalMarker::new(
+                    pep508,
+                    ConflictMarker::from_conflict_item(&item).or(other),
+                );
+
+                marker.assume_inference(&Inference {
+                    included,
+                    item: item.clone(),
+                });
+
+                let expected = if included {
+                    UniversalMarker::from_combined(pep508)
+                } else {
+                    UniversalMarker::new(pep508, other)
+                };
+                assert_eq!(marker, expected, "{item:?}, included: {included}");
+            }
+        }
+    }
+
+    #[test]
+    fn unify_inference_sets_preserves_distinct_branches() {
+        let pep508 =
+            MarkerTree::from_str("sys_platform == 'darwin'").expect("valid marker expression");
+        let original = UniversalMarker::new(
+            pep508,
+            create_extra_marker("foo").or(create_extra_marker("bar")),
+        );
+        let included = BTreeSet::from([Inference {
+            included: true,
+            item: create_extra_item("foo"),
+        }]);
+        let excluded = BTreeSet::from([Inference {
+            included: false,
+            item: create_extra_item("foo"),
+        }]);
+
+        for sets in [
+            vec![],
+            vec![BTreeSet::new()],
+            vec![included.clone(), BTreeSet::new()],
+            vec![included, excluded],
+        ] {
+            let mut marker = original;
+            marker.unify_inference_sets(&sets);
+            assert_eq!(marker, original, "{sets:?}");
+        }
+    }
+
+    #[test]
+    fn unify_inference_sets_simplifies_equal_branches() {
+        let pep508 =
+            MarkerTree::from_str("sys_platform == 'darwin'").expect("valid marker expression");
+
+        for included in [true, false] {
+            let foo = create_extra_marker("foo");
+            let bar = create_extra_marker("bar");
+            let conflict = if included {
+                foo.or(bar)
+            } else {
+                foo.negate().or(bar.negate())
+            };
+            let mut marker = UniversalMarker::new(pep508, conflict);
+            let sets = [
+                BTreeSet::from([Inference {
+                    included,
+                    item: create_extra_item("foo"),
+                }]),
+                BTreeSet::from([Inference {
+                    included,
+                    item: create_extra_item("bar"),
+                }]),
+            ];
+
+            marker.unify_inference_sets(&sets);
+
+            assert_eq!(marker, UniversalMarker::from_combined(pep508));
+        }
     }
 
     #[test]
