@@ -1,4 +1,4 @@
-//! Source-distribution extraction over the published Django source tree.
+//! Source-distribution extraction over published Python and native-library source trees.
 
 mod common;
 
@@ -18,14 +18,11 @@ fn sdist_extract(c: &mut Criterion<WallTime>) {
     if is_codspeed_simulation() {
         return;
     }
-    let bytes = fs_err::read(fixture_path("django-5.2.6.tar.gz"))
-        .expect("Failed to read source distribution");
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("Failed to create Tokio runtime");
     let mut group = c.benchmark_group("sdist_extract");
-    group.throughput(Throughput::Bytes(bytes.len() as u64));
     for (backend, preview) in [
         ("default", Preview::default()),
         (
@@ -34,24 +31,33 @@ fn sdist_extract(c: &mut Criterion<WallTime>) {
         ),
     ] {
         uv_preview::set(preview).expect("Failed to configure tar backend");
-        group.bench_function(BenchmarkId::new(backend, "django"), |b| {
-            b.iter_batched(
-                || tempfile::tempdir().expect("Failed to create extraction directory"),
-                |target| {
-                    let (target, files) = runtime
-                        .block_on(uv_extract::stream::archive(
-                            black_box(bytes.as_slice()),
-                            SourceDistExtension::TarGz,
-                            target,
-                        ))
-                        .expect("Failed to unpack source distribution");
-                    let source_tree = uv_extract::strip_component(target.path())
-                        .expect("Invalid source distribution layout");
-                    black_box((target, files, source_tree))
-                },
-                BatchSize::PerIteration,
-            );
-        });
+        for (name, filename) in [
+            ("flask", "flask-3.1.1.tar.gz"),
+            ("django", "django-5.2.6.tar.gz"),
+            ("numpy", "numpy-2.2.6.tar.gz"),
+        ] {
+            let bytes =
+                fs_err::read(fixture_path(filename)).expect("Failed to read source distribution");
+            group.throughput(Throughput::Bytes(bytes.len() as u64));
+            group.bench_function(BenchmarkId::new(backend, name), |b| {
+                b.iter_batched(
+                    || tempfile::tempdir().expect("Failed to create extraction directory"),
+                    |target| {
+                        let (target, files) = runtime
+                            .block_on(uv_extract::stream::archive(
+                                black_box(bytes.as_slice()),
+                                SourceDistExtension::TarGz,
+                                target,
+                            ))
+                            .expect("Failed to unpack source distribution");
+                        let source_tree = uv_extract::strip_component(target.path())
+                            .expect("Invalid source distribution layout");
+                        black_box((target, files, source_tree))
+                    },
+                    BatchSize::PerIteration,
+                );
+            });
+        }
     }
     group.finish();
     uv_preview::set(Preview::default()).expect("Failed to restore preview configuration");
