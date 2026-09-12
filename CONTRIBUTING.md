@@ -156,11 +156,12 @@ cargo dev check-scenarios --uv target/debug/uv --seed 0 --cases 100 --markers --
 
 When a generated check fails, the checker also saves the commands, output, and exact served
 distributions in a neighboring `.failure` directory. Lock checks additionally retain the temporary
-project and the lockfile after each command. Use `--failure-dir` to choose a new directory when
-replaying an existing fixture. The capture includes the uv binary's SHA-256 digest and the
-advertised distribution hashes; existing evidence directories are never overwritten. An
-unsatisfiable universal lock without a sampled unsatisfiable environment is captured but remains
-unclassified until the target matrix covers the conflict.
+project and the lockfile after each command. If uv rejects its freshly written lockfile, the capture
+also refreshes the temporary project, saves the lockfile diff, and checks the refreshed lock. Use
+`--failure-dir` to choose a new directory when replaying an existing fixture. The capture includes
+the uv binary's SHA-256 digest and the advertised distribution hashes; existing evidence directories
+are never overwritten. An unsatisfiable universal lock without a sampled unsatisfiable environment
+is captured but remains unclassified until the target matrix covers the conflict.
 
 Use the same binary and target to reduce a fixed-environment counterexample:
 
