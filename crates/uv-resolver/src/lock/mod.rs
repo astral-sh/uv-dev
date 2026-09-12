@@ -5255,7 +5255,12 @@ impl Source {
             Self::Directory(..) => false,
             Self::Editable(..) => false,
             Self::Virtual(..) => false,
-            Self::Git(..) => false,
+            Self::Git(_, git) => git.path.as_ref().is_some_and(|path| {
+                matches!(
+                    DistExtension::from_path(path).ok(),
+                    Some(DistExtension::Wheel)
+                )
+            }),
             Self::Registry(..) => false,
         }
     }
@@ -8088,6 +8093,189 @@ mod tests {
             sys_platform: "darwin",
         })
         .expect("valid marker environment")
+    }
+
+    const GIT_WHEEL_HASH: &str =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
+    fn git_wheel_package(filename: &str) -> Package {
+        let lock: Lock = toml::from_str(&format!(
+            r#"
+version = 1
+revision = 3
+requires-python = ">=3.12"
+
+[[package]]
+name = "demo"
+version = "1.0.0"
+source = {{ git = "https://example.invalid/repository.git?path=dist%2F{filename}#0123456789abcdef0123456789abcdef01234567" }}
+wheels = [{{ filename = "{filename}", hash = "{GIT_WHEEL_HASH}" }}]
+"#,
+        ))
+        .expect("valid lock");
+        assert_eq!(lock.packages.len(), 1);
+        lock.packages
+            .into_iter()
+            .next()
+            .expect("one locked package")
+    }
+
+    fn git_wheel_tags() -> Tags {
+        use uv_platform_tags::{Arch, Os, Platform, TagsOptions};
+
+        Tags::from_env(
+            Platform::new(
+                Os::Macos {
+                    major: 14,
+                    minor: 0,
+                },
+                Arch::Aarch64,
+            ),
+            (3, 12),
+            "cpython",
+            (3, 12),
+            TagsOptions::default(),
+        )
+        .expect("valid tags")
+    }
+
+    #[test]
+    fn git_wheel_source_classification() -> Result<(), Box<dyn Error>> {
+        for (query, expected) in [
+            ("", false),
+            ("?path=dist%2Fdemo-1.0.0.tar.gz", false),
+            ("?path=dist%2Fdemo-1.0.0.txt", false),
+            ("?path=dist%2Fdemo-1.0.0-py3-none-any.whl", true),
+        ] {
+            let source = Source::try_from(SourceWire::Git {
+                git: format!(
+                    "https://example.invalid/repository.git{query}#0123456789abcdef0123456789abcdef01234567"
+                ),
+            })?;
+            assert_eq!(source.is_wheel(), expected, "{query}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn git_wheel_no_binary_error() {
+        use uv_configuration::{NoBinary, NoBuild};
+
+        let package = git_wheel_package("demo-1.0.0-py3-none-any.whl");
+        let tags = git_wheel_tags();
+        let markers = marker_environment();
+        let error = package
+            .to_dist(
+                Path::new("."),
+                TagPolicy::Required(&tags),
+                &BuildOptions::new(NoBinary::All, NoBuild::None),
+                &markers,
+                FirstParty::No,
+            )
+            .map(|dist| dist.dist)
+            .expect_err("Git wheel is excluded by no-binary");
+        assert!(matches!(
+            &*error.kind,
+            LockErrorKind::NoBinaryWheelOnly { id } if id == &package.id
+        ));
+        assert!(error.hint.is_none());
+    }
+
+    #[test]
+    fn git_wheel_incompatible_error() {
+        let package = git_wheel_package("demo-1.0.0-cp311-cp311-macosx_11_0_arm64.whl");
+        let tags = git_wheel_tags();
+        let markers = marker_environment();
+        let error = package
+            .to_dist(
+                Path::new("."),
+                TagPolicy::Required(&tags),
+                &BuildOptions::default(),
+                &markers,
+                FirstParty::No,
+            )
+            .map(|dist| dist.dist)
+            .expect_err("Git wheel is incompatible with the required tags");
+        assert!(matches!(
+            &*error.kind,
+            LockErrorKind::IncompatibleWheelOnly { id } if id == &package.id
+        ));
+        assert!(error.hint.is_some());
+    }
+
+    #[test]
+    fn git_wheel_selection_and_build_policy() {
+        use uv_configuration::{NoBinary, NoBuild};
+
+        let tags = git_wheel_tags();
+        let markers = marker_environment();
+        for (filename, tag_policy, no_build) in [
+            (
+                "demo-1.0.0-py3-none-any.whl",
+                TagPolicy::Required(&tags),
+                NoBuild::None,
+            ),
+            (
+                "demo-1.0.0-py3-none-any.whl",
+                TagPolicy::Required(&tags),
+                NoBuild::All,
+            ),
+            (
+                "demo-1.0.0-cp311-cp311-macosx_11_0_arm64.whl",
+                TagPolicy::Preferred(&tags),
+                NoBuild::None,
+            ),
+        ] {
+            let package = git_wheel_package(filename);
+            let dist = package
+                .to_dist(
+                    Path::new("."),
+                    tag_policy,
+                    &BuildOptions::new(NoBinary::None, no_build),
+                    &markers,
+                    FirstParty::No,
+                )
+                .expect("Git wheel is permitted");
+            assert!(matches!(
+                &dist.dist,
+                Dist::Built(BuiltDist::GitPath(git))
+                    if git.install_path == Path::new("dist").join(filename)
+            ));
+            assert_eq!(
+                dist.hashes,
+                HashDigests::from(vec![
+                    GIT_WHEEL_HASH.parse::<HashDigest>().expect("valid hash")
+                ])
+            );
+        }
+
+        let package = git_wheel_package("demo-1.0.0-cp311-cp311-macosx_11_0_arm64.whl");
+        let error = package
+            .to_dist(
+                Path::new("."),
+                TagPolicy::Required(&tags),
+                &BuildOptions::new(NoBinary::None, NoBuild::All),
+                &markers,
+                FirstParty::No,
+            )
+            .map(|dist| dist.dist)
+            .expect_err("Git wheel is incompatible with builds disabled");
+        assert!(matches!(&*error.kind, LockErrorKind::NoBuild { .. }));
+
+        let error = package
+            .to_dist(
+                Path::new("."),
+                TagPolicy::Required(&tags),
+                &BuildOptions::new(NoBinary::All, NoBuild::All),
+                &markers,
+                FirstParty::No,
+            )
+            .map(|dist| dist.dist)
+            .expect_err("Git wheel has both builds and binaries disabled");
+        assert!(matches!(
+            &*error.kind,
+            LockErrorKind::NoBinaryNoBuild { .. }
+        ));
     }
 
     #[test]
