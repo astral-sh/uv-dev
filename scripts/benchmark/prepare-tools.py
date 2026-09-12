@@ -18,19 +18,30 @@ def main() -> None:
     root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--uv", type=Path, default=root / "target/profiling/uv")
+    parser.add_argument("--cache-directory", type=Path, default=root / ".cache")
+    parser.add_argument("--python-install-directory", type=Path)
+    parser.add_argument("--tool", action="append", default=[])
     parser.add_argument("--refresh-locks", action="store_true")
     parser.add_argument("--individual-caches", action="store_true")
     args = parser.parse_args()
-    cache = root / ".cache"
+    cache = args.cache_directory.resolve()
     environment = {
         name: value
         for name, value in os.environ.items()
         if not name.startswith("UV_") and name not in {"VIRTUAL_ENV", "CONDA_PREFIX"}
     }
-    environment["UV_PYTHON_INSTALL_DIR"] = str(cache / "bench-python")
+    environment["UV_PYTHON_INSTALL_DIR"] = str(
+        (args.python_install_directory or cache / "bench-python").resolve()
+    )
     environment["UV_PYTHON_DOWNLOADS"] = "never"
     command = [str(args.uv.resolve()), "--no-config"]
     workloads = json.loads(Path(__file__).with_name("tools.json").read_text())
+    if unknown := set(args.tool).difference(workload["name"] for workload in workloads):
+        parser.error(f"unknown tools: {', '.join(sorted(unknown))}")
+    if args.tool:
+        workloads = [
+            workload for workload in workloads if workload["name"] in args.tool
+        ]
     locks = Path(__file__).with_name("tool-locks")
     if args.refresh_locks:
         locks.mkdir(exist_ok=True)

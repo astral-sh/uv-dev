@@ -37,6 +37,35 @@ Pass `--individual-caches` to also prepare separate Ruff, Black, and Poetry cach
 execution. Each measured invocation starts with its own populated cache and a prepared tool
 environment, so recreating an environment cannot accumulate abandoned environments across samples.
 
+`qualify-tool-environment-reuse.py` checks the corresponding structural contract. It records each
+tool's installed metadata graph, physical environment identity, cache publications, and installation
+work for cold, repeated pinned, frozen `@latest`, `--refresh`, and `--refresh-package` invocations.
+The Ruff workload also adds a pinned Click dependency, which must select a different environment.
+The package caches are copied before use and checked for unexpected input changes. Explicit refresh
+flags cannot be combined with `--offline`, so those two cases allow registry revalidation against
+the frozen constraints; the other cases remain offline. Elapsed times are diagnostic and are not a
+substitute for the matched walltime benchmarks.
+
+Use `prepare-tools.py --tool` and `--cache-directory` to prepare only the needed inputs, while
+`--python-install-directory` can point at an existing pinned interpreter:
+
+```shell
+for tool in ruff black poetry; do
+  python3 scripts/benchmark/prepare-tools.py --uv /path/to/uv \
+    --python-install-directory .cache/bench-python \
+    --cache-directory ".cache/bench-tool-caches/$tool" --tool "$tool"
+done
+python3 scripts/benchmark/prepare-tools.py --uv /path/to/uv \
+  --python-install-directory .cache/bench-python \
+  --cache-directory .cache/bench-tool-caches/ruff --tool black
+python3 scripts/benchmark/qualify-tool-environment-reuse.py \
+  --base /path/to/base/uv --candidate /path/to/candidate/uv \
+  --python /path/to/python3.12 --output tool-environment-reuse.json
+```
+
+The second preparation command makes Black's frozen Click version available for the changed-graph
+control. Use `--candidate-policy refresh-rebuild` when qualifying the refresh-reuse ablation.
+
 Network workloads use `serve-fixtures.py` with the pinned Python 3.11 interpreter. It serves the
 prepared wheels, their actual core metadata, and Simple API listings derived from those wheels or an
 immutable lockfile. The server binds an ephemeral loopback port and applies a fixed 20 ms request
