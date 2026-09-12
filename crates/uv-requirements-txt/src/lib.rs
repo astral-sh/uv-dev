@@ -524,6 +524,27 @@ impl RequirementsTxt {
                     for constraint in sub_constraints.constraints {
                         data.constraints.push(constraint);
                     }
+                    if sub_constraints.index_url.is_some()
+                        && data.index_url.is_some()
+                        && sub_constraints.index_url != data.index_url
+                    {
+                        let (line, column) = calculate_row_column(content, s.cursor());
+                        return Err(RequirementsTxtParserError::Parser {
+                            message: "Nested `constraints` file contains conflicting `--index-url`"
+                                .to_string(),
+                            line,
+                            column,
+                        });
+                    }
+                    if data.index_url.is_none() {
+                        data.index_url = sub_constraints.index_url;
+                    }
+                    data.extra_index_urls
+                        .extend(sub_constraints.extra_index_urls);
+                    data.find_links.extend(sub_constraints.find_links);
+                    data.no_index |= sub_constraints.no_index;
+                    data.no_binary.extend(sub_constraints.no_binary);
+                    data.only_binary.extend(sub_constraints.only_binary);
                 }
                 RequirementsTxtStatement::RequirementEntry(requirement_entry) => {
                     data.requirements.push(requirement_entry);
@@ -1587,6 +1608,7 @@ fn calculate_row_column(content: &str, position: usize) -> (usize, usize) {
 mod test {
     use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
+    use std::str::FromStr;
 
     use anyhow::Result;
     use assert_fs::prelude::*;
@@ -1598,6 +1620,7 @@ mod test {
     use test_case::test_case;
     use unscanny::Scanner;
 
+    use uv_configuration::{NoBinary, NoBuild, PackageNameSpecifier};
     use uv_fs::Simplified;
 
     use crate::{RequirementsTxt, calculate_row_column};
@@ -3055,6 +3078,85 @@ mod test {
             "pkg-requirements-in-constraints",
         }
         "#);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn nested_constraint_options() -> Result<()> {
+        let temp_dir = assert_fs::TempDir::new()?;
+        temp_dir.child("constraints.txt").write_str(indoc! {"
+            --index-url https://example.com/simple
+            --extra-index-url https://extra.example.com/simple
+            --find-links https://example.com/files
+            --no-index
+            --no-binary anyio
+            --only-binary idna
+            anyio==4.9.0
+        "})?;
+        let requirements = temp_dir.child("requirements.txt");
+        requirements.write_str("-c constraints.txt\n")?;
+
+        let parsed = RequirementsTxt::parse(&requirements, temp_dir.path()).await?;
+
+        assert_eq!(
+            parsed
+                .index_url
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("https://example.com/simple")
+        );
+        assert_eq!(
+            parsed
+                .extra_index_urls
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["https://extra.example.com/simple"]
+        );
+        assert_eq!(
+            parsed
+                .find_links
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["https://example.com/files"]
+        );
+        assert!(parsed.no_index);
+        assert_eq!(
+            parsed.no_binary,
+            NoBinary::from_pip_arg(PackageNameSpecifier::from_str("anyio")?)
+        );
+        assert_eq!(
+            parsed.only_binary,
+            NoBuild::from_pip_arg(PackageNameSpecifier::from_str("idna")?)
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn nested_constraint_conflicting_index_url() -> Result<()> {
+        let temp_dir = assert_fs::TempDir::new()?;
+        temp_dir.child("constraints.txt").write_str(indoc! {"
+            --index-url https://fake.pypi.org/simple
+        "})?;
+        let requirements = temp_dir.child("requirements.txt");
+        requirements.write_str(indoc! {"
+            --index-url https://test.pypi.org/simple
+            -c constraints.txt
+        "})?;
+
+        let error = RequirementsTxt::parse(&requirements, temp_dir.path())
+            .await
+            .unwrap_err();
+        let errors = anyhow::Error::new(error).chain().join("\n");
+        let requirements = regex::escape(&requirements.path().user_display().to_string());
+
+        insta::with_settings!({ filters => [(requirements.as_str(), "<REQUIREMENTS_TXT>")] }, {
+            insta::assert_snapshot!(errors, @"Nested `constraints` file contains conflicting `--index-url` at <REQUIREMENTS_TXT>:2:19");
+        });
 
         Ok(())
     }
