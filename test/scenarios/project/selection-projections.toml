@@ -1,0 +1,48 @@
+name = "project-selection-projections"
+description = "Project exports include exactly the selected extras and dependency groups."
+
+[root]
+requires_python = ">=3.12,<3.14"
+requires = ["base"]
+
+[root.optional_dependencies]
+docs = ["docs[theme]; sys_platform != 'win32'"]
+fast = ["feature; python_version >= '3.13'"]
+
+[root.dependency_groups]
+shared = ["group-only; sys_platform == 'linux'", "shared>=1", "shared<3"]
+dev = [{ include-group = "SHARED" }, "dev-only", { include-group = "shared" }]
+
+[expected]
+satisfiable = true
+
+[testgen]
+disable = true
+
+[packages.base.versions."1"]
+requires = ["shared>=1"]
+sdist = false
+
+[packages.shared.versions."1"]
+sdist = false
+
+[packages.shared.versions."2"]
+sdist = false
+
+[packages.docs.versions."1"]
+sdist = false
+
+[packages.docs.versions."1".extras]
+theme = ["theme; python_version >= '3.13'"]
+
+[packages.theme.versions."1"]
+sdist = false
+
+[packages.feature.versions."1"]
+sdist = false
+
+[packages.group-only.versions."1"]
+sdist = false
+
+[packages.dev-only.versions."1"]
+sdist = false

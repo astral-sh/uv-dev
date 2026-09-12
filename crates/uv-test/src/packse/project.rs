@@ -5,6 +5,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::{Context, Result, bail, ensure};
+use serde::Serialize;
 
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep508::{MarkerEnvironment, Requirement};
@@ -19,7 +20,7 @@ const MAX_GROUP_DEPTH: usize = 128;
 /// The root requirements included in one explicit project export.
 ///
 /// Default groups are not implicit: callers select every group they want to include.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProjectSelection {
     pub include_project: bool,
     pub extras: BTreeSet<ExtraName>,
@@ -121,6 +122,95 @@ impl<'a> ScenarioProject<'a> {
                 .collect(),
             groups: self.groups.keys().cloned().collect(),
         }
+    }
+
+    /// A bounded set of explicit exports covering each root and the combined roots.
+    ///
+    /// The matrix includes the base project, individual and combined extras, individual and
+    /// combined groups with and without the project, and all roots together. It does not enumerate
+    /// every possible subset of extras and groups.
+    pub fn selection_matrix(&self) -> Vec<ProjectSelection> {
+        let all = self.all_selection();
+        let mut selections = Vec::new();
+        let mut add = |selection| {
+            if !selections.contains(&selection) {
+                selections.push(selection);
+            }
+        };
+        add(ProjectSelection::default());
+        for extra in &all.extras {
+            add(ProjectSelection {
+                extras: BTreeSet::from([extra.clone()]),
+                ..ProjectSelection::default()
+            });
+        }
+        add(ProjectSelection {
+            extras: all.extras.clone(),
+            ..ProjectSelection::default()
+        });
+        for group in &all.groups {
+            for include_project in [true, false] {
+                add(ProjectSelection {
+                    include_project,
+                    groups: BTreeSet::from([group.clone()]),
+                    ..ProjectSelection::default()
+                });
+            }
+        }
+        if !all.groups.is_empty() {
+            for include_project in [true, false] {
+                add(ProjectSelection {
+                    include_project,
+                    groups: all.groups.clone(),
+                    ..ProjectSelection::default()
+                });
+            }
+        }
+        add(all);
+        selections
+    }
+
+    /// Render the project without expanding its group includes or disabling its default groups.
+    pub(super) fn pyproject(&self) -> Result<String> {
+        let requires_python = self
+            .scenario
+            .root
+            .requires_python
+            .as_ref()
+            .context("lock scenarios require an explicit root Python range")?;
+        let mut pyproject = serde_json::json!({
+            "project": {
+                "name": self.name.to_string(),
+                "version": "0.0.0",
+                "requires-python": requires_python.to_string(),
+                "dependencies": self.scenario.root.requires.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                "optional-dependencies": self.scenario.root.optional_dependencies.iter().map(|(name, requirements)| {
+                    (name.to_string(), requirements.iter().map(ToString::to_string).collect::<Vec<_>>())
+                }).collect::<BTreeMap<_, _>>(),
+            }
+        });
+        if let Some(groups) = &self.scenario.root.dependency_groups {
+            let mut rendered = serde_json::Map::new();
+            for (name, entries) in groups {
+                let entries = entries
+                    .iter()
+                    .map(|entry| match entry {
+                        DependencyGroupSpecifier::Requirement(requirement) => {
+                            Ok(serde_json::json!(requirement))
+                        }
+                        DependencyGroupSpecifier::IncludeGroup { include_group } => {
+                            Ok(serde_json::json!({ "include-group": include_group.to_string() }))
+                        }
+                        DependencyGroupSpecifier::Object(_) => {
+                            bail!("unsupported dependency object in group `{name}`")
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                rendered.insert(name.to_string(), serde_json::Value::Array(entries));
+            }
+            pyproject["dependency-groups"] = serde_json::Value::Object(rendered);
+        }
+        toml::to_string(&pyproject).context("failed to render the scenario project")
     }
 
     /// Expand an explicit selection without dropping duplicate group requirements.
@@ -341,6 +431,58 @@ satisfiable = true
             requirement_strings(&project, &selection(&["docs"], &[], true))?,
             ["base", "docs-lib ; sys_platform == 'linux'"]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn renders_a_bounded_project_selection_matrix() -> Result<()> {
+        let scenario = scenario(
+            r#"
+name = "project-selection-matrix"
+[root]
+requires = ["base"]
+[root.optional_dependencies]
+Docs = ["docs-lib; sys_platform == 'linux'"]
+[root.dependency_groups]
+shared = ["dep==1"]
+dev = [{include-group = "SHARED"}, "other", {include-group = "shared"}]
+[expected]
+satisfiable = true
+"#,
+        );
+        let project = ScenarioProject::new(&scenario)?;
+        let selections = project.selection_matrix();
+        for selection in &selections {
+            project.requirements(selection)?;
+        }
+        insta::assert_snapshot!(
+            selections.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"),
+            @"
+        project
+        project; extras: docs
+        project; groups: dev
+        groups only; groups: dev
+        project; groups: shared
+        groups only; groups: shared
+        project; groups: dev, shared
+        groups only; groups: dev, shared
+        project; extras: docs; groups: dev, shared
+        "
+        );
+
+        let pyproject: toml::Value = toml::from_str(&project.pyproject()?)?;
+        assert_eq!(
+            pyproject["project"]["optional-dependencies"]["docs"][0].as_str(),
+            Some("docs-lib ; sys_platform == 'linux'")
+        );
+        let dev = pyproject["dependency-groups"]["dev"]
+            .as_array()
+            .expect("dependency-group array");
+        assert_eq!(dev.len(), 3);
+        assert_eq!(dev[0]["include-group"].as_str(), Some("shared"));
+        assert_eq!(dev[1].as_str(), Some("other"));
+        assert_eq!(dev[2]["include-group"].as_str(), Some("shared"));
+        assert!(pyproject.get("tool").is_none());
         Ok(())
     }
 

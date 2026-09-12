@@ -5,9 +5,11 @@ use anyhow::{Context, Result};
 use uv_python::PythonVersion;
 use uv_test::packse::check::{
     LockCheckResult, LockScenarioFailureKind, ScenarioPlatform, ScenarioTarget,
-    check_lock_scenario, check_lock_scenario_with_artifacts, check_scenario,
+    check_lock_scenario, check_lock_scenario_with_artifacts, check_project_lock_scenario,
+    check_project_lock_scenario_with_artifacts, check_scenario,
 };
 use uv_test::packse::generate::{SmallGraphOptions, generate_marker_graph, generate_small_graph};
+use uv_test::packse::project::{ProjectSelection, ScenarioProject};
 use uv_test::packse::scenario::{Scenario, ScenarioDocument};
 
 #[test]
@@ -202,6 +204,135 @@ fn captures_unsampled_universal_conflicts() -> Result<()> {
         LockCheckResult::Unsatisfiable { .. }
     ));
     assert!(!matched.exists());
+    Ok(())
+}
+
+#[test]
+fn project_locks_match_explicit_root_selections() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = Scenario::from_path(
+        &context
+            .workspace_root
+            .join("test/scenarios/project/selection-projections.toml"),
+    )?;
+    let targets = ScenarioTarget::matrix(
+        &["3.12", "3.13"]
+            .map(|version| PythonVersion::from_str(version).expect("valid Python version")),
+        &[
+            ScenarioPlatform::Linux,
+            ScenarioPlatform::Macos,
+            ScenarioPlatform::Windows,
+        ],
+    );
+    let selections = ScenarioProject::new(&scenario)?.selection_matrix();
+    assert_eq!(selections.len(), 11);
+    match check_project_lock_scenario(&context, &scenario, &targets, &selections, 100_000)? {
+        LockCheckResult::Satisfiable { projections, .. } => {
+            assert_eq!(projections, targets.len() * selections.len());
+        }
+        LockCheckResult::Unsatisfiable { witness, .. } => {
+            panic!("project roots are satisfiable for {witness}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn project_locks_check_unselected_roots() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let target = ScenarioTarget {
+        python: PythonVersion::from_str("3.12").expect("valid Python version"),
+        platform: ScenarioPlatform::Linux,
+    };
+    let document = ScenarioDocument::from_path(
+        &context
+            .workspace_root
+            .join("test/scenarios/project/combined-roots-conflict.toml"),
+    )?;
+    let scenario = document.scenario()?;
+    let project = ScenarioProject::new(&scenario)?;
+    let all = project.all_selection();
+    let environment = target.markers()?;
+    for selection in [
+        ProjectSelection::default(),
+        ProjectSelection {
+            extras: all.extras.clone(),
+            ..ProjectSelection::default()
+        },
+        ProjectSelection {
+            groups: all.groups.clone(),
+            ..ProjectSelection::default()
+        },
+    ] {
+        assert!(
+            project
+                .oracle(&environment, &selection)?
+                .find_solution(100_000)?
+                .solution
+                .is_some()
+        );
+    }
+    assert!(
+        project
+            .oracle(&environment, &all)?
+            .find_solution(100_000)?
+            .solution
+            .is_none()
+    );
+    let directory = context.temp_dir.join("failure");
+    assert!(matches!(
+        check_project_lock_scenario_with_artifacts(
+            &context,
+            &document,
+            &[target],
+            &[ProjectSelection::default()],
+            100_000,
+            &directory,
+        )?,
+        LockCheckResult::Unsatisfiable { .. }
+    ));
+    assert!(!directory.exists());
+    Ok(())
+}
+
+#[test]
+fn project_locks_reject_unsupported_roots() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let target = ScenarioTarget {
+        python: PythonVersion::from_str("3.12").expect("valid Python version"),
+        platform: ScenarioPlatform::Linux,
+    };
+    for (root, expected_error) in [
+        (
+            "[root.dependency_groups]\na = [{include-group = 'b'}]\nb = [{include-group = 'a'}]",
+            "dependency group include cycle",
+        ),
+        (
+            "[root]\nrequires = [\"dep; extra == 'docs'\"]",
+            "does not model root extra markers",
+        ),
+        (
+            "[root.dependency_groups]\ndev = [\"dep; extra == 'docs'\"]",
+            "does not model root extra markers",
+        ),
+    ] {
+        let document = ScenarioDocument::from_str(&format!(
+            "name = 'unsupported-project-root'\n{root}\n[expected]\nsatisfiable = true\n"
+        ))?;
+        let directory = context.temp_dir.join("failure");
+        let error = check_project_lock_scenario_with_artifacts(
+            &context,
+            &document,
+            std::slice::from_ref(&target),
+            &[ProjectSelection::default()],
+            100_000,
+            &directory,
+        )
+        .expect_err("the project root is outside the checker contract");
+        assert!(format!("{error:#}").contains(expected_error));
+        assert!(!context.temp_dir.join("pyproject.toml").exists());
+        assert!(!directory.exists());
+    }
     Ok(())
 }
 

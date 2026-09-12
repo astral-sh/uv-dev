@@ -19,7 +19,7 @@ use crate::TestContext;
 use super::PackseServer;
 use super::evidence::{self, LockTrace};
 use super::oracle::{ScenarioOracle, SearchResult, Selection};
-use super::project::project_name;
+use super::project::{ProjectSelection, ScenarioProject, project_name};
 use super::scenario::{Scenario, ScenarioDocument};
 
 /// A representative platform for fixed-environment resolver checks.
@@ -363,6 +363,42 @@ pub fn check_lock_scenario_with_artifacts(
     )
 }
 
+/// Check one universal project lock and independently validate explicit extra/group exports.
+///
+/// The lock must satisfy every optional dependency and dependency group together, regardless of
+/// which exports are requested. Default groups are disabled for each export; `selections` names
+/// the complete set of roots to include. Satisfiable results count each selection/environment pair
+/// as one projection.
+pub fn check_project_lock_scenario(
+    context: &TestContext,
+    scenario: &Scenario,
+    targets: &[ScenarioTarget],
+    selections: &[ProjectSelection],
+    max_states: usize,
+) -> Result<LockCheckResult> {
+    check_project_lock_scenario_inner(context, scenario, targets, selections, max_states, None)
+}
+
+/// Check explicit project exports and retain the full command/lockfile trace on a discrepancy.
+pub fn check_project_lock_scenario_with_artifacts(
+    context: &TestContext,
+    document: &ScenarioDocument,
+    targets: &[ScenarioTarget],
+    selections: &[ProjectSelection],
+    max_states: usize,
+    failure_dir: &Path,
+) -> Result<LockCheckResult> {
+    let scenario = document.scenario()?;
+    check_project_lock_scenario_inner(
+        context,
+        &scenario,
+        targets,
+        selections,
+        max_states,
+        Some((failure_dir, document)),
+    )
+}
+
 struct LockProjection<'a> {
     target: &'a ScenarioTarget,
     environment: MarkerEnvironment,
@@ -409,7 +445,7 @@ fn check_lock_scenario_inner(
     });
     let mut run = LockRun::new(context, scenario, &server, toml::to_string(&project)?)?;
     let result = check_lock_scenario_run(&mut run, &searches, checked);
-    run.finish(result, targets, artifacts)
+    run.finish(result, targets, None, artifacts)
 }
 
 fn check_lock_scenario_run(
@@ -418,22 +454,8 @@ fn check_lock_scenario_run(
     checked: usize,
 ) -> Result<LockCheckResult> {
     let output = run.resolve()?;
-    if !output.status.success() {
-        ensure_no_solution(&output, "uv lock")?;
-        if let Some(projection) = searches
-            .iter()
-            .find(|projection| projection.search.solution.is_none())
-        {
-            return Ok(LockCheckResult::Unsatisfiable {
-                witness: (*projection.target).clone(),
-                checked,
-            });
-        }
-        bail!(
-            "uv lock reported no solution, but the requested projections are satisfiable; \
-             add marker environments to distinguish a resolver defect from an unsampled conflict:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+    if let Some(witness) = check_lock_resolution(&output, searches)? {
+        return Ok(LockCheckResult::Unsatisfiable { witness, checked });
     }
     let lock = run.check_round_trip()?;
     let output = run.run_command("export", run.export_command())?;
@@ -442,12 +464,6 @@ fn check_lock_scenario_run(
         std::str::from_utf8(&output.stdout).context(LockScenarioFailureKind::InvalidPins)?;
     for projection in searches {
         let target = projection.target;
-        if projection.search.solution.is_none() {
-            return Err(anyhow::anyhow!(
-                "uv lock succeeded, but its {target} projection is unsatisfiable"
-            )
-            .context(LockScenarioFailureKind::FalseSatisfiable));
-        }
         let selection = parse_pins(requirements, &projection.environment)
             .with_context(|| format!("invalid lock export for {target}"))
             .context(LockScenarioFailureKind::InvalidPins)?;
@@ -461,6 +477,120 @@ fn check_lock_scenario_run(
         projections: searches.len(),
         checked,
     })
+}
+
+fn check_project_lock_scenario_inner(
+    context: &TestContext,
+    scenario: &Scenario,
+    targets: &[ScenarioTarget],
+    selections: &[ProjectSelection],
+    max_states: usize,
+    artifacts: Option<(&Path, &ScenarioDocument)>,
+) -> Result<LockCheckResult> {
+    ensure!(
+        !targets.is_empty(),
+        "at least one lock projection is required"
+    );
+    ensure!(
+        !selections.is_empty(),
+        "at least one project selection is required"
+    );
+    let project = ScenarioProject::new(scenario)?;
+    for selection in selections {
+        project.requirements(selection)?;
+    }
+    let all = project.all_selection();
+    let mut searches = Vec::new();
+    let mut checked = 0;
+    for target in targets {
+        let environment = target_environment(scenario, target)?;
+        let search = project
+            .oracle(&environment, &all)?
+            .find_solution(max_states)?;
+        checked += search.checked;
+        searches.push(LockProjection {
+            target,
+            environment,
+            search,
+        });
+    }
+
+    let server = PackseServer::from_scenario_without_build_dependencies(scenario);
+    let mut run = LockRun::new(context, scenario, &server, project.pyproject()?)?;
+    let result =
+        check_project_lock_scenario_run(&mut run, &project, &searches, selections, checked);
+    run.finish(result, targets, Some(selections), artifacts)
+}
+
+fn check_project_lock_scenario_run(
+    run: &mut LockRun<'_>,
+    project: &ScenarioProject<'_>,
+    searches: &[LockProjection<'_>],
+    selections: &[ProjectSelection],
+    checked: usize,
+) -> Result<LockCheckResult> {
+    let output = run.resolve()?;
+    if let Some(witness) = check_lock_resolution(&output, searches)? {
+        return Ok(LockCheckResult::Unsatisfiable { witness, checked });
+    }
+    let lock = run.check_round_trip()?;
+    for selection in selections {
+        let output = run.run_command("project-export", run.project_export_command(selection))?;
+        ensure_success(&output, "uv export --frozen --offline")
+            .with_context(|| format!("failed to export {selection}"))?;
+        let requirements =
+            std::str::from_utf8(&output.stdout).context(LockScenarioFailureKind::InvalidPins)?;
+        for projection in searches {
+            let target = projection.target;
+            let pins = parse_pins(requirements, &projection.environment)
+                .with_context(|| format!("invalid {selection} export for {target}"))
+                .context(LockScenarioFailureKind::InvalidPins)?;
+            project
+                .oracle(&projection.environment, selection)?
+                .validate(&pins)
+                .with_context(|| {
+                    format!("invalid {selection} dependency closure for {target}: {pins:?}")
+                })
+                .context(LockScenarioFailureKind::InvalidClosure)?;
+        }
+        run.ensure_unchanged(&lock, "frozen project export")?;
+    }
+    Ok(LockCheckResult::Satisfiable {
+        projections: searches
+            .len()
+            .checked_mul(selections.len())
+            .context("the number of project projections overflows usize")?,
+        checked,
+    })
+}
+
+/// Check a universal conclusion against sampled lock-wide root sets.
+fn check_lock_resolution(
+    output: &Output,
+    searches: &[LockProjection<'_>],
+) -> Result<Option<ScenarioTarget>> {
+    let unsatisfiable = searches
+        .iter()
+        .find(|projection| projection.search.solution.is_none());
+    if output.status.success() {
+        if let Some(projection) = unsatisfiable {
+            return Err(anyhow::anyhow!(
+                "uv lock succeeded, but its {} projection is unsatisfiable",
+                projection.target
+            )
+            .context(LockScenarioFailureKind::FalseSatisfiable));
+        }
+        return Ok(None);
+    }
+    ensure_no_solution(output, "uv lock")?;
+    if let Some(projection) = unsatisfiable {
+        return Ok(Some(projection.target.clone()));
+    }
+    bail!(
+        "uv lock reported no solution, but the requested projections are satisfiable; \
+         add marker environments to distinguish a resolver defect from an unsampled conflict:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 struct LockRun<'a> {
@@ -541,6 +671,24 @@ impl<'a> LockRun<'a> {
         command
     }
 
+    fn project_export_command(&self, selection: &ProjectSelection) -> Command {
+        let mut command = self.export_command();
+        command.arg("--no-default-groups");
+        if selection.include_project {
+            for extra in &selection.extras {
+                command.arg("--extra").arg(extra.to_string());
+            }
+            for group in &selection.groups {
+                command.arg("--group").arg(group.to_string());
+            }
+        } else {
+            for group in &selection.groups {
+                command.arg("--only-group").arg(group.to_string());
+            }
+        }
+        command
+    }
+
     fn ensure_unchanged(&self, expected: &[u8], command: &str) -> Result<()> {
         if fs_err::read(&self.lock_path)? != expected {
             return Err(anyhow::anyhow!("{command} changed the lockfile")
@@ -553,6 +701,7 @@ impl<'a> LockRun<'a> {
         &self,
         result: Result<T>,
         targets: &[ScenarioTarget],
+        selections: Option<&[ProjectSelection]>,
         artifacts: Option<(&Path, &ScenarioDocument)>,
     ) -> Result<T> {
         let error = match result {
@@ -562,7 +711,9 @@ impl<'a> LockRun<'a> {
         if let Some((directory, document)) = artifacts
             && !self.trace.is_empty()
         {
-            if let Err(capture_error) = self.write_artifacts(directory, document, targets, &error) {
+            if let Err(capture_error) =
+                self.write_artifacts(directory, document, targets, selections, &error)
+            {
                 return Err(error.context(format!(
                     "failed to save lock evidence to `{}`: {capture_error:#}",
                     directory.display()
@@ -578,6 +729,7 @@ impl<'a> LockRun<'a> {
         directory: &Path,
         document: &ScenarioDocument,
         targets: &[ScenarioTarget],
+        selections: Option<&[ProjectSelection]>,
         error: &anyhow::Error,
     ) -> Result<()> {
         evidence::create_directory(directory)?;
@@ -592,6 +744,7 @@ impl<'a> LockRun<'a> {
                     "python": target.python.to_string(),
                     "platform": target.platform.as_str(),
                 })).collect::<Vec<_>>(),
+                "project_selections": selections,
             }))?,
         )?;
         self.trace.write(directory)?;
