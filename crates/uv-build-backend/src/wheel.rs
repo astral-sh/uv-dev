@@ -157,7 +157,13 @@ fn write_wheel(
         for entry in WalkDir::new(src_root.join(module_relative))
             .sort_by_file_name()
             .into_iter()
-            .filter_entry(|entry| !exclude_matcher.is_match(entry.path()))
+            .filter_entry(|entry| {
+                let relative = entry
+                    .path()
+                    .strip_prefix(source_tree)
+                    .expect("walkdir starts with root");
+                !exclude_matcher.is_match(relative)
+            })
         {
             let entry = entry.map_err(|err| Error::WalkDir {
                 root: source_tree.to_path_buf(),
