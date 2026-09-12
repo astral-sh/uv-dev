@@ -18586,6 +18586,67 @@ fn lock_omits_impossible_group_edges() -> Result<()> {
     Ok(())
 }
 
+/// Extra edges must have the same canonical markers in fresh and lock-seeded resolutions.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_canonicalizes_unreachable_extra_edges() -> Result<()> {
+    let server = PackseServer::new("fork/extra-lock-roundtrip.toml");
+    for fork_strategy in ["fewest", "requires-python"] {
+        let context = uv_test::test_context!("3.12");
+        context
+            .temp_dir
+            .child("pyproject.toml")
+            .write_str(indoc! {r#"
+                [project]
+                name = "project"
+                version = "0.1.0"
+                requires-python = ">=3.12,<3.15"
+                dependencies = [
+                    "a[feature]==1; python_full_version < '3.14'",
+                    "b>=1,<3; sys_platform == 'win32'",
+                    "b[feature]<2; sys_platform != 'win32'",
+                ]
+            "#})?;
+        let command = || {
+            let mut command = context.lock();
+            command
+                .arg("--no-config")
+                .arg("--index-url")
+                .arg(server.index_url())
+                .arg("--no-build")
+                .arg("--fork-strategy")
+                .arg(fork_strategy)
+                .env_remove(EnvVars::UV_EXCLUDE_NEWER);
+            command
+        };
+
+        command().assert().success();
+        let initial = context.read("uv.lock");
+        command()
+            .arg("--locked")
+            .arg("--offline")
+            .assert()
+            .success();
+        assert_eq!(context.read("uv.lock"), initial);
+        command()
+            .arg("--check")
+            .arg("--refresh")
+            .arg("--preview-features")
+            .arg("lockfile-format-check")
+            .assert()
+            .success();
+        assert_eq!(context.read("uv.lock"), initial);
+        command()
+            .arg("--refresh")
+            .arg("--preview-features")
+            .arg("lockfile-format-check")
+            .assert()
+            .success();
+        assert_eq!(context.read("uv.lock"), initial);
+    }
+    Ok(())
+}
+
 /// Disjoint markers on different dependency edges must not require an unreachable package.
 #[cfg(feature = "test-universal")]
 #[test]

@@ -8322,6 +8322,38 @@ wheels = [{ filename = "local-1.0.0-py3-none-any.whl", hash = "sha256:53a42340ae
     }
 
     #[test]
+    fn dependency_marker_ignores_unreachable_fork_edges() {
+        let requires_python = RequiresPython::from_specifiers(
+            VersionSpecifiers::from_str(">=3.12,<3.15").expect("valid version specifier"),
+        );
+        let parent = UniversalMarker::from_combined(
+            MarkerTree::from_str("python_full_version < '3.14' or sys_platform == 'darwin'")
+                .expect("valid parent marker"),
+        );
+        let fresh = UniversalMarker::from_combined(
+            MarkerTree::from_str("python_full_version >= '3.13'").expect("valid edge marker"),
+        );
+        let seeded = UniversalMarker::from_combined(
+            MarkerTree::from_str(
+                "python_full_version >= '3.13' and (python_full_version < '3.14' or sys_platform != 'win32')",
+            )
+            .expect("valid edge marker"),
+        );
+        let environment = SimplifiedMarkerTree::new(&requires_python, MarkerTree::TRUE);
+
+        // A fresh fork can retain this edge on Python 3.14 for Windows even though its parent
+        // is unreachable there. Reusing that fork starts with a narrower dependency graph.
+        assert_eq!(
+            fresh.combined().and(parent.pep508()),
+            seeded.combined().and(parent.pep508()),
+        );
+        assert_eq!(
+            simplify_dependency_marker(&requires_python, environment, parent, fresh),
+            simplify_dependency_marker(&requires_python, environment, parent, seeded),
+        );
+    }
+
+    #[test]
     fn dependency_marker_preserves_parent_conflicts() {
         let requires_python = RequiresPython::from_specifiers(
             VersionSpecifiers::from_str(">=3.12").expect("valid version specifier"),
