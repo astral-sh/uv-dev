@@ -32,7 +32,7 @@ use uv_client::{
 };
 use uv_distribution_filename::{ExtensionError, SourceDistExtension};
 use uv_extract::hash::Hasher;
-use uv_fs::{Simplified, rename_with_retry};
+use uv_fs::{LockedFile, LockedFileError, LockedFileMode, Simplified, rename_with_retry};
 use uv_platform::{self as platform, Arch, Libc, Os, Platform};
 use uv_pypi_types::{HashAlgorithm, HashDigest};
 use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
@@ -53,6 +53,8 @@ use crate::{Interpreter, PythonRequest, PythonVersion, VersionRequest};
 pub enum Error {
     #[error(transparent)]
     Io(#[from] io::Error),
+    #[error(transparent)]
+    LockedFile(#[from] LockedFileError),
     #[error(transparent)]
     ImplementationError(#[from] ImplementationError),
     #[error("Expected download URL (`{0}`) to end in a supported file extension: {1}")]
@@ -1273,54 +1275,56 @@ impl ManagedPythonDownload {
                 }
                 None => "none",
             };
-            let target_cache_file = python_builds_dir.join(format!("{hash_prefix}-{filename}"));
+            let cache_filename = format!("{hash_prefix}-{filename}");
+            let target_cache_file = python_builds_dir.join(&cache_filename);
+            // Use the cache filename, not the spelling of the root path, so aliases of the same
+            // cache directory share the lock. The digest keeps the lock filename short.
+            let cache_lock_file =
+                python_builds_dir.join(format!(".{}.lock", cache_digest(&cache_filename)));
 
             // Download the archive to the cache, or return a reader if we have it in cache.
             // TODO(konsti): We should "tee" the write so we can do the download-to-cache and unpacking
             // in one step.
-            let (reader, size): (Box<dyn AsyncRead + Unpin>, Option<u64>) =
-                match fs_err::tokio::File::open(&target_cache_file).await {
-                    Ok(file) => {
-                        debug!(
-                            "Extracting existing `{}`",
-                            target_cache_file.simplified_display()
-                        );
-                        let size = file.metadata().await?.len();
-                        let reader = Box::new(tokio::io::BufReader::new(file));
-                        (reader, Some(size))
+            let file = match fs_err::tokio::File::open(&target_cache_file).await {
+                Ok(file) => {
+                    debug!(
+                        "Extracting existing `{}`",
+                        target_cache_file.simplified_display()
+                    );
+                    file
+                }
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                    // Point the user to which file is missing where and where to download it
+                    if client.connectivity().is_offline() {
+                        return Err(Error::OfflinePythonMissing {
+                            file: Box::new(self.key().clone()),
+                            url: Box::new(url.clone()),
+                            python_builds_dir,
+                        });
                     }
-                    Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                        // Point the user to which file is missing where and where to download it
-                        if client.connectivity().is_offline() {
-                            return Err(Error::OfflinePythonMissing {
-                                file: Box::new(self.key().clone()),
-                                url: Box::new(url.clone()),
-                                python_builds_dir,
-                            });
-                        }
 
-                        self.download_archive(
-                            &url,
-                            client,
-                            reporter,
-                            &python_builds_dir,
-                            &target_cache_file,
-                        )
-                        .await?;
+                    self.download_archive(
+                        &url,
+                        client,
+                        reporter,
+                        &python_builds_dir,
+                        &target_cache_file,
+                        &cache_lock_file,
+                    )
+                    .await?;
 
-                        debug!("Extracting `{}`", target_cache_file.simplified_display());
-                        let file = fs_err::tokio::File::open(&target_cache_file).await?;
-                        let size = file.metadata().await?.len();
-                        let reader = Box::new(tokio::io::BufReader::new(file));
-                        (reader, Some(size))
-                    }
-                    Err(err) => return Err(err.into()),
-                };
+                    debug!("Extracting `{}`", target_cache_file.simplified_display());
+                    fs_err::tokio::File::open(&target_cache_file).await?
+                }
+                Err(err) => return Err(err.into()),
+            };
+            let size = Some(file.metadata().await?.len());
+            let mut reader = tokio::io::BufReader::new(file);
 
             // Extract the downloaded archive into a temporary directory.
             let result = self
                 .extract_reader(
-                    reader,
+                    &mut reader,
                     temp_dir,
                     &filename,
                     ext,
@@ -1330,12 +1334,13 @@ impl ManagedPythonDownload {
                 )
                 .await;
 
-            if matches!(&result, Err(Error::HashMismatch { .. })) {
-                match fs_err::tokio::remove_file(&target_cache_file).await {
-                    Ok(()) => {}
-                    Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                    Err(err) => return Err(err.into()),
-                }
+            if let Err(Error::HashMismatch { .. }) = &result {
+                Self::remove_rejected_archive(
+                    &target_cache_file,
+                    &cache_lock_file,
+                    reader.into_inner(),
+                )
+                .await?;
             }
             result?
         } else {
@@ -1435,6 +1440,7 @@ impl ManagedPythonDownload {
         reporter: Option<&dyn Reporter>,
         python_builds_dir: &Path,
         target_cache_file: &Path,
+        cache_lock_file: &Path,
     ) -> Result<(), Error> {
         debug!(
             "Downloading {} to `{}`",
@@ -1465,11 +1471,52 @@ impl ManagedPythonDownload {
 
             archive_writer.flush().await?;
         }
+        // Archive extraction is lock-free. Publishers and corrupt-entry removal use the same
+        // lock, so a rejected reader cannot remove a cooperating publisher's replacement.
+        let _lock = LockedFile::acquire(
+            cache_lock_file,
+            LockedFileMode::Exclusive,
+            target_cache_file.user_display(),
+        )
+        .await?;
+
         // Move the completed file into place, invalidating the `File` instance.
         match rename_with_retry(&temp_file, target_cache_file).await {
             Ok(()) => {}
             Err(_) if target_cache_file.is_file() => {}
             Err(err) => return Err(err.into()),
+        }
+        Ok(())
+    }
+
+    /// Remove a rejected archive only if its cache entry still refers to the file that was read.
+    async fn remove_rejected_archive(
+        target_cache_file: &Path,
+        cache_lock_file: &Path,
+        rejected_file: fs_err::tokio::File,
+    ) -> Result<(), Error> {
+        let rejected = same_file::Handle::from_file(rejected_file.into_std().await.into_file())?;
+        let _lock = LockedFile::acquire(
+            cache_lock_file,
+            LockedFileMode::Exclusive,
+            target_cache_file.user_display(),
+        )
+        .await?;
+        let is_rejected_file = match fs_err::tokio::File::open(target_cache_file).await {
+            Ok(file) => {
+                same_file::Handle::from_file(file.into_std().await.into_file())? == rejected
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => false,
+            Err(err) => return Err(err.into()),
+        };
+        // Close our handles before deletion for filesystems that restrict removing open files.
+        drop(rejected);
+        if is_rejected_file {
+            match fs_err::tokio::remove_file(target_cache_file).await {
+                Ok(()) => {}
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err.into()),
+            }
         }
         Ok(())
     }
@@ -1873,6 +1920,8 @@ mod tests {
     use std::collections::HashSet;
     use std::sync::Mutex;
 
+    use tokio::sync::Notify;
+
     use crate::PythonVariant;
     use crate::implementation::LenientImplementationName;
     use crate::installation::PythonInstallationKey;
@@ -2010,6 +2059,82 @@ mod tests {
         assert_matches!(error, Error::HashMismatch { .. });
         assert_eq!(fs_err::read(&cached_archive)?, replacement_contents);
         assert!(!installation_dir.join(download.key().to_string()).exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cached_archive_publication_waits_for_repair_lock() -> anyhow::Result<()> {
+        struct FinishedDownload(Notify);
+
+        impl Reporter for FinishedDownload {
+            fn on_request_start(
+                &self,
+                _direction: Direction,
+                _name: &PythonInstallationKey,
+                _size: Option<u64>,
+            ) -> usize {
+                0
+            }
+
+            fn on_request_progress(&self, _id: usize, _inc: u64) {}
+
+            fn on_request_complete(&self, direction: Direction, _id: usize) {
+                if direction == Direction::Download {
+                    self.0.notify_one();
+                }
+            }
+        }
+
+        let temp_dir = tempfile::tempdir()?;
+        let cache_dir = temp_dir.path().join("cache");
+        fs_err::create_dir_all(&cache_dir)?;
+        let cache_filename = "cached-python.tar".to_string();
+        let cached_archive = cache_dir.join(&cache_filename);
+        let cache_lock_file = cache_dir.join(format!(".{}.lock", cache_digest(&cache_filename)));
+        let rejected_contents = [0; 1024];
+        let replacement_contents = [0; 2048];
+        fs_err::write(&cached_archive, rejected_contents)?;
+        let source = temp_dir.path().join("source.tar");
+        fs_err::write(&source, replacement_contents)?;
+        let source_url = Url::from_file_path(&source)
+            .map_err(|()| anyhow::anyhow!("failed to create the archive URL"))?;
+        let source_url = DisplaySafeUrl::parse(source_url.as_str())?;
+        let download = cpython_download_for_url("file:///missing/python.tar");
+        let client = BaseClientBuilder::default().build()?;
+        let reporter = FinishedDownload(Notify::new());
+
+        let repair_lock = LockedFile::acquire(
+            &cache_lock_file,
+            LockedFileMode::Exclusive,
+            cached_archive.user_display(),
+        )
+        .await?;
+        let publication = download.download_archive(
+            &source_url,
+            &client,
+            Some(&reporter),
+            &cache_dir,
+            &cached_archive,
+            &cache_lock_file,
+        );
+        tokio::pin!(publication);
+        tokio::select! {
+            result = &mut publication => {
+                anyhow::bail!("publication finished while the repair lock was held: {result:?}");
+            }
+            () = reporter.0.notified() => {}
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut publication)
+                .await
+                .is_err(),
+            "publication must wait for the repair lock"
+        );
+        assert_eq!(fs_err::read(&cached_archive)?, rejected_contents);
+
+        drop(repair_lock);
+        publication.await?;
+        assert_eq!(fs_err::read(&cached_archive)?, replacement_contents);
         Ok(())
     }
 
