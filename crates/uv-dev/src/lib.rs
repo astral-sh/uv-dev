@@ -195,6 +195,27 @@ mod tests {
     }
 
     #[test]
+    fn scenario_checker_generates_project_roots() {
+        assert!(
+            Cli::try_parse_from([
+                "uv-dev",
+                "check-scenarios",
+                "--uv",
+                "uv",
+                "--lock",
+                "--project-selections",
+                "--seed",
+                "0",
+                "--output-dir",
+                "cases",
+                "--python-version",
+                "3.12,3.13,3.14",
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
     fn scenario_checker_accepts_target_matrices() {
         let arguments = [
             "uv-dev",

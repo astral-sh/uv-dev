@@ -154,6 +154,15 @@ checked independently. The ordinary generator retains its one-minor-line replay 
 cargo dev check-scenarios --uv target/debug/uv --seed 0 --cases 100 --markers --python-version 3.12,3.13,3.14 --python-platform linux,macos,windows --output-dir generated-markers
 ```
 
+Combine `--seed` with `--project-selections` to generate project graphs with two extras and two
+dependency groups, including repeated group includes. These also cover three Python minor lines. The
+saved expectation describes all project roots at the first target; it does not describe a particular
+exported subset.
+
+```shell
+cargo dev check-scenarios --uv target/debug/uv --lock --project-selections --seed 0 --cases 100 --python-version 3.12,3.13,3.14 --python-platform linux,macos,windows --output-dir generated-projects
+```
+
 When a generated check fails, the checker also saves the commands, output, and exact served
 distributions in a neighboring `.failure` directory. Lock checks additionally retain the temporary
 project and the lockfile after each command. If uv rejects its freshly written lockfile, the capture

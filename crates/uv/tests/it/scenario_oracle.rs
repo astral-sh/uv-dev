@@ -8,7 +8,9 @@ use uv_test::packse::check::{
     check_lock_scenario, check_lock_scenario_with_artifacts, check_project_lock_scenario,
     check_project_lock_scenario_with_artifacts, check_scenario,
 };
-use uv_test::packse::generate::{SmallGraphOptions, generate_marker_graph, generate_small_graph};
+use uv_test::packse::generate::{
+    SmallGraphOptions, generate_marker_graph, generate_project_graph, generate_small_graph,
+};
 use uv_test::packse::project::{ProjectSelection, ScenarioProject};
 use uv_test::packse::scenario::{Scenario, ScenarioDocument};
 
@@ -414,5 +416,39 @@ fn generated_marker_graphs_match_their_concrete_projections() -> Result<()> {
     assert_eq!(satisfiable + unsatisfiable, 36);
     assert!(satisfiable > 0);
     assert!(unsatisfiable > 0);
+    Ok(())
+}
+
+#[test]
+fn generated_project_graphs_match_selected_exports() -> Result<()> {
+    let versions = ["3.12", "3.13", "3.14"]
+        .map(|version| PythonVersion::from_str(version).expect("valid Python version"));
+    let targets = ScenarioTarget::matrix(
+        &versions,
+        &[
+            ScenarioPlatform::Linux,
+            ScenarioPlatform::Macos,
+            ScenarioPlatform::Windows,
+        ],
+    );
+    let anchor = targets.first().expect("nonempty target matrix");
+    let options = SmallGraphOptions {
+        packages: 3,
+        versions: 2,
+    };
+    for (seed, satisfiable) in [(0, false), (39, true)] {
+        let scenario = generate_project_graph(seed, options, anchor, 27)?.scenario()?;
+        let selections = ScenarioProject::new(&scenario)?.selection_matrix();
+        let context = uv_test::test_context!("3.12");
+        let result = check_project_lock_scenario(&context, &scenario, &targets, &selections, 27)
+            .with_context(|| format!("generated project lock graph seed {seed}"))?;
+        assert_eq!(
+            matches!(result, LockCheckResult::Satisfiable { .. }),
+            satisfiable
+        );
+        if let LockCheckResult::Satisfiable { projections, .. } = result {
+            assert_eq!(projections, targets.len() * selections.len());
+        }
+    }
     Ok(())
 }
