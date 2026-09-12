@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
@@ -61,9 +61,8 @@ fn workspace_metadata_schema_rejects_invalid_output() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn workspace_metadata_schema_rejects_invalid_installed_origins() -> Result<()> {
-    let mut metadata = serde_json::json!({
+fn metadata_with_installed_package(package: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
         "schema": {"version": "preview"},
         "workspace_root": "/workspace",
         "requires_python": ">=3.12",
@@ -79,16 +78,23 @@ fn workspace_metadata_schema_rejects_invalid_installed_origins() -> Result<()> {
             "selected_packages": {},
             "module_owners": {},
             "packages": {
-                "installed+/workspace/.venv/demo.dist-info": {
-                    "name": "demo",
-                    "version": "1.0",
-                    "path": "/workspace/.venv/demo.dist-info",
-                    "editable": false,
-                    "direct_url": {"url": "https://example.com/demo.whl", "archive_info": {}},
-                },
+                "installed+/workspace/.venv/demo.dist-info": package,
             },
         },
-    });
+    })
+}
+
+#[test]
+fn workspace_metadata_schema_rejects_invalid_installed_origins() -> Result<()> {
+    let mut metadata = metadata_with_installed_package(&serde_json::json!({
+        "name": "demo",
+        "version": "1.0",
+        "path": "/workspace/.venv/demo.dist-info",
+        "editable": false,
+        "requires_dist": [],
+        "provides_extra": [],
+        "direct_url": {"url": "https://example.com/demo.whl", "archive_info": {}},
+    }));
     parse_metadata(&serde_json::to_vec(&metadata)?)?;
     for invalid in [
         serde_json::Value::Null,
@@ -101,6 +107,55 @@ fn workspace_metadata_schema_rejects_invalid_installed_origins() -> Result<()> {
         metadata["environment"]["packages"]["installed+/workspace/.venv/demo.dist-info"]["direct_url"] =
             invalid;
         assert!(parse_metadata(&serde_json::to_vec(&metadata)?).is_err());
+    }
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_schema_rejects_invalid_installed_requirements() -> Result<()> {
+    let valid_package = serde_json::json!({
+        "name": "demo",
+        "version": "1.0",
+        "path": "/workspace/.venv/demo.dist-info",
+        "editable": false,
+        "requires_dist": ["dependency>=1"],
+        "requires_python": ">=3.9",
+        "provides_extra": ["security"],
+    });
+    parse_metadata(&serde_json::to_vec(&metadata_with_installed_package(
+        &valid_package,
+    ))?)?;
+
+    for (field, invalid) in [
+        ("requires_dist", serde_json::Value::Null),
+        ("requires_dist", serde_json::json!([1])),
+        ("requires_python", serde_json::Value::Null),
+        ("requires_python", serde_json::json!(1)),
+        ("provides_extra", serde_json::Value::Null),
+        ("provides_extra", serde_json::json!([1])),
+    ] {
+        let mut package = valid_package.clone();
+        package[field] = invalid;
+        assert!(
+            parse_metadata(&serde_json::to_vec(&metadata_with_installed_package(
+                &package,
+            ))?)
+            .is_err()
+        );
+    }
+
+    for required in ["requires_dist", "provides_extra"] {
+        let mut package = valid_package.clone();
+        package
+            .as_object_mut()
+            .context("missing package object")?
+            .remove(required);
+        assert!(
+            parse_metadata(&serde_json::to_vec(&metadata_with_installed_package(
+                &package,
+            ))?)
+            .is_err()
+        );
     }
     Ok(())
 }
@@ -376,7 +431,10 @@ import iniconfig
             "name": "iniconfig",
             "version": "2.0.0",
             "path": "[CACHE_DIR]/environments-v2/script-[HASH]/[PYTHON-LIB]/site-packages/iniconfig-2.0.0.dist-info",
-            "editable": false
+            "editable": false,
+            "requires_dist": [],
+            "requires_python": ">=3.7",
+            "provides_extra": []
           }
         },
         "module_owners": {
@@ -1250,6 +1308,8 @@ fn workspace_metadata_installed_packages_are_independent_of_lock() -> Result<()>
               "editable": false,
               "name": "metadata-extra",
               "path": "[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info",
+              "provides_extra": [],
+              "requires_dist": [],
               "version": "0.1.0"
             },
             "installed+[SITE_PACKAGES]/metadata_required-0.2.0.dist-info": {
@@ -1260,6 +1320,8 @@ fn workspace_metadata_installed_packages_are_independent_of_lock() -> Result<()>
               "editable": false,
               "name": "metadata-required",
               "path": "[SITE_PACKAGES]/metadata_required-0.2.0.dist-info",
+              "provides_extra": [],
+              "requires_dist": [],
               "version": "0.2.0"
             }
           },
@@ -1522,8 +1584,9 @@ fn workspace_metadata_reports_installed_requirements() -> Result<()> {
             Requires-Dist: metadata-base >=2
             Requires-Dist: metadata-platform >=3 ; sys_platform == "win32"
             Requires-Dist: metadata-secure[crypto] >=4 ; extra == "security"
-            Requires-Dist: metadata-direct @ https://user:requires-secret@example.com/metadata_direct-1.0-py3-none-any.whl?X-Amz-Signature=signature-secret
+            Requires-Dist: metadata-direct @ 'https://user:requires-secret@example.com/metadata_direct-1.0-py3-none-any.whl?X-Amz-Signature=signature-secret'
             Provides-Extra: Security
+            Provides-Extra: https://user:extra-secret@example.com/private.whl?sig=extra-signature
         "#},
         &[("declarations_module.py", "")],
     )?;
@@ -1554,6 +1617,7 @@ fn workspace_metadata_reports_installed_requirements() -> Result<()> {
         .workspace_metadata()
         .arg("--frozen")
         .arg("--offline")
+        .env(EnvVars::RUST_LOG, "warn")
         .assert()
         .success();
     let metadata = parse_metadata(&assert.get_output().stdout)?;
@@ -1580,15 +1644,25 @@ fn workspace_metadata_reports_installed_requirements() -> Result<()> {
             .get("metadata-declarations")
             .is_none()
     );
-    assert!(!String::from_utf8_lossy(&assert.get_output().stdout).contains("requires-secret"));
-    assert!(!String::from_utf8_lossy(&assert.get_output().stdout).contains("signature-secret"));
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(stderr.contains("Fixing invalid requirement by removing stray quotes"));
+    assert!(stderr.contains("Ignoring invalid extra in metadata for `metadata-declarations`"));
+    for output in [stdout, stderr] {
+        for secret in [
+            "requires-secret",
+            "signature-secret",
+            "extra-secret",
+            "extra-signature",
+        ] {
+            assert!(!output.contains(secret));
+        }
+    }
     assert_eq!(fs_err::read(&metadata_path)?, contents);
     Ok(())
 }
 
-#[test]
-fn workspace_metadata_rejects_invalid_installed_requirements() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+fn install_metadata_error_fixture(context: &uv_test::TestContext) -> Result<PathBuf> {
     let wheel = context
         .temp_dir
         .child("metadata_error-0.1.0-py3-none-any.whl");
@@ -1616,21 +1690,43 @@ fn workspace_metadata_rejects_invalid_installed_requirements() -> Result<()> {
         .assert()
         .success();
 
-    let metadata_path = context
+    Ok(context
         .site_packages()
-        .join("metadata_error-0.1.0.dist-info/METADATA");
+        .join("metadata_error-0.1.0.dist-info/METADATA"))
+}
+
+#[test]
+fn workspace_metadata_rejects_invalid_installed_requirements() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let metadata_path = install_metadata_error_fixture(&context)?;
     for (contents, reason) in [
         (
             "Metadata-Version: 2.1\nVersion: 0.1.0\n",
             "Metadata field Name not found",
         ),
         (
+            "Metadata-Version: 2.1\nName: metadata-error\nVersion: 0.1.0\nRequires-Dist: dependency ; https://user:requires-secret@example.com/private.whl?sig=signature-secret == 'x'\n",
+            "Invalid PEP 508 requirement in `Requires-Dist`",
+        ),
+        (
             "Metadata-Version: 2.1\nName: metadata-error\nVersion: 0.1.0\nRequires-Dist: metadata-private @ https://user:requires-secret@example.com/private-1.0-py3-none-any.whl?sig=signature-secret ; python_version <\n",
-            "Expected marker value, found end of dependency specification",
+            "Invalid PEP 508 requirement in `Requires-Dist`",
         ),
         (
             "Metadata-Version: 2.1\nName: metadata-error\nVersion: 0.1.0\nRequires-Dist: metadata-private @ https://user:requires-secret@example.com/not-an-archive?sig=signature-secret\n",
-            "Invalid URL requirement",
+            "Invalid URL requirement in `Requires-Dist`",
+        ),
+        (
+            "Metadata-Version: 2.1\nName: metadata-error\nVersion: 0.1.0\nRequires-Dist: dependency ; python_version https://user:requires-secret@example.com/private.whl?sig=signature-secret '3.12'\n",
+            "Invalid PEP 508 requirement in `Requires-Dist`",
+        ),
+        (
+            "Metadata-Version: 2.1\nName: metadata-error\nVersion: 0.1.0\nRequires-Dist: dependency >=1.0https://user:requires-secret@example.com/private.whl?sig=signature-secret\n",
+            "Invalid PEP 508 requirement in `Requires-Dist`",
+        ),
+        (
+            "Metadata-Version: 2.1\nName: metadata-error\nVersion: 0.1.0\nRequires-Dist: https://user:requires-secret@example.com/private.whl?sig=signature-secret\n",
+            "Unsupported requirement in `Requires-Dist`",
         ),
     ] {
         fs_err::write(&metadata_path, contents)?;
@@ -1638,6 +1734,7 @@ fn workspace_metadata_rejects_invalid_installed_requirements() -> Result<()> {
             .workspace_metadata()
             .arg("--frozen")
             .arg("--offline")
+            .env(EnvVars::RUST_LOG, "warn")
             .assert()
             .code(2);
         let output = assert.get_output();
@@ -1646,9 +1743,9 @@ fn workspace_metadata_rejects_invalid_installed_requirements() -> Result<()> {
         assert!(stderr.contains("Failed to collect installed package metadata"));
         assert!(stderr.contains("metadata_error-0.1.0.dist-info"));
         assert!(stderr.contains("METADATA"));
-        assert!(stderr.contains(reason), "{stderr}");
         assert!(!stderr.contains("requires-secret"));
         assert!(!stderr.contains("signature-secret"));
+        assert!(stderr.contains(reason), "{stderr}");
         assert_eq!(fs_err::read_to_string(&metadata_path)?, contents);
     }
 
@@ -1661,6 +1758,137 @@ fn workspace_metadata_rejects_invalid_installed_requirements() -> Result<()> {
         .code(2);
     assert!(assert.get_output().stdout.is_empty());
     assert!(String::from_utf8_lossy(&assert.get_output().stderr).contains("METADATA"));
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_rejects_invalid_installed_core_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let metadata_path = install_metadata_error_fixture(&context)?;
+    let mut leaked_fields = Vec::new();
+    for (field, contents, reason) in [
+        (
+            "Requires-Python",
+            "Metadata-Version: 2.1\nName: metadata-error\nVersion: 0.1.0\nRequires-Python: >=3.9,https://user:requires-secret@example.com/private.whl?sig=signature-secret\n",
+            "Invalid `Requires-Python` field",
+        ),
+        (
+            "Name",
+            "Metadata-Version: 2.1\nName: https://user:requires-secret@example.com/private.whl?sig=signature-secret\nVersion: 0.1.0\n",
+            "Invalid `Name` field",
+        ),
+        (
+            "Version",
+            "Metadata-Version: 2.1\nName: metadata-error\nVersion: 0.1.0https://user:requires-secret@example.com/private.whl?sig=signature-secret\n",
+            "Invalid `Version` field",
+        ),
+    ] {
+        fs_err::write(&metadata_path, contents)?;
+        let assert = context
+            .workspace_metadata()
+            .arg("--frozen")
+            .arg("--offline")
+            .env(EnvVars::RUST_LOG, "warn")
+            .assert()
+            .code(2);
+        let output = assert.get_output();
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("Failed to collect installed package metadata"));
+        assert!(stderr.contains("metadata_error-0.1.0.dist-info"));
+        assert!(stderr.contains("METADATA"));
+        if stderr.contains("requires-secret") || stderr.contains("signature-secret") {
+            leaked_fields.push(field);
+        } else {
+            assert!(stderr.contains(reason), "{stderr}");
+        }
+        assert_eq!(fs_err::read_to_string(&metadata_path)?, contents);
+    }
+    assert!(
+        leaked_fields.is_empty(),
+        "raw metadata leaked for {leaked_fields:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_reports_legacy_installed_requirements() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "metadata-root"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = []
+        "#})?;
+    context.lock().arg("--offline").assert().success();
+
+    let directory = context
+        .site_packages()
+        .join("legacy_directory-1.0.0.egg-info");
+    let file = context.site_packages().join("legacy_file-1.0.0.egg-info");
+    fs_err::create_dir_all(&directory)?;
+    for (path, name) in [
+        (directory.join("PKG-INFO"), "legacy-directory"),
+        (file, "legacy-file"),
+    ] {
+        fs_err::write(
+            path,
+            formatdoc! {r#"
+                Metadata-Version: 2.1
+                Name: {name}
+                Version: 1.0.0
+                Requires-Dist: metadata-base >=1
+                Provides-Extra: Legacy
+            "#},
+        )?;
+    }
+
+    let assert = context
+        .workspace_metadata()
+        .arg("--frozen")
+        .arg("--offline")
+        .assert()
+        .success();
+    let metadata = parse_metadata(&assert.get_output().stdout)?;
+    let packages = metadata["environment"]["packages"]
+        .as_object()
+        .context("missing installed package inventory")?;
+    for name in ["legacy-directory", "legacy-file"] {
+        let package = packages
+            .values()
+            .find(|package| package["name"] == name)
+            .context("missing legacy installed distribution")?;
+        assert_eq!(
+            package["requires_dist"],
+            serde_json::json!(["metadata-base>=1"])
+        );
+        assert_eq!(package["provides_extra"], serde_json::json!(["legacy"]));
+        assert!(package.get("requires_python").is_none());
+        assert!(package.get("direct_url").is_none());
+    }
+
+    let contents = "Metadata-Version: 2.1\nName: legacy-directory\nVersion: 1.0.0\nRequires-Dist: metadata-private @ https://user:legacy-secret@example.com/private.whl?sig=legacy-signature ; python_version <\n";
+    fs_err::write(directory.join("PKG-INFO"), contents)?;
+    let assert = context
+        .workspace_metadata()
+        .arg("--frozen")
+        .arg("--offline")
+        .assert()
+        .code(2);
+    assert!(assert.get_output().stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(stderr.contains("legacy_directory-1.0.0.egg-info"));
+    assert!(stderr.contains("PKG-INFO"));
+    assert!(!stderr.contains("legacy-secret"));
+    assert!(!stderr.contains("legacy-signature"));
+    assert_eq!(
+        fs_err::read_to_string(directory.join("PKG-INFO"))?,
+        contents
+    );
     Ok(())
 }
 
@@ -1751,6 +1979,8 @@ dependencies = [
                 "editable": false,
                 "name": "installed-owner",
                 "path": "[SITE_PACKAGES]/installed_owner-0.1.0.dist-info",
+                "provides_extra": [],
+                "requires_dist": [],
                 "version": "0.1.0"
               }
             },
@@ -1862,19 +2092,25 @@ dependencies = [
             "name": "gpu-a",
             "version": "0.1.0",
             "path": "[SITE_PACKAGES]/gpu_a-0.1.0.dist-info",
-            "editable": false
+            "editable": false,
+            "requires_dist": [],
+            "provides_extra": []
           },
           "installed+[SITE_PACKAGES]/gpu_b-0.1.0.dist-info": {
             "name": "gpu-b",
             "version": "0.1.0",
             "path": "[SITE_PACKAGES]/gpu_b-0.1.0.dist-info",
-            "editable": false
+            "editable": false,
+            "requires_dist": [],
+            "provides_extra": []
           },
           "installed+[SITE_PACKAGES]/typing_extensions-0.1.0.dist-info": {
             "name": "typing-extensions",
             "version": "0.1.0",
             "path": "[SITE_PACKAGES]/typing_extensions-0.1.0.dist-info",
-            "editable": false
+            "editable": false,
+            "requires_dist": [],
+            "provides_extra": []
           }
         },
         "module_owners": {

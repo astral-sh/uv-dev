@@ -409,12 +409,37 @@
             }
           ]
         },
+        "provides_extra": {
+          "description": "Optional features declared by the distribution, not the extras requested at installation.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ExtraName"
+          }
+        },
+        "requires_dist": {
+          "description": "Normalized dependency declarations, including unevaluated markers.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Requirement"
+          }
+        },
+        "requires_python": {
+          "description": "Python version constraint declared by the installed distribution.",
+          "type": "string"
+        },
         "version": {
           "description": "Installed distribution version.",
           "type": "string"
         }
       },
-      "required": ["name", "version", "path", "editable"]
+      "required": [
+        "name",
+        "version",
+        "path",
+        "editable",
+        "requires_dist",
+        "provides_extra"
+      ]
     },
     "MetadataModuleOwner": {
       "description": "An installed distribution that provides an importable module.",
@@ -981,6 +1006,10 @@
         }
       },
       "required": ["path", "version", "implementation", "key"]
+    },
+    "Requirement": {
+      "description": "A PEP 508 dependency specifier, e.g., `ruff >= 0.6.0`",
+      "type": "string"
     },
     "SchemaReport": {
       "description": "The schema metadata for the metadata report.",
