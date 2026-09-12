@@ -276,6 +276,19 @@ impl PyProjectTomlMut {
 
     /// Adds a project to the workspace.
     pub fn add_workspace(&mut self, path: impl AsRef<Path>) -> Result<(), Error> {
+        self.add_workspaces(std::iter::once(path))
+    }
+
+    /// Adds projects to the workspace.
+    pub fn add_workspaces<P>(&mut self, paths: impl IntoIterator<Item = P>) -> Result<(), Error>
+    where
+        P: AsRef<Path>,
+    {
+        let mut paths = paths.into_iter().peekable();
+        if paths.peek().is_none() {
+            return Ok(());
+        }
+
         // Get or create `tool.uv.workspace.members`.
         let members = self
             .doc
@@ -296,8 +309,8 @@ impl PyProjectTomlMut {
             .as_array_mut()
             .ok_or(Error::MalformedWorkspace)?;
 
-        // Add the path to the workspace.
-        members.push(PortablePath::from(path.as_ref()).to_string());
+        // Add the paths to the workspace.
+        members.extend(paths.map(|path| PortablePath::from(path.as_ref()).to_string()));
 
         reformat_array_multiline(members);
 
@@ -2076,6 +2089,36 @@ dependencies = [
             serialized.contains("\"attrs>=25.4.0\",#comment"),
             "inline comment spacing without padding should be preserved:\n{serialized}"
         );
+    }
+
+    #[test]
+    fn add_workspaces_preserves_comments_and_order() -> Result<()> {
+        let mut doc = PyProjectTomlMut::from_toml(
+            r#"
+[tool.uv.workspace]
+members = [
+    "packages/*", # existing members
+    # Keep this comment with the explicit member.
+    "tools/existing",
+]
+"#,
+            DependencyTarget::PyProjectToml,
+        )?;
+
+        doc.add_workspaces(["new-b", "new-a"])?;
+
+        assert_snapshot!(doc.to_string(), @r#"
+        [tool.uv.workspace]
+        members = [
+            "packages/*", # existing members
+            # Keep this comment with the explicit member.
+            "tools/existing",
+            "new-b",
+            "new-a",
+        ]
+        "#);
+
+        Ok(())
     }
 
     #[test]
