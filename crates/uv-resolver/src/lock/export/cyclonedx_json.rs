@@ -23,6 +23,7 @@ use uv_normalize::PackageName;
 use uv_pep508::MarkerTree;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{HashAlgorithm as UvHashAlgorithm, HashDigest};
+use uv_redacted::DisplaySafeUrl;
 use uv_warnings::warn_user;
 
 use crate::lock::export::{ExportableRequirement, ExportableRequirements};
@@ -50,6 +51,19 @@ const PURL_ENCODE_SET: &AsciiSet = &CONTROLS
     .add(b']')
     .add(b'^')
     .add(b'|');
+
+/// Character set for percent-encoding PURL qualifier values. In addition to the common PURL
+/// characters, qualifiers must encode punctuation and separators that are used as data.
+const PURL_QUALIFIER_ENCODE_SET: &AsciiSet = &PURL_ENCODE_SET
+    .add(b'!')
+    .add(b'$')
+    .add(b'&')
+    .add(b'\'')
+    .add(b'(')
+    .add(b')')
+    .add(b'*')
+    .add(b',')
+    .add(b'/');
 
 /// Creates `CycloneDX` components, registering them in a `HashMap` so that they can be retrieved by `PackageId`.
 /// Also ensures uniqueness when generating bom-refs by using a numeric prefix which is incremented for each component.
@@ -122,26 +136,59 @@ impl<'a> ComponentBuilder<'a> {
             }
         };
 
-        let qualifiers = if qualifiers.is_empty() {
-            String::new()
-        } else {
-            Self::format_qualifiers(&qualifiers)
-        };
+        let qualifiers = Self::format_qualifiers(&qualifiers)?;
 
         Some(format!("pkg:{purl_type}/{name}{version}{qualifiers}"))
     }
 
-    fn format_qualifiers(qualifiers: &[(&str, &str)]) -> String {
+    fn format_qualifiers(qualifiers: &[(&str, &str)]) -> Option<String> {
         let joined_qualifiers = qualifiers
             .iter()
             .map(|(key, value)| {
-                format!(
+                let mut value = DisplaySafeUrl::parse(value).ok()?;
+                value.remove_credentials();
+
+                let has_sensitive_query_parameter = value
+                    .query_pairs()
+                    .any(|(key, _)| Self::is_sensitive_query_parameter(&key));
+                if has_sensitive_query_parameter {
+                    let query = value
+                        .query_pairs()
+                        .map(|(key, value)| {
+                            if Self::is_sensitive_query_parameter(&key) {
+                                (key.into_owned(), String::from("****"))
+                            } else {
+                                (key.into_owned(), value.into_owned())
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    value.query_pairs_mut().clear().extend_pairs(query);
+                }
+
+                Some(format!(
                     "{key}={}",
-                    percent_encode(value.as_bytes(), PURL_ENCODE_SET)
-                )
+                    percent_encode(value.to_string().as_bytes(), PURL_QUALIFIER_ENCODE_SET)
+                ))
             })
+            .collect::<Option<Vec<_>>>()?
+            .into_iter()
             .join("&");
-        format!("?{joined_qualifiers}")
+        Some(if joined_qualifiers.is_empty() {
+            String::new()
+        } else {
+            format!("?{joined_qualifiers}")
+        })
+    }
+
+    fn is_sensitive_query_parameter(key: &str) -> bool {
+        let key = key.to_ascii_lowercase().replace(['-', '_'], "");
+        key.contains("token")
+            || key.contains("credential")
+            || key.contains("signature")
+            || key.contains("secret")
+            || key.contains("password")
+            || key.contains("apikey")
+            || matches!(key.as_str(), "sig" | "auth" | "authorization" | "key")
     }
 
     fn create_component(
@@ -302,6 +349,55 @@ impl<'a> ComponentBuilder<'a> {
 
     fn get_component(&self, id: &PackageId) -> Option<&Component> {
         self.package_to_component_map.get(id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ComponentBuilder;
+
+    #[test]
+    fn purl_qualifiers_redact_credentials_and_encode_reserved_characters() {
+        assert_eq!(
+            ComponentBuilder::format_qualifiers(&[(
+                "download_url",
+                "https://user:secret@example.com/a!b.whl?token=a&safe=b",
+            )]),
+            Some("?download_url=https:%2F%2Fexample.com%2Fa%21b.whl%3Ftoken%3D%2A%2A%2A%2A%26safe%3Db".to_string())
+        );
+    }
+
+    #[test]
+    fn purl_qualifiers_redact_signed_query_credentials() {
+        assert_eq!(
+            ComponentBuilder::format_qualifiers(&[(
+                "download_url",
+                "https://example.com/a.whl?X-Amz-Credential=credential&X-Amz-Signature=signature&X-Amz-Security-Token=token&safe=value",
+            )]),
+            Some("?download_url=https:%2F%2Fexample.com%2Fa.whl%3FX-Amz-Credential%3D%2A%2A%2A%2A%26X-Amz-Signature%3D%2A%2A%2A%2A%26X-Amz-Security-Token%3D%2A%2A%2A%2A%26safe%3Dvalue".to_string())
+        );
+    }
+
+    #[test]
+    fn purl_qualifiers_redact_azure_and_gcs_query_credentials() {
+        assert_eq!(
+            ComponentBuilder::format_qualifiers(&[(
+                "download_url",
+                "https://example.com/a.whl?sv=2025-01-05&sp=r&sig=azure-secret&X-Goog-Credential=gcs-credential&X-Goog-Signature=gcs-signature&api_key=api-secret&safe=value",
+            )]),
+            Some("?download_url=https:%2F%2Fexample.com%2Fa.whl%3Fsv%3D2025-01-05%26sp%3Dr%26sig%3D%2A%2A%2A%2A%26X-Goog-Credential%3D%2A%2A%2A%2A%26X-Goog-Signature%3D%2A%2A%2A%2A%26api_key%3D%2A%2A%2A%2A%26safe%3Dvalue".to_string())
+        );
+    }
+
+    #[test]
+    fn purl_qualifiers_omit_ambiguous_authorities() {
+        assert_eq!(
+            ComponentBuilder::format_qualifiers(&[(
+                "download_url",
+                "https://user/name:secret@example.com/a.whl",
+            )]),
+            None
+        );
     }
 }
 
