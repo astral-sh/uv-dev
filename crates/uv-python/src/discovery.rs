@@ -459,19 +459,21 @@ fn python_executables_from_installed<'a>(
     let from_search_path = iter::once_with(move || {
         let mut first = true;
         python_executables_from_search_path(version, implementation).filter_map(move |paths| {
-            let executables = paths
-                .into_iter()
-                .map(|path| {
-                    let source = if first {
-                        first = false;
-                        PythonSource::SearchPathFirst
-                    } else {
-                        PythonSource::SearchPath
-                    };
-                    (source, path)
-                })
-                .collect();
-            PythonExecutableGroup::new(executables).map(Ok)
+            let executables = paths.into_iter().map(|path| {
+                let source = if first {
+                    first = false;
+                    PythonSource::SearchPathFirst
+                } else {
+                    PythonSource::SearchPath
+                };
+                (source, path)
+            });
+            // Assign source priority before filtering so an incompatible first executable does
+            // not change which later query errors are treated as critical.
+            #[cfg(windows)]
+            let executables =
+                executables.filter(|(_, path)| python_executable_matches_version(path, version));
+            PythonExecutableGroup::new(executables.collect()).map(Ok)
         })
     })
     .flatten();
@@ -614,6 +616,28 @@ fn python_executables<'a>(
                 .chain(from_installed),
         ),
     }
+}
+
+/// Use a recognized CPython version resource to skip known-incompatible executables.
+#[cfg(windows)]
+fn python_executable_matches_version(path: &Path, version: &VersionRequest) -> bool {
+    // Unconstrained discovery cannot benefit from reading a version resource.
+    if matches!(version, VersionRequest::Any | VersionRequest::Default) {
+        return true;
+    }
+
+    let Some((major, minor)) = crate::windows_executable::cpython_version(path) else {
+        return true;
+    };
+    if version.matches_major_minor(major, minor) {
+        return true;
+    }
+
+    debug!(
+        "Skipping Python executable at `{}`: version resource reports Python {major}.{minor}, which does not satisfy {version}",
+        path.user_display(),
+    );
+    false
 }
 
 /// Lazily iterate over Python executables in the `PATH`.
