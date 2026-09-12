@@ -341,13 +341,7 @@ impl TryFrom<DisplaySafeUrl> for ParsedGitDirectoryUrl {
     fn try_from(url_in: DisplaySafeUrl) -> Result<Self, Self::Error> {
         let subdirectory = get_subdirectory(&url_in).map(PathBuf::into_boxed_path);
 
-        let url = url_in
-            .as_str()
-            .strip_prefix("git+")
-            .unwrap_or(url_in.as_str());
-        let url = DisplaySafeUrl::parse(url)
-            .map_err(|err| ParsedUrlError::UrlParse(url.to_string(), err))?;
-        let url = GitUrl::try_from(url)?;
+        let url = GitUrl::try_from(url_in)?;
         Ok(Self { url, subdirectory })
     }
 }
@@ -388,13 +382,7 @@ impl TryFrom<DisplaySafeUrl> for ParsedGitPathUrl {
         let ext = DistExtension::from_path(&install_path)
             .map_err(|err| ParsedUrlError::MissingExtensionPath(install_path.clone(), err))?;
 
-        let url = url_in
-            .as_str()
-            .strip_prefix("git+")
-            .unwrap_or(url_in.as_str());
-        let url = DisplaySafeUrl::parse(url)
-            .map_err(|err| ParsedUrlError::UrlParse(url.to_string(), err))?;
-        let url = GitUrl::try_from(url)?;
+        let url = GitUrl::try_from(url_in)?;
         Ok(Self {
             url,
             install_path,
@@ -704,7 +692,7 @@ impl From<ParsedGitDirectoryUrl> for DisplaySafeUrl {
 mod tests {
     use anyhow::Result;
 
-    use crate::{DirectUrl, parsed_url::ParsedUrl};
+    use crate::{DirectUrl, ParsedGitDirectoryUrl, parsed_url::ParsedUrl};
     use uv_redacted::DisplaySafeUrl;
 
     #[test]
@@ -756,6 +744,16 @@ mod tests {
             let actual = DisplaySafeUrl::try_from(&DirectUrl::from(&parsed_url))?;
             assert_eq!(expected, actual);
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn git_url_preserves_explicit_default_port() -> Result<()> {
+        let url = DisplaySafeUrl::parse("git+https://example.com:443/pkg.git")?;
+        let parsed = ParsedGitDirectoryUrl::try_from(url)?;
+
+        assert_eq!(parsed.url.explicit_default_port(), Some(443));
 
         Ok(())
     }

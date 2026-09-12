@@ -79,7 +79,15 @@ impl GitSource {
         // Fetch the commit, if we don't already have it. Wrapping this section in a closure makes
         // it easier to short-circuit this in the cases where we do have the commit.
         let (db, actual_rev, maybe_task) = || -> Result<(GitDatabase, GitOid, Option<usize>)> {
-            let git_remote = GitRemote::new(remote.clone().into_owned());
+            let safe_remote = remote.without_credentials();
+            let safe_transport_url = self
+                .git
+                .transport_url(DisplaySafeUrl::ref_cast(safe_remote.as_ref()));
+            let git_remote = GitRemote::new(
+                remote.clone().into_owned(),
+                self.git.transport_url(&remote),
+                safe_transport_url,
+            );
             let maybe_db = git_remote.db_at(&db_path).ok();
 
             // If we have a locked revision, and we have a pre-existing database which has that
