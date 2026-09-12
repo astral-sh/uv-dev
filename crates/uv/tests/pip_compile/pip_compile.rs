@@ -18920,6 +18920,178 @@ fn compile_broken_active_venv() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn compile_self_dependency_after_backtrack() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("backtracking/self-dependency-after-backtrack.toml");
+    context.temp_dir.child("requirements.in").write_str("a")?;
+
+    uv_snapshot!(context.filters(), context
+        .pip_compile()
+        .arg("requirements.in")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("--no-build")
+        .arg("--no-header")
+        .arg("--no-annotate")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    a==1.0.0
+    b==1.0.0
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("a==2.0.0")?;
+    uv_snapshot!(context.filters(), context
+        .pip_compile()
+        .arg("requirements.in")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("--no-build")
+        .arg("--no-header")
+        .arg("--no-annotate")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because a==2.0.0 has an incompatible self-dependency (<1.0.0) and you require a==2.0.0, we can conclude that your requirements are unsatisfiable.
+    ");
+    Ok(())
+}
+
+#[test]
+fn compile_compatible_self_dependencies() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario: Scenario = toml::from_str(indoc! { r#"
+        name = "compatible-self-dependencies"
+        [root]
+        requires = ["a"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0"]
+        requires = ["a>=1,<2", "a==1", "b"]
+        sdist = false
+        [packages.b.versions."1.0.0"]
+        requires = ["b>=1"]
+        sdist = false
+    "# })?;
+    let server = PackseServer::from_scenario(&scenario);
+    context.temp_dir.child("requirements.in").write_str("a")?;
+
+    uv_snapshot!(context.filters(), context
+        .pip_compile()
+        .arg("requirements.in")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("--no-build")
+        .arg("--no-header")
+        .arg("--no-annotate")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    a==1.0.0
+    b==1.0.0
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
+fn compile_self_dependency_source_constraints() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario: Scenario = toml::from_str(indoc! { r#"
+        name = "self-dependency-source"
+        [root]
+        requires = ["a"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0"]
+        requires = ["a>=1"]
+        sdist = false
+    "# })?;
+    let server = PackseServer::from_scenario(&scenario);
+    let source_url = server.file_url("a-1.0.0-py3-none-any.whl");
+    let source_filter = regex::escape(&source_url);
+    let filters: Vec<_> = [(source_filter.as_str(), "[SOURCE_URL]")]
+        .into_iter()
+        .chain(context.filters())
+        .collect();
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str(&format!("a @ {source_url}"))?;
+
+    uv_snapshot!(filters, context
+        .pip_compile()
+        .arg("requirements.in")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("--no-build")
+        .arg("--no-header")
+        .arg("--no-annotate")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    a @ [SOURCE_URL]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    let scenario: Scenario = toml::from_str(&format!(
+        indoc! { r#"
+        name = "self-dependency-source-conflict"
+        [root]
+        requires = ["a"]
+        [expected]
+        satisfiable = false
+        [packages.a.versions."1.0.0"]
+        requires = ["a @ {source_url}"]
+        sdist = false
+    "# },
+        source_url = source_url
+    ))?;
+    let other_server = PackseServer::from_scenario(&scenario);
+    let other_url = other_server.file_url("a-1.0.0-py3-none-any.whl");
+    let other_filter = regex::escape(&other_url);
+    let filters: Vec<_> = [
+        (source_filter.as_str(), "[SOURCE_URL]"),
+        (other_filter.as_str(), "[OTHER_SOURCE_URL]"),
+    ]
+    .into_iter()
+    .chain(context.filters())
+    .collect();
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str(&format!("a @ {other_url}"))?;
+
+    uv_snapshot!(filters, context
+        .pip_compile()
+        .arg("requirements.in")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("--no-build")
+        .arg("--no-header")
+        .arg("--no-annotate")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to resolve dependencies for package `a==1.0.0`
+      cause: Requirements contain conflicting URLs for package `a`:
+             - [SOURCE_URL]
+    ");
+    Ok(())
+}
+
 /// <https://github.com/astral-sh/uv/issues/13344>
 #[test]
 fn pubgrub_panic_double_self_dependency() -> Result<()> {
