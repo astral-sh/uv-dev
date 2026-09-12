@@ -10,11 +10,19 @@ use insta::assert_snapshot;
 use std::path::Path;
 use std::process::Stdio;
 #[cfg(feature = "test-universal")]
+use std::str::{FromStr, from_utf8};
+#[cfg(feature = "test-universal")]
 use uv_fs::Simplified;
+#[cfg(feature = "test-universal")]
+use uv_python::PythonVersion;
 use uv_static::EnvVars;
 #[cfg(feature = "test-universal")]
 use uv_test::copy_dir_ignore;
 use uv_test::packse::PackseServer;
+#[cfg(feature = "test-universal")]
+use uv_test::packse::check::{ScenarioPlatform, ScenarioTarget, parse_pins};
+#[cfg(feature = "test-universal")]
+use uv_test::packse::project::{ProjectSelection, ScenarioProject};
 use uv_test::packse::scenario::Scenario;
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 use uv_test::{READ_ONLY_GITHUB_SSH_DEPLOY_KEY, READ_ONLY_GITHUB_TOKEN, decode_token};
@@ -280,6 +288,78 @@ fn requirements_txt_conditional_transitive_extra() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
+    Ok(())
+}
+
+/// Reaching an extra through a cycle must not enable it wherever the base package is reachable.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_recursive_transitive_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = Scenario::from_path(
+        &context
+            .workspace_root
+            .join("test/scenarios/project/recursive-extra-projection.toml"),
+    )?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12,<3.15"
+            dependencies = ["a"]
+
+            [project.optional-dependencies]
+            feature = ["b[loop]; sys_platform == 'linux'"]
+
+            [[tool.uv.index]]
+            url = "{index_url}"
+            default = true
+            "#,
+            index_url = server.index_url(),
+        })?;
+    context.lock().assert().success();
+
+    let base = uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--offline", "--no-emit-project", "--no-hashes", "--no-header", "--no-annotate", "--no-default-groups"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    a==1.0.0
+    ");
+
+    let feature = uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--offline", "--no-emit-project", "--no-hashes", "--no-header", "--no-annotate", "--no-default-groups", "--extra", "feature"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    a==1.0.0
+    b==1.0.0 ; sys_platform == 'linux'
+    c==1.0.0 ; sys_platform == 'linux'
+    ");
+
+    let targets = ScenarioTarget::matrix(
+        &["3.12", "3.13", "3.14"]
+            .map(|version| PythonVersion::from_str(version).expect("valid Python version")),
+        &[
+            ScenarioPlatform::Linux,
+            ScenarioPlatform::Macos,
+            ScenarioPlatform::Windows,
+        ],
+    );
+    let project = ScenarioProject::new(&scenario)?;
+    for (selection, output) in [
+        (ProjectSelection::default(), base),
+        (project.all_selection(), feature),
+    ] {
+        let requirements = from_utf8(&output.stdout)?;
+        for target in &targets {
+            let environment = target.markers()?;
+            let pins = parse_pins(requirements, &environment)?;
+            project.oracle(&environment, &selection)?.validate(&pins)?;
+        }
+    }
     Ok(())
 }
 
