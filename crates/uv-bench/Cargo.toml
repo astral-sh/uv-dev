@@ -129,6 +129,11 @@ path = "benches/concurrent_downloads.rs"
 harness = false
 
 [[bench]]
+name = "local_wheel_concurrency"
+path = "benches/local_wheel_concurrency.rs"
+harness = false
+
+[[bench]]
 name = "multi_index"
 path = "benches/multi_index.rs"
 harness = false
