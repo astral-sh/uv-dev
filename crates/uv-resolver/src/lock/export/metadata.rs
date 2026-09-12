@@ -118,6 +118,8 @@ struct MetadataEnvironment {
     root: PortablePathBuf,
     /// Information about the Python interpreter in the environment.
     python: PythonReport,
+    /// Locked packages selected for this interpreter, keyed by normalized package name.
+    selected_packages: BTreeMap<PackageName, String>,
     /// Distributions present in the environment, independently of the locked resolution.
     packages: BTreeMap<String, MetadataInstalledPackage>,
     /// Importable modules recorded by installed distributions.
@@ -1501,8 +1503,13 @@ impl Metadata {
         mut self,
         environment: &PythonEnvironment,
         packages: impl IntoIterator<Item = &'a InstalledDist>,
+        selected_packages: BTreeMap<PackageName, String>,
         module_owners: BTreeMap<ModuleName, Vec<String>>,
     ) -> Self {
+        let selected_packages = selected_packages
+            .into_iter()
+            .filter(|(_, package_id)| self.resolution.contains_key(package_id))
+            .collect();
         let packages = packages
             .into_iter()
             .map(MetadataInstalledPackage::from_dist)
@@ -1522,6 +1529,7 @@ impl Metadata {
         self.environment = Some(MetadataEnvironment {
             root: PortablePathBuf::from(environment.root()),
             python: PythonReport::from(environment.interpreter()),
+            selected_packages,
             packages,
             module_owners,
         });

@@ -15,6 +15,13 @@ environment, not an additional node in the locked `resolution` graph. In particu
 versions may differ from the locked versions, and more than one installed distribution can have the
 same name.
 
+`environment.selected_packages` gives the locked package nodes selected for the environment's
+interpreter, keyed by normalized package name. Its values are identifiers in `resolution`. For
+workspace targets, this selection includes all extras and dependency groups, matching
+`uv workspace metadata --sync`; script targets use the script's ordinary selection. A selected
+package is not necessarily installed, and an installed distribution with the same name need not have
+the selected version or source. Virtual packages are not included.
+
 `environment.module_owners` maps module names to those installed-package identifiers, including
 distributions outside the locked graph. The top-level `module_owners` field continues to reference
 package nodes in `resolution`. Both maps describe modules found in installed file records; they do
@@ -196,6 +203,10 @@ Here is a human-readable annotated example:
       "version": "3.12.12",
       // The Python implementation name
       "implementation": "cpython"
+    },
+    // The locked packages selected for this interpreter, whether or not they are installed
+    "selected_packages": {
+      "iniconfig": "iniconfig==2.0.0@registry+https://pypi.org/simple"
     },
     // The installed distributions, keyed by opaque installed-package identifiers
     "packages": {
