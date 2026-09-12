@@ -219,15 +219,16 @@ impl Drop for FixtureServer {
 /// A real, frozen dependency graph and the arguments that select its workload.
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
-struct EnvironmentFixture {
-    name: String,
-    project: String,
-    python: String,
-    sync_args: Vec<String>,
+pub struct EnvironmentFixture {
+    pub name: String,
+    pub project: String,
+    pub python: String,
+    pub sync_args: Vec<String>,
+    pub installed_requirement: String,
 }
 
 /// Small, medium, and large package graphs, measured with the same Python version.
-fn environment_fixtures() -> Vec<EnvironmentFixture> {
+pub fn environment_fixtures() -> Vec<EnvironmentFixture> {
     serde_json::from_str(include_str!("../../../scripts/benchmark/environments.json"))
         .expect("Invalid environment fixture manifest")
 }
@@ -251,7 +252,7 @@ impl PreparedEnvironment {
     }
 
     /// Install a selected frozen graph without building its project checkout.
-    fn from_fixture(fixture: &EnvironmentFixture) -> Self {
+    pub fn from_fixture(fixture: &EnvironmentFixture) -> Self {
         let directory = tempfile::tempdir().expect("Failed to create project directory");
         fs_err::copy(
             fixture_path(&format!("{}.pyproject.toml", fixture.project)),
