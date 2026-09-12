@@ -6180,7 +6180,7 @@ dependencies = [
  "uv-platform-tags",
  "uv-preview",
  "uv-pypi-types",
- "uv-toml",
+ "uv-pyproject-toml",
  "uv-version",
  "uv-warnings",
  "walkdir",
@@ -6217,6 +6217,7 @@ dependencies = [
  "uv-pep440",
  "uv-pep508",
  "uv-pypi-types",
+ "uv-pyproject-toml",
  "uv-python",
  "uv-static",
  "uv-types",
@@ -7149,8 +7150,21 @@ dependencies = [
  "uv-normalize",
  "uv-pep440",
  "uv-pep508",
+ "uv-pyproject-toml",
  "uv-redacted",
  "uv-small-str",
+]
+
+[[package]]
+name = "uv-pyproject-toml"
+version = "0.0.80"
+dependencies = [
+ "indexmap",
+ "serde",
+ "toml",
+ "uv-normalize",
+ "uv-pep440",
+ "uv-pep508",
 ]
 
 [[package]]
@@ -7714,6 +7728,7 @@ dependencies = [
  "uv-pep440",
  "uv-pep508",
  "uv-pypi-types",
+ "uv-pyproject-toml",
  "uv-redacted",
  "uv-static",
  "uv-toml",
