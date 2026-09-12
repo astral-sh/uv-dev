@@ -472,17 +472,22 @@ where
             Ok(()) => Ok(state.mode_working()),
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
                 if options.on_existing_directory == OnExistingDirectory::Merge {
-                    if let Ok(temp_file) = tempfile::Builder::new().make_in(
-                        target.parent().expect("Link path must have a parent"),
-                        |temp_path| reflink_with_permissions(path, temp_path),
-                    ) {
+                    if let Ok(temp_file) = tempfile::Builder::new()
+                        .make_in(
+                            target.parent().expect("Link path must have a parent"),
+                            |temp_path| reflink_with_permissions(path, temp_path),
+                        )
+                        .inspect_err(|err| {
+                            debug!(
+                                "Failed to reflink `{}` to temp location: {}, falling back",
+                                path.display(),
+                                err
+                            );
+                        })
+                    {
                         fs_err::rename(temp_file.path(), target)?;
                         Ok(state.mode_working())
                     } else {
-                        debug!(
-                            "Failed to reflink `{}` to temp location, falling back",
-                            path.display()
-                        );
                         link_file(path, target, state.next_mode(), options)
                     }
                 } else {
