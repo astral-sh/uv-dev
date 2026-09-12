@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use reqsign::aws::DefaultSigner as AwsDefaultSigner;
 use reqsign::azure::DefaultSigner as AzureDefaultSigner;
 use reqsign::google::DefaultSigner as GcsDefaultSigner;
+use reqwest::header::{HeaderValue, InvalidHeaderValue};
 use tracing::debug;
 use url::{ParseError, Url};
 
@@ -28,7 +29,6 @@ static HUGGING_FACE_TOKEN: LazyLock<Option<Vec<u8>>> = LazyLock::new(|| {
     // Extract the Hugging Face token from the environment variable, if it exists.
     let hf_token = std::env::var(EnvVars::HF_TOKEN)
         .ok()
-        .map(String::into_bytes)
         .filter(|token| !token.is_empty())?;
 
     if std::env::var_os(EnvVars::UV_NO_HF_TOKEN).is_some() {
@@ -36,9 +36,20 @@ static HUGGING_FACE_TOKEN: LazyLock<Option<Vec<u8>>> = LazyLock::new(|| {
         return None;
     }
 
+    let Ok(hf_token) = validate_hugging_face_token(hf_token) else {
+        warn_user_once!("Ignoring invalid `HF_TOKEN`");
+        return None;
+    };
+
     debug!("Found Hugging Face token in environment");
     Some(hf_token)
 });
+
+fn validate_hugging_face_token(token: String) -> Result<Vec<u8>, InvalidHeaderValue> {
+    let token = token.into_bytes();
+    HeaderValue::from_bytes(&[b"Bearer ", token.as_slice()].concat())?;
+    Ok(token)
+}
 
 /// A provider for authentication credentials for the Hugging Face platform.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -215,6 +226,21 @@ fn is_endpoint_url(url: &Url, endpoint_url: &Url) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_hugging_face_token_header_validation() {
+        let token = validate_hugging_face_token("hf_valid-token".to_string()).unwrap();
+        let credentials = Credentials::Bearer {
+            token: Token::new(token),
+        };
+        assert_eq!(
+            credentials.to_header_value().as_bytes(),
+            b"Bearer hf_valid-token"
+        );
+
+        assert!(validate_hugging_face_token("hf_secret\ninjected".to_string()).is_err());
+        assert!(validate_hugging_face_token("hf_secret\rinjected".to_string()).is_err());
+    }
 
     #[test]
     fn test_endpoint_url_matches_path_prefix() {
