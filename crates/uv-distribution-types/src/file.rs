@@ -161,6 +161,7 @@ impl Display for FileLocation {
 )]
 #[serde(transparent)]
 #[rkyv(derive(Debug))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct UrlString(SmallString);
 
 impl UrlString {

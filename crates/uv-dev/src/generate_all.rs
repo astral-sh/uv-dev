@@ -28,7 +28,15 @@ pub(crate) enum Mode {
 }
 
 pub(crate) async fn main(args: &Args) -> Result<()> {
-    generate_json_schema::main(&generate_json_schema::Args { mode: args.mode })?;
+    for target in [
+        generate_json_schema::Target::Configuration,
+        generate_json_schema::Target::WorkspaceMetadata,
+    ] {
+        generate_json_schema::main(&generate_json_schema::Args {
+            mode: args.mode,
+            target,
+        })?;
+    }
     generate_options_reference::main(&generate_options_reference::Args { mode: args.mode })?;
     generate_cli_reference::main(&generate_cli_reference::Args { mode: args.mode })?;
     generate_env_vars_reference::main(&generate_env_vars_reference::Args { mode: args.mode })?;

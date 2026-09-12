@@ -1,0 +1,913 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "uv workspace metadata (preview)",
+  "description": "The full `uv workspace metadata` JSON object",
+  "type": "object",
+  "properties": {
+    "conflicts": {
+      "description": "Info about conflicting packages",
+      "allOf": [
+        {
+          "$ref": "#/definitions/MetadataConflicts"
+        }
+      ]
+    },
+    "environment": {
+      "description": "Information about the existing or synchronized environment, when available.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/MetadataEnvironment"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "members": {
+      "description": "An index of which nodes are workspace members\n\nThese entries are often what you should use as the entry-points into the `resolve` graph.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/MetadataWorkspaceMember"
+      }
+    },
+    "module_owners": {
+      "description": "A mapping from importable module names to the package nodes that provide them",
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "$ref": "#/definitions/MetadataModuleOwner"
+        }
+      }
+    },
+    "requires_python": {
+      "description": "The version of python required by the workspace\n\nEvery `marker` we emit implicitly assumes this constraint to keep things clean",
+      "type": "string"
+    },
+    "resolution": {
+      "description": "The dependency graph",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/MetadataNode"
+      }
+    },
+    "schema": {
+      "description": "Format information",
+      "allOf": [
+        {
+          "$ref": "#/definitions/SchemaReport"
+        }
+      ]
+    },
+    "script": {
+      "description": "Information about the script root, when metadata was requested for a script.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/MetadataScript"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "workspace": {
+      "description": "Information about the workspace root, when metadata was requested for a workspace.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/MetadataWorkspace"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "workspace_root": {
+      "description": "Absolute path to the workspace root\n\nIdeally absolute paths to things that are found in subdirs of this should have exactly\nthis as a prefix so it can be stripped to get relative paths if one wants.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/PortablePathBuf"
+        }
+      ]
+    }
+  },
+  "required": ["schema", "workspace_root", "requires_python", "conflicts"],
+  "definitions": {
+    "ExtraName": {
+      "description": "The normalized name of an extra dependency.\n\nConverts the name to lowercase and collapses runs of `-`, `_`, and `.` down to a single `-`.\nFor example, `---`, `.`, and `__` are all converted to a single `-`.\n\nSee:\n- <https://peps.python.org/pep-0685/#specification/>\n- <https://packaging.python.org/en/latest/specifications/name-normalization/>",
+      "type": "string"
+    },
+    "GroupName": {
+      "description": "The normalized name of a dependency group.\n\nSee:\n- <https://peps.python.org/pep-0735/>\n- <https://packaging.python.org/en/latest/specifications/name-normalization/>",
+      "type": "string"
+    },
+    "MetadataBuildSystem": {
+      "type": "object",
+      "properties": {
+        "build_backend": {
+          "description": "The `build-backend` specified in the pyproject.toml",
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": ["build_backend", "id"]
+    },
+    "MetadataConflictItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "This should never be None (should be a validation error way earlier in uv)\n...but I'd rather not error if wrong.",
+          "type": ["string", "null"]
+        },
+        "kind": {
+          "$ref": "#/definitions/MetadataConflictKind"
+        },
+        "package": {
+          "description": "These should always be names of packages referred to in [`Metadata::members`]",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PackageName"
+            }
+          ]
+        }
+      },
+      "required": ["package", "kind", "id"]
+    },
+    "MetadataConflictKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": ["Project"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "Group": {
+              "$ref": "#/definitions/GroupName"
+            }
+          },
+          "additionalProperties": false,
+          "required": ["Group"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "Extra": {
+              "$ref": "#/definitions/ExtraName"
+            }
+          },
+          "additionalProperties": false,
+          "required": ["Extra"]
+        }
+      ]
+    },
+    "MetadataConflictSet": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/MetadataConflictItem"
+          }
+        }
+      },
+      "required": ["items"]
+    },
+    "MetadataConflicts": {
+      "description": "Conflicts",
+      "type": "object",
+      "properties": {
+        "sets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/MetadataConflictSet"
+          }
+        }
+      },
+      "required": ["sets"]
+    },
+    "MetadataDependency": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "marker": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["id"]
+    },
+    "MetadataEnvironment": {
+      "description": "Information about the existing or synchronized environment for the workspace.",
+      "type": "object",
+      "properties": {
+        "module_owners": {
+          "description": "Importable modules recorded by installed distributions.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/MetadataInstalledModuleOwner"
+            }
+          }
+        },
+        "packages": {
+          "description": "Distributions present in the environment, independently of the locked resolution.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/MetadataInstalledPackage"
+          }
+        },
+        "python": {
+          "description": "Information about the Python interpreter in the environment.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PythonReport"
+            }
+          ]
+        },
+        "root": {
+          "description": "Absolute path to the environment root.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          ]
+        },
+        "selected_packages": {
+          "description": "Locked packages selected for this interpreter, keyed by normalized package name.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "root",
+        "python",
+        "selected_packages",
+        "packages",
+        "module_owners"
+      ]
+    },
+    "MetadataExtra": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "$ref": "#/definitions/ExtraName"
+        }
+      },
+      "required": ["name", "id"]
+    },
+    "MetadataGroup": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "$ref": "#/definitions/GroupName"
+        }
+      },
+      "required": ["name", "id"]
+    },
+    "MetadataInstalledModuleOwner": {
+      "description": "An installed distribution whose metadata records an importable module.",
+      "type": "object",
+      "properties": {
+        "installed_id": {
+          "description": "Key for the distribution in `environment.packages`.",
+          "type": "string"
+        }
+      },
+      "required": ["installed_id"]
+    },
+    "MetadataInstalledPackage": {
+      "description": "A distribution observed in an existing Python environment.",
+      "type": "object",
+      "properties": {
+        "editable": {
+          "description": "Whether the distribution is installed in editable mode.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "Normalized distribution name.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PackageName"
+            }
+          ]
+        },
+        "path": {
+          "description": "Absolute path to the installed distribution metadata.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          ]
+        },
+        "version": {
+          "description": "Installed distribution version.",
+          "type": "string"
+        }
+      },
+      "required": ["name", "version", "path", "editable"]
+    },
+    "MetadataModuleOwner": {
+      "description": "An installed distribution that provides an importable module.",
+      "type": "object",
+      "properties": {
+        "package_id": {
+          "description": "Key for the package node in the `resolution` graph.",
+          "type": "string"
+        }
+      },
+      "required": ["package_id"]
+    },
+    "MetadataNode": {
+      "description": "A node in the dependency graph.\n\nThere are 6 kinds of nodes:\n\n* workspaces: `workspace+/workspace`\n* scripts:    `script+/workspace/script.py`\n* packages:   `mypackage==1.0.0@registry+https://pypi.org/simple`\n* extras:     `mypackage[myextra]==1.0.0@registry+https://pypi.org/simple`\n* groups:     `mypackage:mygroup==1.0.0@registry+https://pypi.org/simple`\n* build:      `mypackage(build)==1.0.0@registry+https://pypi.org/simple`\n\nWorkspace and script nodes are special cases that only ever exist in the root of the graph.\n\nA workspace node is only ever used to hang `dependency-groups` off of, to represent the fact\nthat workspaces can define groups that aren't otherwise associated with any package\n(in this way there's technically two kinds of group nodes, since this changes their id format).\n\nA script node is basically just a package, but, it's a script so it's identified by path\ninstead of name/version.\n\nBuild nodes are stubbed out, but never actually used yet, so they're under-defined.\n\n\n# What's an Edge?\n\nStrictly speaking the only edges of the graph are the `dependencies` field of each node.\nThese are the things that must be installed for the node's requirements to be satisfied\n(possibly qualified by a marker).\n\n`optional-dependencies`, `dependency-groups` and `build-system` define things that *look*\nlike edges but aren't really -- there is no dependency from `mypackage` to\n`mypackage[extra]` or `mypackage:group`. There *is* a dependency from `mypackage[extra]`\nto `mypackage`, and that is expressed by including `mypackage` in the `dependencies` of\n`mypackage[extra]`.\n\nThe `optional_dependencies` entry on a `mypackage` node is essentially just a listing\nthat the `mypackage[extra]` node *exists*. In this way if `mypackage` is a workspace\nmember then `mypackage`, `mypackage[extra]`, and `mypackage:group` are all equally \"roots\"\nof the dependency graph (and arguably `workspace` isn't a root at all even though\n`workspace:group` is).\n\n\n# Simple Example\n\nA package like this:\n\n```toml\n[project]\nname = \"mypackage\"\nversion = 1.0.0\n\ndependencies = [\"httpx\"]\n\n[project.optional-dependencies]\ncli = [\"rich\"]\n\n[dependency-groups]\ndev = [\"typing-extensions\"]\n\n[build-system]\nrequires = [\"hatchling\"]\n```\n\nwill get 4 nodes with the following edges (Version and Source omitted here for brevity):\n\n* `mypackage`\n  * `httpx`\n* `mypackage(build)`\n  * `hatchling`\n* `mypackage[cli]`\n  * `mypackage`\n  * `rich`\n* `mypackage:dev`\n  * `typing-extensions`\n\nNote that `mypackage[cli]` has a dependency edge on `mypackage` while `mypackage:dev` does not.\nThis is because `mypackage[cli]` is fundamentally an augmentation of `mypackage` while `mypackage:dev`\nis just a list of packages that happens to be defined by `mypackage`'s pyproject.toml.\n\n---------\n\nWorkspace nodes and script nodes",
+      "type": "object",
+      "properties": {
+        "build_system": {
+          "description": "Info about building the package",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetadataBuildSystem"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dependencies": {
+          "description": "Dependencies of this node (the edges of The Graph)",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/MetadataDependency"
+          }
+        },
+        "dependency_groups": {
+          "description": "Groups",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/MetadataGroup"
+          }
+        },
+        "latest_version": {
+          "description": "The latest known version of this package, when requested by the caller.",
+          "type": ["string", "null"]
+        },
+        "optional_dependencies": {
+          "description": "Extras",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/MetadataExtra"
+          }
+        },
+        "sdist": {
+          "description": "The source distribution found",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetadataSourceDist"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "wheels": {
+          "description": "Wheels we found",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/MetadataWheel"
+          }
+        }
+      },
+      "anyOf": [
+        {
+          "$ref": "#/definitions/MetadataPackageNodeId"
+        },
+        {
+          "$ref": "#/definitions/MetadataScriptNodeId"
+        },
+        {
+          "$ref": "#/definitions/MetadataWorkspaceNodeId"
+        },
+        {
+          "$ref": "#/definitions/MetadataWorkspaceGroupNodeId"
+        }
+      ],
+      "required": ["dependencies"]
+    },
+    "MetadataNodeKind": {
+      "description": "The kind a node can have in the dependency graph",
+      "oneOf": [
+        {
+          "description": "The node is the package itself\nits edges are `project.dependencies`",
+          "type": "string",
+          "const": "package"
+        },
+        {
+          "description": "The node is for building the package's sdist into a wheel\nits edges are `build-system.requires`",
+          "type": "string",
+          "const": "build"
+        },
+        {
+          "description": "The node is for an extra defined on the package\nits edges are `project.optional-dependencies.myextra`",
+          "type": "object",
+          "properties": {
+            "extra": {
+              "$ref": "#/definitions/ExtraName"
+            }
+          },
+          "additionalProperties": false,
+          "required": ["extra"]
+        },
+        {
+          "description": "The node is for a dependency-group defined on the package\nits edges are `dependency-groups.mygroup`",
+          "type": "object",
+          "properties": {
+            "group": {
+              "$ref": "#/definitions/GroupName"
+            }
+          },
+          "additionalProperties": false,
+          "required": ["group"]
+        }
+      ]
+    },
+    "MetadataPackageNodeId": {
+      "description": "The unique key for a package-derived node.\n\n(It's not entirely clear to me that two nodes can differ only by `source` but it doesn't hurt.)",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "What kind of node is this?",
+          "allOf": [
+            {
+              "$ref": "#/definitions/MetadataNodeKind"
+            }
+          ]
+        },
+        "name": {
+          "description": "The name of the package",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PackageName"
+            }
+          ]
+        },
+        "source": {
+          "description": "The source of the package (directory, registry, URL...)",
+          "allOf": [
+            {
+              "$ref": "#/definitions/MetadataSource"
+            }
+          ]
+        },
+        "version": {
+          "description": "The version of the package, if any could be found (source trees may have no version)",
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["name", "source", "kind"]
+    },
+    "MetadataRegistrySource": {
+      "oneOf": [
+        {
+          "description": "Ex) `https://pypi.org/simple`",
+          "type": "object",
+          "properties": {
+            "url": {
+              "$ref": "#/definitions/UrlString"
+            }
+          },
+          "additionalProperties": false,
+          "required": ["url"]
+        },
+        {
+          "description": "Ex) `/path/to/local/index`",
+          "type": "object",
+          "properties": {
+            "path": {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          },
+          "additionalProperties": false,
+          "required": ["path"]
+        }
+      ]
+    },
+    "MetadataScript": {
+      "description": "The script entry-point.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Key for the script's node in the `resolution` graph.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Absolute path to the script.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          ]
+        }
+      },
+      "required": ["path", "id"]
+    },
+    "MetadataScriptNodeId": {
+      "description": "The unique key for a script node.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/MetadataScriptNodeKind"
+        },
+        "path": {
+          "description": "Absolute path to the script.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          ]
+        }
+      },
+      "required": ["kind", "path"]
+    },
+    "MetadataScriptNodeKind": {
+      "type": "string",
+      "enum": ["script"]
+    },
+    "MetadataSource": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "registry": {
+              "$ref": "#/definitions/MetadataRegistrySource"
+            }
+          },
+          "required": ["registry"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "git": {
+              "$ref": "#/definitions/UrlString"
+            }
+          },
+          "required": ["git"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "subdirectory": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PortablePathBuf"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "url": {
+              "$ref": "#/definitions/UrlString"
+            }
+          },
+          "required": ["url", "subdirectory"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "path": {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          },
+          "required": ["path"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "directory": {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          },
+          "required": ["directory"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "editable": {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          },
+          "required": ["editable"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "virtual": {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          },
+          "required": ["virtual"]
+        }
+      ]
+    },
+    "MetadataSourceDist": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "hashes": {
+              "description": "A hash of the source distribution.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "size": {
+              "description": "The size of the source distribution in bytes.\n\nThis is only present for source distributions that come from registries.",
+              "type": ["integer", "null"],
+              "format": "uint64",
+              "minimum": 0
+            },
+            "upload_time": {
+              "description": "The upload time of the source distribution.",
+              "type": ["string", "null"],
+              "format": "date-time"
+            },
+            "url": {
+              "$ref": "#/definitions/UrlString"
+            }
+          },
+          "required": ["url"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "hashes": {
+              "description": "A hash of the source distribution.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "path": {
+              "$ref": "#/definitions/PortablePathBuf"
+            },
+            "size": {
+              "description": "The size of the source distribution in bytes.\n\nThis is only present for source distributions that come from registries.",
+              "type": ["integer", "null"],
+              "format": "uint64",
+              "minimum": 0
+            },
+            "upload_time": {
+              "description": "The upload time of the source distribution.",
+              "type": ["string", "null"],
+              "format": "date-time"
+            }
+          },
+          "required": ["path"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "hashes": {
+              "description": "A hash of the source distribution.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "size": {
+              "description": "The size of the source distribution in bytes.\n\nThis is only present for source distributions that come from registries.",
+              "type": ["integer", "null"],
+              "format": "uint64",
+              "minimum": 0
+            },
+            "upload_time": {
+              "description": "The upload time of the source distribution.",
+              "type": ["string", "null"],
+              "format": "date-time"
+            }
+          }
+        }
+      ]
+    },
+    "MetadataWheel": {
+      "type": "object",
+      "properties": {
+        "filename": {
+          "description": "The filename of the wheel.\n\nThis isn't part of the wire format since it's redundant with the\nURL. But we do use it for various things, and thus compute it at\ndeserialization time. Not being able to extract a wheel filename from a\nwheel URL is thus a deserialization error.",
+          "type": "string"
+        },
+        "hashes": {
+          "description": "A hash of the built distribution.\n\nThis is only present for wheels that come from registries and direct\nURLs. Wheels from git or path dependencies do not have hashes\nassociated with them.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "size": {
+          "description": "The size of the built distribution in bytes.\n\nThis is only present for wheels that come from registries.",
+          "type": ["integer", "null"],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "upload_time": {
+          "description": "The upload time of the built distribution.\n\nThis is only present for wheels that come from registries.",
+          "type": ["string", "null"],
+          "format": "date-time"
+        }
+      },
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "url": {
+              "$ref": "#/definitions/UrlString"
+            }
+          },
+          "required": ["url"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "path": {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          },
+          "required": ["path"]
+        },
+        {}
+      ],
+      "required": ["filename"]
+    },
+    "MetadataWorkspace": {
+      "description": "The workspace entry-point.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Key for the workspace's node in the `resolution` graph.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Absolute path to the workspace root.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          ]
+        }
+      },
+      "required": ["path", "id"]
+    },
+    "MetadataWorkspaceGroupNodeId": {
+      "description": "The unique key for a dependency group defined on the workspace root.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/MetadataWorkspaceGroupNodeKind"
+        },
+        "path": {
+          "description": "Absolute path to the workspace root.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          ]
+        }
+      },
+      "required": ["kind", "path"]
+    },
+    "MetadataWorkspaceGroupNodeKind": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "group": {
+              "$ref": "#/definitions/GroupName"
+            }
+          },
+          "additionalProperties": false,
+          "required": ["group"]
+        }
+      ]
+    },
+    "MetadataWorkspaceMember": {
+      "description": "Info for looking up workspace members, most information is stored in the node behind `id`",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Key for the package's node in the `resolve` graph",
+          "type": "string"
+        },
+        "name": {
+          "description": "Package name",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PackageName"
+            }
+          ]
+        },
+        "path": {
+          "description": "Absolute path to the member",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          ]
+        }
+      },
+      "required": ["name", "path", "id"]
+    },
+    "MetadataWorkspaceNodeId": {
+      "description": "The unique key for a workspace node.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/MetadataWorkspaceNodeKind"
+        },
+        "path": {
+          "description": "Absolute path to the workspace root.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          ]
+        }
+      },
+      "required": ["kind", "path"]
+    },
+    "MetadataWorkspaceNodeKind": {
+      "type": "string",
+      "enum": ["workspace"]
+    },
+    "PackageName": {
+      "description": "The normalized name of a package.\n\nConverts the name to lowercase and collapses runs of `-`, `_`, and `.` down to a single `-`.\nFor example, `---`, `.`, and `__` are all converted to a single `-`.\n\nSee: <https://packaging.python.org/en/latest/specifications/name-normalization/>",
+      "type": "string"
+    },
+    "PortablePathBuf": {
+      "type": "string"
+    },
+    "PythonReport": {
+      "description": "Information about the Python interpreter in an existing environment.",
+      "type": "object",
+      "properties": {
+        "implementation": {
+          "description": "Python implementation name.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Absolute path to the Python executable.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          ]
+        },
+        "version": {
+          "description": "Full Python version.",
+          "type": "string"
+        }
+      },
+      "required": ["path", "version", "implementation"]
+    },
+    "SchemaReport": {
+      "description": "The schema metadata for the metadata report.",
+      "type": "object",
+      "properties": {
+        "version": {
+          "description": "The version of the schema.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SchemaVersion"
+            }
+          ]
+        }
+      },
+      "required": ["version"]
+    },
+    "SchemaVersion": {
+      "description": "The schema version for the metadata report.",
+      "oneOf": [
+        {
+          "description": "An unstable, experimental schema.",
+          "type": "string",
+          "const": "preview"
+        }
+      ]
+    },
+    "UrlString": {
+      "description": "A [`Url`] represented as a `String`.\n\nThis type is not guaranteed to be a valid URL, and may error on conversion.",
+      "type": "string"
+    }
+  }
+}

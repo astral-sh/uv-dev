@@ -33,6 +33,7 @@ uv-pep508 = { workspace = true }
 uv-pypi-types = { workspace = true }
 uv-preview = { workspace = true }
 uv-python = { workspace = true }
+uv-resolver = { workspace = true, features = ["schemars"] }
 uv-settings = { workspace = true, features = ["schemars"] }
 uv-static = { workspace = true }
 uv-test = { workspace = true }
