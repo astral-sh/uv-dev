@@ -1,6 +1,7 @@
 use std::fmt::{self, Display, Formatter};
 use std::hash::BuildHasherDefault;
 use std::sync::Arc;
+use std::sync::PoisonError;
 use std::sync::RwLock;
 
 use rustc_hash::{FxHashMap, FxHasher};
@@ -11,6 +12,7 @@ use uv_once_map::OnceMap;
 use uv_redacted::DisplaySafeUrl;
 
 use crate::credentials::{Authentication, CredentialsFromUrlError, Username};
+use crate::realm::ProtectionSpace;
 use crate::{Credentials, Realm};
 
 type FxOnceMap<K, V> = OnceMap<K, V, BuildHasherDefault<FxHasher>>;
@@ -21,6 +23,7 @@ pub(crate) enum FetchUrl {
     Index(DisplaySafeUrl),
     /// A realm URL
     Realm(Realm),
+    ProtectionSpace(ProtectionSpace),
 }
 
 impl Display for FetchUrl {
@@ -28,6 +31,7 @@ impl Display for FetchUrl {
         match self {
             Self::Index(index) => Display::fmt(index, f),
             Self::Realm(realm) => Display::fmt(realm, f),
+            Self::ProtectionSpace(protection_space) => Display::fmt(protection_space, f),
         }
     }
 }
@@ -36,6 +40,7 @@ impl Display for FetchUrl {
 pub struct CredentialsCache {
     /// A cache per realm and username
     realms: RwLock<FxHashMap<(Realm, Username), Arc<Authentication>>>,
+    protection_spaces: RwLock<FxHashMap<(ProtectionSpace, Username), Arc<Authentication>>>,
     /// A cache tracking the result of realm or index URL fetches from external services
     pub(crate) fetches: FxOnceMap<(FetchUrl, Username), Option<Arc<Authentication>>>,
     /// A cache per URL, uses a trie for efficient prefix queries.
@@ -54,6 +59,7 @@ impl CredentialsCache {
         Self {
             fetches: FxOnceMap::default(),
             realms: RwLock::new(FxHashMap::default()),
+            protection_spaces: RwLock::new(FxHashMap::default()),
             urls: RwLock::new(UrlTrie::new()),
         }
     }
@@ -115,6 +121,22 @@ impl CredentialsCache {
         Some(credentials)
     }
 
+    pub(crate) fn get_protection_space(
+        &self,
+        protection_space: ProtectionSpace,
+        username: &Username,
+    ) -> Option<Arc<Authentication>> {
+        let protection_spaces = self
+            .protection_spaces
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        let credentials = protection_spaces.get(&(protection_space, username.clone()))?;
+        if username.is_some() && credentials.password().is_none() {
+            return None;
+        }
+        Some(credentials.clone())
+    }
+
     /// Return the cached credentials for a URL and username, if any.
     ///
     /// Note we do not cache per username, but if a username is passed we will confirm that the
@@ -142,26 +164,68 @@ impl CredentialsCache {
         None
     }
 
+    /// Return whether credentials were cached for this exact URL rather than a parent path.
+    pub(crate) fn has_exact_url(&self, url: &DisplaySafeUrl) -> bool {
+        self.urls.read().unwrap().get_exact(url).is_some()
+    }
+
     /// Update the cache with the given credentials.
     pub(crate) fn insert(&self, url: &DisplaySafeUrl, credentials: Arc<Authentication>) {
+        self.insert_inner(url, credentials, None);
+    }
+
+    pub(crate) fn insert_for_protection_space(
+        &self,
+        url: &DisplaySafeUrl,
+        credentials: Arc<Authentication>,
+        protection_space: ProtectionSpace,
+    ) {
+        self.insert_inner(url, credentials, Some(protection_space));
+    }
+
+    fn insert_inner(
+        &self,
+        url: &DisplaySafeUrl,
+        credentials: Arc<Authentication>,
+        protection_space: Option<ProtectionSpace>,
+    ) {
         // Do not cache empty credentials
         if credentials.is_empty() {
             return;
         }
 
-        // Insert an entry for requests including the username
         let username = credentials.to_username();
-        if username.is_some() {
-            let realm = (Realm::from(url), username);
-            self.insert_realm(realm, &credentials);
+        if let Some(protection_space) = protection_space {
+            let mut protection_spaces = self
+                .protection_spaces
+                .write()
+                .unwrap_or_else(PoisonError::into_inner);
+            if username.is_some() {
+                protection_spaces.insert((protection_space.clone(), username), credentials.clone());
+            }
+            protection_spaces.insert((protection_space, Username::none()), credentials);
+        } else {
+            // Insert an entry for requests including the username
+            if username.is_some() {
+                let realm = (Realm::from(url), username);
+                self.insert_realm(realm, &credentials);
+            }
+
+            // Insert an entry for requests with no username
+            self.insert_realm((Realm::from(url), Username::none()), &credentials);
+
+            // Protection-space credentials cannot be prefix-matched safely: a nested path may
+            // issue a different challenge. Only credentials learned without a challenge can be
+            // reused before the server has identified its realm.
+            let mut urls = self.urls.write().unwrap_or_else(PoisonError::into_inner);
+            if credentials.is_authenticated()
+                || urls
+                    .get_exact(url)
+                    .is_none_or(|existing| !existing.is_authenticated())
+            {
+                urls.insert(url, credentials);
+            }
         }
-
-        // Insert an entry for requests with no username
-        self.insert_realm((Realm::from(url), Username::none()), &credentials);
-
-        // Insert an entry for the URL
-        let mut urls = self.urls.write().unwrap();
-        urls.insert(url, credentials);
     }
 
     /// Private interface to update a realm cache entry.
@@ -223,15 +287,31 @@ impl<T> UrlTrie<T> {
 
     fn get(&self, url: &Url) -> Option<&T> {
         let mut state = 0;
+        let mut value = None;
+        let realm = Realm::from(url).to_string();
+        for component in [realm.as_str()]
+            .into_iter()
+            .chain(url.path_segments().unwrap().filter(|item| !item.is_empty()))
+        {
+            let Some(next) = self.states[state].get(component) else {
+                break;
+            };
+            state = next;
+            if let Some(candidate) = self.states[state].value.as_ref() {
+                value = Some(candidate);
+            }
+        }
+        value
+    }
+
+    fn get_exact(&self, url: &Url) -> Option<&T> {
+        let mut state = 0;
         let realm = Realm::from(url).to_string();
         for component in [realm.as_str()]
             .into_iter()
             .chain(url.path_segments().unwrap().filter(|item| !item.is_empty()))
         {
             state = self.states[state].get(component)?;
-            if let Some(ref value) = self.states[state].value {
-                return Some(value);
-            }
         }
         self.states[state].value.as_ref()
     }
@@ -293,6 +373,8 @@ mod tests {
             Credentials::basic(Some("username3".to_string()), Some("password3".to_string()));
         let credentials4 =
             Credentials::basic(Some("username4".to_string()), Some("password4".to_string()));
+        let credentials5 =
+            Credentials::basic(Some("username5".to_string()), Some("password5".to_string()));
 
         let mut trie = UrlTrie::new();
         trie.insert(
@@ -311,6 +393,10 @@ mod tests {
             &Url::parse("https://example.com/bar").unwrap(),
             credentials4.clone(),
         );
+        trie.insert(
+            &Url::parse("https://example.com/foo/private").unwrap(),
+            credentials5.clone(),
+        );
 
         let url = Url::parse("https://burntsushi.net/regex-internals").unwrap();
         assert_eq!(trie.get(&url), Some(&credentials1));
@@ -323,12 +409,18 @@ mod tests {
 
         let url = Url::parse("https://example.com/foo").unwrap();
         assert_eq!(trie.get(&url), Some(&credentials3));
+        assert_eq!(trie.get_exact(&url), Some(&credentials3));
 
         let url = Url::parse("https://example.com/foo/").unwrap();
         assert_eq!(trie.get(&url), Some(&credentials3));
 
         let url = Url::parse("https://example.com/foo/bar").unwrap();
         assert_eq!(trie.get(&url), Some(&credentials3));
+        assert_eq!(trie.get_exact(&url), None);
+
+        let url = Url::parse("https://example.com/foo/private/package").unwrap();
+        assert_eq!(trie.get(&url), Some(&credentials5));
+        assert_eq!(trie.get_exact(&url), None);
 
         let url = Url::parse("https://example.com/bar").unwrap();
         assert_eq!(trie.get(&url), Some(&credentials4));
