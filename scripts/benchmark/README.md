@@ -26,7 +26,9 @@ changed settings, actual build calls, reinstall work, and required artifact hash
 without timing assumptions. The same source archive is also installed through a local flat index to
 exercise registry-installed version preferences and the no-preference `--upgrade` path. Input
 artifacts are hash-checked and installed files are replaced atomically when constructing a
-malformed-metadata case.
+malformed-metadata case. Separate cached-registry `--reinstall` and uninstall-then-install controls
+cover preparation routes that can omit an empty `uv_cache.json` record while still requiring valid
+build metadata.
 
 ```shell
 python3 scripts/benchmark/qualify-installed-sidecars.py \
