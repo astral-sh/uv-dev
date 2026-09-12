@@ -1,4 +1,4 @@
-//! Host system information (OS type, kernel release, distro metadata).
+//! Host system information (OS type, kernel release, machine, distro metadata).
 
 use std::convert::Infallible;
 use std::fmt;
@@ -93,6 +93,33 @@ impl fmt::Display for OsRelease {
                 revision,
             } => write!(f, "{major}.{minor}.{build}.{revision}"),
         }
+    }
+}
+
+/// The effective Unix machine name reported by `uname -m`.
+///
+/// This can differ from the architecture uv was compiled for. For example, Linux's `setarch`
+/// changes the machine name observed by uv and any Python processes it starts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OsMachine(String);
+
+impl OsMachine {
+    /// Returns the effective Unix machine name, or `None` on non-Unix platforms.
+    pub fn from_env() -> Option<Self> {
+        cfg_select! {
+            unix => {
+                let uname = rustix::system::uname();
+                let machine = uname.machine().to_str().ok()?;
+                Some(Self(machine.to_string()))
+            },
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for OsMachine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
     }
 }
 
@@ -234,6 +261,20 @@ VERSION_ID=40
             target_os = "macos" => { assert_eq!(os_type, OsType::Darwin); },
             target_os = "windows" => { assert_eq!(os_type, OsType::Windows); },
             _ => {},
+        }
+    }
+
+    #[test]
+    fn test_os_machine() {
+        cfg_select! {
+            unix => {
+                let uname = rustix::system::uname();
+                assert_eq!(
+                    OsMachine::from_env().map(|machine| machine.to_string()),
+                    uname.machine().to_str().ok().map(str::to_string),
+                );
+            },
+            _ => { assert_eq!(OsMachine::from_env(), None); },
         }
     }
 
