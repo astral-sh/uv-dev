@@ -16,6 +16,7 @@ use wiremock::{
 };
 
 use uv_cache::CacheBucket;
+use uv_distribution::PathArchivePointer;
 use uv_fs::PortablePath;
 #[cfg(unix)]
 use uv_fs::create_symlink;
@@ -662,6 +663,70 @@ fn refresh_local_wheel_recovers_missing_archive() -> Result<()> {
         }
 
         assert!(!context.cache_files(CacheBucket::Archive)?.is_empty());
+        context
+            .assert_command("from binary_payload import module; print(module.VALUE, end='')")
+            .success()
+            .stdout("not binary");
+    }
+
+    Ok(())
+}
+
+/// An undecodable local wheel pointer must not prevent re-extraction of the original wheel.
+#[test]
+fn reinstall_local_wheel_recovers_invalid_pointer() -> Result<()> {
+    for content_addressed_cache in [false, true] {
+        let context = uv_test::test_context!("3.12");
+        let wheel = binary_payload_wheel(&context)?;
+        let mut install = context.pip_install();
+        install.arg(&wheel);
+        if content_addressed_cache {
+            install.args(["--preview-features", "content-addressed-cache"]);
+        }
+
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), install, @"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Resolved 1 package in [TIME]
+            Prepared 1 package in [TIME]
+            Installed 1 package in [TIME]
+             + binary-payload==0.1.0 (from file://[TEMP_DIR]/binary_payload-0.1.0-py3-none-any.whl)
+            ");
+        }
+
+        let pointers = context
+            .cache_files(CacheBucket::Wheels)?
+            .into_iter()
+            .filter(|path| path.extension().is_some_and(|extension| extension == "rev"))
+            .collect::<Vec<_>>();
+        assert_eq!(pointers.len(), 1);
+        let pointer = pointers.first().context("expected a local wheel pointer")?;
+
+        // Empty data and the reserved MessagePack marker are both invalid cache entries.
+        for contents in [&[][..], &[0xc1]] {
+            fs_err::write(pointer, contents)?;
+            let mut reinstall = context.pip_install();
+            reinstall.arg(&wheel).arg("--reinstall");
+            if content_addressed_cache {
+                reinstall.args(["--preview-features", "content-addressed-cache"]);
+            }
+
+            allow_duplicates! {
+                uv_snapshot!(context.filters(), reinstall, @"
+                exit_code: 0 (success)
+                ----- stderr -----
+                Resolved 1 package in [TIME]
+                Prepared 1 package in [TIME]
+                Uninstalled 1 package in [TIME]
+                Installed 1 package in [TIME]
+                 ~ binary-payload==0.1.0 (from file://[TEMP_DIR]/binary_payload-0.1.0-py3-none-any.whl)
+                ");
+            }
+
+            assert!(PathArchivePointer::read_from(pointer)?.is_some());
+        }
+
         context
             .assert_command("from binary_payload import module; print(module.VALUE, end='')")
             .success()
