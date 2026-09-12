@@ -2182,7 +2182,7 @@ fn build_fast_path_unbounded_backend() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Building source distribution...
-    warning: `build_system.requires = ["uv-build"]` is missing an upper bound on the `uv_build` version such as `<[NEXT_BREAKING]`. Without bounding the `uv_build` version, the source distribution will break when a future, breaking version of `uv_build` is released.
+    warning: `build-system.requires = ["uv-build"]` is missing an upper bound on the `uv_build` version such as `<[NEXT_BREAKING]`. Without bounding the `uv_build` version, the source distribution will break when a future, breaking version of `uv_build` is released.
     Successfully built project/dist/project-0.1.0.tar.gz
     "#);
 
@@ -2519,7 +2519,7 @@ fn build_list_files_errors() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to build `[WORKSPACE]/test/packages/anyio_local`
-      cause: Can only use `--list` with a compatible uv build backend, but `[WORKSPACE]/test/packages/anyio_local` is not compatible because `build_system.build-backend` is not `uv_build`, but `flit_core.buildapi`
+      cause: Can only use `--list` with a compatible uv build backend, but `[WORKSPACE]/test/packages/anyio_local` is not compatible because `build-system.build-backend` is not `uv_build`, but `flit_core.buildapi`
     ");
     Ok(())
 }
