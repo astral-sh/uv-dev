@@ -730,6 +730,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         };
 
         // Acquire an advisory lock, to guard against concurrent writes.
+        #[cfg(windows)]
         let _lock = Self::lock_wheel(wheel_entry, filename).await?;
 
         // Create an entry for the HTTP cache.
@@ -917,6 +918,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         };
 
         // Acquire an advisory lock, to guard against concurrent writes.
+        #[cfg(windows)]
         let _lock = Self::lock_wheel(wheel_entry, filename).await?;
 
         // Create an entry for the HTTP cache.
