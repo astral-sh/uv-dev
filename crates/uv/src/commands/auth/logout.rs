@@ -4,10 +4,9 @@ use anyhow::{Context, Result, bail};
 use owo_colors::OwoColorize;
 
 use uv_auth::{AuthBackend, Credentials, Service, TextCredentialStore, Username};
-use uv_distribution_types::IndexUrl;
-use uv_pep508::VerbatimUrl;
 use uv_preview::Preview;
 
+use crate::commands::auth::normalize_service;
 use crate::{commands::ExitStatus, printer::Printer};
 
 /// Logout from a service.
@@ -21,15 +20,11 @@ pub(crate) async fn logout(
 ) -> Result<ExitStatus> {
     let backend = AuthBackend::from_settings(preview).await?;
 
-    // TODO(zanieb): Use a shared abstraction across `login` and `logout`?
-    let url = service.url().clone();
-    let (service, url) = match IndexUrl::from(VerbatimUrl::from_url(url.clone())).root() {
-        Some(root) => (Service::try_from(root.clone())?, root),
-        None => (service, url),
-    };
+    let service = normalize_service(service)?;
+    let url = service.url();
 
     // Extract credentials from URL if present
-    let url_credentials = Credentials::from_url(&url)?;
+    let url_credentials = Credentials::from_url(url)?;
     let url_username = url_credentials.as_ref().and_then(|c| c.username());
 
     let username = match (username, url_username) {
@@ -56,7 +51,7 @@ pub(crate) async fn logout(
     match backend {
         AuthBackend::System(provider) => {
             provider
-                .remove(&url, &username)
+                .remove(url, &username)
                 .await
                 .with_context(|| format!("Unable to remove credentials for {display_url}"))?;
         }
