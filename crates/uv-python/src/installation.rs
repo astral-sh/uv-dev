@@ -343,16 +343,15 @@ impl PythonInstallation {
             )
             .await?;
 
-        let path = match result {
-            DownloadResult::AlreadyAvailable(path) => path,
-            DownloadResult::Fetched(path) => path,
+        let (path, needs_finalization) = match result {
+            DownloadResult::AlreadyAvailable(path) => (path, true),
+            DownloadResult::Fetched(path) => (path, false),
         };
 
         let installed = ManagedPythonInstallation::new(path, download);
-        installed.ensure_externally_managed()?;
-        installed.ensure_sysconfig_patched()?;
-        installed.ensure_canonical_executables()?;
-        installed.ensure_build_file()?;
+        if needs_finalization {
+            installed.finalize()?;
+        }
 
         let minor_version = installed.minor_version_key();
         let highest_patch = installations
@@ -366,10 +365,6 @@ impl PythonInstallation {
             .is_some_and(|p| p >= highest_patch)
         {
             installed.ensure_minor_version_link()?;
-        }
-
-        if let Err(e) = installed.ensure_dylib_patched() {
-            e.warn_user(&installed);
         }
 
         Ok(Self {

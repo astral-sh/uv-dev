@@ -453,11 +453,14 @@ impl ManagedPythonInstallation {
     }
 
     fn python_dir(&self) -> PathBuf {
-        let install = self.path.join("install");
-        if install.is_dir() {
-            install
+        self.python_dir_at(&self.path)
+    }
+
+    fn python_dir_at(&self, root: &Path) -> PathBuf {
+        if self.path.join("install").is_dir() {
+            root.join("install")
         } else {
-            self.path.clone()
+            root.to_path_buf()
         }
     }
 
@@ -496,6 +499,27 @@ impl ManagedPythonInstallation {
         PythonInstallationMinorVersionKey::ref_cast(&self.key)
     }
 
+    /// Finalize the files inside the installation directory.
+    ///
+    /// Executable links, minor-version links, and registry entries outside this directory are
+    /// managed by the caller.
+    pub fn finalize(&self) -> Result<(), Error> {
+        self.finalize_at(self.path())
+    }
+
+    /// Finalize a staged installation with paths that refer to its eventual destination.
+    pub(crate) fn finalize_at(&self, install_root: &Path) -> Result<(), Error> {
+        self.ensure_externally_managed()?;
+        self.ensure_sysconfig_patched_at(install_root)?;
+        self.ensure_canonical_executables()?;
+        self.ensure_build_file()?;
+        // macOS developer tools are optional, so a failed dylib patch must not prevent installation.
+        if let Err(err) = self.ensure_dylib_patched_at(install_root) {
+            err.warn_user(self);
+        }
+        Ok(())
+    }
+
     /// Ensure the environment contains the canonical Python executable names.
     pub fn ensure_canonical_executables(&self) -> Result<(), Error> {
         let python = self.executable(false);
@@ -512,7 +536,19 @@ impl ManagedPythonInstallation {
                 continue;
             }
 
-            match symlink_or_copy_file(&python, &executable) {
+            // The aliases share a directory with the interpreter. Relative Unix links remain
+            // valid when a staged installation is moved into its final directory.
+            let source = if cfg!(unix) {
+                Path::new(
+                    python
+                        .file_name()
+                        .ok_or_else(|| Error::MissingExecutable(python.clone()))?,
+                )
+            } else {
+                &python
+            };
+
+            match symlink_or_copy_file(source, &executable) {
                 Ok(()) => {
                     debug!(
                         "Created link {} -> {}",
@@ -574,6 +610,10 @@ impl ManagedPythonInstallation {
 
     /// Ensure that the `sysconfig` data is patched to match the installation path.
     pub fn ensure_sysconfig_patched(&self) -> Result<(), Error> {
+        self.ensure_sysconfig_patched_at(self.path())
+    }
+
+    fn ensure_sysconfig_patched_at(&self, install_root: &Path) -> Result<(), Error> {
         if cfg!(unix) && !self.key.os().is_windows() {
             if self.key.os().is_emscripten() {
                 // Emscripten's stdlib is a zip file so we can't update the
@@ -581,8 +621,9 @@ impl ManagedPythonInstallation {
                 return Ok(());
             }
             if self.implementation() == ImplementationName::CPython {
-                sysconfig::update_sysconfig(
+                sysconfig::update_sysconfig_at(
                     self.path(),
+                    install_root,
                     self.key.major,
                     self.key.minor,
                     self.key.variant.lib_suffix(),
@@ -599,17 +640,27 @@ impl ManagedPythonInstallation {
     ///
     /// See <https://github.com/astral-sh/uv/issues/10598> for more information.
     pub fn ensure_dylib_patched(&self) -> Result<(), macos_dylib::Error> {
+        self.ensure_dylib_patched_at(self.path())
+    }
+
+    fn ensure_dylib_patched_at(&self, install_root: &Path) -> Result<(), macos_dylib::Error> {
         if cfg!(target_os = "macos") {
             if self.key().os().is_like_darwin() {
                 if self.implementation() == ImplementationName::CPython {
-                    let dylib_path = self.python_dir().join("lib").join(format!(
+                    let dylib_name = format!(
                         "{}python{}{}{}",
                         std::env::consts::DLL_PREFIX,
                         self.key.version().python_version(),
                         self.key.variant().executable_suffix(),
                         std::env::consts::DLL_SUFFIX
-                    ));
-                    macos_dylib::patch_dylib_install_name(dylib_path)?;
+                    );
+                    let dylib_path = self.python_dir().join("lib").join(&dylib_name);
+                    let install_root = std::path::absolute(install_root)?;
+                    let install_name = self
+                        .python_dir_at(&install_root)
+                        .join("lib")
+                        .join(dylib_name);
+                    macos_dylib::patch_dylib_install_name(dylib_path, &install_name)?;
                 }
             }
         }
@@ -1030,6 +1081,36 @@ mod tests {
             sha256: None,
             build: build.map(|s| Cow::Owned(s.to_owned())),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn canonical_executable_survives_installation_move() -> Result<(), Error> {
+        let root = tempfile::tempdir()?;
+        let staging = root.path().join("staging");
+        let installed = root.path().join("installed");
+        fs::create_dir_all(staging.join("bin"))?;
+        fs::write(staging.join("bin/python3.12"), b"interpreter")?;
+
+        let mut installation = create_test_installation(
+            ImplementationName::CPython,
+            3,
+            12,
+            0,
+            None,
+            PythonVariant::Default,
+            None,
+        );
+        installation.path = staging.clone();
+        installation.ensure_canonical_executables()?;
+
+        assert_eq!(
+            fs::read_link(staging.join("bin/python"))?,
+            Path::new("python3.12")
+        );
+        fs::rename(&staging, &installed)?;
+        assert_eq!(fs::read(installed.join("bin/python"))?, b"interpreter");
+        Ok(())
     }
 
     #[test]

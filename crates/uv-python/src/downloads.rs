@@ -978,7 +978,9 @@ struct JsonArch {
 
 #[derive(Debug, Clone)]
 pub enum DownloadResult {
+    /// An installation that already existed and has not been finalized by this download.
     AlreadyAvailable(PathBuf),
+    /// A downloaded installation whose contents were finalized before publication.
     Fetched(PathBuf),
 }
 
@@ -1399,56 +1401,16 @@ impl ManagedPythonDownload {
             }
         }
 
-        // Remove the target if it already exists.
+        // Discovery does not acquire the installation lock. Complete the required files while the
+        // installation is still private, using its final destination for embedded paths.
+        let installation = ManagedPythonInstallation::new(extracted.clone(), self);
+        installation.finalize_at(&path).map_err(io::Error::other)?;
+
+        // Keep an existing installation available if staging fails. Replacement of an existing
+        // directory still requires removing it before the final rename.
         if path.is_dir() {
             debug!("Removing existing directory: {}", path.user_display());
             fs_err::tokio::remove_dir_all(&path).await?;
-        }
-
-        // Finalize the installation on the extracted temp directory BEFORE
-        // renaming into place. This eliminates the race window: when the rename
-        // completes, the installation is already fully functional, so a
-        // concurrent `uv python find` will never see an incomplete installation.
-        let installation = ManagedPythonInstallation::new(extracted.clone(), self);
-        installation
-            .ensure_externally_managed()
-            .map_err(io::Error::other)?;
-        // Patch sysconfig with the final destination path, even though we
-        // operate on the temp staging directory. The `_sysconfigdata_` file
-        // replaces `/install` with `install_root`, and it must reference the
-        // final path so the installation is valid after rename.
-        // Only applicable on Unix, non-Windows, non-Emscripten, CPython.
-        if cfg!(unix) && !self.key.os().is_windows() {
-            if !self.key.os().is_emscripten() {
-                if matches!(
-                    self.key.implementation().as_ref(),
-                    LenientImplementationName::Known(ImplementationName::CPython)
-                ) {
-                    crate::sysconfig::update_sysconfig_at(
-                        &extracted,
-                        &path,
-                        self.key.major,
-                        self.key.minor,
-                        self.key.variant.lib_suffix(),
-                    )
-                    .map_err(io::Error::other)?;
-                }
-            }
-        }
-        installation
-            .ensure_canonical_executables()
-            .map_err(io::Error::other)?;
-        installation.ensure_build_file().map_err(io::Error::other)?;
-        // Only applicable on macOS for dylib install_name patching.
-        if cfg!(target_os = "macos") && self.key.os().is_like_darwin() {
-            if matches!(
-                self.key.implementation().as_ref(),
-                LenientImplementationName::Known(ImplementationName::CPython)
-            ) {
-                if let Err(e) = installation.ensure_dylib_patched() {
-                    e.warn_user(&installation);
-                }
-            }
         }
 
         // Persist it to the target.
