@@ -1,0 +1,23 @@
+name = "self-dependency-after-backtrack"
+description = """The latest versions of `a` and `b` each require an incompatible version of themselves.
+After rejecting `a==2.0.0`, the resolver must still reject `b==2.0.0` and include `b==1.0.0` as a dependency of `a==1.0.0`."""
+
+[root]
+requires_python = ">=3.12"
+requires = ["a"]
+
+[expected]
+satisfiable = true
+packages = { a = "1.0.0", b = "1.0.0" }
+
+[packages.a.versions]
+"1.0.0" = { requires = ["b"], sdist = false }
+"2.0.0" = { requires = ["a<1.0.0"], sdist = false }
+
+[packages.b.versions]
+"1.0.0" = { sdist = false }
+"2.0.0" = { requires = ["b<1.0.0"], sdist = false }
+
+[testgen]
+# The handwritten test checks both the solution and the self-conflict diagnostic.
+disable = true

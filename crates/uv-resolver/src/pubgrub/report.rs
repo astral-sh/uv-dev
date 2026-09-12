@@ -58,13 +58,28 @@ pub(crate) struct PubGrubReportFormatter<'a> {
 
 /// Render a PubGrub report without recursive tree traversal.
 ///
-/// This preserves the output and shared-node reference behavior of
-/// [`pubgrub::DefaultStringReporter`], whose recursive entry point is private.
+/// Derived reports use the output and shared-node reference behavior of
+/// [`pubgrub::DefaultStringReporter`], whose recursive entry point is private. A terminal workspace
+/// self-conflict includes its conclusion even when no derived terms remain.
 pub(crate) fn report(
     derivation_tree: &ErrorTree,
     formatter: &PubGrubReportFormatter<'_>,
 ) -> String {
     match derivation_tree {
+        DerivationTree::External(
+            external @ External::Custom(
+                package,
+                set,
+                UnavailableReason::Version(UnavailableVersion::IncompatibleSelfDependency(_)),
+            ),
+        ) if formatter.format_workspace_member(package).is_some() => {
+            let terms = Map::from_iter([(package.clone(), Term::Positive(set.clone()))]);
+            format!(
+                "Because {}, we can conclude that {}.",
+                formatter.format_external(external),
+                formatter.format_terms(&terms),
+            )
+        }
         DerivationTree::External(external) => formatter.format_external(external),
         DerivationTree::Derived(derived) => {
             let mut reporter = IterativeReporter::default();
@@ -304,6 +319,15 @@ impl ReportFormatter<PubGrubPackage, Range<Version>, UnavailableReason>
                 }
             }
             External::Custom(package, set, reason) => {
+                if let UnavailableReason::Version(UnavailableVersion::IncompatibleSelfDependency(
+                    required,
+                )) = reason
+                    && let Some(message) =
+                        self.format_workspace_self_dependency(package, package, required)
+                {
+                    return message;
+                }
+
                 if let UnavailableReason::Version(UnavailableVersion::UnsatisfiableDependency(
                     requirement,
                 )) = reason
@@ -341,13 +365,10 @@ impl ReportFormatter<PubGrubPackage, Range<Version>, UnavailableReason>
                 }
             }
             External::FromDependencyOf(package, package_set, dependency, dependency_set) => {
-                if package.name_no_root() == dependency.name_no_root() {
-                    if let Some(member) = self.format_workspace_member(package) {
-                        return format!(
-                            "{member} depends on itself at an incompatible version ({})",
-                            PackageRange::dependency(dependency, dependency_set, None)
-                        );
-                    }
+                if let Some(message) =
+                    self.format_workspace_self_dependency(package, dependency, dependency_set)
+                {
+                    return message;
                 }
 
                 if dependency_set.is_empty()
@@ -623,6 +644,24 @@ impl PubGrubReportFormatter<'_> {
         }
     }
 
+    /// Describe an incompatible self-requirement of a workspace member.
+    fn format_workspace_self_dependency(
+        &self,
+        package: &PubGrubPackage,
+        dependency: &PubGrubPackage,
+        required: &Range<Version>,
+    ) -> Option<String> {
+        if package.name_no_root() != dependency.name_no_root() {
+            return None;
+        }
+        let member = self.format_workspace_member(package)?;
+        let required = required.without_local_version_sentinels();
+        Some(format!(
+            "{member} depends on itself at an incompatible version ({})",
+            PackageRange::dependency(dependency, &required, None)
+        ))
+    }
+
     /// Return whether the given package is the root package.
     fn is_root(package: &PubGrubPackage) -> bool {
         matches!(&**package, PubGrubPackageInner::Root(_))
@@ -766,6 +805,24 @@ impl PubGrubReportFormatter<'_> {
         while let Some((derivation_tree, inherited_exclude_newer_ranges)) = pending.pop() {
             match derivation_tree {
                 DerivationTree::External(External::Custom(package, set, reason)) => {
+                    if matches!(
+                        reason,
+                        UnavailableReason::Version(UnavailableVersion::IncompatibleSelfDependency(
+                            _
+                        ))
+                    ) {
+                        if let Some(name) = package.name_no_root()
+                            && workspace_members.contains(name)
+                        {
+                            output_hints.insert(PubGrubHint::DependsOnItself {
+                                package: name.clone(),
+                                workspace: self.is_workspace()
+                                    && !self.is_single_project_workspace(),
+                            });
+                        }
+                        continue;
+                    }
+
                     if matches!(
                         reason,
                         UnavailableReason::Version(UnavailableVersion::UnsatisfiableDependency(_))

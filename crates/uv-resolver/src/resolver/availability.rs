@@ -97,6 +97,8 @@ impl Display for UnsatisfiableRequirement {
 pub enum UnavailableVersion {
     /// The version has a dependency whose version specifiers resolve to an empty range.
     UnsatisfiableDependency(UnsatisfiableRequirement),
+    /// A self-dependency excludes the version whose metadata declares it.
+    IncompatibleSelfDependency(Range<Version>),
     /// Version is incompatible because it has no usable distributions
     IncompatibleDist(IncompatibleDist),
     /// The wheel metadata was found, but could not be parsed.
@@ -118,6 +120,10 @@ impl UnavailableVersion {
     fn message(&self) -> Cow<'static, str> {
         match self {
             Self::UnsatisfiableDependency(requirement) => Cow::Owned(requirement.to_string()),
+            Self::IncompatibleSelfDependency(required) => {
+                let required = required.without_local_version_sentinels();
+                Cow::Owned(format!("an incompatible self-dependency ({required})"))
+            }
             Self::IncompatibleDist(invalid_dist) => Cow::Owned(format!("{invalid_dist}")),
             Self::InvalidMetadata => Cow::Borrowed("invalid metadata"),
             Self::InconsistentMetadata => Cow::Borrowed("inconsistent metadata"),
@@ -135,6 +141,7 @@ impl UnavailableVersion {
             Self::UnsatisfiableDependency(requirement) => {
                 format!("depends on {requirement}")
             }
+            Self::IncompatibleSelfDependency(_) => format!("has {self}"),
             Self::IncompatibleDist(invalid_dist) => invalid_dist.singular_message(),
             Self::InvalidMetadata => format!("has {self}"),
             Self::InconsistentMetadata => format!("has {self}"),
@@ -148,6 +155,7 @@ impl UnavailableVersion {
     pub(crate) fn plural_message(&self) -> String {
         match self {
             Self::UnsatisfiableDependency(requirement) => format!("depend on {requirement}"),
+            Self::IncompatibleSelfDependency(_) => format!("have {self}"),
             Self::IncompatibleDist(invalid_dist) => invalid_dist.plural_message(),
             Self::InvalidMetadata => format!("have {self}"),
             Self::InconsistentMetadata => format!("have {self}"),
@@ -165,6 +173,7 @@ impl UnavailableVersion {
     ) -> Option<String> {
         match self {
             Self::UnsatisfiableDependency(_) => None,
+            Self::IncompatibleSelfDependency(_) => None,
             Self::IncompatibleDist(invalid_dist) => {
                 invalid_dist.context_message(tags, requires_python)
             }

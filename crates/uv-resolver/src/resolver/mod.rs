@@ -3250,6 +3250,7 @@ impl ForkState {
         index: &InMemoryIndex,
         installed_packages: &InstalledPackages,
     ) {
+        let self_package = self.pubgrub.package_store[for_package].clone();
         for dependency in &dependencies {
             let PubGrubDependency {
                 package,
@@ -3257,6 +3258,23 @@ impl ForkState {
                 parent: _,
                 source: _,
             } = dependency;
+
+            // A self-requirement is a constraint on the version being selected, not a binary
+            // dependency edge. Two terms for the same PubGrub package cannot propagate a rejected
+            // decision reliably. URL and index constraints have already been visited, so a
+            // compatible self-requirement can be omitted without losing its source constraints.
+            if package == &self_package {
+                if !version.contains(for_version) {
+                    self.add_unavailable_version(
+                        for_version.clone(),
+                        UnavailableVersion::IncompatibleSelfDependency(version.clone()),
+                        index,
+                        installed_packages,
+                    );
+                    return;
+                }
+                continue;
+            }
 
             let Some(base_package) = package.base_package() else {
                 continue;
@@ -3278,15 +3296,18 @@ impl ForkState {
             self.next,
             for_version.clone(),
             versions,
-            dependencies.into_iter().map(|dependency| {
-                let PubGrubDependency {
-                    package,
-                    version,
-                    parent: _,
-                    source: _,
-                } = dependency;
-                (package, version)
-            }),
+            dependencies
+                .into_iter()
+                .filter(|dependency| dependency.package != self_package)
+                .map(|dependency| {
+                    let PubGrubDependency {
+                        package,
+                        version,
+                        parent: _,
+                        source: _,
+                    } = dependency;
+                    (package, version)
+                }),
         );
 
         // Conflict tracking: If the version was rejected due to its dependencies, record culprit
