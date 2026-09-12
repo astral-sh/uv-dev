@@ -12,6 +12,7 @@ use uv_pep440::Version;
 use uv_pypi_types::Scheme;
 
 pub use install::{install_wheel, installed_dist_info_path};
+pub use installer_metadata::InstallerMetadata;
 pub use linker::{InstallState, LinkMode};
 pub use record::RecordEntry;
 pub use uninstall::{Uninstall, uninstall_egg, uninstall_legacy_editable, uninstall_wheel};
@@ -20,6 +21,7 @@ pub use wheel::{
 };
 
 mod install;
+mod installer_metadata;
 mod linker;
 mod record;
 mod script;

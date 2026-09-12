@@ -29,7 +29,9 @@ use uv_distribution_types::{
     DerivationChain, DistributionMetadata, InstalledMetadata, Name, Resolution,
 };
 use uv_fs::{CWD, Simplified, normalize_path_under};
-use uv_install_wheel::{LinkMode, installed_dist_info_path, read_record_into_iter};
+use uv_install_wheel::{
+    InstallerMetadata, LinkMode, installed_dist_info_path, read_record_into_iter,
+};
 use uv_installer::{InstallationStrategy, Plan, Planner, Preparer, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
@@ -690,7 +692,7 @@ pub(crate) async fn install(
     cache: &Cache,
     venv: &PythonEnvironment,
     logger: Box<dyn InstallLogger>,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     dry_run: DryRun,
     printer: Printer,
     preview: Preview,
@@ -753,7 +755,7 @@ impl InstallationPlan {
         cache: &Cache,
         venv: &PythonEnvironment,
         logger: Box<dyn InstallLogger>,
-        installer_metadata: bool,
+        installer_metadata: InstallerMetadata,
         dry_run: DryRun,
         printer: Printer,
         preview: Preview,
@@ -1040,7 +1042,7 @@ async fn execute_plan(
     cache: &Cache,
     venv: &PythonEnvironment,
     logger: &dyn InstallLogger,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     printer: Printer,
     preview: Preview,
 ) -> Result<(Vec<CachedDist>, Vec<InstalledDist>), Error> {

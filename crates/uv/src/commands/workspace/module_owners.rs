@@ -9,6 +9,7 @@ use uv_configuration::{
 };
 use uv_distribution_types::{Dist, Name, ResolvedDist};
 use uv_fs::PortablePathBuf;
+use uv_install_wheel::InstallerMetadata;
 use uv_installer::SitePackages;
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::Preview;
@@ -85,7 +86,7 @@ pub(crate) async fn collect_module_owners(
             client_builder,
             &state.fork(),
             Box::new(DefaultInstallLogger),
-            false,
+            InstallerMetadata::Disabled,
             concurrency,
             cache,
             workspace_cache,
