@@ -5491,8 +5491,8 @@ pub enum ToolCommand {
     /// If a tool was installed with version constraints, they will be respected on upgrade — to
     /// upgrade a tool beyond the originally provided constraints, use `uv tool install` again.
     ///
-    /// If a tool was installed with specific settings, they will be respected on upgraded. For
-    /// example, if `--prereleases allow` was provided during installation, it will continue to be
+    /// If a tool was installed with specific settings, they will be respected on upgrade. For
+    /// example, if `--prerelease allow` was provided during installation, it will continue to be
     /// respected in upgrades.
     #[command(alias = "update")]
     Upgrade(ToolUpgradeArgs),
