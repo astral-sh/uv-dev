@@ -30691,8 +30691,8 @@ fn lock_group_includes_requires_python() -> Result<()> {
         resolution-markers = [
             "python_full_version >= '3.13.1'",
             "python_full_version >= '3.13' and python_full_version < '3.13.1'",
-            "python_full_version >= '3.12.[X]' and python_full_version < '3.13'",
-            "python_full_version < '3.12.[X]'",
+            "python_full_version >= '3.12.1' and python_full_version < '3.13'",
+            "python_full_version < '3.12.1'",
         ]
 
         [options]
@@ -30726,7 +30726,7 @@ fn lock_group_includes_requires_python() -> Result<()> {
             { name = "sortedcontainers", marker = "python_full_version >= '3.13.1'" },
         ]
         blargh = [
-            { name = "idna", marker = "python_full_version >= '3.12.[X]'" },
+            { name = "idna", marker = "python_full_version >= '3.12.1'" },
             { name = "sniffio", marker = "python_full_version >= '3.13'" },
             { name = "sortedcontainers", marker = "python_full_version >= '3.13'" },
         ]
@@ -30750,7 +30750,7 @@ fn lock_group_includes_requires_python() -> Result<()> {
             { name = "sortedcontainers", marker = "python_full_version >= '3.13.1'" },
         ]
         blargh = [
-            { name = "idna", marker = "python_full_version >= '3.12.[X]'" },
+            { name = "idna", marker = "python_full_version >= '3.12.1'" },
             { name = "sniffio", marker = "python_full_version >= '3.13'" },
             { name = "sortedcontainers", marker = "python_full_version >= '3.13'" },
         ]
@@ -35535,7 +35535,7 @@ fn lock_pytorch_cpu() -> Result<()> {
             lock, @r#"
         version = 1
         revision = 3
-        requires-python = ">=3.12.[X]"
+        requires-python = ">=3.12.0"
         resolution-markers = [
             "(python_full_version >= '3.13' and extra != 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (platform_machine != 'aarch64' and extra != 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (platform_python_implementation != 'CPython' and extra != 'extra-7-project-cpu' and extra == 'extra-7-project-cu124') or (sys_platform != 'linux' and extra != 'extra-7-project-cpu' and extra == 'extra-7-project-cu124')",
             "python_full_version < '3.13' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra != 'extra-7-project-cpu' and extra == 'extra-7-project-cu124'",
@@ -37040,7 +37040,7 @@ fn lock_pytorch_local_preference() -> Result<()> {
             lock, @r#"
         version = 1
         revision = 3
-        requires-python = ">=3.12.[X]"
+        requires-python = ">=3.12.0"
         resolution-markers = [
             "sys_platform == 'darwin'",
             "sys_platform != 'darwin'",

@@ -9191,7 +9191,7 @@ fn sorted_dependencies_name_specifiers() -> Result<()> {
         [project]
         name = "project"
         version = "0.1.0"
-        requires-python = ">=3.12.[X]"
+        requires-python = ">=3.12.0"
         dependencies = [
             "pytest>=8",
             "pytest-mock>=3.14.0",
@@ -9220,7 +9220,7 @@ fn sorted_dependencies_name_specifiers() -> Result<()> {
         [project]
         name = "project"
         version = "0.1.0"
-        requires-python = ">=3.12.[X]"
+        requires-python = ">=3.12.0"
         dependencies = [
             "pytest>=8",
             "pytest-mock>=3.14.0",
