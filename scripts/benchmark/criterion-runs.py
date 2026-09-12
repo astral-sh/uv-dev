@@ -69,6 +69,23 @@ def output(*command: str, root: Path) -> str:
     return subprocess.check_output(command, cwd=root, text=True).strip()
 
 
+def source_metadata(root: Path) -> dict:
+    status = subprocess.check_output(
+        ["git", "status", "--porcelain=v1", "--untracked-files=normal"],
+        cwd=root,
+        text=True,
+    ).splitlines()
+    return {
+        "commit": output("git", "rev-parse", "HEAD", root=root),
+        "tree": output("git", "rev-parse", "HEAD^{tree}", root=root),
+        "working_tree_dirty": bool(status),
+        "working_tree_status": status,
+        "tracked_working_tree_dirty": any(
+            not entry.startswith("?? ") for entry in status
+        ),
+    }
+
+
 def main() -> None:
     root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
@@ -94,8 +111,7 @@ def main() -> None:
     with binary.open("rb") as stream:
         binary_sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
     metadata = {
-        "commit": output("git", "rev-parse", "HEAD", root=root),
-        "working_tree_dirty": bool(output("git", "status", "--porcelain", root=root)),
+        **source_metadata(root),
         "operating_system": platform.platform(),
         "architecture": platform.machine(),
         "rustc": output("rustc", "-Vv", root=root),
