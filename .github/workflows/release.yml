@@ -116,7 +116,6 @@ jobs:
     uses: $/.github/workflows/build-release-binaries.yml
     with:
       plan: ${{ needs.plan.outputs.val }}
-    secrets: inherit
     permissions:
       "contents": "read"
 
@@ -127,7 +126,7 @@ jobs:
     uses: $/.github/workflows/build-docker.yml
     with:
       plan: ${{ needs.plan.outputs.val }}
-    secrets: inherit
+    secrets: inherit # zizmor: ignore[secrets-inherit] required for Docker Hub credentials
     permissions:
       "contents": "read"
       "id-token": "write"
@@ -334,7 +333,7 @@ jobs:
       uv-build-wheels: ${{ needs.assemble-release-artifacts.outputs.uv-build-wheels }}
       uv-sdist: ${{ needs.assemble-release-artifacts.outputs.uv-sdist }}
       uv-build-sdist: ${{ needs.assemble-release-artifacts.outputs.uv-build-sdist }}
-    secrets: inherit
+    secrets: inherit # zizmor: ignore[secrets-inherit] retained for the release publishing environment
     # publish jobs get escalated permissions
     permissions:
       "id-token": "write"
@@ -350,7 +349,7 @@ jobs:
     uses: $/.github/workflows/publish-crates.yml
     with:
       plan: ${{ needs.plan.outputs.val }}
-    secrets: inherit
+    secrets: inherit # zizmor: ignore[secrets-inherit] retained for the release publishing environment
     # publish jobs get escalated permissions
     permissions:
       "contents": "read"
@@ -435,7 +434,7 @@ jobs:
     uses: $/.github/workflows/publish-docs.yml
     with:
       plan: ${{ needs.plan.outputs.val }}
-    secrets: inherit
+    secrets: inherit # zizmor: ignore[secrets-inherit] required for the Astral docs token
 
   publish-versions:
     needs:
@@ -445,7 +444,7 @@ jobs:
     uses: $/.github/workflows/publish-versions.yml
     with:
       plan: ${{ needs.plan.outputs.val }}
-    secrets: inherit
+    secrets: inherit # zizmor: ignore[secrets-inherit] required for the Astral versions token
 
   publish-mirror:
     needs:
@@ -458,6 +457,6 @@ jobs:
     with:
       plan: ${{ needs.plan.outputs.val }}
       github-artifacts: ${{ needs.finalize-dist-manifest.outputs.github-artifacts }}
-    secrets: inherit
+    secrets: inherit # zizmor: ignore[secrets-inherit] required for R2 mirror credentials
     permissions:
       "contents": "read"
