@@ -79,10 +79,8 @@ fn parse_with_fixups<Err, T: FromStr<Err = Err>>(input: &str, type_name: &str) -
                     messages.push(*message);
 
                     if let Ok(requirement) = T::from_str(&patched) {
-                        warn!(
-                            "Fixing invalid {type_name} by {} (before: `{input}`; after: `{patched}`)",
-                            messages.join(", ")
-                        );
+                        // The original and repaired inputs can contain private URLs.
+                        warn!("Fixing invalid {type_name} by {}", messages.join(", "));
                         return Ok(requirement);
                     }
 
