@@ -10,6 +10,7 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
 use clap::error::{ContextKind, ContextValue};
@@ -3063,12 +3064,13 @@ where
             .expect("Failed building the Runtime");
         // Box the large main future to avoid stack overflows.
         let result = runtime.block_on(Box::pin(run(cli, GlobalInitialization::Initialize)));
-        // Avoid waiting for pending tasks to complete.
+        // Give pending blocking tasks a brief chance to complete before detaching their worker
+        // threads. Detaching a worker as it exits can trigger glibc BZ #19951 on affected systems.
         //
         // The resolver may have kicked off HTTP requests during resolution that
-        // turned out to be unnecessary. Waiting for those to complete can cause
+        // turned out to be unnecessary. Waiting for those indefinitely can cause
         // the CLI to hang before exiting.
-        runtime.shutdown_background();
+        runtime.shutdown_timeout(Duration::from_millis(100));
         result
     };
     let result = std::thread::Builder::new()
