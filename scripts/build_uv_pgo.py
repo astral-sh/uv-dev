@@ -122,6 +122,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", help="Host-native Rust target triple")
     parser.add_argument(
+        "--instrumented-lto",
+        choices=("fat", "thin"),
+        help="Override LTO only while building the instrumented executable",
+    )
+    parser.add_argument(
+        "--timings",
+        action="store_true",
+        help="Save Cargo timings for the instrumented build",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Use debug builds to validate the complete PGO pipeline",
@@ -205,9 +215,14 @@ def main() -> None:
             environment.get("RUSTFLAGS"), f"-Cprofile-generate={profile_dir}"
         ),
     }
+    if args.instrumented_lto is not None:
+        instrumented_environment["CARGO_PROFILE_RELEASE_LTO"] = args.instrumented_lto
     profile = "debug" if args.debug else "release"
     print(f"Building instrumented {profile} uv and uvx", flush=True)
-    run(cargo_command(target, debug=args.debug), environment=instrumented_environment)
+    instrumented_command = cargo_command(target, debug=args.debug)
+    if args.timings:
+        instrumented_command.append("--timings")
+    run(instrumented_command, environment=instrumented_environment)
 
     binary_directory = instrumented_target_dir / target / profile
     executable_suffix = ".exe" if "windows" in target else ""
