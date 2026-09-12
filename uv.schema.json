@@ -521,6 +521,17 @@
         "type": "string"
       }
     },
+    "required-environments-mode": {
+      "description": "The policy to apply when satisfying `required-environments`.\n\nBy default, a compatible source distribution satisfies a required environment. Set this to\n`require-wheels` to require a compatible wheel for every dependency active in the required\nenvironment, even when a source distribution is available.\n\nThis option is in preview and may change in any future release.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/RequiredEnvironmentsMode"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "required-version": {
       "description": "Enforce a requirement on the version of uv.\n\nIf the version of uv does not meet the requirement at runtime, uv will exit\nwith an error.\n\nAccepts a [PEP 440](https://peps.python.org/pep-0440/) specifier, like `==0.5.0` or `>=0.5.0`.",
       "anyOf": [
@@ -1825,6 +1836,7 @@
             "index-hash-algorithm",
             "lockfile-format-check",
             "lock-without-metadata",
+            "required-environments-mode",
             "tar-codec",
             "index-by-name",
             "artifact-hash-filtering",
@@ -1903,6 +1915,16 @@
       "description": "A Python version specifier, e.g. `3.11` or `3.12.4`.",
       "type": "string",
       "pattern": "^3\\.\\d+(\\.\\d+)?$"
+    },
+    "RequiredEnvironmentsMode": {
+      "description": "The policy used to satisfy required resolution environments.",
+      "oneOf": [
+        {
+          "description": "Require every active dependency to provide a compatible wheel.",
+          "type": "string",
+          "const": "require-wheels"
+        }
+      ]
     },
     "RequiredVersion": {
       "description": "A version specifier, e.g. `>=0.5.0` or `==0.5.0`.",

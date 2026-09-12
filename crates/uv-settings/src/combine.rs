@@ -5,7 +5,7 @@ use url::Url;
 
 use uv_configuration::{
     BuildIsolation, ExportFormat, IndexStrategy, KeyringProviderType, NoSources, ProxyUrl,
-    Reinstall, RequiredVersion, TargetTriple, TrustedPublishing, Upgrade,
+    Reinstall, RequiredEnvironmentsMode, RequiredVersion, TargetTriple, TrustedPublishing, Upgrade,
 };
 use uv_distribution_types::{
     ConfigSettings, ExtraBuildVariables, Index, IndexUrl, PackageConfigSettings, PipExtraIndex,
@@ -115,6 +115,7 @@ impl_combine_or!(ProxyUrl);
 impl_combine_or!(PythonDownloads);
 impl_combine_or!(PythonPreference);
 impl_combine_or!(PythonVersion);
+impl_combine_or!(RequiredEnvironmentsMode);
 impl_combine_or!(RequiredVersion);
 impl_combine_or!(ResolutionMode);
 impl_combine_or!(SchemaConflicts);

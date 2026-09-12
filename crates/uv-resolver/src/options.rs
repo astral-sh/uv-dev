@@ -1,6 +1,8 @@
-use uv_configuration::{BuildOptions, IndexStrategy};
+use uv_configuration::{BuildOptions, IndexStrategy, RequiredEnvironmentsMode};
+use uv_preview::PreviewFeature;
 use uv_pypi_types::SupportedEnvironments;
 use uv_torch::TorchStrategy;
+use uv_warnings::warn_user_once;
 
 use crate::fork_strategy::ForkStrategy;
 use crate::{DependencyMode, ExcludeNewer, Prerelease, ResolutionMode};
@@ -15,6 +17,8 @@ pub struct Options {
     pub exclude_newer: ExcludeNewer,
     pub index_strategy: IndexStrategy,
     pub artifact_environments: SupportedEnvironments,
+    pub required_environments: SupportedEnvironments,
+    pub required_environments_mode: Option<RequiredEnvironmentsMode>,
     pub flexibility: Flexibility,
     pub build_options: BuildOptions,
     pub torch_backend: Option<TorchStrategy>,
@@ -30,6 +34,8 @@ pub struct OptionsBuilder {
     exclude_newer: ExcludeNewer,
     index_strategy: IndexStrategy,
     artifact_environments: SupportedEnvironments,
+    required_environments: SupportedEnvironments,
+    required_environments_mode: Option<RequiredEnvironmentsMode>,
     flexibility: Flexibility,
     build_options: BuildOptions,
     torch_backend: Option<TorchStrategy>,
@@ -90,6 +96,31 @@ impl OptionsBuilder {
         self
     }
 
+    /// Sets the required environments for the resolution.
+    #[must_use]
+    pub fn required_environments(mut self, required_environments: SupportedEnvironments) -> Self {
+        self.required_environments = required_environments;
+        self
+    }
+
+    /// Sets the policy used to satisfy required environments.
+    #[must_use]
+    pub fn required_environments_mode(
+        mut self,
+        required_environments_mode: Option<RequiredEnvironmentsMode>,
+    ) -> Self {
+        if required_environments_mode.is_some()
+            && !uv_preview::is_enabled(PreviewFeature::RequiredEnvironmentsMode)
+        {
+            warn_user_once!(
+                "The `required-environments-mode` setting is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
+                PreviewFeature::RequiredEnvironmentsMode
+            );
+        }
+        self.required_environments_mode = required_environments_mode;
+        self
+    }
+
     /// Sets the [`Flexibility`].
     #[must_use]
     pub fn flexibility(mut self, flexibility: Flexibility) -> Self {
@@ -121,6 +152,8 @@ impl OptionsBuilder {
             exclude_newer: self.exclude_newer,
             index_strategy: self.index_strategy,
             artifact_environments: self.artifact_environments,
+            required_environments: self.required_environments,
+            required_environments_mode: self.required_environments_mode,
             flexibility: self.flexibility,
             build_options: self.build_options,
             torch_backend: self.torch_backend,
