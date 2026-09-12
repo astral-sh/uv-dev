@@ -716,7 +716,7 @@ async fn persist_with_retry(
 /// Persist a `NamedTempFile`, retrying (on Windows) if it fails due to transient operating system
 /// errors.
 ///
-/// This is a synchronous implementation of [`persist_with_retry`].
+/// This is a synchronous implementation of `persist_with_retry`.
 pub fn persist_with_retry_sync(
     from: NamedTempFile,
     to: impl AsRef<Path>,
