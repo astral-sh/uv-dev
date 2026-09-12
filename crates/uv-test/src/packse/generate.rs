@@ -5,6 +5,7 @@ use serde_json::{Map, Value, json};
 
 use super::check::ScenarioTarget;
 use super::oracle::ScenarioOracle;
+use super::project::ScenarioProject;
 use super::scenario::ScenarioDocument;
 
 /// The bounded shape of a generated dependency graph.
@@ -148,6 +149,19 @@ pub fn generate_marker_graph(
     target: &ScenarioTarget,
     max_states: usize,
 ) -> Result<ScenarioDocument> {
+    expected_document(
+        marker_graph_value(seed, options, target, max_states)?,
+        target,
+        max_states,
+    )
+}
+
+fn marker_graph_value(
+    seed: u64,
+    options: SmallGraphOptions,
+    target: &ScenarioTarget,
+    max_states: usize,
+) -> Result<Value> {
     let mut value = small_graph_value(seed, options, target, max_states)?;
     let major = target.python.major();
     let minor = u16::from(target.python.minor());
@@ -219,7 +233,83 @@ pub fn generate_marker_graph(
         "python_platform": target.platform.as_str(),
     });
     value["testgen"] = json!({ "kind": "compile" });
-    expected_document(value, target, max_states)
+    Ok(value)
+}
+
+/// Generate a marker graph with independently selectable project extras and dependency groups.
+///
+/// The recorded expectation belongs to all project roots in `target`. The two extras and two
+/// groups bound the export matrix; dependency-group includes may repeat, but cannot form cycles.
+pub fn generate_project_graph(
+    seed: u64,
+    options: SmallGraphOptions,
+    target: &ScenarioTarget,
+    max_states: usize,
+) -> Result<ScenarioDocument> {
+    let mut value = marker_graph_value(seed, options, target, max_states)?;
+    let major = target.python.major();
+    let minor = u16::from(target.python.minor());
+    let middle = format!("{major}.{}", minor + 1);
+    let upper = format!("{major}.{}", minor + 2);
+    let names = value["packages"]
+        .as_object()
+        .context("generated packages must be a table")?
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut random = fastrand::Rng::with_seed(seed ^ 0x48de_a709_c63b_215f);
+    let mut project_requirements = || -> Result<Value> {
+        let mut requirements = json!(
+            names
+                .iter()
+                .filter_map(|name| {
+                    if random.usize(0..3) == 0 {
+                        Some(requirement(&mut random, name, options.versions))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        );
+        mark_requirements(&mut requirements, &mut random, &middle, &upper, false)?;
+        Ok(requirements)
+    };
+    let one = project_requirements()?;
+    let two = project_requirements()?;
+    let shared = project_requirements()?;
+    let mut dev = project_requirements()?
+        .as_array()
+        .context("generated project requirements must be an array")?
+        .clone();
+    dev.insert(0, json!({ "include-group": "SHARED" }));
+    if random.bool() {
+        dev.push(json!({ "include-group": "shared" }));
+    }
+    value["name"] = json!(format!(
+        "project-graph-{seed:016x}-{}p-{}v-py{}-through{major}.{}-{}",
+        options.packages,
+        options.versions,
+        target.python,
+        minor + 2,
+        target.platform,
+    ));
+    value["description"] = json!(format!(
+        "Finite project graph generated from seed {seed}. Its expected outcome includes all project roots for {target}."
+    ));
+    value["root"]["optional_dependencies"] = json!({ "one": one, "two": two });
+    value["root"]["dependency_groups"] = json!({ "shared": shared, "dev": dev });
+    value["resolver_options"] = json!({ "universal": true });
+    value["testgen"] = json!({ "disable": true });
+
+    let document = ScenarioDocument::from_value(toml::Value::try_from(&value)?)?;
+    let scenario = document.scenario()?;
+    let environment = target.markers()?;
+    let project = ScenarioProject::new(&scenario)?;
+    let search = project
+        .oracle(&environment, &project.all_selection())?
+        .find_solution(max_states)?;
+    value["expected"]["satisfiable"] = Value::Bool(search.solution.is_some());
+    ScenarioDocument::from_value(toml::Value::try_from(value)?)
 }
 
 fn mark_requirements(
@@ -300,10 +390,43 @@ fn requirement(random: &mut fastrand::Rng, name: &str, versions: usize) -> Strin
 mod tests {
     use std::str::FromStr;
 
+    use sha2::{Digest, Sha256};
     use uv_python::PythonVersion;
 
     use super::*;
     use crate::packse::check::ScenarioPlatform;
+
+    #[test]
+    fn seed_formats_are_stable() -> Result<()> {
+        let target = ScenarioTarget {
+            python: PythonVersion::from_str("3.12").expect("valid Python version"),
+            platform: ScenarioPlatform::Linux,
+        };
+        let options = SmallGraphOptions {
+            packages: 3,
+            versions: 2,
+        };
+        for (document, expected) in [
+            (
+                generate_small_graph(0, options, &target, 27)?,
+                "3963b13f39b08c6dc572eecae302b6023067a64c8bf9ed1f4e1e6aa4081dfe95",
+            ),
+            (
+                generate_marker_graph(0, options, &target, 27)?,
+                "7442588496c1fbdec57c1091d14b8e1435da24175347b0618f245ffd8e87ea73",
+            ),
+            (
+                generate_project_graph(39, options, &target, 27)?,
+                "ee0013ebfca9336bbd78bc0dcef0ec335fe1f1e2a6e64a074a509e217287aa41",
+            ),
+        ] {
+            assert_eq!(
+                hex::encode(Sha256::digest(document.to_toml()?.as_bytes())),
+                expected
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn generated_graphs_are_replayable_and_bounded() -> Result<()> {
@@ -414,6 +537,75 @@ mod tests {
                 .scenario()?
                 .name
         );
+        Ok(())
+    }
+
+    #[test]
+    fn project_graphs_have_independent_replayable_roots() -> Result<()> {
+        let versions = ["3.12", "3.13", "3.14"]
+            .map(|version| PythonVersion::from_str(version).expect("valid Python version"));
+        let targets = ScenarioTarget::matrix(
+            &versions,
+            &[
+                ScenarioPlatform::Linux,
+                ScenarioPlatform::Macos,
+                ScenarioPlatform::Windows,
+            ],
+        );
+        let anchor = targets.first().expect("nonempty target matrix");
+        let options = SmallGraphOptions {
+            packages: 3,
+            versions: 2,
+        };
+        let mut satisfiable = 0;
+        let mut unsatisfiable = 0;
+        let mut varying_roots = false;
+        let mut all_satisfiable_seeds = Vec::new();
+        for seed in 0..64 {
+            let document = generate_project_graph(seed, options, anchor, 27)?;
+            assert_eq!(
+                document.to_toml()?,
+                generate_project_graph(seed, options, anchor, 27)?.to_toml()?
+            );
+            let replay: ScenarioDocument = document.to_toml()?.parse()?;
+            let scenario = replay.scenario()?;
+            assert!(scenario.testgen.disable);
+            assert!(scenario.resolver_options.universal);
+            let project = ScenarioProject::new(&scenario)?;
+            let selections = project.selection_matrix();
+            assert_eq!(selections.len(), 11);
+            let all = project.all_selection();
+            let mut all_targets_satisfiable = true;
+            for (index, target) in targets.iter().enumerate() {
+                let environment = target.markers()?;
+                let search = project.oracle(&environment, &all)?.find_solution(27)?;
+                let all_satisfiable = search.solution.is_some();
+                assert!(search.checked <= 27);
+                if index == 0 {
+                    assert_eq!(scenario.expected.satisfiable, all_satisfiable);
+                }
+                all_targets_satisfiable &= all_satisfiable;
+                if all_satisfiable {
+                    satisfiable += 1;
+                } else {
+                    unsatisfiable += 1;
+                }
+                for selection in &selections {
+                    let search = project.oracle(&environment, selection)?.find_solution(27)?;
+                    assert!(search.checked <= 27);
+                    let selected_satisfiable = search.solution.is_some();
+                    assert!(!all_satisfiable || selected_satisfiable);
+                    varying_roots |= selected_satisfiable != all_satisfiable;
+                }
+            }
+            if all_targets_satisfiable {
+                all_satisfiable_seeds.push(seed);
+            }
+        }
+        assert!(satisfiable > 0);
+        assert!(unsatisfiable > 0);
+        assert!(varying_roots);
+        assert_eq!(all_satisfiable_seeds, [39, 40, 46, 54]);
         Ok(())
     }
 }

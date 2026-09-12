@@ -13,7 +13,9 @@ use uv_test::packse::check::{
     check_lock_scenario_with_artifacts, check_project_lock_scenario,
     check_project_lock_scenario_with_artifacts, check_scenario, check_scenario_with_artifacts,
 };
-use uv_test::packse::generate::{SmallGraphOptions, generate_marker_graph, generate_small_graph};
+use uv_test::packse::generate::{
+    SmallGraphOptions, generate_marker_graph, generate_project_graph, generate_small_graph,
+};
 use uv_test::packse::project::ScenarioProject;
 use uv_test::packse::scenario::ScenarioDocument;
 
@@ -40,6 +42,8 @@ pub(crate) struct Args {
     lock: bool,
 
     /// Check explicit project-extra and dependency-group exports from the universal lock.
+    ///
+    /// Generated graphs include project roots and marker projections over three Python minor lines.
     #[arg(long, requires = "lock")]
     project_selections: bool,
 
@@ -100,7 +104,11 @@ pub(crate) fn main(args: &Args) -> Result<()> {
             packages: args.packages.unwrap_or(3),
             versions: args.versions.unwrap_or(2),
         };
-        let minor_lines = if args.markers { 3 } else { 1 };
+        let minor_lines = if args.markers || args.project_selections {
+            3
+        } else {
+            1
+        };
         ensure!(
             targets.iter().all(|other| {
                 other.python.major() == target.python.major()
@@ -115,11 +123,14 @@ pub(crate) fn main(args: &Args) -> Result<()> {
         fs_err::create_dir_all(output_dir)?;
         let mut satisfiable = 0;
         let mut unsatisfiable = 0;
+        let mut export_projections = 0;
         for offset in 0..cases {
             let seed = first_seed
                 .checked_add(u64::try_from(offset)?)
                 .context("the requested seed range overflows u64")?;
-            let document = if args.markers {
+            let document = if args.project_selections {
+                generate_project_graph(seed, options, target, args.max_states)?
+            } else if args.markers {
                 generate_marker_graph(seed, options, target, args.max_states)?
             } else {
                 generate_small_graph(seed, options, target, args.max_states)?
@@ -131,6 +142,13 @@ pub(crate) fn main(args: &Args) -> Result<()> {
                 .with_context(|| format!("generated scenario `{}` failed", path.display()))?;
             satisfiable += result.satisfiable;
             unsatisfiable += result.unsatisfiable;
+            export_projections += result.export_projections;
+        }
+        if args.project_selections {
+            println!(
+                "Checked {cases} generated project graphs (locks: {satisfiable} satisfiable, {unsatisfiable} unsatisfiable; export projections: {export_projections})"
+            );
+            return Ok(());
         }
         let kind = if args.lock { "locks" } else { "projections" };
         println!(
@@ -152,6 +170,7 @@ pub(crate) fn main(args: &Args) -> Result<()> {
 struct CaseResult {
     satisfiable: usize,
     unsatisfiable: usize,
+    export_projections: usize,
     description: String,
 }
 
@@ -210,6 +229,7 @@ fn check_case(
             } => CaseResult {
                 satisfiable: 1,
                 unsatisfiable: 0,
+                export_projections: projections,
                 description: format!(
                     "valid lock ({exports}projections: {projections}; oracle selections: {checked})"
                 ),
@@ -217,6 +237,7 @@ fn check_case(
             LockCheckResult::Unsatisfiable { witness, checked } => CaseResult {
                 satisfiable: 0,
                 unsatisfiable: 1,
+                export_projections: 0,
                 description: format!(
                     "unsatisfiable lock ({witness}; oracle selections: {checked})"
                 ),
@@ -271,6 +292,7 @@ fn check_case(
         Ok(CaseResult {
             satisfiable,
             unsatisfiable,
+            export_projections: 0,
             description,
         })
     }
