@@ -1,29 +1,11 @@
 name = "pip-install"
-description = "Representative registry packages for pip install integration tests."
+description = "Fallback registry packages for command integration tests."
 
 [root]
-requires = ["flask", "anyio", "black", "iniconfig"]
+requires = []
 
 [expected]
 satisfiable = true
-
-[expected.packages]
-anyio = "4.3.0"
-black = "24.4.2"
-blinker = "1.7.0"
-click = "8.1.7"
-flask = "3.0.2"
-idna = "3.6"
-iniconfig = "2.0.0"
-itsdangerous = "2.1.2"
-jinja2 = "3.1.3"
-markupsafe = "2.1.5"
-mypy-extensions = "1.0.0"
-packaging = "23.2"
-pathspec = "0.12.1"
-platformdirs = "4.2.0"
-sniffio = "1.3.1"
-werkzeug = "3.0.1"
 
 [packages.anyio.versions."3.7.0"]
 requires_python = ">=3.8"
@@ -424,10 +406,6 @@ wheel_tags = [
 sdist = false
 
 [packages.distlib.versions."0.3.8"]
-sdist_backend = "in-tree"
-
-[packages.distro.versions."1.9.0"]
-requires_python = ">=3.8"
 sdist_backend = "in-tree"
 
 [packages.entrypoints.versions."0.3"]
@@ -954,11 +932,6 @@ sdist_backend = "in-tree"
 requires_python = ">=3.8"
 sdist_backend = "in-tree"
 
-[packages.pycountry.versions."22.1.10"]
-requires_python = false
-requires = ["setuptools"]
-sdist_backend = "in-tree"
-
 [packages.pyparsing.versions."3.1.2"]
 requires_python = ">=3.8"
 sdist_backend = "in-tree"
@@ -1020,54 +993,6 @@ sdist_backend = "in-tree"
 requires = ["cffi; implementation_name == 'pypy'"]
 sdist_backend = "in-tree"
 
-[packages.pywin32.versions."222"]
-requires_python = false
-sdist = false
-wheel_tags = ["cp36-cp36m-win_amd64"]
-[packages.pywin32.versions."223"]
-requires_python = false
-sdist = false
-wheel_tags = ["cp36-cp36m-win_amd64"]
-[packages.pywin32.versions."224"]
-requires_python = false
-sdist = false
-wheel_tags = ["cp36-cp36m-win_amd64"]
-[packages.pywin32.versions."225"]
-requires_python = false
-sdist = false
-wheel_tags = ["cp36-cp36m-win_amd64"]
-[packages.pywin32.versions."226"]
-requires_python = false
-sdist = false
-wheel_tags = ["cp36-cp36m-win_amd64"]
-[packages.pywin32.versions."227"]
-requires_python = false
-sdist = false
-wheel_tags = ["cp36-cp36m-win_amd64"]
-[packages.pywin32.versions."228"]
-requires_python = false
-sdist = false
-wheel_tags = ["cp36-cp36m-win_amd64"]
-[packages.pywin32.versions."300"]
-requires_python = false
-sdist = false
-wheel_tags = ["cp311-cp311-win_amd64"]
-[packages.pywin32.versions."301"]
-requires_python = false
-sdist = false
-wheel_tags = ["cp311-cp311-win_amd64"]
-[packages.pywin32.versions."302"]
-requires_python = false
-sdist = false
-wheel_tags = ["cp311-cp311-win_amd64"]
-[packages.pywin32.versions."303"]
-requires_python = false
-sdist = false
-wheel_tags = ["cp311-cp311-win_amd64"]
-[packages.pywin32.versions."304"]
-requires_python = false
-sdist = false
-wheel_tags = ["cp311-cp311-win_amd64"]
 [packages.pywin32.versions."305"]
 requires_python = false
 sdist = false
@@ -1080,10 +1005,6 @@ wheel_tags = [
   "cp311-cp311-win_amd64",
 ]
 [packages.pywin32.versions."306"]
-requires_python = false
-sdist = false
-wheel_tags = ["cp312-cp312-win_amd64"]
-[packages.pywin32.versions."307"]
 requires_python = false
 sdist = false
 wheel_tags = ["cp312-cp312-win_amd64"]
@@ -1190,10 +1111,6 @@ sdist_backend = "in-tree"
 
 [packages.ruyaml.versions."0.91.0"]
 requires_python = ">=3.6"
-sdist_backend = "in-tree"
-
-[packages.scikit-learn.versions."1.4.0"]
-module_name = "sklearn"
 sdist_backend = "in-tree"
 
 [packages.setuptools.versions."40.4.3"]

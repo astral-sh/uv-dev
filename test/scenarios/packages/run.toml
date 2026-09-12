@@ -1,123 +1,22 @@
 name = "run"
-description = "Representative registry packages for run integration tests."
+description = "Explicit script indexes and linked-environment entrypoints."
 
 [root]
-requires = ["anyio", "iniconfig", "typing-extensions"]
 
 [expected]
 satisfiable = true
 
-[expected.packages]
-anyio = "4.3.0"
-idna = "3.6"
-iniconfig = "2.0.0"
-sniffio = "1.3.1"
-typing-extensions = "4.10.0"
-
-[packages.anyio.versions."2.0.0"]
-requires_python = ">=3.8"
-requires = ["idna", "sniffio"]
+[packages.script-index-package.versions."1.0.0"]
 sdist_backend = "in-tree"
 
-[packages.anyio.versions."3.0.0"]
-requires_python = ">=3.8"
-requires = ["idna", "sniffio"]
+[packages.script-index-package.versions."2.0.0"]
 sdist_backend = "in-tree"
 
-[packages.anyio.versions."3.6.0"]
-requires_python = ">=3.8"
-requires = ["idna", "sniffio"]
+[packages.linked-entrypoint.versions."1.0.0"]
 sdist_backend = "in-tree"
 
-[packages.anyio.versions."3.7.0"]
-requires_python = ">=3.8"
-requires = ["idna", "sniffio"]
-sdist_backend = "in-tree"
-
-[packages.anyio.versions."4.2.0"]
-requires_python = ">=3.8"
-requires = [
-  "exceptiongroup>=1.0.2; python_version < '3.11'",
-  "idna",
-  "sniffio",
-  "typing-extensions>=4.1; python_version < '3.11'",
-]
-sdist_backend = "in-tree"
-
-[packages.anyio.versions."4.3.0"]
-requires_python = ">=3.8"
-requires = [
-  "exceptiongroup>=1.0.2; python_version < '3.11'",
-  "idna",
-  "sniffio",
-  "typing-extensions>=4.1; python_version < '3.11'",
-]
-sdist_backend = "in-tree"
-
-[packages.exceptiongroup.versions."1.2.0"]
-requires_python = ">=3.8"
-sdist_backend = "in-tree"
-
-[packages.idna.versions."2.0"]
-requires_python = ">=3.8"
-sdist_backend = "in-tree"
-[packages.idna.versions."2.7"]
-requires_python = ">=3.8"
-sdist_backend = "in-tree"
-[packages.idna.versions."3.0"]
-requires_python = ">=3.8"
-sdist_backend = "in-tree"
-[packages.idna.versions."3.6"]
-requires_python = ">=3.8"
-sdist_backend = "in-tree"
-
-[packages.iniconfig.versions."1.0.1"]
-requires_python = ">=3.8"
-sdist_backend = "in-tree"
-[packages.iniconfig.versions."1.1.1"]
-requires_python = ">=3.8"
-sdist_backend = "in-tree"
-[packages.iniconfig.versions."2.0.0"]
-requires_python = ">=3.8"
-sdist_backend = "in-tree"
-
-[packages.sniffio.versions."1.2.0"]
-requires_python = ">=3.8"
-sdist_backend = "in-tree"
-[packages.sniffio.versions."1.3.0"]
-requires_python = ">=3.8"
-sdist_backend = "in-tree"
-[packages.sniffio.versions."1.3.1"]
-requires_python = ">=3.8"
-sdist_backend = "in-tree"
-
-[packages.typing-extensions.versions."4.10.0"]
-requires_python = ">=3.8"
-sdist_backend = "in-tree"
-
-[packages.black.versions."24.3.0"]
-requires_python = ">=3.8"
-requires = [
-  "click",
-  "mypy-extensions",
-  "packaging",
-  "pathspec",
-  "platformdirs",
-]
-sdist_backend = "in-tree"
-
-[packages.black.versions."24.3.0".scripts]
-black = "black:patched_main"
-
-[packages.click.versions."8.1.7"]
-requires_python = ">=3.8"
-sdist_backend = "in-tree"
-[packages.mypy-extensions.versions."1.0.0"]
-requires_python = ">=3.8"
-sdist_backend = "in-tree"
-[packages.platformdirs.versions."4.2.0"]
-requires_python = ">=3.8"
-sdist_backend = "in-tree"
+[packages.linked-entrypoint.versions."1.0.0".scripts]
+linked-entrypoint = "linked_entrypoint:main"
 
 [testgen]
 disable = true
