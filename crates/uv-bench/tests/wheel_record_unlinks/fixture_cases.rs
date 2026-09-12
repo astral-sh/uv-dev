@@ -387,16 +387,19 @@ fn mapped_data_destinations_must_be_independent() -> Result<()> {
     let (path, digest) = write_wheel(scratch.path(), &bytes)?;
     let error = WheelFixture::from_wheel(&path, &digest, scratch.path())
         .expect_err("mapped data must not overwrite another member");
-    let site_packages = Path::new("environment").join(if cfg!(windows) {
-        "Lib/site-packages"
+    let site_packages = if cfg!(windows) {
+        Path::new("environment").join("Lib").join("site-packages")
     } else {
-        "lib/python3.12/site-packages"
-    });
+        Path::new("environment")
+            .join("lib")
+            .join("python3.12")
+            .join("site-packages")
+    };
     assert_eq!(
         error.to_string(),
         format!(
             "duplicate deletion destination: {}",
-            site_packages.join("fixture_pkg/data.txt").display()
+            site_packages.join("fixture_pkg").join("data.txt").display()
         )
     );
     Ok(())
