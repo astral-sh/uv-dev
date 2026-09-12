@@ -2687,11 +2687,11 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
                             let response = match dist {
                                 ResolvedDist::Installable { dist, .. } => Response::Dist {
-                                    dist: (*dist).clone(),
+                                    dist: Arc::unwrap_or_clone(dist),
                                     metadata,
                                 },
                                 ResolvedDist::Installed { dist } => Response::Installed {
-                                    dist: (*dist).clone(),
+                                    dist: Arc::unwrap_or_clone(dist),
                                     metadata,
                                 },
                             };
@@ -2752,7 +2752,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                 .await?;
 
                             Response::Dist {
-                                dist: (*dist).clone(),
+                                dist: Arc::unwrap_or_clone(dist),
                                 metadata,
                             }
                         }
@@ -2761,7 +2761,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                 provider.get_installed_metadata(&dist).boxed_local().await?;
 
                             Response::Installed {
-                                dist: (*dist).clone(),
+                                dist: Arc::unwrap_or_clone(dist),
                                 metadata,
                             }
                         }
