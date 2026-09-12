@@ -71,11 +71,10 @@ jobs:
         with:
           persist-credentials: false
       - name: "Install shellcheck"
-        run: |
-          # renovate: datasource=github-releases depName=koalaman/shellcheck
-          SHELLCHECK_VERSION="v0.11.0"
-          curl -sSL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" | tar -xJf -
-          sudo mv "shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
+        with:
+          tool: shellcheck@0.11.0
+          fallback: none
       - name: "Run shellcheck"
         run: find . -name '*.sh' -type f | xargs shellcheck --shell bash --severity style
 
