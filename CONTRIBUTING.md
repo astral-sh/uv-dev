@@ -133,6 +133,15 @@ replay a failure; the checker refuses to overwrite a different input with the sa
 `--packages`, `--versions`, and `--max-states` to bound the graph and exhaustive search. Add
 `--lock` to run the same generated graphs through the lockfile checks.
 
+Add `--markers` for Python and platform conditions, per-version `Requires-Python`, and additive
+extra markers. These graphs cover three Python minor lines starting with the first selected Python
+version. Their saved expectation describes that first target, while each additional projection is
+checked independently. The ordinary generator retains its one-minor-line replay format.
+
+```shell
+cargo dev check-scenarios --uv target/debug/uv --seed 0 --cases 100 --markers --python-version 3.12,3.13,3.14 --python-platform linux,macos,windows --output-dir generated-markers
+```
+
 When a generated fixed-environment check fails, the checker also saves the command, output, and
 exact served distributions in a neighboring `.failure` directory. Use `--failure-dir` to choose a
 new directory when replaying an existing fixture. The capture includes the uv binary's SHA-256
