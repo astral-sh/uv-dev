@@ -2,6 +2,9 @@
 
 mod python_dir;
 
+#[cfg(all(feature = "test-python", target_os = "linux", target_arch = "x86_64"))]
+mod linux_personality;
+
 #[cfg(feature = "test-python")]
 mod python_find;
 
