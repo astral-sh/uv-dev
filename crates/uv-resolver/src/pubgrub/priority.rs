@@ -166,6 +166,9 @@ impl PubGrubPriorities {
     /// Returns whether the priority was changed, i.e., it's the first time we hit this condition
     /// for the package.
     pub(crate) fn mark_conflict_early(&mut self, package: &PubGrubPackage) -> bool {
+        if Self::has_fixed_priority(package) {
+            return false;
+        }
         let Some(name) = package.name_no_root() else {
             // Not a correctness bug
             if cfg!(debug_assertions) {
@@ -199,6 +202,9 @@ impl PubGrubPriorities {
     /// Returns whether the priority was changed, i.e., it's the first time this package was
     /// marked as conflicting above the threshold.
     pub(crate) fn mark_conflict_late(&mut self, package: &PubGrubPackage) -> bool {
+        if Self::has_fixed_priority(package) {
+            return false;
+        }
         let Some(name) = package.name_no_root() else {
             // Not a correctness bug
             if cfg!(debug_assertions) {
@@ -227,6 +233,19 @@ impl PubGrubPriorities {
                 entry.insert(PubGrubPriority::ConflictLate(Reverse(index)));
                 true
             }
+        }
+    }
+
+    /// Root and environment constraints are always selected ahead of named packages.
+    fn has_fixed_priority(package: &PubGrubPackage) -> bool {
+        match &**package {
+            PubGrubPackageInner::Root(_)
+            | PubGrubPackageInner::Python(_)
+            | PubGrubPackageInner::System(_) => true,
+            PubGrubPackageInner::Package { .. }
+            | PubGrubPackageInner::Extra { .. }
+            | PubGrubPackageInner::Group { .. }
+            | PubGrubPackageInner::Marker { .. } => false,
         }
     }
 }
@@ -271,5 +290,66 @@ pub(crate) struct PubGrubTiebreaker(Reverse<u32>);
 impl From<u32> for PubGrubTiebreaker {
     fn from(value: u32) -> Self {
         Self(Reverse(value))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cmp::Reverse;
+    use std::str::FromStr;
+
+    use uv_normalize::PackageName;
+
+    use crate::fork_urls::ForkUrls;
+    use crate::pubgrub::{PubGrubPackage, PubGrubPackageInner, PubGrubPython, Range};
+
+    use super::{PubGrubPriorities, PubGrubPriority, PubGrubTiebreaker};
+
+    #[test]
+    fn conflicts_do_not_reprioritize_fixed_packages() {
+        let name = PackageName::from_str("root").expect("valid package name");
+        for (package, tiebreaker) in [
+            (PubGrubPackageInner::Root(None), 0),
+            (PubGrubPackageInner::Root(Some(name.clone())), 0),
+            (PubGrubPackageInner::Python(PubGrubPython::Installed), 1),
+            (PubGrubPackageInner::Python(PubGrubPython::Target), 2),
+            (PubGrubPackageInner::System(name), 3),
+        ] {
+            let package = PubGrubPackage::from(package);
+            let mut priorities = PubGrubPriorities::default();
+            priorities.insert(&package, &Range::full(), &ForkUrls::default());
+            let expected = (PubGrubPriority::Root, PubGrubTiebreaker::from(tiebreaker));
+            assert_eq!(priorities.get(&package), expected);
+            assert!(!priorities.mark_conflict_early(&package));
+            assert!(!priorities.mark_conflict_late(&package));
+            assert_eq!(priorities.get(&package), expected);
+            assert!(priorities.package_priority.is_empty());
+        }
+    }
+
+    #[test]
+    fn conflicts_reprioritize_named_packages() {
+        let package =
+            PubGrubPackage::base(PackageName::from_str("package").expect("valid package name"));
+        let mut priorities = PubGrubPriorities::default();
+        priorities.insert(&package, &Range::full(), &ForkUrls::default());
+        let tiebreaker = PubGrubTiebreaker::from(0);
+        assert_eq!(
+            priorities.get(&package),
+            (PubGrubPriority::Unspecified(Reverse(0)), tiebreaker)
+        );
+        assert!(priorities.mark_conflict_late(&package));
+        assert_eq!(
+            priorities.get(&package),
+            (PubGrubPriority::ConflictLate(Reverse(0)), tiebreaker)
+        );
+        assert!(!priorities.mark_conflict_late(&package));
+        assert!(priorities.mark_conflict_early(&package));
+        assert_eq!(
+            priorities.get(&package),
+            (PubGrubPriority::ConflictEarly(Reverse(0)), tiebreaker)
+        );
+        assert!(!priorities.mark_conflict_early(&package));
+        assert!(!priorities.mark_conflict_late(&package));
     }
 }
