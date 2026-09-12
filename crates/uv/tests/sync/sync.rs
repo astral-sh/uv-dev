@@ -16374,7 +16374,7 @@ fn sync_fails_ambiguous_url() -> Result<()> {
       cause: ambiguous user/pass authority in URL (not percent-encoded?): https:***@domain/a/b/c
         --> pyproject.toml:10:15
          |
-      10 |         url = "https://user/name:password@domain/a/b/c"
+      10 |         url = "https:********************@domain/a/b/c"
          |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     "#);
 

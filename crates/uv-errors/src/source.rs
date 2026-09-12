@@ -5,13 +5,15 @@ use std::sync::Arc;
 
 use annotate_snippets::renderer::{AnsiColor, Effects};
 use annotate_snippets::{AnnotationKind, Element, Group, Level, Origin, Patch, Renderer, Snippet};
+use uv_redacted::url_redaction_ranges;
 
 use crate::SourceSuggestion;
 
 /// Immutable source text retained when an error is produced.
 ///
-/// Ranges refer to the bytes in [`Self::text`], after any decoding or redaction performed by the
-/// producer. The renderer never reopens the file. The name should be safe to display to the user.
+/// Ranges refer to the exact bytes in [`Self::text`]. Any producer-side decoding or transformation
+/// must happen before those ranges are created. Display normalization and URL masking leave this
+/// snapshot unchanged. The renderer never reopens the file, and the name must be safe to display.
 #[derive(Clone)]
 pub struct SourceFile {
     name: Arc<str>,
@@ -148,9 +150,10 @@ impl<'a> SourceAnnotation<'a> {
 
 /// The annotations to show for one retained source.
 ///
-/// Only annotated lines are shown by default. Producers should select or redact source excerpts
-/// when even the annotated lines can contain secrets. Invalid byte ranges are ignored; if no
-/// valid annotations remain, only the source name is shown.
+/// Only annotated physical lines are shown by default. The selected text masks credentials and
+/// supported signed-query values in visibly spelled absolute URLs; it does not detect arbitrary
+/// secrets or decode source-language escapes. Invalid byte ranges are ignored; if no valid
+/// annotations remain, only the source name is shown.
 #[derive(Clone, Debug)]
 pub struct SourceSnippet<'a> {
     source: SourceFile,
@@ -276,7 +279,7 @@ pub(crate) fn write_suggestion(
 
     let mut group = Group::with_level(SourceLevel::Hint.level());
     for window in windows {
-        let normalized = NormalizedSource::new(window.text);
+        let normalized = NormalizedSource::new(window.text, &window.redactions);
         let patches = window
             .annotations
             .into_iter()
@@ -362,7 +365,7 @@ fn source_elements<'a>(snippet: &'a SourceSnippet<'_>) -> Vec<Element<'a>> {
 
     let mut elements = Vec::new();
     for window in windows {
-        let normalized = NormalizedSource::new(window.text);
+        let normalized = NormalizedSource::new(window.text, &window.redactions);
         let mut annotations = Vec::new();
         for annotation in window.annotations {
             let mut rendered = annotation
@@ -410,9 +413,11 @@ pub(crate) struct SourcePosition {
 }
 
 pub(crate) struct SourceWindowView<'a> {
-    pub(crate) text: &'a str,
+    /// The original decoded bytes, used to resolve annotation and edit coordinates.
+    text: &'a str,
     pub(crate) line_start: usize,
     pub(crate) annotations: Vec<SourceAnnotationView<'a>>,
+    redactions: Vec<Range<usize>>,
 }
 
 impl SourceWindowView<'_> {
@@ -422,6 +427,28 @@ impl SourceWindowView<'_> {
             lines: SourceLines::new(self.text),
             line_start: self.line_start,
         }
+    }
+
+    /// Mask sensitive URL bytes without moving the original UTF-8 byte coordinates used by JSON.
+    pub(crate) fn redacted_text(&self) -> Cow<'_, str> {
+        if self.redactions.is_empty() {
+            return Cow::Borrowed(self.text);
+        }
+        let mut redacted = String::with_capacity(self.text.len());
+        let mut cursor = 0;
+        for range in &self.redactions {
+            redacted.push_str(&self.text[cursor..range.start]);
+            for byte in self.text[range.clone()].bytes() {
+                redacted.push(if matches!(byte, b'\r' | b'\n') {
+                    char::from(byte)
+                } else {
+                    '*'
+                });
+            }
+            cursor = range.end;
+        }
+        redacted.push_str(&self.text[cursor..]);
+        Cow::Owned(redacted)
     }
 }
 
@@ -448,8 +475,8 @@ pub(crate) struct SourceAnnotationView<'a> {
     visible_context: Vec<Range<usize>>,
 }
 
-/// Select explicit source windows before handing source text to any renderer. In particular,
-/// unrelated configuration lines must not become visible merely because annotations are nearby.
+/// Select explicit physical-line windows before handing source text to either renderer.
+/// Surrounding lines are included only through [`SourceSnippet::with_context_lines`].
 pub(crate) fn source_view<'a>(snippet: &'a SourceSnippet<'_>) -> Option<SourceView<'a>> {
     let source = &snippet.source;
     let positions = source.position_index();
@@ -572,6 +599,7 @@ pub(crate) fn source_view<'a>(snippet: &'a SourceSnippet<'_>) -> Option<SourceVi
             text,
             line_start: source.line_start + window.first,
             annotations,
+            redactions: url_redaction_ranges(text),
         });
     }
     if windows.is_empty() {
@@ -716,10 +744,24 @@ struct NormalizedSource<'a> {
 }
 
 impl<'a> NormalizedSource<'a> {
-    fn new(text: &'a str) -> Self {
+    fn new(text: &'a str, redactions: &[Range<usize>]) -> Self {
+        // One replacement scalar per sensitive scalar keeps the terminal's character columns
+        // tied to the original source. The byte-offset map accounts for different UTF-8 lengths.
+        let replacement = |index, character| {
+            let redaction = redactions
+                .get(redactions.partition_point(|range| range.end <= index))
+                .is_some_and(|range| range.start <= index);
+            if redaction && !matches!(character, '\r' | '\n') {
+                Some('*')
+            } else if extra_control(character) {
+                Some('\u{fffd}')
+            } else {
+                None
+            }
+        };
         let Some(first) = text
             .char_indices()
-            .find_map(|(index, character)| extra_control(character).then_some(index))
+            .find_map(|(index, character)| replacement(index, character).map(|_| index))
         else {
             return Self {
                 text: Cow::Borrowed(text),
@@ -730,9 +772,11 @@ impl<'a> NormalizedSource<'a> {
         normalized.push_str(&text[..first]);
         let mut offsets = Vec::new();
         for (index, character) in text[first..].char_indices() {
-            if extra_control(character) {
-                normalized.push('\u{fffd}');
-                offsets.push((first + index + character.len_utf8(), normalized.len()));
+            if let Some(replacement) = replacement(first + index, character) {
+                normalized.push(replacement);
+                if replacement.len_utf8() != character.len_utf8() {
+                    offsets.push((first + index + character.len_utf8(), normalized.len()));
+                }
             } else {
                 normalized.push(character);
             }
@@ -856,6 +900,7 @@ mod tests {
             text: &text[4..],
             line_start: 11,
             annotations: Vec::new(),
+            redactions: Vec::new(),
         };
         let window_positions = window.position_index();
         for offset in 0..=window.text.len() + 1 {
@@ -1342,6 +1387,38 @@ mod tests {
         1 | prefix��␛[31m    🦀target
           |                    ^^^^^^ bad␛[31m␊label�
         ");
+    }
+
+    #[test]
+    fn source_urls_keep_original_character_columns() {
+        let text = "index = 'https://user:sëcret🦀@example.invalid/?sig=秘密&safe=yes', explicit = \"yes\"\r\n";
+        let source = SourceFile::new("uv.toml", text);
+        let snippet = SourceSnippet::new(source.clone()).with_annotation(
+            SourceAnnotation::primary(range_of(text, "\"yes\"")).with_label("expected a boolean"),
+        );
+        assert_snapshot!(render(&[snippet], None), @r#"
+         --> uv.toml:1:77
+          |
+        1 | index = 'https://user:*******@example.invalid/?sig=**&safe=yes', explicit = "yes"
+          |                                                                             ^^^^^ expected a boolean
+        "#);
+        assert_eq!(source.text(), text);
+    }
+
+    #[test]
+    fn source_urls_keep_quoted_requirement_context() {
+        let text = "dependencies = [\"demo @ https:///user:pa'ss@example.invalid/demo.whl ; python_version >= '3.12'\"], explicit = \"yes\"\n";
+        let source = SourceFile::new("pyproject.toml", text);
+        let snippet = SourceSnippet::new(source.clone()).with_annotation(
+            SourceAnnotation::primary(range_of(text, "\"yes\"")).with_label("expected a boolean"),
+        );
+        assert_snapshot!(render(&[snippet], None), @r#"
+         --> pyproject.toml:1:111
+          |
+        1 | dependencies = ["demo @ https:///user:*****@example.invalid/demo.whl ; python_version >= '3.12'"], explicit = "yes"
+          |                                                                                                               ^^^^^ expected a boolean
+        "#);
+        assert_eq!(source.text(), text);
     }
 
     #[test]

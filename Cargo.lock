@@ -6657,6 +6657,7 @@ dependencies = [
  "terminal_size",
  "textwrap",
  "thiserror",
+ "uv-redacted",
  "uv-static",
 ]
 

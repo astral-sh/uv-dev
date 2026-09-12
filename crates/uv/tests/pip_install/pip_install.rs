@@ -1287,7 +1287,7 @@ async fn invalid_remote_requirements_txt() -> Result<()> {
       info: The file was included here
        --> requirements.txt:1:1
         |
-      1 | -r http://user:password@[LOCALHOST]/requirements.txt
+      1 | -r http://user:********@[LOCALHOST]/requirements.txt
         | -------------------------------------------------------- included here
       cause: Couldn't parse requirement
       cause: after parsing `1.0`, found `.x`, which is not part of a valid version
