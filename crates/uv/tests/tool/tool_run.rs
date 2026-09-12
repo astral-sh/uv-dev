@@ -473,6 +473,47 @@ fn tool_run_from_install() {
 }
 
 #[test]
+fn tool_run_from_install_exclude_newer() {
+    let context = uv_test::test_context!("3.12").with_filtered_counts();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+
+    context
+        .tool_install()
+        .arg("black")
+        .arg("--exclude-newer")
+        .arg("2024-03-01T00:00:00Z")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    // This is undesirable: `tool run` should use the installed version, but instead resolves a
+    // newer version when the `exclude-newer` settings differ; see astral-sh/uv#20981.
+    uv_snapshot!(context.filters(), context.tool_run()
+        .arg("black")
+        .arg("--version")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    black, 24.3.0 (compiled: yes)
+    Python (CPython) 3.12.[X]
+
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + black==24.3.0
+     + click==8.1.7
+     + mypy-extensions==1.0.0
+     + packaging==24.0
+     + pathspec==0.12.1
+     + platformdirs==4.2.0
+    ");
+}
+
+#[test]
 fn tool_run_from_install_constraints() {
     let context = uv_test::test_context!("3.12")
         .with_filtered_counts()
