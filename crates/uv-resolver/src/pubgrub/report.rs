@@ -1138,9 +1138,19 @@ impl PubGrubReportFormatter<'_> {
                     })
                 }
             }
-            IncompatibleTag::Abi
-            | IncompatibleTag::FreethreadedAbi
-            | IncompatibleTag::AbiPythonVersion => {
+            IncompatibleTag::AbiPythonVersion => {
+                let tags = prioritized.python_tags().collect::<BTreeSet<_>>();
+                if tags.is_empty() {
+                    None
+                } else {
+                    Some(PubGrubHint::PythonVersionTags {
+                        package: name.clone(),
+                        version: candidate.version().clone(),
+                        tags,
+                    })
+                }
+            }
+            IncompatibleTag::Abi | IncompatibleTag::FreethreadedAbi => {
                 let best = tags.and_then(Tags::abi_tag);
                 let tags = prioritized
                     .abi_tags()
@@ -1643,6 +1653,15 @@ pub enum PubGrubHint {
         // excluded from `PartialEq` and `Hash`
         best: Option<LanguageTag>,
     },
+    /// The available wheels were rejected for a Python-version incompatibility. Report their
+    /// literal Python tags, including for wheels with no ABI.
+    PythonVersionTags {
+        package: PackageName,
+        // excluded from `PartialEq` and `Hash`
+        version: Version,
+        // excluded from `PartialEq` and `Hash`
+        tags: BTreeSet<LanguageTag>,
+    },
     /// None of the available wheels for a package have a compatible ABI tag (e.g., `abi3` in
     /// `cp310-abi3-manylinux_2_17_x86_64.whl`).
     AbiTags {
@@ -1755,6 +1774,9 @@ enum PubGrubHintCore {
     LanguageTags {
         package: PackageName,
     },
+    PythonVersionTags {
+        package: PackageName,
+    },
     AbiTags {
         package: PackageName,
     },
@@ -1837,6 +1859,7 @@ impl From<PubGrubHint> for PubGrubHintCore {
             PubGrubHint::NoBuild { package, .. } => Self::NoBuild { package },
             PubGrubHint::NoBinary { package, .. } => Self::NoBinary { package },
             PubGrubHint::LanguageTags { package, .. } => Self::LanguageTags { package },
+            PubGrubHint::PythonVersionTags { package, .. } => Self::PythonVersionTags { package },
             PubGrubHint::AbiTags { package, .. } => Self::AbiTags { package },
             PubGrubHint::PlatformTags { package, .. } => Self::PlatformTags { package },
             PubGrubHint::ExcludeNewer {
@@ -2243,6 +2266,22 @@ impl std::fmt::Display for PubGrubHint {
                             .join(", "),
                     )
                 }
+            }
+            Self::PythonVersionTags {
+                package,
+                version,
+                tags,
+            } => {
+                let s = if tags.len() == 1 { "" } else { "s" };
+                write!(
+                    f,
+                    "Wheels are available for `{}` ({}) with the following Python version tag{s}: {}",
+                    package.cyan(),
+                    format!("v{version}").cyan(),
+                    tags.iter()
+                        .map(|tag| format!("`{}`", tag.cyan()))
+                        .join(", "),
+                )
             }
             Self::AbiTags {
                 package,
@@ -2842,6 +2881,42 @@ mod tests {
                 tags: None,
             }
         }
+    }
+
+    #[test]
+    fn python_version_hints_are_deduplicated_separately() {
+        let package = "example"
+            .parse::<PackageName>()
+            .expect("valid package name");
+        let version = Version::new([1_u64]);
+        let python_tag = LanguageTag::CPython {
+            python_version: (3, 11),
+        };
+        let hints = IndexSet::from([
+            PubGrubHint::LanguageTags {
+                package: package.clone(),
+                version: version.clone(),
+                tags: BTreeSet::from([python_tag]),
+                best: None,
+            },
+            PubGrubHint::PythonVersionTags {
+                package: package.clone(),
+                version: version.clone(),
+                tags: BTreeSet::from([python_tag]),
+            },
+            PubGrubHint::PythonVersionTags {
+                package: package.clone(),
+                version: Version::new([2_u64]),
+                tags: BTreeSet::new(),
+            },
+            PubGrubHint::AbiTags {
+                package,
+                version,
+                tags: BTreeSet::from([AbiTag::None]),
+                best: None,
+            },
+        ]);
+        assert_eq!(hints.len(), 3);
     }
 
     #[test]
