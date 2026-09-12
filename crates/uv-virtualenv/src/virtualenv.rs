@@ -56,9 +56,43 @@ fn install_distutils_patch(interpreter: &Interpreter) -> bool {
 /// Very basic `.cfg` file format writer.
 fn write_cfg(f: &mut impl Write, data: &[(String, String)]) -> io::Result<()> {
     for (key, value) in data {
+        validate_cfg_value(key, value)?;
+    }
+
+    for (key, value) in data {
         writeln!(f, "{key} = {value}")?;
     }
     Ok(())
+}
+
+/// Validate a key-value pair before writing it to `pyvenv.cfg`.
+fn validate_cfg_value(key: &str, value: &str) -> io::Result<()> {
+    if key.contains(['\r', '\n']) || value.contains(['\r', '\n']) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid `{key}` value in `pyvenv.cfg`: newlines are not supported"),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_cfg;
+
+    #[test]
+    fn reject_cfg_newlines() {
+        for value in [
+            "safe\ninclude-system-site-packages = true",
+            "safe\rinclude-system-site-packages = true",
+        ] {
+            let mut buffer = Vec::new();
+            let error = write_cfg(&mut buffer, &[("prompt".to_string(), value.to_string())])
+                .expect_err("newlines must be rejected");
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+            assert!(buffer.is_empty());
+        }
+    }
 }
 
 /// Create a [`VirtualEnvironment`] at the given location.
@@ -98,6 +132,9 @@ pub(crate) fn create(
         Prompt::Static(value) => Some(value),
         Prompt::None => None,
     };
+    if let Some(prompt) = prompt.as_deref() {
+        validate_cfg_value("prompt", prompt)?;
+    }
     let absolute = std::path::absolute(location)?;
 
     // Validate the path before creating the virtual environment, since some filesystems, e.g.,
