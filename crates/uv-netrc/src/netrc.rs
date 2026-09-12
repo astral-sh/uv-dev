@@ -136,7 +136,7 @@ impl std::str::FromStr for Netrc {
                 match tt.as_str() {
                     "" | "machine" | "default" | "macdef" => {
                         res.hosts.insert(entryname, auth);
-                        lexer.push_token(&tt);
+                        lexer.push_token(tt);
                         break;
                     }
                     "login" | "user" => {
