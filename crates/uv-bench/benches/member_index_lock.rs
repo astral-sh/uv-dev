@@ -4,7 +4,9 @@ mod common;
 
 use std::path::Path;
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main, measurement::WallTime};
+use criterion::{
+    BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main, measurement::WallTime,
+};
 use uv_bench::{copy_cache, is_codspeed_simulation, run_command, uv_command_with_cache};
 
 #[derive(serde::Deserialize)]
@@ -31,12 +33,11 @@ fn member_index_lock(c: &mut Criterion<WallTime>) {
                 directory.path(),
             )
             .expect("Run `python3 scripts/benchmark/prepare-member-index-locks.py`");
-            fs_err::copy(
+            let initial = fs_err::read(
                 Path::new("../../scripts/benchmark/member-index-locks")
                     .join(format!("{}-{layout}.lock", workload.name)),
-                directory.path().join("uv.lock"),
             )
-            .expect("Failed to copy frozen lock");
+            .expect("Failed to read frozen lock");
             let mut command = uv_command_with_cache(&prepared.join("cache"));
             command
                 .env(
@@ -48,7 +49,8 @@ fn member_index_lock(c: &mut Criterion<WallTime>) {
                 .arg(directory.path())
                 .args([
                     "lock",
-                    "--locked",
+                    "--default-index",
+                    "https://pypi.org/simple",
                     "--managed-python",
                     "--python",
                     "3.11.13",
@@ -56,7 +58,14 @@ fn member_index_lock(c: &mut Criterion<WallTime>) {
                     "2025-10-01T00:00:00Z",
                 ]);
             group.bench_function(BenchmarkId::new(layout, &workload.name), |b| {
-                b.iter(|| run_command(&mut command));
+                b.iter_batched(
+                    || {
+                        fs_err::write(directory.path().join("uv.lock"), &initial)
+                            .expect("Failed to restore frozen lock");
+                    },
+                    |()| run_command(&mut command),
+                    BatchSize::PerIteration,
+                );
             });
         }
     }
