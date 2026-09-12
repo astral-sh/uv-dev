@@ -181,6 +181,23 @@ mod tests {
     }
 
     #[test]
+    fn scenario_checker_accepts_target_matrices() {
+        let arguments = [
+            "uv-dev",
+            "check-scenarios",
+            "--uv",
+            "uv",
+            "--python-version",
+            "3.12,3.13",
+            "--python-platform",
+            "linux,windows",
+            "scenario.toml",
+        ];
+        assert!(Cli::try_parse_from(arguments).is_ok());
+        assert!(Cli::try_parse_from(arguments.into_iter().chain(["--lock"])).is_ok());
+    }
+
+    #[test]
     fn scenario_reducer_requires_a_replay_destination() {
         let arguments = ["uv-dev", "minimize-scenario", "--uv", "uv", "scenario.toml"];
         assert!(Cli::try_parse_from(arguments).is_err());
