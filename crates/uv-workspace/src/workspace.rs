@@ -90,6 +90,11 @@ impl WorkspaceCache {
         match result {
             Ok(workspace) => {
                 for package in workspace.packages.values() {
+                    // Complete the root only after its member aliases. Replacing a filled
+                    // `OnceMap` entry can retain an extra workspace reference until reclamation.
+                    if package.root == workspace.install_path {
+                        continue;
+                    }
                     // Historically, upward workspace discovery stopped at an intermediate
                     // `pyproject.toml`, so don't map this member to the outer workspace in that
                     // case.
@@ -2767,6 +2772,11 @@ mod tests {
         .expect("cached workspace member ignores invalid change in the meantime");
 
         assert!(Arc::ptr_eq(&root_workspace, &member_project.workspace));
+
+        drop(member_project);
+        drop(member_workspace);
+        workspace_cache.invalidate_workspace(&root_workspace);
+        assert_eq!(Arc::strong_count(&root_workspace), 1);
 
         Ok(())
     }
