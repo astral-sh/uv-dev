@@ -124,6 +124,11 @@ path = "benches/virtualenv_creation.rs"
 harness = false
 
 [[bench]]
+name = "concurrent_downloads"
+path = "benches/concurrent_downloads.rs"
+harness = false
+
+[[bench]]
 name = "uv_pypi_types"
 path = "benches/uv_pypi_types.rs"
 harness = false

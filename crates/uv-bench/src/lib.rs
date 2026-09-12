@@ -1,5 +1,6 @@
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 
 /// Published wheels spanning Python source, application assets, and native extensions.
 pub const WHEEL_FIXTURES: &[(&str, &str)] = &[
@@ -77,6 +78,88 @@ pub fn run_command(command: &mut Command) {
         "Benchmark command {command:?} failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+/// A loopback server replaying the prepared package artifacts and index records.
+pub struct FixtureServer {
+    process: Child,
+    base_url: String,
+}
+
+impl FixtureServer {
+    /// Start the replay server, optionally adding package records from immutable lockfiles.
+    pub fn start(lockfiles: &[&str]) -> Self {
+        let python_directory = std::path::absolute("../../.cache/bench-python")
+            .expect("Failed to locate benchmark Python directory");
+        let output = uv_command()
+            .env("UV_PYTHON_INSTALL_DIR", &python_directory)
+            .args([
+                "--offline",
+                "python",
+                "find",
+                "--system",
+                "--managed-python",
+                "3.11.13",
+            ])
+            .stdout(Stdio::piped())
+            .output()
+            .expect("Failed to locate replay-server Python");
+        assert!(output.status.success(), "Replay-server Python is missing");
+        let python = String::from_utf8(output.stdout).expect("Python path is not UTF-8");
+        let mut command = Command::new(python.trim());
+        command.arg(
+            std::path::absolute("../../scripts/benchmark/serve-fixtures.py")
+                .expect("Failed to locate fixture server"),
+        );
+        for lockfile in lockfiles {
+            command.arg("--lockfile").arg(
+                std::path::absolute(fixture_path(lockfile)).expect("Failed to locate lockfile"),
+            );
+        }
+        let mut process = command
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("Failed to start fixture server");
+        let mut base_url = String::new();
+        BufReader::new(process.stdout.take().expect("Missing server output"))
+            .read_line(&mut base_url)
+            .expect("Failed to read fixture server address");
+        let base_url = base_url.trim().to_owned();
+        assert!(
+            base_url.starts_with("http://127.0.0.1:"),
+            "Invalid fixture server address: {base_url:?}"
+        );
+        Self { process, base_url }
+    }
+
+    /// Build an absolute URL on this replay server.
+    pub fn url(&self, path: &str) -> String {
+        format!("{}{path}", self.base_url)
+    }
+
+    /// Run uv with an isolated cache and the pinned interpreter, bypassing loopback proxies.
+    pub fn command(&self, cache: &Path) -> Command {
+        let mut command = uv_command_with_cache(cache);
+        command
+            .env("NO_PROXY", "127.0.0.1,localhost")
+            .env("no_proxy", "127.0.0.1,localhost")
+            .env(
+                "UV_PYTHON_INSTALL_DIR",
+                std::path::absolute("../../.cache/bench-python")
+                    .expect("Failed to locate benchmark Python directory"),
+            )
+            .env("UV_PYTHON", "3.11.13")
+            .env("UV_MANAGED_PYTHON", "true")
+            .arg("--no-progress");
+        command
+    }
+}
+
+impl Drop for FixtureServer {
+    fn drop(&mut self) {
+        let _ = self.process.kill();
+        let _ = self.process.wait();
+    }
 }
 
 /// A frozen Prefect runtime environment, installed from the prepared package cache.
