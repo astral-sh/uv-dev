@@ -1160,12 +1160,12 @@ impl Lock {
         required_environments: Vec<MarkerTree>,
         mut fork_markers: Vec<UniversalMarker>,
     ) -> Result<Self, LockError> {
-        sort_fork_markers(&mut fork_markers, &options);
+        sort_fork_markers(&mut fork_markers, &requires_python, &options);
 
         // Put all dependencies for each package in a canonical order and
         // check for duplicates.
         for package in &mut packages {
-            sort_fork_markers(&mut package.fork_markers, &options);
+            sort_fork_markers(&mut package.fork_markers, &requires_python, &options);
             package.dependencies.sort();
             for [dep1, dep2] in package.dependencies.array_windows() {
                 if dep1 == dep2 {
@@ -7817,16 +7817,27 @@ fn canonicalize_universal_markers(
 
 /// Order persisted fork markers independently of fork discovery and interner allocation.
 ///
-/// The stored resolution policy determines the direction of the Python lower bound. The
-/// [`MarkerTree`] structural tie-break makes equal-bound partitions stable across processes.
-fn sort_fork_markers(markers: &mut [UniversalMarker], options: &ResolverOptions) {
+/// The stored resolution policy determines the direction of the Python lower bound. Formatting
+/// and reparsing the wire marker removes redundant tree boundaries introduced by restricting
+/// the Python domain, so equal-bound partitions use the same structural order on read and write.
+fn sort_fork_markers(
+    markers: &mut [UniversalMarker],
+    python: &RequiresPython,
+    options: &ResolverOptions,
+) {
     let key = |marker: &UniversalMarker| {
+        let wire = SimplifiedMarkerTree::new(python, marker.combined()).try_to_string();
+        let canonical = wire.as_deref().map_or(MarkerTree::TRUE, |wire| {
+            MarkerTree::from_str(wire).expect("serialized fork marker is valid")
+        });
+        let canonical = UniversalMarker::from_combined(python.complexify_markers(canonical));
         (
-            requires_python(marker.pep508())
+            requires_python(canonical.pep508())
                 .unwrap_or_default()
                 .lower()
                 .clone(),
-            marker.combined(),
+            canonical.combined(),
+            wire,
         )
     };
     match (options.fork_strategy, options.resolution_mode) {
@@ -7839,8 +7850,8 @@ fn sort_fork_markers(markers: &mut [UniversalMarker], options: &ResolverOptions)
         }
         (ForkStrategy::RequiresPython, ResolutionMode::Highest | ResolutionMode::LowestDirect) => {
             markers.sort_by_cached_key(|marker| {
-                let (lower, marker) = key(marker);
-                (Reverse(lower), marker)
+                let (lower, marker, wire) = key(marker);
+                (Reverse(lower), marker, wire)
             });
         }
     }
@@ -8174,6 +8185,55 @@ mod tests {
                 let serialized = first.to_toml()?;
                 assert_eq!(serialized, second.to_toml()?);
                 assert_eq!(toml::from_str::<Lock>(&serialized)?, first);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn fork_marker_order_uses_wire_form() -> Result<(), Box<dyn Error>> {
+        let requires_python =
+            RequiresPython::from_specifiers(">=3.12,<3.15".parse::<VersionSpecifiers>()?);
+        let fresh = [
+            "(sys_platform == 'darwin' and python_full_version >= '3.12' and python_full_version < '3.14') or (sys_platform != 'darwin' and sys_platform != 'win32' and python_full_version < '3.14')",
+            "sys_platform == 'win32' and python_full_version < '3.14'",
+        ]
+        .into_iter()
+        .map(MarkerTree::from_str)
+        .map(|marker| marker.map(UniversalMarker::from_combined))
+        .collect::<Result<Vec<_>, _>>()?;
+        let fresh = canonicalize_universal_markers(&fresh, &requires_python);
+        let wire = simplified_universal_markers(&fresh, &requires_python);
+        let read = wire
+            .iter()
+            .map(|marker| MarkerTree::from_str(marker))
+            .map(|marker| {
+                marker.map(|marker| {
+                    UniversalMarker::from_combined(requires_python.complexify_markers(marker))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(wire, simplified_universal_markers(&read, &requires_python));
+
+        for fork_strategy in [ForkStrategy::RequiresPython, ForkStrategy::Fewest] {
+            for resolution_mode in [
+                ResolutionMode::Highest,
+                ResolutionMode::Lowest,
+                ResolutionMode::LowestDirect,
+            ] {
+                let options = ResolverOptions {
+                    resolution_mode,
+                    fork_strategy,
+                    ..ResolverOptions::default()
+                };
+                let mut fresh = fresh.clone();
+                let mut read = read.clone();
+                sort_fork_markers(&mut fresh, &requires_python, &options);
+                sort_fork_markers(&mut read, &requires_python, &options);
+                assert_eq!(
+                    simplified_universal_markers(&fresh, &requires_python),
+                    simplified_universal_markers(&read, &requires_python),
+                );
             }
         }
         Ok(())
