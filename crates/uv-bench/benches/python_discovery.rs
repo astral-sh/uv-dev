@@ -72,6 +72,22 @@ fn path_command(cache: &Path, search_path: &OsStr) -> Command {
     command
 }
 
+fn verify_venv(directory: &Path) {
+    let python = directory.join(".venv").join(if cfg!(windows) {
+        "Scripts/python.exe"
+    } else {
+        "bin/python"
+    });
+    let mut command = Command::new(python);
+    isolate(&mut command);
+    let output = run_output(command.args([
+        "-I",
+        "-c",
+        "import sys; print('.'.join(map(str, sys.version_info[:3])))",
+    ]));
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "3.13.4");
+}
+
 struct QueryCounts {
     queries: usize,
     cache_hits: usize,
@@ -248,6 +264,73 @@ fn python_discovery(c: &mut Criterion<WallTime>) {
                 |(cache, mut command)| {
                     run_command(&mut command);
                     cache
+                },
+                BatchSize::PerIteration,
+            );
+        });
+
+        let venv = |cache: &Path, directory: &Path| {
+            let mut command = path_command(cache, &search_path);
+            command
+                .args(["venv", "--no-project", "--python", "3.13.4"])
+                .arg(directory.join(".venv"));
+            command
+        };
+        let warm_cache = tempfile::tempdir().expect("Failed to create interpreter cache");
+        let cold_venv = tempfile::tempdir().expect("Failed to create project directory");
+        let cold = query_counts(
+            &format!("python_discovery/path_venv/cold/{count}"),
+            venv(warm_cache.path(), cold_venv.path()),
+            &mut probes,
+        );
+        assert!(
+            cold.queries > 0,
+            "Cold virtual-environment discovery must query a real interpreter"
+        );
+        verify_venv(cold_venv.path());
+        let warm_venv = tempfile::tempdir().expect("Failed to create project directory");
+        let warm = query_counts(
+            &format!("python_discovery/path_venv/warm/{count}"),
+            venv(warm_cache.path(), warm_venv.path()),
+            &mut probes,
+        );
+        assert_eq!(
+            warm.queries, 0,
+            "Warm virtual-environment discovery must not start an interpreter"
+        );
+        assert!(
+            warm.cache_hits > 0,
+            "Warm virtual-environment discovery must use the interpreter cache"
+        );
+        verify_venv(warm_venv.path());
+
+        group.bench_function(BenchmarkId::new("path_venv/warm", count), |b| {
+            b.iter_batched(
+                || {
+                    let directory =
+                        tempfile::tempdir().expect("Failed to create project directory");
+                    let command = venv(warm_cache.path(), directory.path());
+                    (directory, command)
+                },
+                |(directory, mut command)| {
+                    run_command(&mut command);
+                    directory
+                },
+                BatchSize::PerIteration,
+            );
+        });
+        group.bench_function(BenchmarkId::new("path_venv/cold", count), |b| {
+            b.iter_batched(
+                || {
+                    let cache = tempfile::tempdir().expect("Failed to create interpreter cache");
+                    let directory =
+                        tempfile::tempdir().expect("Failed to create project directory");
+                    let command = venv(cache.path(), directory.path());
+                    (cache, directory, command)
+                },
+                |(cache, directory, mut command)| {
+                    run_command(&mut command);
+                    (cache, directory)
                 },
                 BatchSize::PerIteration,
             );
