@@ -4,9 +4,24 @@ use assert_fs::fixture::ChildPath;
 use assert_fs::fixture::FileWriteStr;
 use assert_fs::fixture::PathChild;
 use assert_fs::prelude::*;
+use insta::allow_duplicates;
 
 use uv_static::EnvVars;
 use uv_test::uv_snapshot;
+
+/// Populate enough wheel records to exercise batched installed-package indexing.
+fn create_many_installed_distributions(site_packages: &ChildPath) -> Result<Vec<String>> {
+    const DIST_INFO_COUNT: usize = 1_024;
+    let mut packages = Vec::with_capacity(DIST_INFO_COUNT);
+    for index in 0..DIST_INFO_COUNT {
+        let package = format!("filler{index:04}");
+        site_packages
+            .child(format!("{package}-1.0.0.dist-info"))
+            .create_dir_all()?;
+        packages.push(package);
+    }
+    Ok(packages)
+}
 
 #[test]
 fn list_empty_columns() {
@@ -44,6 +59,93 @@ fn list_empty_json() {
     []
     "
     );
+}
+
+#[test]
+fn list_many_distributions_keeps_metadata_lazy() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_concurrent_installs("4");
+    let site_packages = ChildPath::new(context.site_packages());
+    let packages = create_many_installed_distributions(&site_packages)?;
+
+    for (package, version) in [("omega", "2.0.0"), ("alpha", "1.0.0")] {
+        let dist_info = site_packages.child(format!("{package}-{version}.dist-info"));
+        dist_info.create_dir_all()?;
+        dist_info.child("METADATA").write_str("invalid")?;
+        dist_info.child("WHEEL").write_str("invalid")?;
+    }
+
+    let mut command = context.pip_list();
+    command.arg("--format=json");
+    for package in packages {
+        command.arg("--exclude").arg(package);
+    }
+
+    uv_snapshot!(context.filters(), command, @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [{"name":"alpha","version":"1.0.0"},{"name":"omega","version":"2.0.0"}]
+    "#);
+
+    Ok(())
+}
+
+#[test]
+fn list_many_distributions_reports_first_error() -> Result<()> {
+    for concurrent_installs in ["1", "4"] {
+        let context = uv_test::test_context!("3.12").with_concurrent_installs(concurrent_installs);
+        let site_packages = ChildPath::new(context.site_packages());
+        create_many_installed_distributions(&site_packages)?;
+
+        for package in ["a_warning", "c_warning"] {
+            let dist_info = site_packages.child(format!("{package}-1.0.0.dist-info"));
+            dist_info.create_dir_all()?;
+            dist_info
+                .child("direct_url.json")
+                .write_str(r#"{"url":"relative","dir_info":{}}"#)?;
+        }
+        for package in ["b_error", "z_error"] {
+            let dist_info = site_packages.child(format!("{package}-1.0.0.dist-info"));
+            dist_info.create_dir_all()?;
+            dist_info.child("uv_cache.json").write_str("invalid")?;
+        }
+        site_packages
+            .child("~dangling-1.0.0.dist-info")
+            .create_dir_all()?;
+
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), context.pip_list()
+                .env(EnvVars::RUST_LOG, "uv_distribution_types=warn"), @"
+            exit_code: 2 (failure)
+            ----- stderr -----
+            WARN Failed to parse direct URL: relative URL without a base
+            error: Failed to read metadata from: `[SITE_PACKAGES]/b_error-1.0.0.dist-info`
+              Caused by: expected value at line 1 column 1
+            ");
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn list_many_distributions_orders_dangling_warnings() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_concurrent_installs("4");
+    let site_packages = ChildPath::new(context.site_packages());
+    create_many_installed_distributions(&site_packages)?;
+    for package in ["~z", "~a"] {
+        site_packages
+            .child(format!("{package}-1.0.0.dist-info"))
+            .create_dir_all()?;
+    }
+
+    uv_snapshot!(context.filters(), context.pip_list().arg("--editable"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Ignoring dangling temporary directory: `[SITE_PACKAGES]/~a-1.0.0.dist-info`
+    warning: Ignoring dangling temporary directory: `[SITE_PACKAGES]/~z-1.0.0.dist-info`
+    ");
+
+    Ok(())
 }
 
 #[test]
@@ -589,10 +691,12 @@ fn list_format_freeze() {
 #[test]
 fn list_legacy_editable() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_concurrent_installs("4")
         .with_filter((r"\-\-\-\-\-\-+.*", "[UNDERLINE]"))
         .with_filter(("  +", " "));
 
     let site_packages = ChildPath::new(context.site_packages());
+    create_many_installed_distributions(&site_packages)?;
 
     let target = context.temp_dir.child("zstandard_project");
     target.child("zstd").create_dir_all()?;
