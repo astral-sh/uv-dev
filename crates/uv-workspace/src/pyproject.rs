@@ -624,6 +624,10 @@ pub struct ToolUv {
     /// macOS (and ignoring Linux and Windows). On the other hand, `required-environments = ["sys_platform == 'darwin'"]`
     /// would _require_ that any package without a source distribution include a wheel for macOS in
     /// order to be installable.
+    ///
+    /// When updating an existing lockfile, pinned packages without a wheel for a required
+    /// environment are resolved again, allowing an incremental Python upgrade to move those
+    /// packages to newer allowed versions.
     #[cfg_attr(
         feature = "schemars",
         schemars(
