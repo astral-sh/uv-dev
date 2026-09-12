@@ -2518,6 +2518,8 @@ fn python_install_no_cache() {
     uv_snapshot!(context.filters(), context
         .python_install()
         .arg("3.12")
+        // Use a single source URL so this tests offline behavior, not mirror fallback.
+        .env(EnvVars::UV_PYTHON_INSTALL_MIRROR, "https://github.com/astral-sh/python-build-standalone/releases/download")
         .arg("--offline"), @"
     exit_code: 1 (failure)
     ----- stderr -----

@@ -2709,6 +2709,58 @@ mod process_status_tests {
 }
 
 #[cfg(test)]
+mod python_download_cache_tests {
+    use std::{env, ffi::OsStr};
+
+    use uv_cache::{Cache, CacheBucket};
+    use uv_static::EnvVars;
+
+    use super::TestContext;
+
+    #[test]
+    fn managed_python_enables_shared_download_cache() -> anyhow::Result<()> {
+        let expected = if let Some(cache) = env::var_os(EnvVars::UV_PYTHON_CACHE_DIR) {
+            cache
+        } else {
+            Cache::from_settings(false, None)?
+                .bucket(CacheBucket::Python)
+                .into()
+        };
+        let context =
+            TestContext::new_with_versions_and_bin(&[], "uv".into()).with_managed_python_dirs();
+        let command = context.python_install();
+
+        assert_eq!(
+            command
+                .get_envs()
+                .find(|(key, _)| *key == OsStr::new(EnvVars::UV_PYTHON_CACHE_DIR))
+                .map(|(_, value)| value),
+            Some(Some(expected.as_os_str()))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn managed_python_download_cache_opt_out_unsets_environment() {
+        let context = TestContext::new_with_versions_and_bin(&[], "uv".into())
+            .with_env(EnvVars::UV_PYTHON_CACHE_DIR, "before-managed-setup")
+            .with_managed_python_dirs()
+            .with_env(EnvVars::UV_PYTHON_CACHE_DIR, "after-managed-setup")
+            .without_python_download_cache();
+        let command = context.python_install();
+
+        assert_eq!(
+            command
+                .get_envs()
+                .find(|(key, _)| *key == OsStr::new(EnvVars::UV_PYTHON_CACHE_DIR))
+                .map(|(_, value)| value),
+            Some(None)
+        );
+    }
+}
+
+#[cfg(test)]
 mod cache_directory_tests {
     use std::process::Command;
 
