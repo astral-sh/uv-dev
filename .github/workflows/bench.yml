@@ -254,7 +254,8 @@ jobs:
 
   benchmarks-release-build:
     name: "release walltime build"
-    runs-on: depot-ubuntu-22.04-arm-4
+    # The paired fat-LTO builds need the same capacity as the ARM release job.
+    runs-on: depot-ubuntu-22.04-arm-8
     if: ${{ github.repository == 'astral-sh/uv' || (github.repository == 'astral-sh/uv-dev' && github.ref != 'refs/heads/main') }}
     timeout-minutes: 180
     steps:
