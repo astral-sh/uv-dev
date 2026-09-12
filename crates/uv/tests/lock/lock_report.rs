@@ -5,6 +5,7 @@ use indoc::{formatdoc, indoc};
 use serde_json::Value;
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
 
+use uv_static::EnvVars;
 use uv_test::packse::PackseServer;
 use uv_test::uv_snapshot;
 
@@ -698,5 +699,73 @@ fn lock_json_omits_invalid_registry_values() -> Result<()> {
             assert_ne!(context.read("uv.lock"), invalid);
         }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn lock_json_http_error_codes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let mut errors = Vec::new();
+
+    for status in [403u16, 500] {
+        let wheel_path = format!("/{status}/a-1.0.0-py3-none-any.whl");
+        Mock::given(path(&wheel_path))
+            .respond_with(ResponseTemplate::new(status))
+            .mount(&server)
+            .await;
+        let wheel_url = format!("{}{wheel_path}", server.uri()).replacen(
+            "http://",
+            "http://probe:lock-http-secret-canary@",
+            1,
+        );
+        context
+            .temp_dir
+            .child("pyproject.toml")
+            .write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["a @ {wheel_url}"]
+        "#})?;
+        let output = context
+            .lock()
+            .args([
+                "--output-format",
+                "json",
+                "--preview-features",
+                "json-output",
+                "--no-cache",
+            ])
+            .env(EnvVars::UV_HTTP_RETRIES, "0")
+            .assert()
+            .code(2);
+        let stdout = &output.get_output().stdout;
+        let report: Value = serde_json::from_slice(stdout)?;
+        assert_eq!(report["status"], "stale");
+        assert_eq!(report["reason"]["code"], "missing_lockfile");
+        assert!(report.get("action").is_none());
+        assert!(!String::from_utf8_lossy(stdout).contains("lock-http-secret-canary"));
+        errors.push(report["error"].clone());
+        assert!(!context.temp_dir.child("uv.lock").exists());
+    }
+
+    insta::assert_json_snapshot!(errors, @r#"
+    [
+      {
+        "code": "access_denied",
+        "http_status": 403,
+        "message": "Access was denied",
+        "package": "a"
+      },
+      {
+        "code": "http",
+        "http_status": 500,
+        "message": "An HTTP request failed",
+        "package": "a"
+      }
+    ]
+    "#);
     Ok(())
 }
