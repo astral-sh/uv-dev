@@ -15,6 +15,14 @@ environment, not an additional node in the locked `resolution` graph. In particu
 versions may differ from the locked versions, and more than one installed distribution can have the
 same name.
 
+An installed package's optional `direct_url` contains its parsed
+[`direct_url.json`](https://packaging.python.org/en/latest/specifications/direct-url/) record.
+Archive hashes, VCS revisions, and editable-directory information remain available, while URL
+credentials and sensitive query parameters are redacted. If no usable record exists, the field is
+omitted; uv does not infer a package index or a matching locked artifact from the installed name and
+version. The record describes the installer's metadata, not an independent verification of the
+installed files.
+
 `environment.selected_packages` gives the locked package nodes selected for the environment's
 interpreter, keyed by normalized package name. Its values are identifiers in `resolution`. For
 workspace targets, this selection includes all extras and dependency groups, matching

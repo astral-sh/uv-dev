@@ -10,6 +10,7 @@ use futures::executor::block_on;
 use indoc::{formatdoc, indoc};
 use url::Url;
 
+use uv_fs::PortablePathBuf;
 use uv_static::EnvVars;
 use uv_test::json_schema::JsonSchema;
 use uv_test::{copy_dir_ignore, uv_snapshot};
@@ -57,6 +58,50 @@ fn workspace_metadata_schema_rejects_invalid_output() -> Result<()> {
     metadata["module_owners"] = serde_json::json!({"café": [{"package_id": 1}]});
     assert!(parse_metadata(&serde_json::to_vec(&metadata)?).is_err());
 
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_schema_rejects_invalid_installed_origins() -> Result<()> {
+    let mut metadata = serde_json::json!({
+        "schema": {"version": "preview"},
+        "workspace_root": "/workspace",
+        "requires_python": ">=3.12",
+        "conflicts": {"sets": []},
+        "environment": {
+            "root": "/workspace/.venv",
+            "python": {
+                "path": "/workspace/.venv/bin/python",
+                "version": "3.12.0",
+                "implementation": "cpython",
+                "key": "cpython-3.12.0-linux-x86_64-gnu",
+            },
+            "selected_packages": {},
+            "module_owners": {},
+            "packages": {
+                "installed+/workspace/.venv/demo.dist-info": {
+                    "name": "demo",
+                    "version": "1.0",
+                    "path": "/workspace/.venv/demo.dist-info",
+                    "editable": false,
+                    "direct_url": {"url": "https://example.com/demo.whl", "archive_info": {}},
+                },
+            },
+        },
+    });
+    parse_metadata(&serde_json::to_vec(&metadata)?)?;
+    for invalid in [
+        serde_json::Value::Null,
+        serde_json::json!({"url": "https://example.com/demo.whl"}),
+        serde_json::json!({"url": "not-a-url", "archive_info": {}}),
+        serde_json::json!({"url": "file:///workspace", "dir_info": {"editable": null}}),
+        serde_json::json!({"url": "https://example.com/demo.whl", "archive_info": {"hashes": {"sha256": 7}}}),
+        serde_json::json!({"url": "https://example.com/demo.git", "vcs_info": {"vcs": "git", "commit_id": null}}),
+    ] {
+        metadata["environment"]["packages"]["installed+/workspace/.venv/demo.dist-info"]["direct_url"] =
+            invalid;
+        assert!(parse_metadata(&serde_json::to_vec(&metadata)?).is_err());
+    }
     Ok(())
 }
 
@@ -1198,12 +1243,20 @@ fn workspace_metadata_installed_packages_are_independent_of_lock() -> Result<()>
           },
           "installed_packages": {
             "installed+[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info": {
+              "direct_url": {
+                "archive_info": {},
+                "url": "file://[TEMP_DIR]/metadata_extra-0.1.0-py3-none-any.whl"
+              },
               "editable": false,
               "name": "metadata-extra",
               "path": "[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info",
               "version": "0.1.0"
             },
             "installed+[SITE_PACKAGES]/metadata_required-0.2.0.dist-info": {
+              "direct_url": {
+                "archive_info": {},
+                "url": "file://[TEMP_DIR]/metadata_required-0.2.0-py3-none-any.whl"
+              },
               "editable": false,
               "name": "metadata-required",
               "path": "[SITE_PACKAGES]/metadata_required-0.2.0.dist-info",
@@ -1282,6 +1335,174 @@ fn workspace_metadata_ignores_malformed_installed_direct_url() -> Result<()> {
     assert_eq!(package["version"], "0.1.0");
     assert!(package.get("direct_url").is_none());
     assert_eq!(fs_err::read_to_string(&direct_url)?, "invalid");
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_reports_installed_direct_url() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = context
+        .temp_dir
+        .child("metadata_origin-0.1.0-py3-none-any.whl");
+    write_wheel(
+        wheel.path(),
+        "metadata-origin",
+        "metadata_origin-0.1.0",
+        &[("origin_module.py", "")],
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "metadata-root"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = []
+        "#})?;
+    context.lock().arg("--offline").assert().success();
+    context
+        .pip_install()
+        .arg("--no-index")
+        .arg(wheel.path())
+        .assert()
+        .success();
+
+    let direct_url_path = context
+        .site_packages()
+        .join("metadata_origin-0.1.0.dist-info/direct_url.json");
+    let inspect = || -> Result<serde_json::Value> {
+        let assert = context
+            .workspace_metadata()
+            .arg("--frozen")
+            .arg("--offline")
+            .assert()
+            .success();
+        let metadata = parse_metadata(&assert.get_output().stdout)?;
+        metadata["environment"]["packages"]
+            .as_object()
+            .context("missing installed package inventory")?
+            .values()
+            .find(|package| package["name"] == "metadata-origin")
+            .cloned()
+            .context("missing installed distribution")
+    };
+
+    let installed_record: serde_json::Value =
+        serde_json::from_slice(&fs_err::read(&direct_url_path)?)?;
+    assert_eq!(inspect()?["direct_url"], installed_record);
+
+    let local_url = Url::from_directory_path(context.temp_dir.path())
+        .map_err(|()| anyhow::anyhow!("failed to convert directory path to file URL"))?;
+    let records = [
+        (
+            serde_json::json!({
+                "url": local_url.as_str(),
+                "dir_info": {"editable": true},
+                "subdirectory": "src",
+            }),
+            local_url.to_string(),
+        ),
+        (
+            serde_json::json!({
+                "url": "https://user:archive-secret@example.com/demo.whl?sig=signature-secret&download=1",
+                "archive_info": {"hashes": {"sha256": "a".repeat(64)}},
+                "subdirectory": "src",
+            }),
+            "https://user:****@example.com/demo.whl?sig=****&download=1".to_string(),
+        ),
+        (
+            serde_json::json!({
+                "url": "https://vcs-secret@example.com/repository.git",
+                "vcs_info": {
+                    "vcs": "git",
+                    "commit_id": "b".repeat(40),
+                    "requested_revision": "release",
+                },
+                "subdirectory": "src",
+            }),
+            "https://****@example.com/repository.git".to_string(),
+        ),
+    ];
+    for (record, expected_url) in records {
+        let contents = serde_json::to_vec(&record)?;
+        fs_err::write(&direct_url_path, &contents)?;
+        let mut expected = record;
+        expected["url"] = serde_json::json!(expected_url);
+        assert_eq!(inspect()?["direct_url"], expected);
+        assert_eq!(fs_err::read(&direct_url_path)?, contents);
+    }
+
+    fs_err::remove_file(&direct_url_path)?;
+    assert!(inspect()?.get("direct_url").is_none());
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_installed_origin_is_not_locked_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let locked_dir = context.temp_dir.child("locked");
+    let installed_dir = context.temp_dir.child("installed");
+    locked_dir.create_dir_all()?;
+    installed_dir.create_dir_all()?;
+    let locked = locked_dir.child("metadata_origin-0.1.0-py3-none-any.whl");
+    let installed = installed_dir.child("metadata_origin-0.1.0-py3-none-any.whl");
+    write_wheel(
+        locked.path(),
+        "metadata-origin",
+        "metadata_origin-0.1.0",
+        &[("locked_module.py", "")],
+    )?;
+    write_wheel(
+        installed.path(),
+        "metadata-origin",
+        "metadata_origin-0.1.0",
+        &[("installed_module.py", "")],
+    )?;
+    let locked_url = Url::from_file_path(locked.path())
+        .map_err(|()| anyhow::anyhow!("failed to convert wheel path to file URL"))?;
+    let installed_url = Url::from_file_path(installed.path())
+        .map_err(|()| anyhow::anyhow!("failed to convert wheel path to file URL"))?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "metadata-root"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["metadata-origin @ {locked_url}"]
+        "#})?;
+    context.lock().arg("--offline").assert().success();
+    context
+        .pip_install()
+        .arg("--no-index")
+        .arg(installed.path())
+        .assert()
+        .success();
+
+    let assert = context
+        .workspace_metadata()
+        .arg("--frozen")
+        .arg("--offline")
+        .assert()
+        .success();
+    let metadata = parse_metadata(&assert.get_output().stdout)?;
+    let selected_id = metadata["environment"]["selected_packages"]["metadata-origin"]
+        .as_str()
+        .context("missing selected package")?;
+    assert_eq!(
+        metadata["resolution"][selected_id]["source"]["path"],
+        PortablePathBuf::from(locked.path()).to_string()
+    );
+    let package = metadata["environment"]["packages"]
+        .as_object()
+        .context("missing installed package inventory")?
+        .values()
+        .find(|package| package["name"] == "metadata-origin")
+        .context("missing installed distribution")?;
+    assert_eq!(package["version"], "0.1.0");
+    assert_eq!(package["direct_url"]["url"], installed_url.as_str());
     Ok(())
 }
 
@@ -1365,6 +1586,10 @@ dependencies = [
             },
             "packages": {
               "installed+[SITE_PACKAGES]/installed_owner-0.1.0.dist-info": {
+                "direct_url": {
+                  "archive_info": {},
+                  "url": "file://[TEMP_DIR]/installed_owner-0.1.0-py3-none-any.whl"
+                },
                 "editable": false,
                 "name": "installed-owner",
                 "path": "[SITE_PACKAGES]/installed_owner-0.1.0.dist-info",
