@@ -209,8 +209,11 @@ installed.
 
 ### Module is missing or cannot be imported
 
-If the build error mentions a failing import, consider
-[disabling build isolation](../../concepts/projects/config.md#build-isolation).
+If the build error mentions a failing import, the package may be missing a build dependency. When
+possible,
+[augment the build dependencies](../../concepts/projects/config.md#augmenting-build-dependencies)
+with `extra-build-dependencies` to keep the build isolated. Otherwise, consider
+[disabling build isolation](../../concepts/projects/config.md#disabling-build-isolation).
 
 For example, some packages assume that `pip` is available without declaring it as a build
 dependency:
@@ -244,8 +247,8 @@ dependency:
     ModuleNotFoundError: No module named 'pip'
 ```
 
-To resolve this error, pre-install the build dependencies then disable build isolation for the
-package:
+If augmenting the build dependencies is not suitable, pre-install the build dependencies then
+disable build isolation for the package:
 
 ```console
 $ uv pip install pip setuptools
