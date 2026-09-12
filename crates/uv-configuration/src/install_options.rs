@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
+use std::fmt::{Debug, Formatter};
 
+use rustc_hash::FxHashSet;
 use tracing::debug;
 
 use uv_normalize::PackageName;
@@ -28,9 +30,45 @@ pub struct InstallOptions {
     /// Include only local packages in the resolution.
     only_install_local: bool,
     /// Omit the specified packages from the resolution.
-    no_install_package: Vec<PackageName>,
+    no_install_package: InstallPackages,
     /// Include only the specified packages in the resolution.
-    only_install_package: Vec<PackageName>,
+    only_install_package: InstallPackages,
+}
+
+#[derive(Clone, Default)]
+struct InstallPackages {
+    packages: Vec<PackageName>,
+    lookup: Option<FxHashSet<PackageName>>,
+}
+
+impl Debug for InstallPackages {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        self.packages.fmt(formatter)
+    }
+}
+
+impl InstallPackages {
+    fn new(packages: Vec<PackageName>) -> Self {
+        let lookup = if packages.len() > 1 {
+            Some(packages.iter().cloned().collect())
+        } else {
+            None
+        };
+
+        Self { packages, lookup }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.packages.is_empty()
+    }
+
+    fn contains(&self, package_name: &PackageName) -> bool {
+        if let Some(lookup) = &self.lookup {
+            lookup.contains(package_name)
+        } else {
+            self.packages.contains(package_name)
+        }
+    }
 }
 
 impl InstallOptions {
@@ -52,8 +90,8 @@ impl InstallOptions {
             only_install_workspace,
             no_install_local,
             only_install_local,
-            no_install_package,
-            only_install_package,
+            no_install_package: InstallPackages::new(no_install_package),
+            only_install_package: InstallPackages::new(only_install_package),
         }
     }
 
@@ -157,5 +195,123 @@ impl InstallOptions {
         }
 
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::str::FromStr;
+
+    use uv_normalize::PackageName;
+
+    use super::{InstallOptions, InstallTarget};
+
+    fn package_name(name: &str) -> PackageName {
+        PackageName::from_str(name).expect("valid package name")
+    }
+
+    fn includes(
+        options: &InstallOptions,
+        name: &PackageName,
+        is_local: bool,
+        project: Option<&PackageName>,
+    ) -> bool {
+        options.include_package(
+            InstallTarget { name, is_local },
+            project,
+            &BTreeSet::default(),
+        )
+    }
+
+    #[test]
+    fn install_package_filters() {
+        let included = package_name("Included_Package");
+        let excluded = package_name("excluded-package");
+        let other = package_name("other-package");
+        let options = InstallOptions::new(
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            vec![excluded.clone(), excluded.clone()],
+            Vec::new(),
+        );
+        assert!(includes(&options, &included, false, None));
+        assert!(!includes(&options, &excluded, false, None));
+
+        let options = InstallOptions::new(
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            vec![included.clone()],
+            vec![included.clone(), package_name("INCLUDED-PACKAGE")],
+        );
+        assert!(includes(&options, &included, false, Some(&other)));
+        assert!(!includes(&options, &other, true, Some(&other)));
+    }
+
+    #[test]
+    fn single_install_package_filters() {
+        let selected = package_name("selected-package");
+        let other = package_name("other-package");
+        let options = InstallOptions::new(
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            Vec::new(),
+            vec![selected.clone()],
+        );
+        assert!(includes(&options, &selected, false, None));
+        assert!(!includes(&options, &other, false, None));
+
+        let options = InstallOptions::new(
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            vec![selected.clone()],
+            Vec::new(),
+        );
+        assert!(!includes(&options, &selected, false, None));
+        assert!(includes(&options, &other, false, None));
+    }
+
+    #[test]
+    fn install_package_filter_debug() {
+        let package = package_name("selected-package");
+        let options = InstallOptions::new(
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            vec![package.clone(), package.clone()],
+            vec![package.clone()],
+        );
+
+        assert_eq!(
+            format!("{:?}", options.no_install_package),
+            format!("{:?}", vec![package.clone(), package.clone()]),
+        );
+        assert_eq!(
+            format!("{:?}", options.only_install_package),
+            format!("{:?}", vec![package]),
+        );
+        assert_eq!(
+            format!("{:?}", InstallOptions::default().no_install_package),
+            "[]",
+        );
     }
 }
