@@ -7516,6 +7516,7 @@ dependencies = [
  "uv-pep440",
  "uv-pep508",
  "uv-preview",
+ "uv-pypi-types",
  "uv-python",
  "uv-static",
  "uv-version",

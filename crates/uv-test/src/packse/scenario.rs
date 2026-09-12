@@ -16,6 +16,7 @@ use uv_distribution_filename::WheelFilename;
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::{MarkerTree, Requirement};
+use uv_pypi_types::Identifier;
 use uv_python::PythonVersion;
 
 /// A complete packse scenario definition.
@@ -106,6 +107,14 @@ pub struct PackageMetadata {
     #[serde(default)]
     pub extras: BTreeMap<ExtraName, Vec<Requirement>>,
 
+    /// Console-script names mapped to generated callables (e.g., `"example.cli:main"`).
+    ///
+    /// Targets must use ASCII Python identifiers, excluding keywords, with a single callable
+    /// name. The module must be inside the package's normalized import name. Generated callables
+    /// print the package name and version.
+    #[serde(default, deserialize_with = "deserialize_scripts")]
+    pub scripts: BTreeMap<String, ScriptTarget>,
+
     /// Whether to produce a source distribution, and optionally its metadata.
     #[serde(
         default = "default_artifact",
@@ -128,6 +137,135 @@ pub struct PackageMetadata {
     /// An empty list means produce only the default `py3-none-any` wheel.
     #[serde(default)]
     pub wheel_tags: Vec<WheelTag>,
+}
+
+/// A console-script target supported by the Packse package generator.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScriptTarget {
+    module: String,
+    function: Identifier,
+}
+
+impl ScriptTarget {
+    pub(super) fn module(&self) -> &str {
+        &self.module
+    }
+
+    pub(super) fn function(&self) -> &str {
+        self.function.as_ref()
+    }
+}
+
+impl FromStr for ScriptTarget {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let (module, function) = value.split_once(':').ok_or_else(|| {
+            format!("script target `{value}` must have the form `module:callable`")
+        })?;
+        let module = module.trim();
+        let function = function.trim();
+        for component in module.split('.') {
+            script_identifier(component)
+                .map_err(|error| format!("invalid module in script target `{value}`: {error}"))?;
+        }
+        let function = script_identifier(function)
+            .map_err(|error| format!("invalid callable in script target `{value}`: {error}"))?;
+        Ok(Self {
+            module: module.to_string(),
+            function,
+        })
+    }
+}
+
+impl fmt::Display for ScriptTarget {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}:{}", self.module, self.function)
+    }
+}
+
+impl<'de> Deserialize<'de> for ScriptTarget {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::from_str(&value).map_err(serde::de::Error::custom)
+    }
+}
+
+fn script_identifier(value: &str) -> Result<Identifier, String> {
+    if !value.is_ascii() {
+        return Err(format!(
+            "only ASCII Python identifiers are supported: `{value}`"
+        ));
+    }
+    let identifier = Identifier::from_str(value).map_err(|error| error.to_string())?;
+    if matches!(
+        value,
+        "False"
+            | "None"
+            | "True"
+            | "and"
+            | "as"
+            | "assert"
+            | "async"
+            | "await"
+            | "break"
+            | "class"
+            | "continue"
+            | "def"
+            | "del"
+            | "elif"
+            | "else"
+            | "except"
+            | "finally"
+            | "for"
+            | "from"
+            | "global"
+            | "if"
+            | "import"
+            | "in"
+            | "is"
+            | "lambda"
+            | "nonlocal"
+            | "not"
+            | "or"
+            | "pass"
+            | "raise"
+            | "return"
+            | "try"
+            | "while"
+            | "with"
+            | "yield"
+    ) {
+        return Err(format!("Python keyword `{value}` is not supported"));
+    }
+    Ok(identifier)
+}
+
+fn deserialize_scripts<'de, D>(deserializer: D) -> Result<BTreeMap<String, ScriptTarget>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let scripts = BTreeMap::<String, ScriptTarget>::deserialize(deserializer)?;
+    for name in scripts.keys() {
+        validate_script_name(name).map_err(serde::de::Error::custom)?;
+    }
+    Ok(scripts)
+}
+
+/// Match uv-build-backend's console-script name restrictions.
+pub(super) fn validate_script_name(name: &str) -> Result<(), String> {
+    if name.is_empty()
+        || name.chars().all(|character| character == '.')
+        || !name
+            .chars()
+            .all(|character| character.is_alphanumeric() || matches!(character, '.' | '-' | '_'))
+    {
+        return Err(format!("invalid console-script name `{name}`"));
+    }
+    Ok(())
 }
 
 fn deserialize_artifact<'de, D>(
@@ -402,6 +540,49 @@ extra_c = ["c"]
             a_meta.extras[&extra_name],
             vec![Requirement::from_str("b").expect("valid requirement")]
         );
+    }
+
+    #[test]
+    fn parse_script_targets() {
+        let metadata: PackageMetadata = toml::from_str(
+            r#"scripts = { example = "example.cli:main", alias = "example.cli : main" }"#,
+        )
+        .expect("script metadata should parse");
+        assert_eq!(metadata.scripts["example"].to_string(), "example.cli:main");
+        assert_eq!(metadata.scripts["alias"], metadata.scripts["example"]);
+        assert_eq!(metadata.scripts["example"].module(), "example.cli");
+        assert_eq!(metadata.scripts["example"].function(), "main");
+    }
+
+    #[test]
+    fn reject_unsupported_script_targets() {
+        for target in [
+            "example",
+            ":main",
+            "example:",
+            "example..cli:main",
+            "example/cli:main",
+            "other-package:main",
+            "example:object.main",
+            "example:main()",
+            "example:main[extra]",
+            "example:main:other",
+            "example:class",
+            "example.async:main",
+            "example:méthode",
+        ] {
+            assert!(ScriptTarget::from_str(target).is_err(), "{target}");
+        }
+    }
+
+    #[test]
+    fn reject_invalid_script_names() {
+        for name in ["", ".", "..", "../example", "two words", "a=b", "a\nb"] {
+            let metadata = format!("scripts = {{ {name:?} = \"example:main\" }}");
+            let error = toml::from_str::<PackageMetadata>(&metadata)
+                .expect_err("invalid script name should be rejected");
+            assert!(error.message().contains("invalid console-script name"));
+        }
     }
 
     #[test]
