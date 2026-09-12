@@ -825,7 +825,13 @@ impl Cache {
             Err(err) => return Err(err),
         }
 
-        summary += self.prune_archive_files()?;
+        if ci {
+            // CI caches retain built wheel archives rather than extracted file objects. Removing
+            // the file store leaves hardlinks in surviving archives and environments intact.
+            summary += self.remove_path(self.bucket(CacheBucket::Files))?;
+        } else {
+            summary += self.prune_archive_files()?;
+        }
 
         Ok(summary)
     }
