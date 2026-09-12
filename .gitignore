@@ -32,6 +32,8 @@ __pycache__
 
 # Profiling
 .cache/bench-fixtures/
+.cache/bench-python/
+.cache/bench-python-archives/
 flamegraph.svg
 perf.data
 perf.data.old

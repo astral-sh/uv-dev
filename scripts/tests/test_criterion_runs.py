@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +17,58 @@ SPEC.loader.exec_module(runs)
 
 
 class CriterionRuns(unittest.TestCase):
+    def test_distinguishes_tracked_changes_from_generated_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            subprocess.run(["git", "init", "--quiet", str(directory)], check=True)
+            hooks = directory / "empty-hooks"
+            hooks.mkdir()
+            tracked = directory / "tracked.txt"
+            tracked.write_text("original\n")
+            subprocess.run(["git", "add", "tracked.txt"], cwd=directory, check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    f"core.hooksPath={hooks}",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.com",
+                    "commit",
+                    "--quiet",
+                    "-m",
+                    "Fixture",
+                ],
+                cwd=directory,
+                check=True,
+            )
+            clean = runs.source_metadata(directory)
+            self.assertFalse(clean["working_tree_dirty"])
+            self.assertFalse(clean["tracked_working_tree_dirty"])
+            self.assertEqual(clean["working_tree_status"], [])
+
+            generated = directory / "generated"
+            generated.mkdir()
+            (generated / "manifest.json").write_text("{}\n")
+            untracked = runs.source_metadata(directory)
+            self.assertTrue(untracked["working_tree_dirty"])
+            self.assertFalse(untracked["tracked_working_tree_dirty"])
+            self.assertEqual(untracked["working_tree_status"], ["?? generated/"])
+            self.assertEqual(untracked["tree"], clean["tree"])
+
+            (generated / ".gitignore").write_text("*\n")
+            ignored = runs.source_metadata(directory)
+            self.assertFalse(ignored["working_tree_dirty"])
+            self.assertEqual(ignored["working_tree_status"], [])
+
+            tracked.write_text("changed\n")
+            modified = runs.source_metadata(directory)
+            self.assertTrue(modified["tracked_working_tree_dirty"])
+            self.assertIn(" M tracked.txt", modified["working_tree_status"])
+
     def test_normalizes_iteration_counts_and_keeps_repeats(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
