@@ -48,6 +48,16 @@ of the package. The kind of bound can be adjusted with
 $ uv add "httpx>=0.20"
 ```
 
+To add a dependency without an inferred version constraint, use
+[`--raw`](../../reference/cli.md#uv-add--raw):
+
+```console
+$ uv add --raw httpx
+```
+
+This adds `"httpx"` to `project.dependencies`. For non-registry dependencies, `--raw` also records
+the source directly in `project.dependencies` instead of `tool.uv.sources`.
+
 When adding a dependency from a source other than a package registry, uv will add an entry in the
 sources field. For example, when adding `httpx` from GitHub:
 
