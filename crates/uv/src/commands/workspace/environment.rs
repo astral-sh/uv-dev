@@ -27,13 +27,18 @@ use crate::commands::project::sync::do_sync;
 use crate::printer::Printer;
 use crate::settings::{InstallerSettingsRef, ResolverSettings};
 
-/// Map importable modules to package IDs, optionally syncing all locked extras and groups first.
+pub(crate) struct CollectedEnvironment {
+    pub(crate) packages: SitePackages,
+    pub(crate) module_owners: BTreeMap<ModuleName, Vec<String>>,
+}
+
+/// Inspect installed distributions, optionally syncing all locked extras and groups first.
 ///
 /// By default, synchronization is sufficient (inexact), so required distributions are available
 /// to inspect without removing unrelated packages from an existing environment. Exact
-/// synchronization removes those unrelated packages instead. Only distributions in the selected
-/// resolution are assigned package IDs.
-pub(crate) async fn collect_module_owners(
+/// synchronization removes those unrelated packages instead. The installed inventory includes
+/// every distribution, while the top-level module-owner map only includes the selected resolution.
+pub(crate) async fn collect_environment(
     target: InstallTarget<'_>,
     venv: &PythonEnvironment,
     settings: &ResolverSettings,
@@ -45,14 +50,12 @@ pub(crate) async fn collect_module_owners(
     preview: Preview,
     malware_settings: &MalwareCheckSettings,
     sync: Option<Modifications>,
-) -> Result<BTreeMap<ModuleName, Vec<String>>> {
+) -> Result<CollectedEnvironment> {
     let (extras, groups) = target_selection(target);
     let package_ids = selected_package_ids(target, venv, &extras, &groups, settings)?;
-    if package_ids.is_none() && !matches!(sync, Some(Modifications::Exact)) {
-        return Ok(BTreeMap::new());
-    }
-
-    if let Some(modifications) = sync {
+    if let Some(modifications) = sync
+        && (package_ids.is_some() || matches!(modifications, Modifications::Exact))
+    {
         let reinstall = Reinstall::None;
         let installer_settings = InstallerSettingsRef {
             index_locations: &settings.index_locations,
@@ -97,11 +100,16 @@ pub(crate) async fn collect_module_owners(
         .await?;
     }
 
-    let Some(package_ids) = package_ids else {
-        return Ok(BTreeMap::new());
+    let packages = SitePackages::from_environment(venv)?;
+    let module_owners = if let Some(package_ids) = package_ids {
+        find_module_owners_in_environment(venv, &packages, &package_ids)?
+    } else {
+        BTreeMap::new()
     };
-
-    find_module_owners_in_environment(venv, &package_ids)
+    Ok(CollectedEnvironment {
+        packages,
+        module_owners,
+    })
 }
 
 /// Select the package IDs that can own modules in the target resolution.
@@ -141,10 +149,11 @@ fn selected_package_ids(
 /// Map modules in an existing environment to their selected package IDs.
 fn find_module_owners_in_environment(
     venv: &PythonEnvironment,
+    packages: &SitePackages,
     package_ids: &BTreeMap<PackageName, String>,
 ) -> Result<BTreeMap<ModuleName, Vec<String>>> {
     let mut owners = BTreeMap::<ModuleName, BTreeSet<String>>::new();
-    for dist in SitePackages::from_environment(venv)?.iter() {
+    for dist in packages.iter() {
         let Some(package_id) = package_ids.get(dist.name()) else {
             continue;
         };
