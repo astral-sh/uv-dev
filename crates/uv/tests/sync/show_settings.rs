@@ -3791,6 +3791,7 @@ fn preview_features() {
     +            ArtifactHashFiltering,
     +            ContentAddressedCache,
     +            MissingExcludeNewerPackageLock,
+    +            RemotePythonDownloadMetadata,
     +        ],
          },
          python_preference: Managed,

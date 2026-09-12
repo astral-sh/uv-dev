@@ -66,6 +66,51 @@ impl Platform {
         Ok(Self { os, arch, libc })
     }
 
+    /// Parse a platform from a `cargo-dist` style triple string (e.g., `aarch64-apple-darwin`).
+    ///
+    /// See [`Self::as_cargo_dist_triple`] for the inverse operation.
+    pub fn from_cargo_dist_triple(triple: &str) -> Result<Self, Error> {
+        let mut components = triple.split('-');
+        let (Some(architecture), Some(_vendor), Some(operating_system)) =
+            (components.next(), components.next(), components.next())
+        else {
+            return Err(Error::InvalidPlatformFormat(format!(
+                "expected an architecture, vendor, and operating system in `{triple}`"
+            )));
+        };
+        let environment = components.next();
+        if components.next().is_some() {
+            return Err(Error::InvalidPlatformFormat(format!(
+                "unexpected components in `{triple}`"
+            )));
+        }
+
+        let architecture = match architecture {
+            "armv5tel" => "armv5te",
+            "ppc64" => "powerpc64",
+            "ppc64le" => "powerpc64le",
+            "riscv64" | "riscv64gc" => "riscv64gc",
+            architecture => architecture,
+        };
+        let arch = Arch::from_str(architecture)?;
+
+        let operating_system = match operating_system {
+            "darwin" => "macos",
+            operating_system => operating_system,
+        };
+        let os = Os::from_str(operating_system)?;
+
+        let environment = match environment {
+            Some("gnuabi64") => "gnu",
+            Some("muslabi64") => "musl",
+            Some("msvc" | "android" | "androideabi") | None => "none",
+            Some(environment) => environment,
+        };
+        let libc = Libc::from_str(environment)?;
+
+        Ok(Self { os, arch, libc })
+    }
+
     /// Check if this platform supports running another platform.
     pub fn supports(&self, other: &Self) -> bool {
         // If platforms are exactly equal, they're compatible
@@ -137,6 +182,8 @@ impl Platform {
     }
 
     /// Convert this platform to a `cargo-dist` style triple string.
+    ///
+    /// See [`Self::from_cargo_dist_triple`] for the inverse operation.
     pub fn as_cargo_dist_triple(&self) -> String {
         use target_lexicon::{
             Architecture, ArmArchitecture, Environment, OperatingSystem, Riscv64Architecture,
@@ -548,5 +595,78 @@ mod tests {
                 "linux-{arch}-{libc}"
             );
         }
+    }
+
+    #[test]
+    fn test_from_cargo_dist_triple() -> Result<(), Error> {
+        for (triple, operating_system, architecture, libc) in [
+            ("aarch64-apple-darwin", "macos", "aarch64", "none"),
+            ("x86_64-apple-darwin", "macos", "x86_64", "none"),
+            ("x86_64-unknown-linux-gnu", "linux", "x86_64", "gnu"),
+            ("aarch64-unknown-linux-gnu", "linux", "aarch64", "gnu"),
+            ("x86_64-unknown-linux-musl", "linux", "x86_64", "musl"),
+            ("x86_64-pc-windows-msvc", "windows", "x86_64", "none"),
+            ("aarch64-pc-windows-msvc", "windows", "aarch64", "none"),
+            ("x86_64_v3-unknown-linux-gnu", "linux", "x86_64_v3", "gnu"),
+            ("armv7-unknown-linux-gnueabi", "linux", "armv7", "gnueabi"),
+            (
+                "armv7-unknown-linux-gnueabihf",
+                "linux",
+                "armv7",
+                "gnueabihf",
+            ),
+            ("armv7-unknown-linux-musleabi", "linux", "armv7", "musleabi"),
+            (
+                "armv7-unknown-linux-musleabihf",
+                "linux",
+                "armv7",
+                "musleabihf",
+            ),
+            ("ppc64le-unknown-linux-gnu", "linux", "powerpc64le", "gnu"),
+            ("riscv64-unknown-linux-gnu", "linux", "riscv64gc", "gnu"),
+            ("riscv64gc-unknown-linux-gnu", "linux", "riscv64gc", "gnu"),
+        ] {
+            assert_eq!(
+                Platform::from_cargo_dist_triple(triple)?,
+                Platform::from_parts(operating_system, architecture, libc)?,
+                "failed to parse `{triple}`"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_from_cargo_dist_triple_errors() {
+        assert!(Platform::from_cargo_dist_triple("x86_64-unknown").is_err());
+        assert!(Platform::from_cargo_dist_triple("x86_64").is_err());
+        assert!(Platform::from_cargo_dist_triple("invalid_arch-unknown-linux-gnu").is_err());
+        assert!(Platform::from_cargo_dist_triple("x86_64-unknown-invalid_os-gnu").is_err());
+        assert!(Platform::from_cargo_dist_triple("x86_64-unknown-linux-invalid").is_err());
+        assert!(Platform::from_cargo_dist_triple("x86_64-unknown-linux-gnu-extra").is_err());
+    }
+
+    #[test]
+    fn test_cargo_dist_triple_roundtrip() -> Result<(), Error> {
+        let platforms = [
+            Platform::from_parts("macos", "aarch64", "none")?,
+            Platform::from_parts("macos", "x86_64", "none")?,
+            Platform::from_parts("linux", "x86_64", "gnu")?,
+            Platform::from_parts("linux", "x86_64", "musl")?,
+            Platform::from_parts("linux", "aarch64", "gnu")?,
+            Platform::from_parts("linux", "armv7", "gnueabi")?,
+            Platform::from_parts("linux", "armv7", "gnueabihf")?,
+            Platform::from_parts("linux", "armv7", "musleabi")?,
+            Platform::from_parts("linux", "armv7", "musleabihf")?,
+            Platform::from_parts("windows", "x86_64", "none")?,
+        ];
+
+        for original in platforms {
+            let triple = original.as_cargo_dist_triple();
+            let parsed = Platform::from_cargo_dist_triple(&triple)?;
+            assert_eq!(original, parsed, "roundtrip failed for {triple}");
+        }
+
+        Ok(())
     }
 }
