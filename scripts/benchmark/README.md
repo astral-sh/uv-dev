@@ -57,6 +57,12 @@ support byte ranges; only locally prepared artifact bodies can be downloaded. Fi
 `"replay": false` are used only by local-file workloads and do not change the replayed package
 listings.
 
+The macOS certificate workload compares bundled and system certificate configuration during real
+metadata resolution. It uses plain HTTP replay requests to isolate client initialization and native
+certificate-store access from TLS handshake and live network variability. Its native walltime job
+retains a separate profile stream, and its noise must be assessed independently from the Linux
+bare-metal runner.
+
 Run `python3 scripts/benchmark/prepare-git.py` to prepare the Git sources in `git.json` under
 `.cache/bench-git`. These repositories retain upstream commit and tree objects for PyPA's sample
 project, Flask, Django, and the small pip regression fixture. Each captured ref points to its pinned

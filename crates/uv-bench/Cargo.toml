@@ -239,6 +239,11 @@ path = "benches/tls_handshake.rs"
 harness = false
 
 [[bench]]
+name = "system_certificates"
+path = "benches/system_certificates.rs"
+harness = false
+
+[[bench]]
 name = "entrypoint_startup"
 path = "benches/entrypoint_startup.rs"
 harness = false
