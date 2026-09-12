@@ -5,7 +5,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use either::Either;
-use itertools::Itertools;
 use petgraph::Graph;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -713,30 +712,24 @@ trait InstallableExt<'lock>: Installable<'lock> {
                     }
                 }
             }
-            // At time of writing, it's somewhat expected that the set of
-            // conflicting extras is pretty small. With that said, the
-            // time complexity of the following routine is pretty gross.
-            // Namely, `set.contains` is linear in the size of the set,
-            // iteration over all conflicts is also obviously linear in
-            // the number of conflicting sets and then for each of those,
-            // we visit every possible pair of activated extra from above,
-            // which is quadratic in the total number of extras enabled. I
-            // believe the simplest improvement here, if it's necessary, is
-            // to adjust the `Conflicts` internals to own these sorts of
-            // checks. ---AG
             for set in self.lock().conflicts().iter() {
-                for ((pkg1, extra1), (pkg2, extra2)) in
-                    activated_extras_set.iter().tuple_combinations()
+                // Checking each conflict item avoids visiting every pair of activated extras.
+                let mut activated = set.iter().filter_map(|item| {
+                    let extra = item.extra()?;
+                    activated_extras_set
+                        .contains(&(item.package(), extra))
+                        .then_some((item.package(), extra))
+                });
+                if let (Some((package1, extra1)), Some((package2, extra2))) =
+                    (activated.next(), activated.next())
                 {
-                    if set.contains(pkg1, *extra1) && set.contains(pkg2, *extra2) {
-                        return Err(LockErrorKind::ConflictingExtra {
-                            package1: (*pkg1).clone(),
-                            extra1: (*extra1).clone(),
-                            package2: (*pkg2).clone(),
-                            extra2: (*extra2).clone(),
-                        }
-                        .into());
+                    return Err(LockErrorKind::ConflictingExtra {
+                        package1: package1.clone(),
+                        extra1: extra1.clone(),
+                        package2: package2.clone(),
+                        extra2: extra2.clone(),
                     }
+                    .into());
                 }
             }
         }
@@ -1027,6 +1020,7 @@ mod tests {
     use std::str::FromStr;
     use std::sync::LazyLock;
 
+    use itertools::Itertools;
     use petgraph::visit::EdgeRef;
     use uv_configuration::{DependencyGroups, ExtrasSpecification};
     use uv_distribution_types::Name;
@@ -1657,6 +1651,24 @@ source = { registry = "https://example.com/simple" }
         )
         "#);
         });
+    }
+
+    #[test]
+    fn rejects_conflicting_extras_within_the_synthetic_root() {
+        let lock = conflict_lock();
+        let extras = ExtrasSpecification::from_extra(vec![
+            "gpu".parse().expect("valid extra name"),
+            "cpu".parse().expect("valid extra name"),
+        ]);
+        let error = materialize_with_extras(
+            &lock,
+            &[package(&lock, "tool", "1.0.0")],
+            &DARWIN_MARKERS,
+            &extras,
+        )
+        .expect_err("conflicting extras are rejected");
+
+        insta::assert_snapshot!(error, @"Found conflicting extras `tool[cpu]` and `tool[gpu]` enabled simultaneously");
     }
 
     #[test]
