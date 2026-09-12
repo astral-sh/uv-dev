@@ -1549,6 +1549,37 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn resolve_bin_link_target_uses_captured_target() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let root = dunce::canonicalize(temp_dir.path())?;
+        let first = root.join("first-python");
+        let second = root.join("second-python");
+        fs_err::write(&first, b"first Python")?;
+        fs_err::write(&second, b"second Python")?;
+        let bin = root.join("bin");
+        fs_err::create_dir_all(&bin)?;
+        let link = bin.join("python3");
+        std::os::unix::fs::symlink("../first-python", &link)?;
+        let captured_target = read_bin_link_target(&link).context("missing captured target")?;
+        assert_eq!(captured_target, Path::new("../first-python"));
+
+        uv_fs::replace_symlink("../second-python", &link)?;
+        let current_target = read_bin_link_target(&link).context("missing current target")?;
+        assert_eq!(current_target, Path::new("../second-python"));
+
+        assert_eq!(
+            super::resolve_bin_link_target(&link, &captured_target),
+            Some(first)
+        );
+        assert_eq!(
+            super::resolve_bin_link_target(&link, &current_target),
+            Some(second)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn create_bin_links_requires_force_for_unmanaged_executable() -> Result<()> {
         let temp_dir = tempfile::tempdir()?;
         let root = dunce::canonicalize(temp_dir.path())?;
