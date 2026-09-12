@@ -62,10 +62,10 @@ jobs:
         run: cargo build --locked --profile profiling --bin uv
 
       - name: "Prime installed-environment fixtures"
-        run: python3 scripts/benchmark/prepare-environments.py
+        run: python3 scripts/benchmark/prepare-environments.py --discovery
 
       - name: "Build benchmarks"
-        run: cargo codspeed build -m walltime --profile profiling -p uv-bench --bench uv --bench workspace_discovery --bench lockfile --bench wheel_extract --bench wheel_install --bench sdist_extract --bench package_build --bench project_inspection --bench installed_environment --bench project_noop --bench installed_bytecode --bench publish_preparation
+        run: cargo codspeed build -m walltime --profile profiling -p uv-bench --bench uv --bench workspace_discovery --bench lockfile --bench wheel_extract --bench wheel_install --bench sdist_extract --bench package_build --bench project_inspection --bench installed_environment --bench project_noop --bench installed_bytecode --bench publish_preparation --bench python_discovery
 
       - name: "Plan bounded walltime runs"
         id: shards
