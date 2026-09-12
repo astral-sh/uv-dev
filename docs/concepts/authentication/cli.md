@@ -42,6 +42,9 @@ To remove credentials, use the `uv auth logout` command:
 $ uv auth logout example.com
 ```
 
+When using the system-native storage backend, uv can infer the username if exactly one account
+matches the service. If multiple accounts match, specify `--username`.
+
 !!! note
 
     The credentials will not be invalidated with the remote server, i.e., they will only be removed
@@ -55,11 +58,14 @@ To show the credential stored for a given URL, use the `uv auth token` command:
 $ uv auth token example.com
 ```
 
-If a username was used to log in, it will need to be provided as well, e.g.:
+With the default plaintext storage backend, a username used to log in must also be provided, e.g.:
 
 ```console
 $ uv auth token --username foo example.com
 ```
+
+When using the system-native storage backend, uv can infer the username if exactly one account
+matches the service. If multiple accounts match, specify `--username`.
 
 ## Using credentials with external tools
 
@@ -95,4 +101,8 @@ with Bazel.
 Credentials are persisted to the uv [credentials store](./http.md#the-uv-credentials-store).
 
 By default, credentials are written to a plaintext file. An encrypted system-native storage backend
-can be enabled with `UV_PREVIEW_FEATURES=native-auth`.
+is available in [preview](../preview.md) and can be enabled with `--preview-features native-auth` or
+`UV_PREVIEW_FEATURES=native-auth`.
+
+When native storage is enabled, existing plaintext credentials are not used. uv warns if a plaintext
+credentials file exists; run `uv auth login` again to add credentials to the native store.

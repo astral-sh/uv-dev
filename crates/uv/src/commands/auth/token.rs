@@ -27,27 +27,29 @@ pub(crate) async fn token(
                 "Cannot specify a username both via the URL and CLI; found `--username {cli}` and `{url}`"
             );
         }
-        (Some(cli), None) => cli,
-        (None, Some(url)) => url.to_string(),
-        (None, None) => "__token__".to_string(),
+        (Some(cli), None) => Some(cli),
+        (None, Some(url)) => Some(url.to_string()),
+        (None, None) if matches!(&backend, AuthBackend::System(_)) => None,
+        (None, None) => Some("__token__".to_string()),
     };
-    if username.is_empty() {
+    if username.as_deref().is_some_and(str::is_empty) {
         bail!("Username cannot be empty");
     }
 
-    let display_url = if username == "__token__" {
-        url.without_credentials().to_string()
-    } else {
-        format!("{username}@{}", url.without_credentials())
+    let display_url = match username.as_deref() {
+        Some(username) if username != "__token__" => {
+            format!("{username}@{}", url.without_credentials())
+        }
+        _ => url.without_credentials().to_string(),
     };
 
     let credentials = match &backend {
         AuthBackend::System(provider) => provider
-            .fetch(url, Some(&username))
-            .await
+            .fetch(url, username.as_deref())
+            .await?
             .ok_or_else(|| anyhow::anyhow!("Failed to fetch credentials for {display_url}"))?,
         AuthBackend::TextStore(store, _lock) => store
-            .get_credentials(url, Some(&username))?
+            .get_credentials(url, username.as_deref())?
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("Failed to fetch credentials for {display_url}"))?,
     };
@@ -55,7 +57,7 @@ pub(crate) async fn token(
     let Some(password) = credentials.password() else {
         bail!(
             "No {} found for {display_url}",
-            if username != "__token__" {
+            if credentials.username() != Some("__token__") {
                 "password"
             } else {
                 "token"
