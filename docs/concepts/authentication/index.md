@@ -1,6 +1,6 @@
 # Authentication
 
-Authentication is required when working with private repositories or package indexes.
+Private repositories and package indexes require authentication.
 
 Learn more about authentication in uv:
 

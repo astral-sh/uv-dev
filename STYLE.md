@@ -19,6 +19,22 @@ documentation_.
 1. Use a space, not an equals sign, for command-line arguments with a value, e.g.
    `--resolution lowest`, not `--resolution=lowest`.
 
+### Plain language
+
+Use Simplified Technical English principles for user-facing documentation, Rust documentation, and
+code comments:
+
+1. Use short sentences. Keep instructions to approximately 20 words and descriptions to
+   approximately 25 words.
+1. Express one action or idea in each sentence. Put conditions before the action or result.
+1. Prefer active voice and name the actor when it improves clarity.
+1. Use simple, consistent words. For example, use "start" instead of "commence" and "use" instead of
+   "utilize".
+1. Write "for example" instead of "e.g." and "that is" instead of "i.e." in explanatory prose.
+1. Avoid contractions, idioms, ambiguous pronouns, and unnecessary jargon.
+1. Preserve established technical terms, commands, option names, and exact behavioral distinctions.
+1. Match the existing point of view for guides, concepts, and reference documentation.
+
 ## Styling uv
 
 Just uv, please.

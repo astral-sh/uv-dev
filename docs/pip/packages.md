@@ -2,49 +2,49 @@
 
 ## Installing a package
 
-To install a package into the virtual environment, e.g., Flask:
+Install a package, such as Flask, into the virtual environment:
 
 ```console
 $ uv pip install flask
 ```
 
-To install a package with optional dependencies enabled, e.g., Flask with the "dotenv" extra:
+Install a package with optional dependencies, such as Flask with the "dotenv" extra:
 
 ```console
 $ uv pip install "flask[dotenv]"
 ```
 
-To install multiple packages, e.g., Flask and Ruff:
+Install multiple packages, such as Flask and Ruff:
 
 ```console
 $ uv pip install flask ruff
 ```
 
-To install a package with a constraint, e.g., Ruff v0.2.0 or newer:
+Install a package with a version constraint, such as Ruff v0.2.0 or newer:
 
 ```console
 $ uv pip install 'ruff>=0.2.0'
 ```
 
-To install a package at a specific version, e.g., Ruff v0.3.0:
+Install a specific package version, such as Ruff v0.3.0:
 
 ```console
 $ uv pip install 'ruff==0.3.0'
 ```
 
-To install a package from the disk:
+Install a package from a local directory:
 
 ```console
 $ uv pip install "ruff @ ./projects/ruff"
 ```
 
-To install a package from GitHub:
+Install a package from GitHub:
 
 ```console
 $ uv pip install "git+https://github.com/astral-sh/ruff"
 ```
 
-To install a package from GitHub at a specific reference:
+Install a package from a specific GitHub reference:
 
 ```console
 $ # Install a tag
@@ -57,20 +57,20 @@ $ # Install a branch
 $ uv pip install "git+https://github.com/astral-sh/ruff@main"
 ```
 
-See the [Git authentication](../concepts/authentication/git.md) documentation for installation from
-a private repository.
+See the [Git authentication](../concepts/authentication/git.md) documentation to install from a
+private repository.
 
 ## Editable packages
 
-Editable packages do not need to be reinstalled for changes to their source code to be active.
+Changes to an editable package's source code take effect without reinstalling the package.
 
-To install the current project as an editable package
+Install the current project as an editable package:
 
 ```console
 $ uv pip install -e .
 ```
 
-To install a project in another directory as an editable package:
+Install a project in another directory as an editable package:
 
 ```console
 $ uv pip install -e "ruff @ ./project/ruff"
@@ -78,7 +78,7 @@ $ uv pip install -e "ruff @ ./project/ruff"
 
 ## Installing packages from files
 
-Multiple packages can be installed at once from standard file formats.
+Install multiple packages from files in standard formats.
 
 Install from a `requirements.txt` file:
 
@@ -95,7 +95,7 @@ Install from a `pyproject.toml` file:
 $ uv pip install -r pyproject.toml
 ```
 
-Install from a `pyproject.toml` file with optional dependencies enabled, e.g., the "foo" extra:
+Install from a `pyproject.toml` file with optional dependencies from the "foo" extra:
 
 ```console
 $ uv pip install -r pyproject.toml --extra foo
@@ -107,20 +107,19 @@ Install from a `pyproject.toml` file with all optional dependencies enabled:
 $ uv pip install -r pyproject.toml --all-extras
 ```
 
-To install dependency groups in the current project directory's `pyproject.toml`, for example the
-group `foo`:
+Install a dependency group, such as `foo`, from the current project's `pyproject.toml`:
 
 ```console
 $ uv pip install --group foo
 ```
 
-To specify the project directory where groups should be sourced from:
+Specify the project directory that contains the dependency groups:
 
 ```console
 $ uv pip install --project some/path/ --group foo --group bar
 ```
 
-Alternatively, you can specify a path to a `pyproject.toml` for each group:
+Alternatively, specify a `pyproject.toml` path for each group:
 
 ```console
 $ uv pip install --group some/path/pyproject.toml:foo --group other/pyproject.toml:bar
@@ -128,19 +127,19 @@ $ uv pip install --group some/path/pyproject.toml:foo --group other/pyproject.to
 
 !!! note
 
-    As in pip, `--group` flags do not apply to other sources specified with flags like `-r` or `-e`.
-    For instance, `uv pip install -r some/path/pyproject.toml --group foo` sources `foo`
-    from `./pyproject.toml` and **not** `some/path/pyproject.toml`.
+    As in pip, `--group` flags do not apply to sources specified with flags such as `-r` or `-e`.
+    For example, `uv pip install -r some/path/pyproject.toml --group foo` reads `foo` from
+    `./pyproject.toml`, **not** `some/path/pyproject.toml`.
 
 ## Uninstalling a package
 
-To uninstall a package, e.g., Flask:
+Uninstall a package, such as Flask:
 
 ```console
 $ uv pip uninstall flask
 ```
 
-To uninstall multiple packages, e.g., Flask and Ruff:
+Uninstall multiple packages, such as Flask and Ruff:
 
 ```console
 $ uv pip uninstall flask ruff

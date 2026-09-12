@@ -1,20 +1,20 @@
 ---
 title: Installing and managing Python
 description:
-  A guide to using uv to install Python, including requesting specific versions, automatic
-  installation, viewing installed versions, and more.
+  Use uv to install Python, request specific versions, download Python automatically, and view
+  installed versions.
 ---
 
 # Installing Python
 
-If Python is already installed on your system, uv will
-[detect and use](#using-existing-python-versions) it without configuration. However, uv can also
-install and manage Python versions. uv [automatically installs](#automatic-python-downloads) missing
-Python versions as needed — you don't need to install Python to get started.
+If your system already has Python, uv [detects and uses](#using-existing-python-versions) it without
+configuration. uv can also install and manage Python versions. It
+[automatically installs](#automatic-python-downloads) missing versions when necessary. You do not
+need to install Python before you start.
 
 ## Getting started
 
-To install the latest Python version:
+To install the latest Python version, run:
 
 ```console
 $ uv python install
@@ -22,17 +22,20 @@ $ uv python install
 
 !!! note
 
-    Python does not publish official distributable binaries. As such, uv uses distributions from the Astral [`python-build-standalone`](https://github.com/astral-sh/python-build-standalone) project. See the [Python distributions](../concepts/python-versions.md#managed-python-distributions) documentation for more details.
+    Python does not publish official distributable binaries. uv uses distributions from the Astral
+    [`python-build-standalone`](https://github.com/astral-sh/python-build-standalone) project. For
+    details, see the [Python distributions](../concepts/python-versions.md#managed-python-distributions)
+    documentation.
 
-Once Python is installed, it will be used by `uv` commands automatically. uv also adds the installed
-version to your `PATH`:
+After you install Python, `uv` commands use it automatically. uv also adds the installed version to
+your `PATH`:
 
 ```console
 $ python3.13
 ```
 
-uv only installs a _versioned_ executable by default. To install `python` and `python3` executables,
-include the experimental `--default` option:
+By default, uv installs only a _versioned_ executable. To install `python` and `python3`, use the
+experimental `--default` option:
 
 ```console
 $ uv python install --default
@@ -40,68 +43,66 @@ $ uv python install --default
 
 !!! tip
 
-    See the documentation on [installing Python executables](../concepts/python-versions.md#installing-python-executables)
-    for more details.
+    For details, see [installing Python executables](../concepts/python-versions.md#installing-python-executables).
 
 ## Installing a specific version
 
-To install a specific Python version:
+To install a specific Python version, run:
 
 ```console
 $ uv python install 3.12
 ```
 
-To install multiple Python versions:
+To install multiple Python versions, run:
 
 ```console
 $ uv python install 3.11 3.12
 ```
 
-To install an alternative Python implementation, e.g., PyPy:
+To install another Python implementation, such as PyPy, run:
 
 ```console
 $ uv python install pypy@3.10
 ```
 
-See the [`python install`](../concepts/python-versions.md#installing-a-python-version) documentation
-for more details.
+For details, see the [`python install`](../concepts/python-versions.md#installing-a-python-version)
+documentation.
 
 ## Reinstalling Python
 
-To reinstall uv-managed Python versions, use `--reinstall`, e.g.:
+To reinstall Python versions that uv manages, use `--reinstall`:
 
 ```console
 $ uv python install --reinstall
 ```
 
-This will reinstall all previously installed Python versions. Improvements are constantly being
-added to the Python distributions, so reinstalling may resolve bugs even if the Python version does
-not change.
+This command reinstalls all Python versions that uv previously installed. Python distributions
+receive frequent improvements. A reinstall can resolve bugs even if the Python version does not
+change.
 
 ## Viewing Python installations
 
-To view available and installed Python versions:
+To view available and installed Python versions, run:
 
 ```console
 $ uv python list
 ```
 
-See the [`python list`](../concepts/python-versions.md#viewing-available-python-versions)
-documentation for more details.
+For details, see the
+[`python list`](../concepts/python-versions.md#viewing-available-python-versions) documentation.
 
 ## Automatic Python downloads
 
-Python does not need to be explicitly installed to use uv. By default, uv will automatically
-download Python versions when they are required. For example, the following would download Python
-3.12 if it was not installed:
+You do not need to install Python before you use uv. By default, uv automatically downloads Python
+versions when necessary. For example, this command downloads Python 3.12 if it is not installed:
 
 ```console
 $ uvx python@3.12 -c "print('hello world')"
 ```
 
-Even if a specific Python version is not requested, uv will download the latest version on demand.
-For example, if there are no Python versions on your system, the following will install Python
-before creating a new virtual environment:
+If you do not request a specific Python version, uv downloads the latest version when necessary. For
+example, this command installs Python if your system does not have it. It then creates a virtual
+environment:
 
 ```console
 $ uv venv
@@ -109,7 +110,7 @@ $ uv venv
 
 !!! tip
 
-    Automatic Python downloads can be [easily disabled](../concepts/python-versions.md#disabling-automatic-python-downloads) if you want more control over when Python is downloaded.
+    To control when uv downloads Python, [disable automatic Python downloads](../concepts/python-versions.md#disabling-automatic-python-downloads).
 
 <!-- TODO(zanieb): Restore when Python shim management is added
 Note that when an automatic Python installation occurs, the `python` command will not be added to the shell. Use `uv python install-shim` to ensure the `python` shim is installed.
@@ -117,41 +118,38 @@ Note that when an automatic Python installation occurs, the `python` command wil
 
 ## Using existing Python versions
 
-uv will use existing Python installations if present on your system. There is no configuration
-necessary for this behavior: uv will use the system Python if it satisfies the requirements of the
-command invocation. See the
-[Python discovery](../concepts/python-versions.md#discovery-of-python-versions) documentation for
-details.
+uv uses existing Python installations without additional configuration. It uses the system Python if
+that version meets the requirements of the command. For details, see the
+[Python discovery](../concepts/python-versions.md#discovery-of-python-versions) documentation.
 
-To force uv to use the system Python, provide the `--no-managed-python` flag. See the
+To require the system Python, use the `--no-managed-python` flag. For details, see the
 [Python version preference](../concepts/python-versions.md#requiring-or-disabling-managed-python-versions)
-documentation for more details.
+documentation.
 
 ## Upgrading Python versions
 
 !!! important
 
-    Support for upgrading Python patch versions is in _preview_. This means the behavior is
-    experimental and subject to change.
+    Upgrades to Python patch versions are in _preview_. This experimental behavior can change.
 
-To upgrade a Python version to the latest supported patch release:
+To upgrade a Python version to the latest supported patch release, run:
 
 ```console
 $ uv python upgrade 3.12
 ```
 
-To upgrade all uv-managed Python versions:
+To upgrade all Python versions that uv manages, run:
 
 ```console
 $ uv python upgrade
 ```
 
-See the [`python upgrade`](../concepts/python-versions.md#upgrading-python-versions) documentation
-for more details.
+For details, see the [`python upgrade`](../concepts/python-versions.md#upgrading-python-versions)
+documentation.
 
 ## Next steps
 
-To learn more about `uv python`, see the [Python version concept](../concepts/python-versions.md)
-page and the [command reference](../reference/cli.md#uv-python).
+For details about `uv python`, see the [Python version concept](../concepts/python-versions.md) page
+and the [command reference](../reference/cli.md#uv-python).
 
-Or, read on to learn how to [run scripts](./scripts.md) and invoke Python with uv.
+Next, learn how to [run scripts](./scripts.md) and invoke Python with uv.

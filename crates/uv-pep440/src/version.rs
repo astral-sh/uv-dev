@@ -12,7 +12,7 @@ use std::{
 };
 use uv_cache_key::{CacheKey, CacheKeyHasher};
 
-/// One of `~=` `==` `!=` `<=` `>=` `<` `>` `===`
+/// A version comparison operator, such as `~=`, `==`, `!=`, `<=`, `>=`, `<`, `>`, or `===`.
 #[derive(Eq, Ord, PartialEq, PartialOrd, Debug, Hash, Clone, Copy)]
 #[cfg_attr(
     feature = "rkyv",
@@ -29,7 +29,7 @@ pub enum Operator {
     /// <https://peps.python.org/pep-0440/#arbitrary-equality>
     ///
     /// "Use of this operator is heavily discouraged and tooling MAY display a warning when it is used"
-    // clippy doesn't like this: #[deprecated = "Use of this operator is heavily discouraged"]
+    // Clippy rejects this: #[deprecated = "Use of this operator is heavily discouraged"]
     ExactEqual,
     /// `!= 1.2.3`
     NotEqual,
@@ -50,19 +50,14 @@ pub enum Operator {
 }
 
 impl Operator {
-    /// Negates this operator, if a negation exists, so that it has the
-    /// opposite meaning.
+    /// Returns the negation of this operator, if one exists.
     ///
-    /// This returns a negated operator in every case except for the `~=`
-    /// operator. In that case, `None` is returned and callers may need to
-    /// handle its negation at a higher level. (For example, if it's negated
-    /// in the context of a marker expression, then the "compatible" version
-    /// constraint can be split into its component parts and turned into a
-    /// disjunction of the negation of each of those parts.)
+    /// Returns `None` for `~=`, which has no single negated operator. Callers must handle that
+    /// negation at a higher level. For example, split a compatible-version constraint into its
+    /// component constraints and combine their negations with a disjunction.
     ///
-    /// Note that this routine is not reversible in all cases. For example
-    /// `Operator::ExactEqual` negates to `Operator::NotEqual`, and
-    /// `Operator::NotEqual` in turn negates to `Operator::Equal`.
+    /// Negation is not always reversible. For example, `Operator::ExactEqual` negates to
+    /// `Operator::NotEqual`, which negates to `Operator::Equal`.
     pub fn negate(self) -> Option<Self> {
         Some(match self {
             Self::Equal => Self::NotEqual,
@@ -78,12 +73,10 @@ impl Operator {
         })
     }
 
-    /// Returns true if and only if this operator can be used in a version
-    /// specifier with a version containing a non-empty local segment.
+    /// Returns `true` if this operator accepts a version with a non-empty local segment.
     ///
-    /// Specifically, this comes from the "Local version identifiers are
-    /// NOT permitted in this version specifier." phrasing in the version
-    /// specifiers [spec].
+    /// This follows the version specifier [spec]: "Local version identifiers are
+    /// NOT permitted in this version specifier."
     ///
     /// [spec]: https://packaging.python.org/en/latest/specifications/version-specifiers/
     pub(crate) fn is_local_compatible(self) -> bool {
@@ -99,10 +92,9 @@ impl Operator {
         )
     }
 
-    /// Returns the wildcard version of this operator, if appropriate.
+    /// Returns the wildcard form of this operator, if one exists.
     ///
-    /// This returns `None` when this operator doesn't have an analogous
-    /// wildcard operator.
+    /// Returns `None` when this operator has no wildcard form.
     pub(crate) fn to_star(self) -> Option<Self> {
         match self {
             Self::Equal => Some(Self::EqualStar),
@@ -120,7 +112,7 @@ impl Operator {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Equal => "==",
-            // Beware, this doesn't print the star
+            // The operator does not include the wildcard.
             Self::EqualStar => "==",
             #[allow(deprecated)]
             Self::ExactEqual => "===",
@@ -138,7 +130,7 @@ impl Operator {
 impl FromStr for Operator {
     type Err = OperatorParseError;
 
-    /// Notably, this does not know about star versions, it just assumes the base operator
+    /// Parses the base operator without any version wildcard.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let operator = match s {
             "==" => Self::Equal,
@@ -167,7 +159,7 @@ impl FromStr for Operator {
 }
 
 impl std::fmt::Display for Operator {
-    /// Note the `EqualStar` is also `==`.
+    /// Formats `EqualStar` as `==`.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let operator = self.as_str();
         write!(f, "{operator}")
@@ -192,14 +184,11 @@ impl std::fmt::Display for OperatorParseError {
     }
 }
 
-// NOTE: I did a little bit of experimentation to determine what most version
-// numbers actually look like. The idea here is that if we know what most look
-// like, then we can optimize our representation for the common case, while
-// falling back to something more complete for any cases that fall outside of
-// that.
+// NOTE: Measure common version formats to optimize their representation. Use a more complete
+// representation for versions outside the common case.
 //
-// The experiment downloaded PyPI's distribution metadata from Google BigQuery,
-// and then counted the number of versions with various qualities:
+// The experiment downloaded PyPI distribution metadata from Google BigQuery and counted versions
+// with each property:
 //
 //     total: 11264078
 //     release counts:
@@ -242,23 +231,18 @@ impl std::fmt::Display for OperatorParseError {
 //     fitsu8: 10388430 (92.23%)
 //     sweetspot: 10236089 (90.87%)
 //
-// The "JUST release counts" corresponds to versions that only have a release
-// component and nothing else. The "fitsu8" property indicates that all numbers
-// (except for local numeric segments) fit into `u8`. The "sweetspot" property
-// consists of any version number with no local part, 4 or fewer parts in the
-// release version and *all* numbers fit into a u8.
+// "JUST release counts" includes versions with only a release component. "fitsu8" means every
+// number except a local numeric segment fits in `u8`. "sweetspot" means the version has no local
+// component, has at most four release segments, and every number fits in `u8`.
 //
-// This somewhat confirms what one might expect: the vast majority of versions
-// (75%) are precisely in the format of `x.y.z`. That is, a version with only a
-// release version of 3 components.
+// Most versions, 75%, use exactly three release components in the `x.y.z` format.
 //
 // ---AG
 
 /// A version number such as `1.2.3` or `4!5.6.7-a8.post9.dev0`.
 ///
-/// Beware that the sorting implemented with [Ord] and [Eq] is not consistent with the operators
-/// from PEP 440, i.e. compare two versions in rust with `>` gives a different result than a
-/// `VersionSpecifier` with `>` as operator.
+/// The [`Ord`] and [`Eq`] implementations do not always match PEP 440 comparison operators. A
+/// Rust `>` comparison can differ from a [`crate::VersionSpecifier`] that uses `>`.
 ///
 /// Parse with [`Version::from_str`]:
 ///
@@ -290,8 +274,7 @@ enum VersionInner {
 }
 
 impl Version {
-    /// Create a new version from an iterator of segments in the release part
-    /// of a version.
+    /// Creates a version from an iterator of release segments.
     ///
     /// # Panics
     ///
@@ -310,40 +293,39 @@ impl Version {
         .with_release(release_numbers)
     }
 
-    /// Whether this is an alpha/beta/rc or dev version
+    /// Returns `true` for an alpha, beta, release-candidate, or development version.
     #[inline]
     pub fn any_prerelease(&self) -> bool {
         self.is_pre() || self.is_dev()
     }
 
-    /// Whether this is a stable version (i.e., _not_ an alpha/beta/rc or dev version)
+    /// Returns `true` if this is neither a pre-release nor a development version.
     #[inline]
     pub fn is_stable(&self) -> bool {
         !self.is_pre() && !self.is_dev()
     }
 
-    /// Whether this is an alpha/beta/rc version
+    /// Returns `true` for an alpha, beta, or release-candidate version.
     #[inline]
     pub fn is_pre(&self) -> bool {
         self.pre().is_some()
     }
 
-    /// Whether this is a dev version
+    /// Returns `true` for a development version.
     #[inline]
     pub fn is_dev(&self) -> bool {
         self.dev().is_some()
     }
 
-    /// Whether this is a post version
+    /// Returns `true` for a post-release version.
     #[inline]
     pub fn is_post(&self) -> bool {
         self.post().is_some()
     }
 
-    /// Whether this is a local version (e.g. `1.2.3+localsuffixesareweird`)
+    /// Returns `true` for a local version, such as `1.2.3+localsuffixesareweird`.
     ///
-    /// When true, it is guaranteed that the slice returned by
-    /// [`Version::local`] is non-empty.
+    /// A `true` result guarantees that [`Version::local`] returns a non-empty slice.
     #[inline]
     pub fn is_local(&self) -> bool {
         !self.local().is_empty()
@@ -363,7 +345,7 @@ impl Version {
     pub fn release(&self) -> Release<'_> {
         let inner = match &self.inner {
             VersionInner::Small { small } => {
-                // Parse out the version digits.
+                // Extract the version digits.
                 // * Bytes 6 and 7 correspond to the first release segment as a `u16`.
                 // * Bytes 5, 4 and 3 correspond to the second, third and fourth release
                 //   segments, respectively.
@@ -432,9 +414,8 @@ impl Version {
 
     /// Returns the min-release part of this version, if it exists.
     ///
-    /// The "min" component is internal-only, and does not exist in PEP 440.
-    /// The version `1.0min0` is smaller than all other `1.0` versions,
-    /// like `1.0a1`, `1.0dev0`, etc.
+    /// The internal `min` component does not exist in PEP 440. For example, `1.0min0` sorts before
+    /// every other `1.0` version, including `1.0a1` and `1.0dev0`.
     #[inline]
     pub(crate) fn min(&self) -> Option<u64> {
         match self.inner {
@@ -445,9 +426,8 @@ impl Version {
 
     /// Returns the max-release part of this version, if it exists.
     ///
-    /// The "max" component is internal-only, and does not exist in PEP 440.
-    /// The version `1.0max0` is larger than all other `1.0` versions,
-    /// like `1.0.post1`, `1.0+local`, etc.
+    /// The internal `max` component does not exist in PEP 440. For example, `1.0max0` sorts after
+    /// every other `1.0` version, including `1.0.post1` and `1.0+local`.
     #[inline]
     pub(crate) fn max(&self) -> Option<u64> {
         match self.inner {
@@ -456,12 +436,9 @@ impl Version {
         }
     }
 
-    /// Set the release numbers and return the updated version.
+    /// Sets the release numbers and returns the updated version.
     ///
-    /// Usually one can just use `Version::new` to create a new version with
-    /// the updated release numbers, but this is useful when one wants to
-    /// preserve the other components of a version number while only changing
-    /// the release numbers.
+    /// Unlike [`Version::new`], this preserves the other version components.
     ///
     /// # Panics
     ///
@@ -484,10 +461,10 @@ impl Version {
         self
     }
 
-    /// Return this version's release component at the given precision.
+    /// Returns the release component at the given precision.
     ///
-    /// Preserve the epoch, pad missing release segments with zeros, and discard every other
-    /// component. Return `None` for a precision of zero.
+    /// Preserves the epoch, pads missing release segments with zeros, and removes every other
+    /// component. Returns `None` when the precision is zero.
     #[inline]
     #[must_use]
     pub fn only_release_at_precision(&self, precision: usize) -> Option<Self> {
@@ -501,8 +478,7 @@ impl Version {
         (!release.is_empty()).then(|| Self::new(release).with_epoch(self.epoch()))
     }
 
-    /// Push the given release number into this version. It will become the
-    /// last number in the release component.
+    /// Appends the given number to the release component.
     #[inline]
     fn push_release(&mut self, n: u64) {
         if let VersionInner::Small { small } = &mut self.inner {
@@ -513,10 +489,9 @@ impl Version {
         self.make_full().release.push(n);
     }
 
-    /// Clears the release component of this version so that it has no numbers.
+    /// Removes every number from the release component.
     ///
-    /// Generally speaking, this empty state should not be exposed to callers
-    /// since all versions should have at least one release number.
+    /// Do not expose this empty state because valid versions require at least one release number.
     #[inline]
     fn clear_release(&mut self) {
         match &mut self.inner {
@@ -527,7 +502,7 @@ impl Version {
         }
     }
 
-    /// Set the epoch and return the updated version.
+    /// Sets the epoch and returns the updated version.
     #[inline]
     #[must_use]
     pub(crate) fn with_epoch(mut self, value: u64) -> Self {
@@ -540,7 +515,7 @@ impl Version {
         self
     }
 
-    /// Set the pre-release component and return the updated version.
+    /// Sets the pre-release component and returns the updated version.
     #[inline]
     #[must_use]
     pub fn with_pre(mut self, value: Option<Prerelease>) -> Self {
@@ -553,7 +528,7 @@ impl Version {
         self
     }
 
-    /// Set the post-release component and return the updated version.
+    /// Sets the post-release component and returns the updated version.
     #[inline]
     #[must_use]
     pub fn with_post(mut self, value: Option<u64>) -> Self {
@@ -566,7 +541,7 @@ impl Version {
         self
     }
 
-    /// Set the dev-release component and return the updated version.
+    /// Sets the development-release component and returns the updated version.
     #[inline]
     #[must_use]
     pub(crate) fn with_dev(mut self, value: Option<u64>) -> Self {
@@ -579,7 +554,7 @@ impl Version {
         self
     }
 
-    /// Set the local segments and return the updated version.
+    /// Sets the local segments and returns the updated version.
     #[inline]
     #[must_use]
     pub(crate) fn with_local_segments(mut self, value: Vec<LocalSegment>) -> Self {
@@ -591,7 +566,7 @@ impl Version {
         }
     }
 
-    /// Set the local version and return the updated version.
+    /// Sets the local version and returns the updated version.
     #[inline]
     #[must_use]
     pub(crate) fn with_local(mut self, value: LocalVersion) -> Self {
@@ -625,22 +600,21 @@ impl Version {
         self
     }
 
-    /// Return the version with any segments apart from the release removed.
+    /// Returns the version with only its release component.
     #[inline]
     #[must_use]
     pub fn only_release(&self) -> Self {
         Self::new(self.release().iter().copied())
     }
 
-    /// Return the version with any segments apart from the minor version of the release removed.
+    /// Returns the version with only its major and minor release segments.
     #[inline]
     #[must_use]
     pub(crate) fn only_minor_release(&self) -> Self {
         Self::new(self.release().iter().take(2).copied())
     }
 
-    /// Return the version with any segments apart from the release removed, with trailing zeroes
-    /// trimmed.
+    /// Returns the release component without trailing zeroes or other version components.
     #[inline]
     #[must_use]
     pub fn only_release_trimmed(&self) -> Self {
@@ -665,7 +639,7 @@ impl Version {
         }
     }
 
-    /// Return the version with trailing `.0` release segments removed.
+    /// Returns the version without trailing `.0` release segments.
     ///
     /// # Panics
     ///
@@ -680,58 +654,54 @@ impl Version {
         self.with_release(release)
     }
 
-    /// Various "increment the version" operations
+    /// Updates a version component with the given operation.
     pub fn bump(&mut self, bump: BumpCommand) {
-        // This code operates on the understanding that the components of a version form
-        // the following hierarchy:
+        // Version components use this hierarchy:
         //
         //   major > minor > patch > stable > pre > post > dev
         //
-        // Any updates to something earlier in the hierarchy should clear all values lower
-        // in the hierarchy. So for instance:
+        // Updating one component clears every lower component. For example:
         //
         // if you bump `minor`, then clear: patch, pre, post, dev
         // if you bump `pre`, then clear: post, dev
         //
-        // ...and so on.
+        // Incrementing a missing component sets it to `1`.
         //
-        // If you bump a value that doesn't exist, it will be set to "1".
-        //
-        // The special "stable" mode has no value, bumping it clears: pre, post, dev.
+        // The `stable` operation has no value. It clears `pre`, `post`, and `dev`.
         let full = self.make_full();
 
         match bump {
             BumpCommand::BumpRelease { index, value } => {
-                // Clear all sub-release items
+                // Clear every component below the release.
                 full.pre = None;
                 full.post = None;
                 full.dev = None;
 
-                // Use `max` here to try to do 0.2 => 0.3 instead of 0.2 => 0.3.0
+                // Use `max` so `0.2` becomes `0.3`, not `0.3.0`.
                 let old_parts = &full.release;
                 let len = old_parts.len().max(index + 1);
                 let new_release_vec = (0..len)
                     .map(|i| match i.cmp(&index) {
-                        // Everything before the bumped value is preserved (or is an implicit 0)
+                        // Preserve earlier values or use an implicit `0`.
                         Ordering::Less => old_parts.get(i).copied().unwrap_or(0),
-                        // This is the value to bump (could be implicit 0)
+                        // Increment the selected value or an implicit `0`.
                         Ordering::Equal => {
                             value.unwrap_or_else(|| old_parts.get(i).copied().unwrap_or(0) + 1)
                         }
-                        // Everything after the bumped value becomes 0
+                        // Reset every later value to `0`.
                         Ordering::Greater => 0,
                     })
                     .collect::<Vec<u64>>();
                 full.release = new_release_vec;
             }
             BumpCommand::MakeStable => {
-                // Clear all sub-release items
+                // Clear every component below the release.
                 full.pre = None;
                 full.post = None;
                 full.dev = None;
             }
             BumpCommand::BumpPrerelease { kind, value } => {
-                // Clear all sub-prerelease items
+                // Clear every component below the pre-release.
                 full.post = None;
                 full.dev = None;
                 if let Some(value) = value {
@@ -740,7 +710,7 @@ impl Version {
                         number: value,
                     });
                 } else {
-                    // Either bump the matching kind or set to 1
+                    // Increment the matching kind or set it to `1`.
                     if let Some(prerelease) = &mut full.pre
                         && prerelease.kind == kind
                     {
@@ -751,12 +721,12 @@ impl Version {
                 }
             }
             BumpCommand::BumpPost { value } => {
-                // Clear sub-post items
+                // Clear every component below the post-release.
                 full.dev = None;
                 if let Some(value) = value {
                     full.post = Some(value);
                 } else {
-                    // Either bump or set to 1
+                    // Increment the value or set it to `1`.
                     if let Some(post) = &mut full.post {
                         *post += 1;
                     } else {
@@ -768,7 +738,7 @@ impl Version {
                 if let Some(value) = value {
                     full.dev = Some(value);
                 } else {
-                    // Either bump or set to 1
+                    // Increment the value or set it to `1`.
                     if let Some(dev) = &mut full.dev {
                         *dev += 1;
                     } else {
@@ -779,11 +749,10 @@ impl Version {
         }
     }
 
-    /// Set the min-release component and return the updated version.
+    /// Sets the minimum-release component and returns the updated version.
     ///
-    /// The "min" component is internal-only, and does not exist in PEP 440.
-    /// The version `1.0min0` is smaller than all other `1.0` versions,
-    /// like `1.0a1`, `1.0dev0`, etc.
+    /// The internal `min` component does not exist in PEP 440. For example, `1.0min0` sorts before
+    /// every other `1.0` version, including `1.0a1` and `1.0dev0`.
     #[inline]
     #[must_use]
     pub fn with_min(mut self, value: Option<u64>) -> Self {
@@ -798,11 +767,10 @@ impl Version {
         self
     }
 
-    /// Set the max-release component and return the updated version.
+    /// Sets the maximum-release component and returns the updated version.
     ///
-    /// The "max" component is internal-only, and does not exist in PEP 440.
-    /// The version `1.0max0` is larger than all other `1.0` versions,
-    /// like `1.0.post1`, `1.0+local`, etc.
+    /// The internal `max` component does not exist in PEP 440. For example, `1.0max0` sorts after
+    /// every other `1.0` version, including `1.0.post1` and `1.0+local`.
     #[inline]
     #[must_use]
     pub fn with_max(mut self, value: Option<u64>) -> Self {
@@ -820,8 +788,7 @@ impl Version {
         self
     }
 
-    /// Convert this version to a "full" representation in-place and return a
-    /// mutable borrow to the full type.
+    /// Converts this version to its full representation and returns a mutable reference.
     fn make_full(&mut self) -> &mut VersionFull {
         if let VersionInner::Small { ref small } = self.inner {
             let full = VersionFull {
@@ -846,12 +813,10 @@ impl Version {
         }
     }
 
-    /// Performs a "slow" but complete comparison between two versions.
+    /// Compares two versions without relying on their internal representations.
     ///
-    /// This comparison is done using only the public API of a `Version`, and
-    /// is thus independent of its specific representation. This is useful
-    /// to use when comparing two versions that aren't *both* the small
-    /// representation.
+    /// Uses the public [`Version`] API. Use this slower comparison when either version does not
+    /// use the small representation.
     #[cold]
     #[inline(never)]
     fn cmp_slow(&self, other: &Self) -> Ordering {
@@ -875,7 +840,7 @@ impl Version {
             }
         }
 
-        // release is equal, so compare the other parts
+        // The release components match, so compare the remaining components.
         sortable_tuple(self).cmp(&sortable_tuple(other))
     }
 }
@@ -913,7 +878,7 @@ impl Serialize for Version {
     }
 }
 
-/// Shows normalized version
+/// Displays the normalized version.
 impl std::fmt::Display for Version {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.epoch() != 0 {
@@ -967,11 +932,11 @@ impl PartialEq<Self> for Version {
 impl Eq for Version {}
 
 impl Hash for Version {
-    /// Custom implementation to ignoring trailing zero because `PartialEq` zero pads
+    /// Ignores trailing zeroes because [`PartialEq`] pads release segments with zeroes.
     #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.epoch().hash(state);
-        // Skip trailing zeros
+        // Skip trailing zeroes.
         for i in self.release().iter().rev().skip_while(|x| **x == 0) {
             i.hash(state);
         }
@@ -1047,119 +1012,94 @@ impl Ord for Version {
 impl FromStr for Version {
     type Err = VersionParseError;
 
-    /// Parses a version such as `1.19`, `1.0a1`,`1.0+abc.5` or `1!2012.2`
+    /// Parses a version such as `1.19`, `1.0a1`, `1.0+abc.5`, or `1!2012.2`.
     ///
-    /// Note that this doesn't allow wildcard versions.
+    /// Does not allow wildcard versions.
     fn from_str(version: &str) -> Result<Self, Self::Err> {
         Parser::new(version.as_bytes()).parse()
     }
 }
 
-/// Various ways to "bump" a version
+/// An operation that updates a version component.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BumpCommand {
-    /// Bump or set the release component
+    /// Increments or sets a release component.
     BumpRelease {
-        /// The release component to bump (0 is major, 1 is minor, 2 is patch)
+        /// The release component: `0` for major, `1` for minor, or `2` for patch.
         index: usize,
-        /// Explicit value to set; when absent the component is incremented
+        /// An explicit value. If absent, increments the component.
         value: Option<u64>,
     },
-    /// Bump or set the prerelease component
+    /// Increments or sets the pre-release component.
     BumpPrerelease {
-        /// prerelease component to bump
+        /// The pre-release component to update.
         kind: PrereleaseKind,
-        /// Explicit value to set; when absent the component is incremented
+        /// An explicit value. If absent, increments the component.
         value: Option<u64>,
     },
-    /// Bump to the associated stable release
+    /// Updates the version to its stable release.
     MakeStable,
-    /// Bump or set the post component
+    /// Increments or sets the post-release component.
     BumpPost {
-        /// Explicit value to set; when absent the component is incremented
+        /// An explicit value. If absent, increments the component.
         value: Option<u64>,
     },
-    /// Bump or set the dev component
+    /// Increments or sets the development component.
     BumpDev {
-        /// Explicit value to set; when absent the component is incremented
+        /// An explicit value. If absent, increments the component.
         value: Option<u64>,
     },
 }
 
 /// A small representation of a version.
 ///
-/// This representation is used for a (very common) subset of versions: the
-/// set of all versions with ~small numbers and no local component. The
-/// representation is designed to be (somewhat) compact, but also laid out in
-/// a way that makes comparisons between two small versions equivalent to a
-/// simple `memcmp`.
+/// Stores common versions with small numeric components and no local component. The compact
+/// layout lets two small versions compare with a simple `memcmp`.
 ///
-/// The methods on this type encapsulate the representation. Since this type
-/// cannot represent the full range of all versions, setters on this type will
-/// return `false` if the value could not be stored. In this case, callers
-/// should generally convert a version into its "full" representation and then
-/// set the value on the full type.
+/// Setters return `false` when a value does not fit this representation. In that case, convert the
+/// version to its full representation before setting the value.
 ///
 /// # Representation
 ///
-/// At time of writing, this representation supports versions that meet all of
-/// the following criteria:
+/// This representation supports versions that meet every condition below:
 ///
 /// * The epoch must be `0`.
-/// * The release portion must have 4 or fewer segments.
-/// * All release segments, except for the first, must be representable in a
-///   `u8`. The first segment must be representable in a `u16`. (This permits
-///   calendar versions, like `2023.03`, to be represented.)
-/// * There is *at most* one of the following components: pre, dev or post.
-/// * If there is a pre segment, then its numeric value is less than 64.
-/// * If there is a dev or post segment, then its value is less than `u8::MAX`.
-/// * There are zero "local" segments.
+/// * The release must have at most four segments.
+/// * The first release segment must fit in a `u16`; every other segment must fit in a `u8`. This
+///   supports calendar versions such as `2023.03`.
+/// * The version can have *at most* one pre-release, development, or post-release component.
+/// * A pre-release value must be less than 64.
+/// * A development or post-release value must be less than `u8::MAX`.
+/// * The version must have no local segments.
 ///
-/// The above constraints were chosen as a balancing point between being able
-/// to represent all parts of a version in a very small amount of space,
-/// and for supporting as many versions in the wild as possible. There is,
-/// however, another constraint in play here: comparisons between two `Version`
-/// values. It turns out that we do a lot of them as part of resolution, and
-/// the cheaper we can make that, the better. This constraint pushes us
-/// toward using as little space as possible. Indeed, here, comparisons are
-/// implemented via `u64::cmp`.
+/// These constraints balance a compact representation against support for common versions.
+/// Resolution compares versions frequently, so this representation uses `u64::cmp` to keep each
+/// comparison inexpensive.
 ///
-/// We pack versions fitting the above constraints into a `u64` in such a way
-/// that it preserves the ordering between versions as prescribed in PEP 440.
-/// Namely:
+/// Versions that meet these constraints fit in a `u64` that preserves PEP 440 ordering:
 ///
 /// * Bytes 6 and 7 correspond to the first release segment as a `u16`.
 /// * Bytes 5, 4 and 3 correspond to the second, third and fourth release
 ///   segments, respectively.
 /// * Bytes 2, 1 and 0 represent *one* of the following:
 ///   `min, .devN, aN, bN, rcN, <no suffix>, local, .postN, max`.
-///   Its representation is thus:
-///   * The most significant 4 bits of Byte 2 corresponds to a value in
-///     the range 0-8 inclusive, corresponding to min, dev, pre-a, pre-b,
-///     pre-rc, no-suffix, post or max releases, respectively. `min` is a
-///     special version that does not exist in PEP 440, but is used here to
-///     represent the smallest possible version, preceding any `dev`, `pre`,
-///     `post` or releases. `max` is an analogous concept for the largest
-///     possible version, following any `post` or local releases.
-///   * The low 4 bits combined with the bits in bytes 1 and 0 correspond
-///     to the release number of the suffix, if one exists. If there is no
-///     suffix, then these bits are always 0.
+///   * The four most significant bits of byte 2 contain a value from 0 through 8. These values
+///     represent min, dev, pre-a, pre-b, pre-rc, no suffix, local, post, and max, respectively.
+///     The internal `min` value sorts before every development, pre-release, post-release, and
+///     final release. The internal `max` value sorts after every post-release and local release.
+///     Neither value exists in PEP 440.
+///   * The four remaining bits of byte 2 and all bits in bytes 1 and 0 contain the suffix release
+///     number. These bits are `0` when no suffix exists.
 ///
-/// The order of the encoding above is significant. For example, suffixes are
-/// encoded at a less significant location than the release numbers, so that
+/// Encoding order matters. Suffixes use less significant bits than release numbers, so
 /// `1.2.3 < 1.2.3.post4`.
 ///
-/// In a previous representation, we tried to encode the suffixes in different
-/// locations so that, in theory, you could represent `1.2.3.dev2.post3` in the
-/// packed form. But getting the ordering right for this is difficult (perhaps
-/// impossible without extra space?). So we limited to only storing one suffix.
-/// But even then, we wound up with a bug where `1.0dev1 > 1.0a1`, when of
-/// course, all dev releases should compare less than pre releases. This was
-/// because the encoding recorded the pre-release as "absent", and this in turn
-/// screwed up the order comparisons.
+/// An earlier representation stored suffixes in separate locations to support versions such as
+/// `1.2.3.dev2.post3`. Preserving the correct order was difficult, so this representation stores
+/// only one suffix. A previous encoding also incorrectly produced `1.0dev1 > 1.0a1` because it
+/// treated the pre-release as absent. Development releases must sort before pre-releases.
 ///
-/// Thankfully, such versions are incredibly rare. Virtually all versions have
-/// zero or one pre, dev or post release components.
+/// Almost all versions have at most one pre-release, development, or post-release component.
 #[derive(Clone, Debug)]
 #[cfg_attr(
     feature = "rkyv",
@@ -1167,32 +1107,28 @@ pub enum BumpCommand {
 )]
 #[cfg_attr(feature = "rkyv", rkyv(derive(Debug, Eq, PartialEq, PartialOrd, Ord)))]
 struct VersionSmall {
-    /// The representation discussed above.
+    /// The packed representation described above.
     repr: u64,
     /// The number of segments in the release component.
     ///
-    /// PEP 440 considers `1.2`  equivalent to `1.2.0.0`, but we want to preserve trailing zeroes
-    /// in roundtrips, as the "full" version representation also does.
+    /// PEP 440 considers `1.2` equivalent to `1.2.0.0`. Preserve trailing zeroes when converting
+    /// to and from strings, as the full representation does.
     len: u8,
-    /// Force a niche into the aligned type so the [`Version`] enum is two words instead of three.
+    /// Adds a niche to the aligned type so [`Version`] uses two words instead of three.
     _force_niche: NonZero<u8>,
 }
 
 impl VersionSmall {
-    // Constants for each suffix kind. They form an enumeration.
+    // Constants for each suffix kind.
     //
-    // The specific values are assigned in a way that provides the suffix kinds
-    // their ordering. i.e., No suffix should sort after a dev suffix but
-    // before a post suffix.
+    // These values define suffix ordering. For example, no suffix sorts after a development
+    // suffix but before a post-release suffix.
     //
-    // The maximum possible suffix value is SUFFIX_KIND_MASK. If you need to
-    // add another suffix value and you're at the max, then the mask must gain
-    // another bit. And adding another bit to the mask will require taking it
-    // from somewhere else. (Usually the suffix version.)
+    // `SUFFIX_KIND_MASK` is the maximum suffix value. Adding a suffix beyond this value requires
+    // another mask bit, usually taken from the suffix version.
     //
-    // NOTE: If you do change the bit format here, you'll need to bump any
-    // cache versions in uv that use rkyv with `Version` in them. That includes
-    // *at least* the "simple" cache.
+    // NOTE: Changing this bit format requires a cache-version update for every rkyv cache that
+    // contains [`Version`], including *at least* the "simple" cache.
     const SUFFIX_MIN: u64 = 0;
     const SUFFIX_DEV: u64 = 1;
     const SUFFIX_PRE_ALPHA: u64 = 2;
@@ -1203,22 +1139,18 @@ impl VersionSmall {
     const SUFFIX_POST: u64 = 7;
     const SUFFIX_MAX: u64 = 8;
 
-    // The mask to get only the release segment bits.
+    // The mask for the release segment bits.
     //
-    // NOTE: If you change the release mask to have more or less bits,
-    // then you'll also need to change `push_release` below and also
+    // NOTE: Changing the number of release mask bits also requires changes to `push_release` and
     // `Parser::parse_fast`.
     const SUFFIX_RELEASE_MASK: u64 = 0xFFFF_FFFF_FF00_0000;
-    // The mask to get the version suffix.
+    // The mask for the version suffix.
     const SUFFIX_VERSION_MASK: u64 = 0x000F_FFFF;
-    // The number of bits used by the version suffix. Shifting the `repr`
-    // right by this number of bits should put the suffix kind in the least
-    // significant bits.
+    // The number of version suffix bits. Shifting `repr` right by this number moves the suffix
+    // kind into the least significant bits.
     const SUFFIX_VERSION_BIT_LEN: u64 = 20;
-    // The mask to get only the suffix kind, after shifting right by the
-    // version bits. If you need to add a bit here, then you'll probably need
-    // to take a bit from the suffix version. (Which requires a change to both
-    // the mask and the bit length above.)
+    // The mask for the suffix kind after shifting past the version bits. Adding a bit usually
+    // requires taking one from the suffix version and updating its mask and bit length.
     const SUFFIX_KIND_MASK: u64 = 0b1111;
 
     #[inline]
@@ -1519,14 +1451,12 @@ impl VersionSmall {
     }
 }
 
-/// The "full" representation of a version.
+/// The full representation of a version.
 ///
-/// This can represent all possible versions, but is a bit beefier because of
-/// it. It also uses some indirection for variable length data such as the
-/// release numbers and the local segments.
+/// Supports every possible version. Variable-length data, such as release numbers and local
+/// segments, requires additional storage and indirection.
 ///
-/// In general, the "full" representation is rarely used in practice since most
-/// versions will fit into the "small" representation.
+/// Most versions fit in the small representation and do not require this form.
 #[derive(Clone, Debug)]
 #[cfg_attr(
     feature = "rkyv",
@@ -1535,33 +1465,31 @@ impl VersionSmall {
 #[cfg_attr(feature = "rkyv", rkyv(derive(Debug, Eq, PartialEq, PartialOrd, Ord)))]
 struct VersionFull {
     /// The [versioning
-    /// epoch](https://peps.python.org/pep-0440/#version-epochs). Normally
-    /// just 0, but you can increment it if you switched the versioning
-    /// scheme.
+    /// epoch](https://peps.python.org/pep-0440/#version-epochs). Usually `0`, but can increase
+    /// after a versioning scheme changes.
     epoch: u64,
     /// The normal number part of the version (["final
-    /// release"](https://peps.python.org/pep-0440/#final-releases)), such
-    /// a `1.2.3` in `4!1.2.3-a8.post9.dev1`
+    /// release"](https://peps.python.org/pep-0440/#final-releases)), such as `1.2.3` in
+    /// `4!1.2.3-a8.post9.dev1`.
     ///
-    /// Note that we drop the * placeholder by moving it to `Operator`
+    /// The [`Operator`] stores any `*` placeholder.
     release: Vec<u64>,
     /// The [prerelease](https://peps.python.org/pep-0440/#pre-releases),
-    /// i.e. alpha, beta or rc plus a number
+    /// such as an alpha, beta, or release candidate with a number.
     ///
-    /// Note that whether this is Some influences the version range
-    /// matching since normally we exclude all pre-release versions
+    /// Its presence affects version-range matching because matching usually excludes pre-releases.
     pre: Option<Prerelease>,
     /// The [Post release
-    /// version](https://peps.python.org/pep-0440/#post-releases), higher
-    /// post version are preferred over lower post or none-post versions
+    /// version](https://peps.python.org/pep-0440/#post-releases). Higher post-release values sort
+    /// after lower values and versions without a post-release.
     post: Option<u64>,
     /// The [developmental
     /// release](https://peps.python.org/pep-0440/#developmental-releases),
-    /// if any
+    /// if present.
     dev: Option<u64>,
     /// A [local version
     /// identifier](https://peps.python.org/pep-0440/#local-version-identifiers)
-    /// such as `+deadbeef` in `1.2.3+deadbeef`
+    /// such as `+deadbeef` in `1.2.3+deadbeef`.
     ///
     /// > They consist of a normal public version identifier (as defined
     /// > in the previous section), along with an arbitrary “local version
@@ -1569,32 +1497,26 @@ struct VersionFull {
     /// > Local version labels have no specific semantics assigned, but
     /// > some syntactic restrictions are imposed.
     ///
-    /// Local versions allow multiple segments separated by periods, such as `deadbeef.1.2.3`, see
-    /// [`LocalSegment`] for details on the semantics.
+    /// Local versions can contain period-separated segments, such as `deadbeef.1.2.3`. See
+    /// [`LocalSegment`] for their semantics.
     local: LocalVersion,
-    /// An internal-only segment that does not exist in PEP 440, used to
-    /// represent the smallest possible version of a release, preceding any
-    /// `dev`, `pre`, `post` or releases.
+    /// An internal segment that sorts before every development, pre-release, post-release, and
+    /// final release. PEP 440 does not define this segment.
     min: Option<u64>,
-    /// An internal-only segment that does not exist in PEP 440, used to
-    /// represent the largest possible version of a release, following any
-    /// `post` or local releases.
+    /// An internal segment that sorts after every post-release and local release. PEP 440 does not
+    /// define this segment.
     max: Option<u64>,
 }
 
 /// A version number pattern.
 ///
-/// A version pattern appears in a
-/// [`VersionSpecifier`](crate::VersionSpecifier). It is just like a version,
-/// except that it permits a trailing `*` (wildcard) at the end of the version
-/// number. The wildcard indicates that any version with the same prefix should
-/// match.
+/// A version pattern appears in a [`VersionSpecifier`](crate::VersionSpecifier). Unlike a version,
+/// it can end with a `*` wildcard. The wildcard matches every version with the same prefix.
 ///
-/// A `VersionPattern` cannot do any matching itself. Instead,
-/// it needs to be paired with an [`Operator`] to create a
-/// [`VersionSpecifier`](crate::VersionSpecifier).
+/// A [`VersionPattern`] cannot match versions by itself. Combine it with an [`Operator`] to create
+/// a [`VersionSpecifier`](crate::VersionSpecifier).
 ///
-/// Here are some valid and invalid examples:
+/// Examples:
 ///
 /// * `1.2.3` -> verbatim pattern
 /// * `1.2.3.*` -> wildcard pattern
@@ -1607,8 +1529,7 @@ pub struct VersionPattern {
 }
 
 impl VersionPattern {
-    /// Creates a new verbatim version pattern that matches the given
-    /// version exactly.
+    /// Creates a verbatim pattern that matches the given version exactly.
     #[inline]
     pub fn verbatim(version: Version) -> Self {
         Self {
@@ -1617,8 +1538,7 @@ impl VersionPattern {
         }
     }
 
-    /// Creates a new wildcard version pattern that matches any version with
-    /// the given version as a prefix.
+    /// Creates a wildcard pattern that matches every version with the given prefix.
     #[inline]
     pub fn wildcard(version: Version) -> Self {
         Self {
@@ -1639,7 +1559,7 @@ impl VersionPattern {
         self.version
     }
 
-    /// Returns true if and only if this pattern contains a wildcard.
+    /// Returns `true` if this pattern contains a wildcard.
     #[inline]
     pub(crate) fn is_wildcard(&self) -> bool {
         self.wildcard
@@ -1656,16 +1576,14 @@ impl FromStr for VersionPattern {
 
 /// Release digits of a [`Version`].
 ///
-/// Lifetime and indexing workaround to allow accessing the release as `&[u64]` even though the
-/// digits may be stored in a compressed representation.
+/// Provides `&[u64]` access even when the release digits use a compressed representation.
 pub struct Release<'a> {
     inner: ReleaseInner<'a>,
 }
 
 enum ReleaseInner<'a> {
-    // The small versions unpacked into larger u64 values.
-    // We're storing at most 4 u64 plus determinant for the duration of the release call on the
-    // stack, without heap allocation.
+    // Unpack small versions into at most four `u64` values on the stack. This avoids a heap
+    // allocation during the release call.
     Small0([u64; 0]),
     Small1([u64; 1]),
     Small2([u64; 2]),
@@ -1703,7 +1621,7 @@ pub struct Prerelease {
     pub number: u64,
 }
 
-/// Optional pre-release modifier (alpha, beta or release candidate) appended to version
+/// A pre-release modifier: alpha, beta, or release candidate.
 ///
 /// <https://peps.python.org/pep-0440/#pre-releases>
 #[derive(PartialEq, Eq, Debug, Hash, Clone, Copy, Ord, PartialOrd)]
@@ -1713,11 +1631,11 @@ pub struct Prerelease {
 )]
 #[cfg_attr(feature = "rkyv", rkyv(derive(Debug, Eq, PartialEq, PartialOrd, Ord)))]
 pub enum PrereleaseKind {
-    /// alpha pre-release
+    /// An alpha pre-release.
     Alpha,
-    /// beta pre-release
+    /// A beta pre-release.
     Beta,
-    /// release candidate pre-release
+    /// A release-candidate pre-release.
     Rc,
 }
 
@@ -1737,8 +1655,8 @@ impl std::fmt::Display for Prerelease {
     }
 }
 
-/// Either a sequence of local segments or [`LocalVersion::Sentinel`], an internal-only value that
-/// compares greater than all other local versions.
+/// Either local version segments or [`LocalVersion::Max`], an internal value that sorts after
+/// every other local version.
 #[derive(Eq, PartialEq, Debug, Clone, Hash)]
 #[cfg_attr(
     feature = "rkyv",
@@ -1748,21 +1666,21 @@ impl std::fmt::Display for Prerelease {
 pub enum LocalVersion {
     /// A sequence of local segments.
     Segments(Vec<LocalSegment>),
-    /// An internal-only value that compares greater to all other local versions.
+    /// An internal value that sorts after every other local version.
     Max,
 }
 
-/// Like [`LocalVersion`], but using a slice
+/// A [`LocalVersion`] that stores its segments as a slice.
 #[derive(Eq, PartialEq, Debug, Clone, Hash)]
 pub enum LocalVersionSlice<'a> {
-    /// Like [`LocalVersion::Segments`]
+    /// The slice form of [`LocalVersion::Segments`].
     Segments(&'a [LocalSegment]),
-    /// Like [`LocalVersion::Sentinel`]
+    /// The slice form of [`LocalVersion::Max`].
     Max,
 }
 
 impl LocalVersion {
-    /// Return an empty local version.
+    /// Returns an empty local version.
     fn empty() -> Self {
         Self::Segments(Vec::new())
     }
@@ -1775,7 +1693,7 @@ impl LocalVersion {
         }
     }
 
-    /// Convert the local version segments into a slice.
+    /// Converts the local version segments into a slice.
     fn as_slice(&self) -> LocalVersionSlice<'_> {
         match self {
             Self::Segments(segments) => LocalVersionSlice::Segments(segments),
@@ -1784,10 +1702,9 @@ impl LocalVersion {
     }
 }
 
-/// Output the local version identifier string.
+/// Displays the local version identifier.
 ///
-/// [`LocalVersionSlice::Max`] maps to `"[max]"` which is otherwise an illegal local
-/// version because `[` and `]` are not allowed.
+/// [`LocalVersionSlice::Max`] maps to `"[max]"`. A valid local version cannot contain `[` or `]`.
 impl std::fmt::Display for LocalVersionSlice<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -1840,7 +1757,7 @@ impl Ord for LocalVersionSlice<'_> {
 }
 
 impl LocalVersionSlice<'_> {
-    /// Return an empty local version.
+    /// Returns an empty local version.
     const fn empty() -> Self {
         Self::Segments(&[])
     }
@@ -1851,9 +1768,9 @@ impl LocalVersionSlice<'_> {
     }
 }
 
-/// A part of the [local version identifier](<https://peps.python.org/pep-0440/#local-version-identifiers>)
+/// A segment of a [local version identifier](<https://peps.python.org/pep-0440/#local-version-identifiers>).
 ///
-/// Local versions are a mess:
+/// PEP 440 defines local version ordering as follows:
 ///
 /// > Comparison and ordering of local versions considers each segment of the local version
 /// > (divided by a .) separately. If a segment consists entirely of ASCII digits then that section
@@ -1865,7 +1782,7 @@ impl LocalVersionSlice<'_> {
 /// > shorter local version’s segments match the beginning of the longer local version’s segments
 /// > exactly.
 ///
-/// Luckily the default `Ord` implementation for `Vec<LocalSegment>` matches the PEP 440 rules.
+/// The default [`Ord`] implementation for `Vec<LocalSegment>` matches these PEP 440 rules.
 #[derive(Eq, PartialEq, Debug, Clone, Hash)]
 #[cfg_attr(
     feature = "rkyv",
@@ -1873,9 +1790,9 @@ impl LocalVersionSlice<'_> {
 )]
 #[cfg_attr(feature = "rkyv", rkyv(derive(Debug, Eq, PartialEq, PartialOrd, Ord)))]
 pub enum LocalSegment {
-    /// Not-parseable as integer segment of local version
+    /// A local version segment that cannot be parsed as an integer.
     String(String),
-    /// Inferred integer segment of local version
+    /// A local version segment parsed as an integer.
     Number(u64),
 }
 
@@ -1921,18 +1838,16 @@ impl Ord for LocalSegment {
     }
 }
 
-/// The state used for [parsing a version][pep440].
+/// The state for [parsing a version][pep440].
 ///
-/// This parses the most "flexible" format of a version as described in the
-/// "normalization" section of PEP 440.
+/// Accepts the flexible version format from the PEP 440 normalization rules.
 ///
-/// This can also parse a version "pattern," which essentially is just like
-/// parsing a version, but permits a trailing wildcard. e.g., `1.2.*`.
+/// Also parses version patterns with a trailing wildcard, such as `1.2.*`.
 ///
 /// [pep440]: https://packaging.python.org/en/latest/specifications/version-specifiers/
 #[derive(Debug)]
 struct Parser<'a> {
-    /// The version string we are parsing.
+    /// The version string to parse.
     v: &'a [u8],
     /// The current position of the parser.
     i: usize,
@@ -1944,23 +1859,22 @@ struct Parser<'a> {
     pre: Option<Prerelease>,
     /// The post-release version, if any.
     post: Option<u64>,
-    /// The dev release, if any.
+    /// The development release, if any.
     dev: Option<u64>,
     /// The local segments, if any.
     local: Vec<LocalSegment>,
-    /// Whether a wildcard at the end of the version was found or not.
+    /// Whether the version ends with a wildcard.
     ///
-    /// This is only valid when a version pattern is being parsed.
+    /// Valid only while parsing a version pattern.
     wildcard: bool,
 }
 
 impl<'a> Parser<'a> {
-    /// The "separators" that are allowed in several different parts of a
-    /// version.
+    /// Separators allowed in multiple version components.
     #[expect(clippy::byte_char_slices)]
     const SEPARATOR: ByteSet = ByteSet::new(&[b'.', b'_', b'-']);
 
-    /// Create a new `Parser` for parsing the version in the given byte string.
+    /// Creates a [`Parser`] for the given version byte string.
     fn new(version: &'a [u8]) -> Self {
         Parser {
             v: version,
@@ -1975,9 +1889,9 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse a verbatim version.
+    /// Parses a verbatim version.
     ///
-    /// If a version pattern is found, then an error is returned.
+    /// Returns an error for a version pattern.
     fn parse(self) -> Result<Version, VersionParseError> {
         match self.parse_pattern() {
             Ok(vpat) => {
@@ -1987,12 +1901,8 @@ impl<'a> Parser<'a> {
                     Ok(vpat.into_version())
                 }
             }
-            // If we get an error when parsing a version pattern, then
-            // usually it will actually just be a VersionParseError.
-            // But if it's specific to version patterns, and since
-            // we are expecting a verbatim version here, we can just
-            // return a generic "wildcards not allowed" error in that
-            // case.
+            // Preserve version parsing errors. Convert pattern-specific errors to the generic
+            // wildcard error because this method expects a verbatim version.
             Err(err) => match *err.kind {
                 PatternErrorKind::Version(err) => Err(err),
                 PatternErrorKind::WildcardNotTrailing => Err(ErrorKind::Wildcard.into()),
@@ -2000,7 +1910,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse a version pattern, which may be a verbatim version.
+    /// Parses a version pattern, which can also be a verbatim version.
     fn parse_pattern(mut self) -> Result<VersionPattern, VersionPatternParseError> {
         if let Some(vpat) = self.parse_fast() {
             return Ok(vpat);
@@ -2025,15 +1935,12 @@ impl<'a> Parser<'a> {
         Ok(self.into_pattern())
     }
 
-    /// Attempts to do a "fast parse" of a version.
+    /// Attempts to parse a common numeric version without the general parser.
     ///
-    /// This looks for versions of the form `w[.x[.y[.z]]]` while
-    /// simultaneously parsing numbers. This format corresponds to the
-    /// overwhelming majority of all version strings and can avoid most of the
-    /// work done in the more general parser.
+    /// Parses versions in the `w[.x[.y[.z]]]` format. Most version strings use this format, which
+    /// avoids most of the work in the general parser.
     ///
-    /// If the version string is not in the format of `w[.x[.y[.z]]]`, then
-    /// this returns `None`.
+    /// Returns `None` when the version does not match that format.
     fn parse_fast(&self) -> Option<VersionPattern> {
         if let [major, b'.', minor, b'.', patch] = self.v {
             let major = major.wrapping_sub(b'0');
@@ -2091,16 +1998,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parses an optional initial epoch number and the first component of the
-    /// release part of a version number. In all cases, the first part of a
-    /// version must be a single number, and if one isn't found, an error is
-    /// returned.
+    /// Parses an optional epoch and the first release component.
     ///
-    /// Upon success, the epoch is possibly set and the release has exactly one
-    /// number in it. The parser will be positioned at the beginning of the
-    /// next component, which is usually a `.`, indicating the start of the
-    /// second number in the release component. It could however point to the
-    /// end of input, in which case, a valid version should be returned.
+    /// Returns an error if the version does not start with a number. On success, the release
+    /// contains one number, and the parser points to the next component or the end of input.
     fn parse_epoch_and_initial_release(&mut self) -> Result<(), VersionPatternParseError> {
         let first_number = self.parse_number()?.ok_or(ErrorKind::NoLeadingNumber)?;
         let first_release_number = if self.bump_if("!") {
@@ -2114,16 +2015,12 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// This parses the rest of the numbers in the release component of
-    /// the version. Upon success, the release part of this parser will be
-    /// completely finished, and the parser will be positioned at the first
-    /// character after the last number in the release component. This position
-    /// may point to a `.`, for example, the second dot in `1.2.*` or `1.2.a5`
-    /// or `1.2.dev5`. It may also point to the end of the input, in which
-    /// case, the caller should return the current version.
+    /// Parses the remaining release numbers.
     ///
-    /// Callers should use this after the initial optional epoch and the first
-    /// release number have been parsed.
+    /// Stops after the last release number. The next character can be a component separator, such
+    /// as the second dot in `1.2.*`, `1.2.a5`, or `1.2.dev5`, or the end of input.
+    ///
+    /// Call this after parsing the optional epoch and first release number.
     fn parse_rest_of_release(&mut self) -> Result<(), VersionPatternParseError> {
         while self.bump_if(".") {
             let Some(n) = self.parse_number()? else {
@@ -2135,14 +2032,12 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// Attempts to parse a trailing wildcard after the numbers in the release
-    /// component. Upon success, this returns `true` and positions the parser
-    /// immediately after the `.*` (which must necessarily be the end of
-    /// input), or leaves it unchanged if no wildcard was found. It is an error
-    /// if a `.*` is found and there is still more input after the `.*`.
+    /// Parses an optional trailing wildcard after the release numbers.
     ///
-    /// Callers should use this immediately after parsing all of the numbers in
-    /// the release component of the version.
+    /// Returns `true` when the input ends with `.*`. Returns `false` without moving the parser
+    /// when no wildcard exists. Returns an error if input follows the wildcard.
+    ///
+    /// Call this immediately after parsing every release number.
     fn parse_wildcard(&mut self) -> Result<bool, VersionPatternParseError> {
         if !self.bump_if(".*") {
             return Ok(false);
@@ -2156,18 +2051,14 @@ impl<'a> Parser<'a> {
 
     /// Parses the pre-release component of a version.
     ///
-    /// If this version has no pre-release component, then this is a no-op.
-    /// Otherwise, it sets `self.pre` and positions the parser to the first
-    /// byte immediately following the pre-release.
+    /// If present, sets `self.pre` and advances past the pre-release. Otherwise, leaves the parser
+    /// unchanged.
     fn parse_pre(&mut self) -> Result<(), VersionPatternParseError> {
-        // SPELLINGS and MAP are in correspondence. SPELLINGS is used to look
-        // for what spelling is used in the version string (if any), and
-        // the index of the element found is used to lookup which type of
-        // pre-release it is.
+        // `SPELLINGS` and `MAP` share the same order. Use the matching spelling index to find the
+        // pre-release kind.
         //
-        // Note also that the order of the strings themselves matters. If 'pre'
-        // were before 'preview' for example, then 'preview' would never match
-        // since the strings are matched in order.
+        // Spelling order matters because strings match in sequence. For example, `preview` must
+        // appear before `pre`.
         const SPELLINGS: StringSet =
             StringSet::new(&["alpha", "beta", "preview", "pre", "rc", "a", "b", "c"]);
         const MAP: &[PrereleaseKind] = &[
@@ -2184,17 +2075,14 @@ impl<'a> Parser<'a> {
         let oldpos = self.i;
         self.bump_if_byte_set(&Parser::SEPARATOR);
         let Some(spelling) = self.bump_if_string_set(&SPELLINGS) else {
-            // We might see a separator (or not) and then something
-            // that isn't a pre-release. At this stage, we can't tell
-            // whether it's invalid or not. So we back-up and let the
-            // caller try something else.
+            // An optional separator can precede a different component. Restore the parser so the
+            // caller can try the next component.
             self.reset(oldpos);
             return Ok(());
         };
         let kind = MAP[spelling];
         self.bump_if_byte_set(&Parser::SEPARATOR);
-        // Under the normalization rules, a pre-release without an
-        // explicit number defaults to `0`.
+        // Normalization defaults a missing pre-release number to `0`.
         let number = self.parse_number()?.unwrap_or(0);
         self.pre = Some(Prerelease { kind, number });
         Ok(())
@@ -2202,9 +2090,8 @@ impl<'a> Parser<'a> {
 
     /// Parses the post-release component of a version.
     ///
-    /// If this version has no post-release component, then this is a no-op.
-    /// Otherwise, it sets `self.post` and positions the parser to the first
-    /// byte immediately following the post-release.
+    /// If present, sets `self.post` and advances past the post-release. Otherwise, leaves the
+    /// parser unchanged.
     fn parse_post(&mut self) -> Result<(), VersionPatternParseError> {
         const SPELLINGS: StringSet = StringSet::new(&["post", "rev", "r"]);
 
@@ -2218,48 +2105,38 @@ impl<'a> Parser<'a> {
         }
         self.bump_if_byte_set(&Parser::SEPARATOR);
         if self.bump_if_string_set(&SPELLINGS).is_none() {
-            // As with pre-releases, if we don't see post|rev|r here, we can't
-            // yet determine whether the version as a whole is invalid since
-            // post-releases are optional.
+            // Post-releases are optional. Restore the parser when no post-release spelling matches.
             self.reset(oldpos);
             return Ok(());
         }
         self.bump_if_byte_set(&Parser::SEPARATOR);
-        // Under the normalization rules, a post-release without an
-        // explicit number defaults to `0`.
+        // Normalization defaults a missing post-release number to `0`.
         self.post = Some(self.parse_number()?.unwrap_or(0));
         Ok(())
     }
 
-    /// Parses the dev-release component of a version.
+    /// Parses the development-release component of a version.
     ///
-    /// If this version has no dev-release component, then this is a no-op.
-    /// Otherwise, it sets `self.dev` and positions the parser to the first
-    /// byte immediately following the post-release.
+    /// If present, sets `self.dev` and advances past the development release. Otherwise, leaves
+    /// the parser unchanged.
     fn parse_dev(&mut self) -> Result<(), VersionPatternParseError> {
         let oldpos = self.i;
         self.bump_if_byte_set(&Parser::SEPARATOR);
         if !self.bump_if("dev") {
-            // As with pre-releases, if we don't see dev here, we can't
-            // yet determine whether the version as a whole is invalid
-            // since dev-releases are optional.
+            // Development releases are optional. Restore the parser when `dev` does not match.
             self.reset(oldpos);
             return Ok(());
         }
         self.bump_if_byte_set(&Parser::SEPARATOR);
-        // Under the normalization rules, a post-release without an
-        // explicit number defaults to `0`.
+        // Normalization defaults a missing development-release number to `0`.
         self.dev = Some(self.parse_number()?.unwrap_or(0));
         Ok(())
     }
 
     /// Parses the local component of a version.
     ///
-    /// If this version has no local component, then this is a no-op.
-    /// Otherwise, it adds to `self.local` and positions the parser to the
-    /// first byte immediately following the local component. (Which ought to
-    /// be the end of the version since the local component is the last thing
-    /// that can appear in a version.)
+    /// If present, updates `self.local` and advances past the local component. Otherwise, leaves
+    /// the parser unchanged. A local component must be the final version component.
     fn parse_local(&mut self) -> Result<(), VersionPatternParseError> {
         if !self.bump_if("+") {
             return Ok(());
@@ -2285,24 +2162,19 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// Consumes input from the current position while the characters are ASCII
-    /// digits, and then attempts to parse what was consumed as a decimal
-    /// number.
+    /// Consumes consecutive ASCII digits and parses them as a decimal number.
     ///
-    /// If nothing was consumed, then `Ok(None)` is returned. Otherwise, if the
-    /// digits consumed do not form a valid decimal number that fits into a
-    /// `u64`, then an error is returned.
+    /// Returns `Ok(None)` when no digits exist. Returns an error when the number does not fit in a
+    /// `u64`.
     fn parse_number(&mut self) -> Result<Option<u64>, VersionPatternParseError> {
         let digits = self.bump_while(|ch| ch.is_ascii_digit());
         if digits.is_empty() {
             return Ok(None);
         }
         let n = parse_u64(digits)?;
-        // Reject `u64::MAX` to prevent arithmetic overflow in downstream code
-        // that computes `segment + 1` (e.g., `~=` upper bound, `==*` upper
-        // bound, `python_version` marker algebra). This only applies to version
-        // segments (release, epoch, pre/post/dev), not local version segments
-        // which don't undergo arithmetic.
+        // Reject `u64::MAX` to prevent overflow when downstream code computes `segment + 1`, such
+        // as `~=` upper bounds, `==*` upper bounds, and `python_version` marker algebra. This
+        // applies to release, epoch, and pre/post/dev segments, but not local segments.
         if n == u64::MAX {
             return Err(ErrorKind::NumberTooBig {
                 bytes: digits.to_vec(),
@@ -2312,13 +2184,11 @@ impl<'a> Parser<'a> {
         Ok(Some(n))
     }
 
-    /// Turns whatever state has been gathered into a `VersionPattern`.
+    /// Converts the current parser state into a [`VersionPattern`].
     ///
     /// # Panics
     ///
-    /// When `self.release` is empty. Callers must ensure at least one part
-    /// of the release component has been successfully parsed. Otherwise, the
-    /// version itself is invalid.
+    /// When `self.release` is empty. A valid version requires at least one release component.
     fn into_pattern(self) -> VersionPattern {
         assert!(
             self.release.len() > 0,
@@ -2336,12 +2206,9 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Consumes input from this parser while the given predicate returns true.
-    /// The resulting input (which may be empty) is returned.
+    /// Consumes and returns input while the given predicate returns `true`.
     ///
-    /// Once returned, the parser is positioned at the first position where the
-    /// predicate returns `false`. (This may be the position at the end of the
-    /// input such that [`Parser::is_done`] returns `true`.)
+    /// Stops at the first byte that fails the predicate or at the end of the input.
     fn bump_while(&mut self, mut predicate: impl FnMut(u8) -> bool) -> &'a [u8] {
         let start = self.i;
         while !self.is_done() && predicate(self.byte()) {
@@ -2350,10 +2217,9 @@ impl<'a> Parser<'a> {
         &self.v[start..self.i]
     }
 
-    /// Consumes `bytes.len()` bytes from the current position of the parser if
-    /// and only if `bytes` is a prefix of the input starting at the current
-    /// position. Otherwise, this is a no-op. Returns true when consumption was
-    /// successful.
+    /// Consumes the given string if it matches the input at the current position.
+    ///
+    /// Returns `true` when the string matches. Otherwise, leaves the parser unchanged.
     fn bump_if(&mut self, string: &str) -> bool {
         if self.is_done() {
             return false;
@@ -2369,9 +2235,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Like [`Parser::bump_if`], but attempts each string in the ordered set
-    /// given. If one is successfully consumed from the start of the current
-    /// position in the input, then it is returned.
+    /// Consumes the first matching string from the ordered set and returns its index.
     fn bump_if_string_set(&mut self, set: &StringSet) -> Option<usize> {
         let index = set.starts_with(&self.v[self.i..])?;
         let found = &set.strings[index];
@@ -2382,9 +2246,7 @@ impl<'a> Parser<'a> {
         Some(index)
     }
 
-    /// Like [`Parser::bump_if`], but attempts each byte in the set
-    /// given. If one is successfully consumed from the start of the
-    /// current position in the input.
+    /// Consumes and returns the current byte if it belongs to the given set.
     fn bump_if_byte_set(&mut self, set: &ByteSet) -> Option<u8> {
         let found = set.starts_with(&self.v[self.i..])?;
         self.i = self
@@ -2394,10 +2256,9 @@ impl<'a> Parser<'a> {
         Some(found)
     }
 
-    /// Moves the parser back one byte. i.e., ungetch.
+    /// Moves the parser back by one byte.
     ///
-    /// This is useful when one has bumped the parser "too far" and wants to
-    /// back-up. This tends to help with composition among parser routines.
+    /// Use this when a parsing routine advances past the intended position.
     ///
     /// # Panics
     ///
@@ -2425,15 +2286,15 @@ impl<'a> Parser<'a> {
         self.v[self.i]
     }
 
-    /// Returns true if and only if there is no more input to consume.
+    /// Returns `true` if no input remains.
     fn is_done(&self) -> bool {
         self.i >= self.v.len()
     }
 }
 
-/// Stores the numbers found in the release portion of a version.
+/// Stores the release numbers of a version.
 ///
-/// We use this in the version parser to avoid allocating in the 90+% case.
+/// Avoids heap allocation for more than 90% of parsed versions.
 #[derive(Debug)]
 enum ReleaseNumbers {
     Inline { numbers: [u64; 4], len: usize },
@@ -2441,7 +2302,7 @@ enum ReleaseNumbers {
 }
 
 impl ReleaseNumbers {
-    /// Create a new empty set of release numbers.
+    /// Creates an empty set of release numbers.
     fn new() -> Self {
         Self::Inline {
             numbers: [0; 4],
@@ -2449,8 +2310,7 @@ impl ReleaseNumbers {
         }
     }
 
-    /// Push a new release number. This automatically switches over to the heap
-    /// when the lengths grow too big.
+    /// Adds a release number and switches to heap storage when the inline capacity is full.
     fn push(&mut self, n: u64) {
         match *self {
             Self::Inline {
@@ -2487,21 +2347,18 @@ impl ReleaseNumbers {
     }
 }
 
-/// Represents a set of strings for prefix searching.
+/// A set of strings for prefix searches.
 ///
-/// This can be built as a constant and is useful for quickly looking for one
-/// of a number of matching literal strings while ignoring ASCII case.
+/// Supports constant construction and case-insensitive ASCII matching.
 struct StringSet {
-    /// A set of the first bytes of each string in this set. We use this to
-    /// quickly bail out of searching if the first byte of our haystack doesn't
-    /// match any element in this set.
+    /// The first byte of each string. Rejects inputs that cannot match any prefix.
     first_byte: ByteSet,
     /// The strings in this set. They are matched in order.
     strings: &'static [&'static str],
 }
 
 impl StringSet {
-    /// Create a new string set for prefix searching from the given strings.
+    /// Creates a prefix-search set from the given strings.
     ///
     /// # Panics
     ///
@@ -2529,8 +2386,7 @@ impl StringSet {
         }
     }
 
-    /// Returns the index of the first string in this set that is a prefix of
-    /// the given haystack, or `None` if no elements are a prefix.
+    /// Returns the index of the first string that matches the given input prefix.
     fn starts_with(&self, haystack: &[u8]) -> Option<usize> {
         let first_byte = self.first_byte.starts_with(haystack)?;
         for (i, &string) in self.strings.iter().enumerate() {
@@ -2545,13 +2401,13 @@ impl StringSet {
     }
 }
 
-/// A set of bytes for searching case insensitively (ASCII only).
+/// A byte set for case-insensitive ASCII searches.
 struct ByteSet {
     set: [bool; 256],
 }
 
 impl ByteSet {
-    /// Create a new byte set for searching from the given bytes.
+    /// Creates a search set from the given bytes.
     const fn new(bytes: &[u8]) -> Self {
         let mut set = [false; 256];
         let mut i = 0;
@@ -2563,8 +2419,7 @@ impl ByteSet {
         Self { set }
     }
 
-    /// Returns the first byte in the haystack if and only if that byte is in
-    /// this set (ignoring ASCII case).
+    /// Returns the first input byte if it belongs to this case-insensitive ASCII set.
     fn starts_with(&self, haystack: &[u8]) -> Option<u8> {
         let byte = *haystack.first()?;
         if self.contains(byte) {
@@ -2574,7 +2429,7 @@ impl ByteSet {
         }
     }
 
-    /// Returns true if and only if the given byte is in this set.
+    /// Returns `true` if the given byte belongs to this set.
     fn contains(&self, byte: u8) -> bool {
         self.set[usize::from(byte)]
     }
@@ -2663,41 +2518,35 @@ impl std::fmt::Display for VersionParseError {
     }
 }
 
-/// The kind of error that occurs when parsing a `Version`.
+/// An error that can occur while parsing a [`Version`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ErrorKind {
-    /// Occurs when a version pattern is found but a normal verbatim version is
-    /// expected.
+    /// A wildcard pattern appears where a verbatim version is required.
     Wildcard,
-    /// Occurs when an ASCII digit was expected, but something else was found.
+    /// A non-digit appears where an ASCII digit is required.
     InvalidDigit {
-        /// The (possibly non-ASCII) byte that was seen instead of [0-9].
+        /// The unexpected byte, which can be non-ASCII.
         got: u8,
     },
-    /// Occurs when a number was found that exceeds what can fit into a u64.
+    /// A number exceeds the range of a `u64`.
     NumberTooBig {
-        /// The bytes that were being parsed as a number. These may contain
-        /// invalid digits or even invalid UTF-8.
+        /// The number bytes, which can contain invalid digits or invalid UTF-8.
         bytes: Vec<u8>,
     },
-    /// Occurs when a version does not start with a leading number.
+    /// A version does not start with a number.
     NoLeadingNumber,
-    /// Occurs when an epoch version does not have a number after the `!`.
+    /// An epoch has no release number after `!`.
     NoLeadingReleaseNumber,
-    /// Occurs when a `+` (or a `.` after the first local segment) is seen
-    /// (indicating a local component of a version), but no alphanumeric ASCII
-    /// string is found following it.
+    /// A local version separator has no following alphanumeric ASCII segment.
     LocalEmpty {
-        /// Either a `+` or a `[-_.]` indicating what was found that demands a
-        /// non-empty local segment following it.
+        /// The `+` or `[-_.]` separator that requires a non-empty local segment.
         precursor: char,
     },
-    /// Occurs when a version has been parsed but there is some unexpected
-    /// trailing data in the string.
+    /// Unexpected input follows an otherwise valid version.
     UnexpectedEnd {
-        /// The version that has been parsed so far.
+        /// The parsed version.
         version: String,
-        /// The bytes that were remaining and not parsed.
+        /// The remaining unparsed input.
         remaining: String,
     },
 }
@@ -2729,7 +2578,7 @@ impl std::fmt::Display for VersionPatternParseError {
     }
 }
 
-/// The kind of error that occurs when parsing a `VersionPattern`.
+/// An error that can occur while parsing a [`VersionPattern`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PatternErrorKind {
     Version(VersionParseError),
@@ -2758,8 +2607,7 @@ impl From<VersionParseError> for VersionPatternParseError {
     }
 }
 
-/// Compare the release parts of two versions, e.g. `4.3.1` > `4.2`, `1.1.0` ==
-/// `1.1` and `1.16` < `1.19`
+/// Compares release components, such as `4.3.1 > 4.2`, `1.1.0 == 1.1`, and `1.16 < 1.19`.
 pub(crate) fn compare_release(this: &[u64], other: &[u64]) -> Ordering {
     if this.len() == other.len() {
         return this.cmp(other);
@@ -2785,34 +2633,31 @@ pub(crate) fn compare_release(this: &[u64], other: &[u64]) -> Ordering {
     Ordering::Equal
 }
 
-/// Compare the parts attached after the release, given equal release
+/// Orders suffixes when two versions have the same release component.
 ///
-/// According to [a summary of permitted suffixes and relative
-/// ordering][pep440-suffix-ordering] the order of pre/post-releases is: .devN,
-/// aN, bN, rcN, <no suffix (final)>, .postN but also, you can have dev/post
-/// releases on beta releases, so we make a three stage ordering: ({min: 0,
-/// dev: 1, a: 2, b: 3, rc: 4, (): 5, post: 6}, <preN>, <postN or None as
-/// smallest>, <devN or Max as largest>, <local>)
+/// The [PEP 440 suffix ordering][pep440-suffix-ordering] is `.devN`, `aN`, `bN`, `rcN`, no
+/// suffix, and `.postN`. Development and post-release suffixes can also occur on pre-releases.
+/// Represent this with the tuple `({min: 0, dev: 1, a: 2, b: 3, rc: 4, (): 5, post: 6}, <preN>,
+/// <postN or None as smallest>, <devN or Max as largest>, <local>)`.
 ///
-/// For post, any number is better than none (so None defaults to None<0),
-/// but for dev, no number is better (so None default to the maximum). For
-/// local the Option<Vec<T>> luckily already has the correct default Ord
-/// implementation
+/// A post-release number sorts after no post-release. A missing development number sorts after
+/// every development number. The default [`Ord`] implementation already orders local segments
+/// correctly.
 ///
 /// [pep440-suffix-ordering]: https://peps.python.org/pep-0440/#summary-of-permitted-suffixes-and-relative-ordering
 fn sortable_tuple(version: &Version) -> (u64, u64, Option<u64>, u64, LocalVersionSlice<'_>) {
-    // If the version is a "max" version, use a post version larger than any possible post version.
+    // For a `max` version, use a post-release value larger than every valid post-release.
     let post = if version.max().is_some() {
         Some(u64::MAX)
     } else {
         version.post()
     };
     match (version.pre(), post, version.dev(), version.min()) {
-        // min release
+        // Minimum release.
         (_pre, post, _dev, Some(n)) => (0, 0, post, n, version.local()),
-        // dev release
+        // Development release.
         (None, None, Some(n), None) => (1, 0, None, n, version.local()),
-        // alpha release
+        // Alpha release.
         (
             Some(Prerelease {
                 kind: PrereleaseKind::Alpha,
@@ -2822,7 +2667,7 @@ fn sortable_tuple(version: &Version) -> (u64, u64, Option<u64>, u64, LocalVersio
             dev,
             None,
         ) => (2, n, post, dev.unwrap_or(u64::MAX), version.local()),
-        // beta release
+        // Beta release.
         (
             Some(Prerelease {
                 kind: PrereleaseKind::Beta,
@@ -2832,7 +2677,7 @@ fn sortable_tuple(version: &Version) -> (u64, u64, Option<u64>, u64, LocalVersio
             dev,
             None,
         ) => (3, n, post, dev.unwrap_or(u64::MAX), version.local()),
-        // alpha release
+        // Release candidate.
         (
             Some(Prerelease {
                 kind: PrereleaseKind::Rc,
@@ -2842,36 +2687,29 @@ fn sortable_tuple(version: &Version) -> (u64, u64, Option<u64>, u64, LocalVersio
             dev,
             None,
         ) => (4, n, post, dev.unwrap_or(u64::MAX), version.local()),
-        // final release
+        // Final release.
         (None, None, None, None) => (5, 0, None, 0, version.local()),
-        // post release
+        // Post-release.
         (None, Some(post), dev, None) => {
             (6, 0, Some(post), dev.unwrap_or(u64::MAX), version.local())
         }
     }
 }
 
-/// Returns true only when, ignoring ASCII case, `needle` is a prefix of
-/// `haystack`.
+/// Returns `true` if `needle` is a prefix of `haystack`, ignoring ASCII case.
 fn starts_with_ignore_ascii_case(needle: &[u8], haystack: &[u8]) -> bool {
     needle.len() <= haystack.len()
         && std::iter::zip(needle, haystack).all(|(b1, b2)| b1.eq_ignore_ascii_case(b2))
 }
 
-/// Parses a u64 number from the given slice of ASCII digit characters.
+/// Parses a `u64` from ASCII digits.
 ///
-/// If any byte in the given slice is not [0-9], then this returns an error.
-/// Similarly, if the number parsed does not fit into a `u64`, then this
-/// returns an error.
+/// Returns an error if any byte is not an ASCII digit or the number does not fit in a `u64`.
 ///
 /// # Motivation
 ///
-/// We hand-write this for a couple reasons. Firstly, the standard library's
-/// `FromStr` impl for parsing integers requires UTF-8 validation first. We
-/// don't need that for version parsing since we stay in the realm of ASCII.
-/// Secondly, std's version is a little more flexible because it supports
-/// signed integers. So for example, it permits a leading `+` before the actual
-/// integer. We don't need that for version parsing.
+/// The standard integer parser requires UTF-8 validation and accepts a leading `+`. Version
+/// parsing needs neither behavior because it accepts only unsigned ASCII digits.
 fn parse_u64(bytes: &[u8]) -> Result<u64, VersionParseError> {
     let mut n: u64 = 0;
     for &byte in bytes {
