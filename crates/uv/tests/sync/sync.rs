@@ -1,10 +1,12 @@
-use anyhow::{Result, anyhow};
+use std::sync::LazyLock;
+
+use anyhow::{Context, Result, anyhow};
 use assert_cmd::prelude::*;
 use assert_fs::{fixture::ChildPath, prelude::*};
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
-use serde_json::json;
+use serde_json::{Value, json};
 #[cfg(feature = "test-git")]
 use std::process::Command;
 use tempfile::tempdir_in;
@@ -14,9 +16,113 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_fs::Simplified;
 use uv_static::EnvVars;
+use uv_test::json_schema::JsonSchema;
 use uv_test::packse::PackseServer;
 
 use uv_test::{TestContext, download_to_disk, uv_snapshot, venv_bin_path};
+
+static SYNC_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> = LazyLock::new(|| {
+    JsonSchema::new(include_str!(
+        "../../../../docs/reference/internals/sync.schema.json"
+    ))
+    .map_err(|error| error.to_string())
+});
+
+fn parse_sync_report(contents: &[u8]) -> Result<Value> {
+    SYNC_SCHEMA
+        .as_ref()
+        .map_err(|error| anyhow!("invalid sync schema: {error}"))?
+        .parse(contents)
+        .context("sync schema mismatch")
+}
+
+macro_rules! sync_json_snapshot {
+    ($($args:tt)*) => {{
+        let output = uv_snapshot!($($args)*);
+        // `uv sync --check` can return a report with an unsuccessful exit status.
+        if !output.stdout.is_empty() {
+            let result = parse_sync_report(&output.stdout);
+            assert!(result.is_ok(), "sync schema mismatch: {result:?}");
+        }
+        output
+    }};
+}
+
+#[test]
+fn sync_json_schema_rejects_invalid_output() -> Result<()> {
+    let report = json!({
+        "schema": {"version": "preview"},
+        "target": "project",
+        "project": {"path": "/project", "workspace": {"path": "/project"}},
+        "sync": {
+            "environment": {
+                "path": "/project/.venv",
+                "python": {
+                    "path": "/project/.venv/bin/python",
+                    "version": "3.12.14",
+                    "implementation": "cpython",
+                    "key": "cpython-3.12.14-linux-x86_64-gnu"
+                }
+            },
+            "action": "check",
+            "changes": [{"name": "example", "version": "1.0", "action": "installed"}]
+        },
+        "lock": {"path": "/project/uv.lock", "action": "use"},
+        "dry_run": false
+    });
+    parse_sync_report(&serde_json::to_vec(&report)?)?;
+
+    let mut invalid = report.clone();
+    invalid["schema"]["version"] = json!(1);
+    assert!(parse_sync_report(&serde_json::to_vec(&invalid)?).is_err());
+
+    let mut invalid = report.clone();
+    invalid["dry_run"] = json!("false");
+    assert!(parse_sync_report(&serde_json::to_vec(&invalid)?).is_err());
+
+    let mut invalid = report.clone();
+    invalid["sync"]["action"] = json!("remove");
+    assert!(parse_sync_report(&serde_json::to_vec(&invalid)?).is_err());
+
+    for version in [json!(1), Value::Null] {
+        let mut invalid = report.clone();
+        invalid["sync"]["changes"][0]["version"] = version;
+        assert!(parse_sync_report(&serde_json::to_vec(&invalid)?).is_err());
+    }
+
+    let mut without_version = report.clone();
+    without_version["sync"]["changes"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("version");
+    parse_sync_report(&serde_json::to_vec(&without_version)?)?;
+
+    let mut invalid = report.clone();
+    invalid["sync"]["environment"]["python"]
+        .as_object_mut()
+        .unwrap()
+        .remove("key");
+    assert!(parse_sync_report(&serde_json::to_vec(&invalid)?).is_err());
+
+    let mut invalid = report.clone();
+    invalid["project"] = Value::Null;
+    assert!(parse_sync_report(&serde_json::to_vec(&invalid)?).is_err());
+
+    let mut invalid = report.clone();
+    invalid.as_object_mut().unwrap().remove("lock");
+    assert!(parse_sync_report(&serde_json::to_vec(&invalid)?).is_err());
+
+    let mut script = report;
+    script.as_object_mut().unwrap().remove("project");
+    script["target"] = json!("script");
+    script["script"] = json!({"path": "/project/script.py"});
+    script["lock"] = Value::Null;
+    parse_sync_report(&serde_json::to_vec(&script)?)?;
+    script["script"] = Value::Null;
+    assert!(parse_sync_report(&serde_json::to_vec(&script)?).is_err());
+
+    Ok(())
+}
 
 #[test]
 fn sync() -> Result<()> {
@@ -753,7 +859,7 @@ fn sync_json_python_key() -> Result<()> {
         ])
         .assert()
         .success();
-    let report: serde_json::Value = serde_json::from_slice(&report.get_output().stdout)?;
+    let report = parse_sync_report(&report.get_output().stdout)?;
     let key = report["sync"]["environment"]["python"]["key"]
         .as_str()
         .ok_or_else(|| anyhow!("sync report has no Python installation key"))?;
@@ -796,7 +902,7 @@ fn sync_json() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.sync()
+    sync_json_snapshot!(context.filters(), context.sync()
         .arg("--output-format").arg("json"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
@@ -846,7 +952,7 @@ fn sync_json() -> Result<()> {
 
     assert!(context.temp_dir.child("uv.lock").exists());
 
-    uv_snapshot!(context.filters(), context.sync()
+    sync_json_snapshot!(context.filters(), context.sync()
         .arg("--frozen")
         .arg("--output-format").arg("json"), @r#"
     exit_code: 0 (success)
@@ -886,7 +992,7 @@ fn sync_json() -> Result<()> {
     Checked 1 package in [TIME]
     "#);
 
-    uv_snapshot!(context.filters(), context.sync()
+    sync_json_snapshot!(context.filters(), context.sync()
         .arg("--locked")
         .arg("--output-format").arg("json"), @r#"
     exit_code: 0 (success)
@@ -939,7 +1045,7 @@ fn sync_json() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.sync()
+    sync_json_snapshot!(context.filters(), context.sync()
         .arg("--locked")
         .arg("--output-format").arg("json"), @"
     exit_code: 1 (failure)
@@ -951,7 +1057,7 @@ fn sync_json() -> Result<()> {
     ");
 
     // Test that JSON output is shown even with --quiet flag
-    uv_snapshot!(context.filters(), context.sync()
+    sync_json_snapshot!(context.filters(), context.sync()
         .arg("--quiet")
         .arg("--frozen")
         .arg("--output-format").arg("json"), @r#"
@@ -1010,7 +1116,7 @@ fn sync_json_check_outdated_environment() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.sync()
+    sync_json_snapshot!(context.filters(), context.sync()
         .arg("--check")
         .arg("--output-format").arg("json"), @r#"
     exit_code: 1 (failure)
@@ -1083,7 +1189,7 @@ fn sync_dry_json() -> Result<()> {
     )?;
 
     // Running `uv sync` should report intent to create the environment and lockfile
-    uv_snapshot!(context.filters(), context.sync()
+    sync_json_snapshot!(context.filters(), context.sync()
         .arg("--output-format").arg("json")
         .arg("--dry-run"), @r#"
     exit_code: 0 (success)
@@ -7294,7 +7400,7 @@ fn sync_active_script_environment_json() -> Result<()> {
     })?;
 
     // Running `uv sync --script` with `VIRTUAL_ENV` should warn
-    uv_snapshot!(context.filters(), context.sync()
+    sync_json_snapshot!(context.filters(), context.sync()
         .arg("--script").arg("script.py")
         .arg("--output-format").arg("json")
         .env(EnvVars::VIRTUAL_ENV, "foo"), @r#"
@@ -7357,7 +7463,7 @@ fn sync_active_script_environment_json() -> Result<()> {
         .assert(predicate::path::missing());
 
     // Using `--active` should create the environment
-    uv_snapshot!(context.filters(), context.sync()
+    sync_json_snapshot!(context.filters(), context.sync()
         .arg("--script").arg("script.py")
         .arg("--output-format").arg("json")
         .env(EnvVars::VIRTUAL_ENV, "foo").arg("--active"), @r#"
@@ -7427,7 +7533,7 @@ fn sync_active_script_environment_json() -> Result<()> {
     ");
 
     // Requesting another Python version will invalidate the environment
-    uv_snapshot!(context.filters(), context.sync()
+    sync_json_snapshot!(context.filters(), context.sync()
         .arg("--script").arg("script.py")
         .arg("--output-format").arg("json")
         .env(EnvVars::VIRTUAL_ENV, "foo")
