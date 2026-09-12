@@ -12,6 +12,7 @@ use std::fmt::Formatter;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 
 use glob::Pattern;
 use rustc_hash::{FxBuildHasher, FxHashSet};
@@ -38,6 +39,7 @@ use uv_toml::deserialize_unique_map;
 
 pub use source::PyProjectTomlSource;
 
+mod cache;
 mod source;
 
 #[derive(Error, Debug)]
@@ -94,9 +96,22 @@ pub struct PyProjectToml {
 }
 
 impl PyProjectToml {
+    /// The largest source admitted to the optional process cache.
+    #[doc(hidden)]
+    pub const PROCESS_CACHE_MAX_ENTRY_BYTES: usize = cache::MAX_ENTRY_BYTES;
+
     /// Parse a `PyProjectToml` from a raw TOML string.
     #[instrument("toml::from_str workspace", skip_all, fields(path = %_path.as_ref().display()))]
     pub fn from_string(raw: String, _path: impl AsRef<Path>) -> Result<Self, PyprojectTomlError> {
+        if cache::is_enabled() && cache::accepts(&raw) {
+            if let Some(source) = cache::get(&raw) {
+                return source.deserialize();
+            }
+            let source = Arc::new(PyProjectTomlSource::parse(raw)?);
+            cache::insert(&source);
+            return source.deserialize();
+        }
+
         let pyproject: Self = match toml::from_str(&raw) {
             Ok(pyproject) => pyproject,
             Err(error) => {
@@ -114,6 +129,32 @@ impl PyProjectToml {
         };
 
         Ok(Self { raw, ..pyproject })
+    }
+
+    /// Enable bounded reuse of context-free project-manifest syntax in this process.
+    #[doc(hidden)]
+    pub fn enable_process_cache() {
+        cache::enable();
+    }
+
+    /// Observe exact-source lookups after releasing the cache's mutex.
+    ///
+    /// The second argument is true for a hit and false for newly admitted syntax.
+    #[doc(hidden)]
+    pub fn observe_process_cache(observer: fn(&str, bool)) {
+        cache::observe(observer);
+    }
+
+    /// Retain syntax without interpreting any invocation-dependent manifest fields.
+    #[doc(hidden)]
+    pub fn warm_process_cache(raw: String) -> Result<(), toml::de::Error> {
+        cache::warm(raw)
+    }
+
+    /// Return the number of retained syntax trees and their total source size.
+    #[doc(hidden)]
+    pub fn process_cache_stats() -> (usize, usize) {
+        cache::stats()
     }
 
     /// Returns `true` if the project should be considered a Python package, as opposed to a

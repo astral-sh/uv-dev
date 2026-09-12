@@ -31,12 +31,13 @@ point is not reentrant. A long-running server must not call that entry point rep
 changing environments.
 
 The initial implementation is a single-threaded fork server. It starts from a fresh executable,
-before any uv command initialization, and only handles local requests and parses lockfiles. It keeps
-parsed `Lock` values and their marker interner in memory. For each command it forks a new worker,
-which inherits those values through copy-on-write, restores the caller's process context, and enters
-the normal uv implementation exactly once. The parent never starts Tokio, Rayon, HTTP clients,
-Python, builds, or project hooks. Jemalloc background threads are disabled in the parent, and the
-kernel-reported thread count is checked before each fork.
+before any uv command initialization, and only handles local requests and parses source text. It
+keeps parsed `Lock` values, their marker interner, and context-free project-manifest syntax in
+memory. For each command it forks a new worker, which inherits those values through copy-on-write,
+restores the caller's process context, and enters the normal uv implementation exactly once. The
+parent never starts Tokio, Rayon, HTTP clients, Python, builds, or project hooks. Jemalloc
+background threads are disabled in the parent, and the kernel-reported thread count is checked
+before each fork.
 
 The daemon is session-scoped because a Unix process can only join a process group in its own
 session. The worker joins the caller's process group, so terminal-generated signals and job control
@@ -87,6 +88,35 @@ overflow and replacement, and revalidate content before publishing a new snapsho
 workspace discovery additionally requires tracking all consulted `pyproject.toml`, `uv.toml`, member
 globs, missing paths, and configuration/environment inputs. No watcher optimization may silently
 weaken the content-based validity contract.
+
+## Project-manifest validity
+
+`PyProjectTomlSource` retains the TOML parser's original value types, source text, and diagnostic
+spans. The process cache uses the exact source bytes as its key. Every reader still reads the
+manifest, then deserializes a fresh `PyProjectToml` in its own invocation. Environment expansion,
+relative URLs, file-type checks, time-sensitive settings, and project validation are therefore not
+reused across requests. Valid syntax may be retained even when typed validation fails; the next
+reader evaluates that validation again. Syntax errors and filesystem read errors follow the normal
+command path. The per-invocation `WorkspaceCache` and its mutation/invalidation rules are unchanged.
+
+The syntax cache admits at most 16,384 entries and 32 MiB of source text, with a 256 KiB limit per
+manifest and oldest-entry eviction. These are admission limits, not a bound on syntax-tree heap
+allocations or the cost of forking a populated parent. Larger manifests use the ordinary parser.
+
+Workers queue source observations without doing socket I/O in parser callbacks. The queue is bounded
+to 8,192 sources and 8 MiB; transfer batches contain at most 256 sources and 1 MiB of text in a
+separately bounded 2 MiB frame. Checkpoints after settings discovery, before an external command is
+spawned, and at normal invocation completion make those sources available to later workers. The
+final checkpoint closes the observer before draining it. Transfers are best effort, have a
+one-second flush budget, and are not retried after an ambiguous acknowledgment. A parent accepts
+batches only from its active worker PIDs and checks its batch deadline between source parses. It
+never lowers project fields or starts an additional thread while warming this cache.
+
+`cached_manifests` and `cached_manifest_source_bytes` describe retained syntax, not RSS.
+`manifest_cache_hits` counts reported exact-source lookups, including reuse within one worker; it is
+not exclusively a cross-invocation hit count. `manifest_cache_dropped` counts known source
+observations omitted while queueing or warming the parent. It excludes oversized manifests that
+bypass admission and observations lost with an interrupted worker or unacknowledged transfer.
 
 ## Protocol and lifecycle
 

@@ -1293,6 +1293,8 @@ pub(crate) async fn run(
         })?;
     }
 
+    crate::daemon::flush_process_caches();
+
     // Spawn and wait for completion
     // Standard input, output, and error streams are all inherited
     // TODO(zanieb): Throw a nicer error message if the command is not found
