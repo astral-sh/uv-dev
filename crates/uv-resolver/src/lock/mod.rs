@@ -3916,10 +3916,7 @@ impl Package {
             PackageMetadata::default()
         } else {
             PackageMetadata::from_distribution(
-                annotated_dist
-                    .metadata
-                    .as_ref()
-                    .expect("metadata is present"),
+                annotated_dist.metadata().expect("metadata is present"),
                 root,
             )?
         };
@@ -4813,8 +4810,7 @@ impl PackageId {
         // Omit versions for dynamic source trees.
         let version = if source.is_source_tree()
             && annotated_dist
-                .metadata
-                .as_ref()
+                .metadata()
                 .is_some_and(|metadata| metadata.dynamic)
         {
             None
