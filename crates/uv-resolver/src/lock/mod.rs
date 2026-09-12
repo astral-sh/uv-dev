@@ -630,6 +630,12 @@ impl<'a> LockedDependencyBuilder<'a> {
             self.parent_marker,
             marker,
         );
+        // An edge can be unreachable after restricting it to the parent and resolution
+        // environments. Refreshed declarations omit these edges, so retaining one would make a
+        // freshly resolved lockfile fail its own canonical check.
+        if simplified_marker.as_simplified_marker_tree().is_false() {
+            return;
+        }
         let dependency =
             Dependency::new(self.requires_python, package_id, extras, simplified_marker);
 
@@ -8197,6 +8203,55 @@ wheels = [{ filename = "local-1.0.0-py3-none-any.whl", hash = "sha256:53a42340ae
             marker.try_to_string().as_deref(),
             Some("python_full_version >= '3.12' and extra != 'extra-1-x-foo'")
         );
+    }
+
+    #[test]
+    fn locked_dependency_builder_omits_impossible_markers() {
+        let requires_python = RequiresPython::from_specifiers(
+            VersionSpecifiers::from_str(">=3.12,<3.15").expect("valid version specifier"),
+        );
+        let package_id: PackageId = toml::from_str(
+            r#"
+name = "a"
+version = "1.0.0"
+source = { registry = "https://example.com/simple" }
+"#,
+        )
+        .expect("valid package ID");
+        for (environment, parent, marker) in [
+            (
+                MarkerTree::TRUE,
+                MarkerTree::TRUE,
+                "python_version < '3.12'",
+            ),
+            (
+                MarkerTree::from_str("sys_platform != 'win32'").unwrap(),
+                MarkerTree::TRUE,
+                "sys_platform == 'win32'",
+            ),
+            (
+                MarkerTree::TRUE,
+                MarkerTree::from_str("sys_platform == 'win32'").unwrap(),
+                "sys_platform != 'win32'",
+            ),
+        ] {
+            let builder = LockedDependencyBuilder::new(
+                &requires_python,
+                SimplifiedMarkerTree::new(&requires_python, environment),
+                UniversalMarker::from_combined(parent),
+            );
+            let mut dependencies = Vec::new();
+            builder.add(
+                &mut dependencies,
+                package_id.clone(),
+                BTreeSet::new(),
+                UniversalMarker::from_combined(MarkerTree::from_str(marker).unwrap()),
+            );
+            assert!(
+                dependencies.is_empty(),
+                "retained impossible marker {marker}"
+            );
+        }
     }
 
     #[test]
