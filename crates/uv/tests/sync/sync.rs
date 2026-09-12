@@ -7214,6 +7214,15 @@ fn sync_active_script_environment_json() -> Result<()> {
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix();
 
+    // Script discovery can select a compatible parent virtual environment before searching PATH.
+    // Keep the nearest environment inside the fixture so the initial Python version is deterministic.
+    context
+        .venv()
+        .arg("--python")
+        .arg("3.11")
+        .assert()
+        .success();
+
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! { r#"
         # /// script
