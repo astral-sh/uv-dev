@@ -242,25 +242,11 @@ impl<T: Pep508Url> CacheKey for Requirement<T> {
             extra.as_str().cache_key(state);
         }
 
-        // TODO(zanieb): We inline cache key handling for the child types here, but we could
-        // move the implementations to the children. The intent here was to limit the scope of
-        // types exposing the `CacheKey` trait for now.
         if let Some(version_or_url) = &self.version_or_url {
+            // Preserve the `Option::Some` tag (`1`) before the child's own variant tag
+            // so existing cache keys remain unchanged.
             1u8.cache_key(state);
-            match version_or_url {
-                VersionOrUrl::VersionSpecifier(spec) => {
-                    0u8.cache_key(state);
-                    spec.len().cache_key(state);
-                    for specifier in spec.iter() {
-                        specifier.operator().as_str().cache_key(state);
-                        specifier.version().cache_key(state);
-                    }
-                }
-                VersionOrUrl::Url(url) => {
-                    1u8.cache_key(state);
-                    url.cache_key(state);
-                }
-            }
+            version_or_url.cache_key(state);
         } else {
             0u8.cache_key(state);
         }
@@ -405,6 +391,25 @@ pub enum VersionOrUrl<T: Pep508Url = VerbatimUrl> {
     VersionSpecifier(VersionSpecifiers),
     /// A installable URL
     Url(T),
+}
+
+impl<T: Pep508Url> CacheKey for VersionOrUrl<T> {
+    fn cache_key(&self, state: &mut CacheKeyHasher) {
+        match self {
+            Self::VersionSpecifier(specifiers) => {
+                0u8.cache_key(state);
+                specifiers.len().cache_key(state);
+                for specifier in specifiers.iter() {
+                    specifier.operator().as_str().cache_key(state);
+                    specifier.version().cache_key(state);
+                }
+            }
+            Self::Url(url) => {
+                1u8.cache_key(state);
+                url.cache_key(state);
+            }
+        }
+    }
 }
 
 impl<T: Pep508Url> Display for VersionOrUrl<T> {
@@ -1070,14 +1075,140 @@ mod tests {
     use insta::assert_snapshot;
     use url::Url;
 
+    use uv_cache_key::cache_digest;
     use uv_normalize::{ExtraName, InvalidNameError, PackageName};
-    use uv_pep440::{Operator, Version, VersionPattern, VersionSpecifier};
+    use uv_pep440::{Operator, Version, VersionPattern, VersionSpecifier, VersionSpecifiers};
 
     use crate::cursor::Cursor;
     use crate::marker::{MarkerExpression, MarkerTree, MarkerValueVersion, parse};
     use crate::{
-        MarkerOperator, MarkerValueString, Requirement, TracingReporter, VerbatimUrl, VersionOrUrl,
+        MarkerOperator, MarkerValueString, Pep508Url, Requirement, RequirementOrigin,
+        TracingReporter, VerbatimUrl, VersionOrUrl,
     };
+
+    fn assert_requirement_cache_key<T: Pep508Url>(input: &str, expected: &str) {
+        let mut requirement = Requirement::<T>::from_str(input).expect("valid test requirement");
+        assert_eq!(cache_digest(&requirement), expected, "{input}");
+
+        for origin in [
+            RequirementOrigin::Workspace,
+            RequirementOrigin::File("requirements.txt".into()),
+        ] {
+            requirement.origin = Some(origin);
+            assert_eq!(cache_digest(&requirement), expected, "{input}");
+        }
+    }
+
+    #[test]
+    fn requirement_cache_key_encoding() {
+        // Specify the existing encoding independently, including the `u8` presence markers and
+        // `usize` lengths, so the fixtures also work on different pointer widths.
+        let cases = [
+            ("requests", cache_digest(&("requests", 0usize, 0u8, 0u8))),
+            (
+                "requests[security,tests]",
+                cache_digest(&("requests", (2usize, "security", "tests"), 0u8, 0u8)),
+            ),
+            (
+                "requests>=2,<3",
+                cache_digest(&(
+                    "requests",
+                    0usize,
+                    1u8,
+                    (0u8, 2usize, ">=", Version::new([2]), "<", Version::new([3])),
+                    0u8,
+                )),
+            ),
+            (
+                "requests[security,tests]>=2,!=2.5.*,<3; sys_platform == 'linux'",
+                cache_digest(&(
+                    "requests",
+                    (2usize, "security", "tests"),
+                    1u8,
+                    (
+                        0u8,
+                        3usize,
+                        ">=",
+                        Version::new([2]),
+                        "!=",
+                        Version::new([2, 5]),
+                        "<",
+                        Version::new([3]),
+                    ),
+                    (1u8, "sys_platform == 'linux'"),
+                )),
+            ),
+            (
+                "requests @ https://user:password@example.com/requests.whl",
+                cache_digest(&(
+                    "requests",
+                    0usize,
+                    1u8,
+                    1u8,
+                    "https://user:password@example.com/requests.whl",
+                    0u8,
+                )),
+            ),
+        ];
+
+        for (input, expected) in cases {
+            assert_requirement_cache_key::<Url>(input, &expected);
+            assert_requirement_cache_key::<VerbatimUrl>(input, &expected);
+        }
+
+        let mut requirement =
+            Requirement::<VerbatimUrl>::from_str("requests").expect("valid test requirement");
+        requirement.version_or_url =
+            Some(VersionOrUrl::VersionSpecifier(VersionSpecifiers::empty()));
+        assert_eq!(
+            cache_digest(&requirement),
+            cache_digest(&("requests", 0usize, 1u8, 0u8, 0usize, 0u8)),
+        );
+    }
+
+    #[test]
+    fn version_or_url_cache_key_encoding() {
+        let cases = [
+            (
+                "requests>=2,!=2.5.*,<3",
+                cache_digest(&(
+                    0u8,
+                    3usize,
+                    ">=",
+                    Version::new([2]),
+                    "!=",
+                    Version::new([2, 5]),
+                    "<",
+                    Version::new([3]),
+                )),
+            ),
+            (
+                "requests @ https://user:password@example.com/requests.whl",
+                cache_digest(&(1u8, "https://user:password@example.com/requests.whl")),
+            ),
+        ];
+
+        for (input, expected) in cases {
+            let version_or_url = Requirement::<Url>::from_str(input)
+                .expect("valid test requirement")
+                .version_or_url
+                .expect("requirement contains a version or URL");
+            assert_eq!(cache_digest(&version_or_url), expected, "{input}");
+
+            let version_or_url = Requirement::<VerbatimUrl>::from_str(input)
+                .expect("valid test requirement")
+                .version_or_url
+                .expect("requirement contains a version or URL");
+            assert_eq!(cache_digest(&version_or_url), expected, "{input}");
+        }
+
+        assert_eq!(
+            cache_digest(&VersionOrUrl::<VerbatimUrl>::VersionSpecifier(
+                VersionSpecifiers::empty()
+            )),
+            cache_digest(&(0u8, 0usize)),
+        );
+    }
 
     fn parse_pep508_err(input: &str) -> String {
         Requirement::<VerbatimUrl>::from_str(input)
