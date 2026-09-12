@@ -19,6 +19,7 @@ use uv_configuration::{Concurrency, Constraints, HashCheckingMode, TargetTriple}
 use uv_distribution_types::{
     BuiltDist, Dist, Identifier, Node, Resolution, ResolvedDist, SourceDist,
 };
+use uv_fs::PythonExt;
 use uv_preview::Preview;
 use uv_python::{Interpreter, PythonEnvironment, canonicalize_executable};
 use uv_settings::MalwareCheckSettings;
@@ -82,6 +83,23 @@ impl EphemeralEnvironment {
             .ok_or(ProjectError::InvalidParentEnvironmentPath)?;
         self.0
             .set_pyvenv_cfg("extends-environment", parent_environment_sys_prefix)?;
+        Ok(())
+    }
+
+    /// Layer this environment over an immutable, content-addressed dependency environment.
+    pub(crate) fn set_shared_script_base(
+        &self,
+        parent_environment: &PythonEnvironment,
+    ) -> Result<(), ProjectError> {
+        let parent_site_packages = parent_environment
+            .site_packages()
+            .next()
+            .ok_or(ProjectError::NoSitePackages)?;
+        self.set_overlay(format!(
+            "import site; site.addsitedir({})",
+            parent_site_packages.escape_for_python()
+        ))?;
+        self.set_parent_environment(parent_environment.root())?;
         Ok(())
     }
 
@@ -315,6 +333,7 @@ impl CachedEnvironment {
 
         if let Ok(root) = cache.resolve_link(cache_entry.path()) {
             if let Ok(environment) = PythonEnvironment::from_root(root, cache) {
+                environment.set_pyvenv_cfg("immutable", "true")?;
                 return Ok(Self(environment));
             }
         }
@@ -332,7 +351,7 @@ impl CachedEnvironment {
             false,
         )?;
 
-        sync_environment(
+        let venv = sync_environment(
             venv,
             resolution,
             hash_strategy,
@@ -349,6 +368,8 @@ impl CachedEnvironment {
             preview,
         )
         .await?;
+
+        venv.set_pyvenv_cfg("immutable", "true")?;
 
         // Now that the environment is complete, sync it to its content-addressed location.
         let id = cache.persist(temp_dir.keep(), cache_entry.path()).await?;
