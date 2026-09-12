@@ -135,7 +135,6 @@ csv = { version = "1.3.0" }
 ctrlc = { version = "3.4.5" }
 cyclonedx-bom = { version = "0.8.1" }
 data-encoding = { version = "2.6.0" }
-diskus = { version = "0.9.0", default-features = false }
 dotenvy = { version = "0.15.7" }
 dunce = { version = "1.0.5" }
 editpe = { version = "0.2.4", default-features = false, features = ["std"] }

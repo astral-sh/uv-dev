@@ -2,7 +2,6 @@ use std::fmt::Write;
 
 use anstream::stream::IsTerminal;
 use anyhow::Result;
-use diskus::DiskUsage;
 
 use crate::commands::{ExitStatus, human_readable_bytes};
 use crate::printer::Printer;
@@ -40,9 +39,15 @@ pub(crate) fn cache_size(
         return Ok(ExitStatus::Success);
     }
 
-    let disk_usage = DiskUsage::new(vec![cache.root().to_path_buf()]);
-
-    let total_bytes = disk_usage.count_ignoring_errors();
+    let total_bytes: u64 = walkdir::WalkDir::new(cache.root())
+        .follow_links(false)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter_map(|entry| match entry.metadata() {
+            Ok(metadata) if metadata.is_file() => Some(metadata.len()),
+            _ => None,
+        })
+        .sum();
 
     if human_readable {
         let bytes = human_readable_bytes(total_bytes);
