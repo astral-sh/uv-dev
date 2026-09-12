@@ -2558,6 +2558,7 @@ pub async fn download_to_disk(url: &str, path: &Path) {
     let trusted_hosts: Vec<_> = env::var(EnvVars::UV_INSECURE_HOST)
         .unwrap_or_default()
         .split(' ')
+        .filter(|host| !host.is_empty())
         .map(|h| uv_configuration::TrustedHost::from_str(h).unwrap())
         .collect();
 
