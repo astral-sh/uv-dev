@@ -5,7 +5,7 @@ use async_zip::base::read::mem::ZipFileReader;
 use futures::executor::block_on;
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
-use predicates::prelude::predicate;
+use predicates::prelude::{PredicateStrExt, predicate};
 use std::env::current_dir;
 use std::path::Path;
 use url::Url;
@@ -108,7 +108,7 @@ fn build_packse_in_tree_sdist() -> Result<()> {
     context
         .assert_command("from build_package import main; main()")
         .success()
-        .stdout("build-package 1.0.0\n");
+        .stdout(predicate::str::diff("build-package 1.0.0\n").normalize());
     Ok(())
 }
 

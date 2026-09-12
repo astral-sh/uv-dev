@@ -82,13 +82,13 @@ fn tool_list_paths_windows() {
         .assert()
         .success();
 
-    uv_snapshot!(context.filters_without_standard_filters(), context.tool_list().arg("--show-paths"), @r###"
+    uv_snapshot!(context.filters_without_standard_filters(), context.tool_list().arg("--show-paths"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
-    black v24.2.0 ([TEMP_DIR]\tools\black)
-    - black ([TEMP_DIR]\bin\black.exe)
-    - blackd ([TEMP_DIR]\bin\blackd.exe)
-    "###);
+    list-tool v1.0.0 ([TEMP_DIR]\tools\list-tool)
+    - list-tool ([TEMP_DIR]\bin\list-tool.exe)
+    - list-tool-helper ([TEMP_DIR]\bin\list-tool-helper.exe)
+    "#);
 }
 
 #[test]
@@ -316,7 +316,6 @@ fn tool_list_bad_environment() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
         .with_default_index(&_server.index_url())
-        .with_filtered_exe_suffix()
         .with_filter((r#"index-url = ".*"\n"#, ""));
     let context = context
         .with_filtered_python_names()

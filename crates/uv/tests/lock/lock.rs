@@ -8021,9 +8021,9 @@ fn lock_requires_python_exact() -> Result<()> {
         name = "iniconfig"
         version = "2.0.0"
         source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz", hash = "sha256:3044e038d561c43ca41abdcc389de2d497cf23145d81efc6b8fe90584719f1b2", upload-time = "2024-03-24T00:00:00Z" }
+        sdist = { url = "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz", hash = "sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:00f622d84ed35290d488b7a11a49b075159f8b59de3e8c211d4ad47b49cce9e2", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
@@ -28976,8 +28976,17 @@ fn lock_multiple_sources_index_non_total() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_multiple_sources_index_explicit() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
-    let explicit_index = PackseServer::new("packages/pip-install.toml");
+    let mut indexes = [
+        PackseServer::new("packages/pip-install.toml"),
+        PackseServer::new("packages/pip-install.toml"),
+    ];
+    // Registry URLs break ties between identical package versions in the lockfile.
+    indexes.sort_by_key(PackseServer::index_url);
+    let [default_index, explicit_index] = indexes;
+    let explicit_index_url = explicit_index.index_url();
+    let context = uv_test::test_context!("3.12")
+        .with_default_index(&default_index.index_url())
+        .with_exclude_newer("2025-01-30T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc!(
@@ -28998,7 +29007,7 @@ fn lock_multiple_sources_index_explicit() -> Result<()> {
         url = "{}"
         explicit = true
         "#,
-        explicit_index.index_url(),
+        explicit_index_url,
     ))?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -29009,8 +29018,13 @@ fn lock_multiple_sources_index_explicit() -> Result<()> {
 
     let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
 
+    let mut lock_filters = vec![(
+        explicit_index_url.as_str(),
+        "http://[EXPLICIT-INDEX]/simple/",
+    )];
+    lock_filters.extend(context.filters());
     insta::with_settings!({
-        filters => context.filters(),
+        filters => lock_filters,
     }, {
         assert_snapshot!(
             lock, @r#"
@@ -29043,7 +29057,7 @@ fn lock_multiple_sources_index_explicit() -> Result<()> {
         [[package]]
         name = "jinja2"
         version = "3.1.3"
-        source = { registry = "http://[LOCALHOST]/simple/" }
+        source = { registry = "http://[EXPLICIT-INDEX]/simple/" }
         resolution-markers = [
             "sys_platform == 'win32'",
         ]
@@ -29069,13 +29083,13 @@ fn lock_multiple_sources_index_explicit() -> Result<()> {
         source = { virtual = "." }
         dependencies = [
             { name = "jinja2", version = "3.1.3", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "sys_platform != 'win32'" },
-            { name = "jinja2", version = "3.1.3", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "sys_platform == 'win32'" },
+            { name = "jinja2", version = "3.1.3", source = { registry = "http://[EXPLICIT-INDEX]/simple/" }, marker = "sys_platform == 'win32'" },
         ]
 
         [package.metadata]
         requires-dist = [
             { name = "jinja2", marker = "sys_platform != 'win32'", specifier = ">=3" },
-            { name = "jinja2", marker = "sys_platform == 'win32'", specifier = ">=3", index = "http://[LOCALHOST]/simple/" },
+            { name = "jinja2", marker = "sys_platform == 'win32'", specifier = ">=3", index = "http://[EXPLICIT-INDEX]/simple/" },
         ]
         "#
         );
@@ -36162,7 +36176,7 @@ fn lock_requires_python_empty_lock_file() -> Result<()> {
         name = "numpy"
         version = "1.26.4"
         source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/numpy-1.26.4.tar.gz", hash = "sha256:9eaa6267d3f85c640f85e24a3ff5cd79e008685a4c1dd028a4b46018ec77e4cf", upload-time = "2024-03-24T00:00:00Z" }
+        sdist = { url = "http://[LOCALHOST]/files/numpy-1.26.4.tar.gz", hash = "sha256:39384ad8e5d13812dc71d700a3f127b4ebf2a12df048d612ef41740e2128747b", upload-time = "2024-03-24T00:00:00Z" }
 
         [[package]]
         name = "opencv-python-headless"
@@ -36171,14 +36185,14 @@ fn lock_requires_python_empty_lock_file() -> Result<()> {
         dependencies = [
             { name = "numpy" },
         ]
-        sdist = { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80.tar.gz", hash = "sha256:feb15b56018231393ff6409d4f7141daf2b1c199e7f27b2df6295afdca2231bc", upload-time = "2024-03-24T00:00:00Z" }
+        sdist = { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80.tar.gz", hash = "sha256:68840ffc0e8b93e7929bd840c241fa5fb5065979a76ec11a0d7baeb10896492f", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80-cp37-abi3-macosx_10_16_x86_64.whl", hash = "sha256:949cbb12bc49357dce2876e3e091d70899bf41ea068ac99a6384637b83d1c093", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80-cp37-abi3-macosx_11_0_arm64.whl", hash = "sha256:1623c6d5deec3019bee3342f4c548dc8de742b712a5aba6f86d8d0248a78609a", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80-cp37-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:c47356bf5a7abd1efd9f60dd0a7c67f1c62b080889102358972271d63e21fb93", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:cf4ba3a60179814466c7f2a34bd412fd8be920fd9fcff00c7ac3738d30c028b2", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80-cp37-abi3-win32.whl", hash = "sha256:b8bb35281ea43ac6a1d03f2080717e79198ef284011bfd1fea7a63f7aca9658c", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80-cp37-abi3-win_amd64.whl", hash = "sha256:7d162f0825597a28f10d1085ca9b980b8a6e846b2247e3d064607598fcba412c", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80-cp37-abi3-macosx_10_16_x86_64.whl", hash = "sha256:1191f9d832df9d5b5571a5c5046f015e38ddd4c97e886c08250ab67c6eaed18d", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80-cp37-abi3-macosx_11_0_arm64.whl", hash = "sha256:fd92ca89fc57ad8875a84e089c69c5102b5fc6df7792787f4e045d2fa21f06c3", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80-cp37-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:3584dd862561fde6c2df7e06d85a2923ff2529b881525f8190b55f20d494c4db", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:ec297025ed1dd545aeb199b67fe52fd30a8b07a881514614b805848a933f390e", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80-cp37-abi3-win32.whl", hash = "sha256:672280aa52b4d574aa90a30b90a3ed190bd6c1f5d643dc3d2af03be78c517c77", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80-cp37-abi3-win_amd64.whl", hash = "sha256:03a18d759a42a36e8c174ffcd41faf9943d33f4a00a0535e2c9341ea3a3bdbd2", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
@@ -36205,11 +36219,11 @@ fn lock_requires_python_empty_lock_file() -> Result<()> {
         "#,
     ))?;
 
-    uv_snapshot!(context.filters(), context.lock().arg("--upgrade-package=python"), @r"
+    uv_snapshot!(context.filters(), context.lock().arg("--upgrade-package=python"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.13.2 interpreter at: [PYTHON-3.13.2]
-    warning: Resolving despite existing lockfile due to fork markers being disjoint with `requires-python`: `python_full_version == '3.13.0'` vs `python_full_version == '3.13.2'`
+    warning: Resolving despite existing lockfile due to fork markers being disjoint with `requires-python`: `python_full_version == '3.13'` vs `python_full_version == '3.13.2'`
     Resolved 3 packages in [TIME]
     ");
 
@@ -36230,7 +36244,7 @@ fn lock_requires_python_empty_lock_file() -> Result<()> {
         name = "numpy"
         version = "1.26.4"
         source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/numpy-1.26.4.tar.gz", hash = "sha256:9eaa6267d3f85c640f85e24a3ff5cd79e008685a4c1dd028a4b46018ec77e4cf", upload-time = "2024-03-24T00:00:00Z" }
+        sdist = { url = "http://[LOCALHOST]/files/numpy-1.26.4.tar.gz", hash = "sha256:39384ad8e5d13812dc71d700a3f127b4ebf2a12df048d612ef41740e2128747b", upload-time = "2024-03-24T00:00:00Z" }
 
         [[package]]
         name = "opencv-python-headless"
@@ -36239,14 +36253,14 @@ fn lock_requires_python_empty_lock_file() -> Result<()> {
         dependencies = [
             { name = "numpy" },
         ]
-        sdist = { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80.tar.gz", hash = "sha256:feb15b56018231393ff6409d4f7141daf2b1c199e7f27b2df6295afdca2231bc", upload-time = "2024-03-24T00:00:00Z" }
+        sdist = { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80.tar.gz", hash = "sha256:68840ffc0e8b93e7929bd840c241fa5fb5065979a76ec11a0d7baeb10896492f", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80-cp37-abi3-macosx_10_16_x86_64.whl", hash = "sha256:949cbb12bc49357dce2876e3e091d70899bf41ea068ac99a6384637b83d1c093", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80-cp37-abi3-macosx_11_0_arm64.whl", hash = "sha256:1623c6d5deec3019bee3342f4c548dc8de742b712a5aba6f86d8d0248a78609a", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80-cp37-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:c47356bf5a7abd1efd9f60dd0a7c67f1c62b080889102358972271d63e21fb93", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:cf4ba3a60179814466c7f2a34bd412fd8be920fd9fcff00c7ac3738d30c028b2", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80-cp37-abi3-win32.whl", hash = "sha256:b8bb35281ea43ac6a1d03f2080717e79198ef284011bfd1fea7a63f7aca9658c", upload-time = "2024-03-24T00:00:00Z" },
-            { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80-cp37-abi3-win_amd64.whl", hash = "sha256:7d162f0825597a28f10d1085ca9b980b8a6e846b2247e3d064607598fcba412c", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80-cp37-abi3-macosx_10_16_x86_64.whl", hash = "sha256:1191f9d832df9d5b5571a5c5046f015e38ddd4c97e886c08250ab67c6eaed18d", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80-cp37-abi3-macosx_11_0_arm64.whl", hash = "sha256:fd92ca89fc57ad8875a84e089c69c5102b5fc6df7792787f4e045d2fa21f06c3", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80-cp37-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:3584dd862561fde6c2df7e06d85a2923ff2529b881525f8190b55f20d494c4db", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:ec297025ed1dd545aeb199b67fe52fd30a8b07a881514614b805848a933f390e", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80-cp37-abi3-win32.whl", hash = "sha256:672280aa52b4d574aa90a30b90a3ed190bd6c1f5d643dc3d2af03be78c517c77", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/opencv_python_headless-4.9.0.80-cp37-abi3-win_amd64.whl", hash = "sha256:03a18d759a42a36e8c174ffcd41faf9943d33f4a00a0535e2c9341ea3a3bdbd2", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
