@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 use std::fmt::Formatter;
+use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::{cmp, num::NonZeroU32};
 
 use rustc_hash::FxHashMap;
 
@@ -53,27 +53,10 @@ pub enum IncompatibleTag {
 /// compared to other wheels.
 ///
 /// A higher tag compatibility means higher priority.
-#[derive(Debug, Eq, PartialEq, Copy, Clone)]
+#[derive(Debug, Eq, Ord, PartialEq, PartialOrd, Copy, Clone)]
 pub enum TagCompatibility {
     Incompatible(IncompatibleTag),
     Compatible(TagPriority),
-}
-
-impl Ord for TagCompatibility {
-    fn cmp(&self, other: &Self) -> cmp::Ordering {
-        match (self, other) {
-            (Self::Compatible(p_self), Self::Compatible(p_other)) => p_self.cmp(p_other),
-            (Self::Incompatible(_), Self::Compatible(_)) => cmp::Ordering::Less,
-            (Self::Compatible(_), Self::Incompatible(_)) => cmp::Ordering::Greater,
-            (Self::Incompatible(t_self), Self::Incompatible(t_other)) => t_self.cmp(t_other),
-        }
-    }
-}
-
-impl PartialOrd for TagCompatibility {
-    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
-        Some(Self::cmp(self, other))
-    }
 }
 
 impl TagCompatibility {
@@ -1175,6 +1158,32 @@ mod tests {
     use insta::{assert_debug_snapshot, assert_snapshot};
 
     use super::*;
+
+    #[test]
+    fn test_tag_compatibility_order() {
+        let compatibilities = [
+            TagCompatibility::Incompatible(IncompatibleTag::Invalid),
+            TagCompatibility::Incompatible(IncompatibleTag::Python),
+            TagCompatibility::Incompatible(IncompatibleTag::Abi),
+            TagCompatibility::Incompatible(IncompatibleTag::FreethreadedAbi),
+            TagCompatibility::Incompatible(IncompatibleTag::AbiPythonVersion),
+            TagCompatibility::Incompatible(IncompatibleTag::Platform),
+            TagCompatibility::Compatible(
+                TagPriority::try_from(0usize).expect("valid tag priority"),
+            ),
+            TagCompatibility::Compatible(
+                TagPriority::try_from(1usize).expect("valid tag priority"),
+            ),
+        ];
+
+        for (left_index, left) in compatibilities.iter().enumerate() {
+            for (right_index, right) in compatibilities.iter().enumerate() {
+                let expected = left_index.cmp(&right_index);
+                assert_eq!(left.cmp(right), expected);
+                assert_eq!(left.partial_cmp(right), Some(expected));
+            }
+        }
+    }
 
     /// Check platform tag ordering.
     /// The list is displayed in decreasing priority.
