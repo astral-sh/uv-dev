@@ -228,6 +228,7 @@ class Fixture:
     archive: Path
     digest: str
     source: bool
+    registry: bool = False
 
 
 @dataclass(frozen=True)
@@ -238,6 +239,7 @@ class FreshnessCase:
     flavor: str | None = None
     wrong_hash: bool = False
     reinstall: bool = False
+    upgrade: bool = False
     outcome: str = "success"
     value: str | None = None
     installed: int = 0
@@ -403,6 +405,94 @@ FRESHNESS_CASES = (
         installed=1,
         built=1,
     ),
+    FreshnessCase(
+        "registry-source-fresh", "registry-source", flavor="alpha", value="alpha"
+    ),
+    FreshnessCase(
+        "registry-source-valid-changed-settings",
+        "registry-source",
+        flavor="beta",
+        value="alpha",
+    ),
+    FreshnessCase(
+        "registry-source-missing-build-settings",
+        "registry-source",
+        "build-missing",
+        flavor="beta",
+        value="alpha",
+    ),
+    FreshnessCase(
+        "registry-source-missing-cache",
+        "registry-source",
+        "cache-missing",
+        flavor="alpha",
+        value="alpha",
+    ),
+    FreshnessCase(
+        "registry-source-malformed-build-settings",
+        "registry-source",
+        "build-syntax",
+        flavor="beta",
+        value="beta",
+        installed=1,
+        built=1,
+        fallback_value="alpha",
+        fallback_installed=0,
+        fallback_built=0,
+    ),
+    FreshnessCase(
+        "registry-source-malformed-build-settings-wrong-hash",
+        "registry-source",
+        "build-syntax",
+        flavor="beta",
+        wrong_hash=True,
+        outcome="hash-mismatch",
+        value="alpha",
+        fallback_outcome="success",
+    ),
+    FreshnessCase(
+        "registry-source-malformed-cache",
+        "registry-source",
+        "cache-syntax",
+        flavor="alpha",
+        value="alpha",
+        installed=1,
+        fallback_installed=0,
+    ),
+    FreshnessCase(
+        "registry-source-malformed-cache-wrong-hash",
+        "registry-source",
+        "cache-syntax",
+        flavor="alpha",
+        wrong_hash=True,
+        outcome="hash-mismatch",
+        value="alpha",
+        fallback_outcome="success",
+    ),
+    FreshnessCase(
+        "registry-source-malformed-build-upgrade",
+        "registry-source",
+        "build-syntax",
+        flavor="beta",
+        upgrade=True,
+        value="beta",
+        installed=1,
+        built=1,
+        fallback_value="alpha",
+        fallback_installed=0,
+        fallback_built=0,
+    ),
+    FreshnessCase(
+        "registry-source-malformed-build-upgrade-wrong-hash",
+        "registry-source",
+        "build-syntax",
+        flavor="beta",
+        wrong_hash=True,
+        upgrade=True,
+        outcome="hash-mismatch",
+        value="alpha",
+        fallback_outcome="success",
+    ),
 )
 
 
@@ -462,13 +552,17 @@ class Environment:
         flavor: str | None = None,
         wrong_hash: bool = False,
         reinstall: bool = False,
+        upgrade: bool = False,
         no_installer_metadata: bool = False,
     ) -> dict:
         digest = "0" * 64 if wrong_hash else self.fixture.digest
         requirements = self.root / ("wrong.txt" if wrong_hash else "requirements.txt")
-        requirements.write_text(
-            f"{self.fixture.name} @ {self.fixture.archive.as_uri()} --hash=sha256:{digest}\n"
+        requirement = (
+            f"{self.fixture.name}=={self.fixture.version}"
+            if self.fixture.registry
+            else f"{self.fixture.name} @ {self.fixture.archive.as_uri()}"
         )
+        requirements.write_text(f"{requirement} --hash=sha256:{digest}\n")
         arguments = [
             "pip",
             "install",
@@ -480,10 +574,14 @@ class Environment:
             "--requirements",
             str(requirements),
         ]
+        if self.fixture.registry:
+            arguments.extend(["--find-links", str(self.fixture.archive.parent)])
         if flavor is not None:
             arguments.extend(["--config-setting", f"flavor={flavor}"])
         if reinstall:
             arguments.append("--reinstall")
+        if upgrade:
+            arguments.append("--upgrade")
         if no_installer_metadata:
             arguments.append("--no-installer-metadata")
         return self.command(*arguments)
@@ -518,6 +616,8 @@ class Environment:
             raise AssertionError(
                 f"Fixture was installed outside its environment: {probe}"
             )
+        if self.fixture.registry and (self.dist_info / "direct_url.json").exists():
+            raise AssertionError("Registry fixture was recorded as a direct URL")
         if self.fixture.source and not no_installer_metadata:
             record = (self.dist_info / "RECORD").read_text()
             for name in SIDECARS:
@@ -756,6 +856,7 @@ class Qualification:
                 flavor=case.flavor,
                 wrong_hash=case.wrong_hash,
                 reinstall=case.reinstall,
+                upgrade=case.upgrade,
             )
             outcome = case.outcome
             value = case.value
@@ -821,6 +922,7 @@ class Qualification:
                     "requested_flavor": case.flavor,
                     "wrong_hash": case.wrong_hash,
                     "reinstall": case.reinstall,
+                    "upgrade": case.upgrade,
                     "expected_outcome": outcome,
                     "expected_value": value,
                     "expected_installed": installed,
@@ -869,6 +971,9 @@ def main() -> None:
     archive = make_source_archive(fixture_directory, backend)
     fixtures = {
         "source": Fixture(NAME, VERSION, MODULE, archive, sha256(archive), True),
+        "registry-source": Fixture(
+            NAME, VERSION, MODULE, archive, sha256(archive), True, registry=True
+        ),
         "wheel": Fixture(
             WHEEL_NAME, WHEEL_VERSION, WHEEL_NAME, args.wheel, WHEEL_SHA256, False
         ),
@@ -915,7 +1020,7 @@ def main() -> None:
             for name, fixture in fixtures.items()
         },
         "expected_policy": args.expect,
-        "measurement_scope": "Real installed distributions, diagnostics, source build settings, and artifact hash enforcement; no timing comparison.",
+        "measurement_scope": "Real installed distributions, diagnostics, direct-URL and registry source build settings, and artifact hash enforcement; no timing comparison.",
         "cases": [],
     }
     try:
