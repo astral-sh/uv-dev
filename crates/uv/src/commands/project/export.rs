@@ -20,7 +20,7 @@ use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::Preview;
 use uv_python::{ConfigDiscovery, PythonDownloads, PythonPreference, PythonRequest};
 use uv_requirements::is_pylock_toml;
-use uv_resolver::{Installable, PylockToml, RequirementsTxtExport, cyclonedx_json};
+use uv_resolver::{Installable, PylockTomlExport, RequirementsTxtExport, cyclonedx_json};
 use uv_scripts::Pep723Script;
 use uv_settings::PythonInstallMirrors;
 use uv_warnings::warn_user;
@@ -443,7 +443,7 @@ pub(crate) async fn export(
             write!(writer, "{export}")?;
         }
         ExportFormat::PylockToml => {
-            let mut export = PylockToml::from_lock(
+            let export = PylockTomlExport::from_lock(
                 &target,
                 &prune,
                 &extras,
@@ -451,18 +451,19 @@ pub(crate) async fn export(
                 include_annotations,
                 editable.as_ref(),
                 &install_options,
-            )?;
-
-            // Registries don't always provide hashes, but `packages.*.hashes` is a required
-            // key in PEP 751, so we have to download and hash files with missing hashes.
-            if export.has_missing_hashes() {
-                let client = RegistryClientBuilder::new(client_builder.clone(), cache.clone())
-                    .index_locations(settings.index_locations.clone())
-                    .build()?;
-                export
-                    .generate_missing_hashes(&client, concurrency.downloads, target.install_path())
-                    .await?;
-            }
+            )?
+            .finish(
+                || -> Result<_> {
+                    Ok(
+                        RegistryClientBuilder::new(client_builder.clone(), cache.clone())
+                            .index_locations(settings.index_locations.clone())
+                            .build()?,
+                    )
+                },
+                concurrency.downloads,
+                target.install_path(),
+            )
+            .await?;
 
             if include_header {
                 writeln!(
