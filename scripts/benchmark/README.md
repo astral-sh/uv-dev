@@ -129,6 +129,12 @@ commit and raw-content requests use the delayed replay server.
 
 ## Workload selection
 
+Run `python3 scripts/benchmark/prepare-incremental-locks.py` to prime offline resolution of pinned
+Flask, JupyterLab, and Airflow releases. Their checked-in initial locks use an October 2025 cutoff;
+the measured command widens it to January 2026. Preparation also resolves without the initial lock
+so both preference-preserving and full-resolution implementations have the required metadata in
+cache. Regenerate these inputs explicitly with `--refresh-locks`.
+
 Run `python3 scripts/benchmark/prepare-resolver-errors.py` to prime the unsatisfiable requirements
 in `resolver-errors.json`. The fixed December 2024 cutoff selects 8 Rooster, 14 HTTPX, and 31 NumPy
 releases whose Python requirements exclude the requested interpreter. Diagnostic workloads solve

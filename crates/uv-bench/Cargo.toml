@@ -134,6 +134,11 @@ path = "benches/project_lock.rs"
 harness = false
 
 [[bench]]
+name = "incremental_cutoff_lock"
+path = "benches/incremental_cutoff_lock.rs"
+harness = false
+
+[[bench]]
 name = "direct_url_lock"
 path = "benches/direct_url_lock.rs"
 harness = false
