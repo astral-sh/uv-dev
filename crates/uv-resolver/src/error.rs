@@ -2185,6 +2185,99 @@ mod tests {
         assert_matches!(collapse_unavailable_versions(tree), ErrorTree::Derived(_));
     }
 
+    /// A dependency can omit a nested `NoVersions` proof only for the same package and when its
+    /// depending range is contained in the original dependency request.
+    #[test]
+    fn collapses_redundant_dependency_no_versions() {
+        let range = |start, end| Range::from_range_bounds(version(start)..version(end));
+        let derived = |cause1, cause2| {
+            ErrorTree::Derived(Derived {
+                terms: Map::default(),
+                shared_id: None,
+                cause1: Arc::new(cause1),
+                cause2: Arc::new(cause2),
+            })
+        };
+        let b = pubgrub_package("b");
+        let c = pubgrub_package("c");
+
+        for (versions, required, is_subset) in [
+            (range("1", "2"), range("1", "2"), true),
+            (range("1", "2"), range("1", "3"), true),
+            (range("1", "3"), range("2", "3"), false),
+            (range("1", "2"), range("2", "3"), false),
+        ] {
+            for (package, no_versions_package, dependency_package, same_package) in [
+                ("a", "a", "a", true),
+                ("d", "a", "a", false),
+                ("a", "d", "a", false),
+                ("a", "a", "d", false),
+            ] {
+                let package = pubgrub_package(package);
+                let no_versions_package = pubgrub_package(no_versions_package);
+                let dependency_package = pubgrub_package(dependency_package);
+
+                for reverse_parent in [false, true] {
+                    for reverse_child in [false, true] {
+                        let no_versions = ErrorTree::External(External::NoVersions(
+                            no_versions_package.clone(),
+                            range("1", "2"),
+                        ));
+                        let dependency = ErrorTree::External(External::FromDependencyOf(
+                            c.clone(),
+                            Range::full(),
+                            dependency_package.clone(),
+                            required.clone(),
+                        ));
+                        let child = if reverse_child {
+                            derived(dependency, no_versions)
+                        } else {
+                            derived(no_versions, dependency)
+                        };
+                        let parent = ErrorTree::External(External::FromDependencyOf(
+                            package.clone(),
+                            versions.clone(),
+                            b.clone(),
+                            Range::full(),
+                        ));
+                        let tree = if reverse_parent {
+                            derived(child, parent)
+                        } else {
+                            derived(parent, child)
+                        };
+
+                        let ErrorTree::Derived(collapsed) =
+                            collapse_redundant_depends_on_no_versions(tree)
+                        else {
+                            panic!("expected the outer dependency derivation");
+                        };
+                        let child = if reverse_parent {
+                            &*collapsed.cause1
+                        } else {
+                            &*collapsed.cause2
+                        };
+                        if is_subset && same_package {
+                            assert_matches!(
+                                child,
+                                ErrorTree::External(External::FromDependencyOf(
+                                    actual_package,
+                                    actual_versions,
+                                    actual_dependency,
+                                    actual_required,
+                                )) if actual_package == &c
+                                    && actual_versions == &Range::full()
+                                    && actual_dependency == &dependency_package
+                                    && actual_required == &required
+                            );
+                        } else {
+                            assert_matches!(child, ErrorTree::Derived(_));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn drops_transformed_derivation_tree_without_recursion() -> std::io::Result<()> {
         let thread = std::thread::Builder::new()
