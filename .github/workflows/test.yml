@@ -40,7 +40,7 @@ jobs:
         run: ./scripts/install-mold.sh
 
       - name: "Install Rust toolchain"
-        run: rustup toolchain install --profile minimal
+        run: rustup toolchain install --profile minimal --override
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         id: rust-cache
@@ -164,7 +164,7 @@ jobs:
           persist-credentials: false
 
       - name: "Install Rust toolchain"
-        run: rustup toolchain install --profile minimal
+        run: rustup toolchain install --profile minimal --override
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         id: rust-cache
@@ -285,7 +285,10 @@ jobs:
 
       - name: "Install Rust toolchain"
         working-directory: ${{ env.UV_WORKSPACE }}
-        run: rustup toolchain install --profile minimal
+        run: |
+          rustup toolchain install --profile minimal --override
+          $toolchain = (rustup show active-toolchain).Split()[0]
+          rustup override set $toolchain --path "${{ github.workspace }}"
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         id: rust-cache
