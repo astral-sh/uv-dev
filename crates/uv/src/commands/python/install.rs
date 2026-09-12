@@ -1560,7 +1560,7 @@ mod tests {
         let bin = root.join("bin");
         fs_err::create_dir_all(&bin)?;
         let link = bin.join("python3");
-        std::os::unix::fs::symlink("../first-python", &link)?;
+        fs_err::os::unix::fs::symlink("../first-python", &link)?;
         let captured_target = read_bin_link_target(&link).context("missing captured target")?;
         assert_eq!(captured_target, Path::new("../first-python"));
 
