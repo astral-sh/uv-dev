@@ -14,7 +14,7 @@ use thiserror::Error;
 use tracing::{debug, instrument, trace};
 
 use uv_build_backend::check_direct_build;
-use uv_build_frontend::{SourceBuild, SourceBuildContext};
+use uv_build_frontend::{SourceBuild, SourceBuildContext, UvBuildWarningPolicy};
 use uv_cache::Cache;
 use uv_client::RegistryClient;
 use uv_configuration::{
@@ -627,6 +627,7 @@ impl BuildContext for BuildDispatch<'_> {
         debug!("Performing direct build for {identifier}");
 
         let output_dir = output_dir.to_path_buf();
+        let show_warnings = UvBuildWarningPolicy::from_sources(&sources).warn_for_bundled_backend();
         let filename = tokio::task::spawn_blocking(move || -> Result<_> {
             let filename = match build_kind {
                 BuildKind::Wheel => {
@@ -635,7 +636,7 @@ impl BuildContext for BuildDispatch<'_> {
                         &output_dir,
                         None,
                         uv_version::version(),
-                        sources.is_none(),
+                        show_warnings,
                     )?;
                     DistFilename::WheelFilename(wheel)
                 }
@@ -644,7 +645,7 @@ impl BuildContext for BuildDispatch<'_> {
                         &source_tree,
                         &output_dir,
                         uv_version::version(),
-                        sources.is_none(),
+                        show_warnings,
                     )?;
                     DistFilename::SourceDistFilename(source_dist)
                 }
@@ -654,7 +655,7 @@ impl BuildContext for BuildDispatch<'_> {
                         &output_dir,
                         None,
                         uv_version::version(),
-                        sources.is_none(),
+                        show_warnings,
                     )?;
                     DistFilename::WheelFilename(wheel)
                 }

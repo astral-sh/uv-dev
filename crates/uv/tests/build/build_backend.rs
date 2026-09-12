@@ -1354,6 +1354,16 @@ fn warn_on_redundant_module_names() -> Result<()> {
     Successfully built dist/project-0.1.0-py3-none-any.whl
     ");
 
+    // Package-scoped source restrictions also disable bundled-backend warnings.
+    uv_snapshot!(context.filters(), context.build().arg("--no-sources-package").arg("project"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building source distribution...
+    Building wheel from source distribution...
+    Successfully built dist/project-0.1.0.tar.gz
+    Successfully built dist/project-0.1.0-py3-none-any.whl
+    ");
+
     Ok(())
 }
 
@@ -1695,6 +1705,18 @@ fn tool_uv_build_backend_wrong_build_backend() -> Result<()> {
     project.child("src/project/__init__.py").touch()?;
 
     uv_snapshot!(context.filters(), context.build().arg("--no-build-logs").arg(project.path()), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building source distribution...
+    warning: `project` defines settings for `uv_build` in `tool.uv.build-backend`, but uses `hatchling.build` as build backend instead
+    Building wheel from source distribution...
+    Successfully built project/dist/project-0.1.0.tar.gz
+    Successfully built project/dist/project-0.1.0-py2.py3-none-any.whl
+    ");
+
+    // Unlike bundled-backend warnings, unused-settings warnings remain enabled with
+    // package-scoped source restrictions.
+    uv_snapshot!(context.filters(), context.build().arg("--no-build-logs").arg("--no-sources-package").arg("project").arg(project.path()), @r"
     exit_code: 0 (success)
     ----- stderr -----
     Building source distribution...
