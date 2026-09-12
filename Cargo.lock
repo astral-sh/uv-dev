@@ -6069,6 +6069,7 @@ dependencies = [
  "jiff",
  "rcgen",
  "reqwest",
+ "rustix",
  "rustls",
  "serde",
  "serde_json",
@@ -6106,6 +6107,7 @@ dependencies = [
  "uv-types",
  "uv-version",
  "uv-workspace",
+ "walkdir",
 ]
 
 [[package]]

@@ -32,6 +32,17 @@ pub fn fixture_path(filename: &str) -> PathBuf {
     path
 }
 
+/// Return an immutable exported project tree prepared before the benchmark suite.
+pub fn source_fixture(name: &str) -> PathBuf {
+    let path = std::path::absolute(Path::new("../../.cache/bench-sources").join(name))
+        .expect("Failed to locate source fixture");
+    assert!(
+        path.is_dir(),
+        "Missing source fixture. Run `python3 scripts/benchmark/prepare-sources.py`."
+    );
+    path
+}
+
 /// A real Git repository captured at a pinned upstream commit.
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct GitFixture {
