@@ -18657,6 +18657,117 @@ fn lock_recovers_disjoint_transitive_markers() -> Result<()> {
     Ok(())
 }
 
+/// An eager dependency fork can exclude a requirement already added in the parent state.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_restarts_after_eager_environment_fork() -> Result<()> {
+    let server = PackseServer::new("fork/non-local-fork-marker-eager.toml");
+    allow_duplicates! {
+        for (requirements, selection) in [
+            ("dependencies = [\"a; sys_platform == 'win32'\"]", &[][..]),
+            (
+                "[project.optional-dependencies]\nfeature = [\"a; sys_platform == 'win32'\"]",
+                &["--extra", "feature"][..],
+            ),
+            (
+                "[dependency-groups]\ndev = [\"a; sys_platform == 'win32'\"]",
+                &["--group", "dev"][..],
+            ),
+        ] {
+            for strategy in ["fewest", "requires-python"] {
+                let context = uv_test::test_context!("3.12");
+                context
+                    .temp_dir
+                    .child("pyproject.toml")
+                    .write_str(&formatdoc! {r#"
+                        [project]
+                        name = "project"
+                        version = "0.1.0"
+                        requires-python = ">=3.12,<3.15"
+                        {requirements}
+                    "#})?;
+                let command = || {
+                    let mut command = context.lock();
+                    command
+                        .arg("--no-config")
+                        .arg("--index-url")
+                        .arg(server.index_url())
+                        .arg("--no-build")
+                        .arg("--fork-strategy")
+                        .arg(strategy)
+                        .env_remove(EnvVars::UV_EXCLUDE_NEWER);
+                    command
+                };
+
+                uv_snapshot!(context.filters(), command(), @"
+                exit_code: 0 (success)
+                ----- stderr -----
+                Resolved 2 packages in [TIME]
+                ");
+                let initial = context.read("uv.lock");
+
+                uv_snapshot!(context.filters(), command().arg("--check").arg("--refresh").arg("--preview-features").arg("lockfile-format-check"), @"
+                exit_code: 0 (success)
+                ----- stderr -----
+                Resolved 2 packages in [TIME]
+                ");
+                assert_eq!(context.read("uv.lock"), initial);
+
+                uv_snapshot!(context.filters(), context.export()
+                    .arg("--frozen")
+                    .arg("--no-default-groups")
+                    .arg("--no-emit-project")
+                    .arg("--no-header")
+                    .arg("--no-hashes")
+                    .arg("--no-annotate")
+                    .args(selection), @"
+                exit_code: 0 (success)
+                ----- stdout -----
+                a==1.0.0 ; sys_platform == 'win32'
+                ");
+            }
+        }
+        Ok::<(), anyhow::Error>(())
+    }?;
+    Ok(())
+}
+
+/// Discarding an excluded root requirement must not discard a genuinely unsatisfiable region.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_eager_environment_restart_keeps_unsatisfiable_regions() -> Result<()> {
+    let server = PackseServer::new("fork/non-local-fork-marker-eager-unsatisfiable.toml");
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12,<3.15"
+            dependencies = ["a; sys_platform == 'win32'"]
+        "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("--no-build")
+        .arg("--fork-strategy")
+        .arg("fewest")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies for split (markers: python_full_version >= '3.14' and sys_platform == 'win32')
+      cause: Because there are no versions of absent{python_full_version >= '3.14' and sys_platform == 'win32'} and all versions of a depend on absent{python_full_version >= '3.14' and sys_platform == 'win32'}, we can conclude that all versions of a cannot be used.
+             And because your project depends on a{sys_platform == 'win32'}, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: While the active Python version is 3.12, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
+    ");
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    Ok(())
+}
+
 /// Restarted marker forks must rediscover explicit index constraints from the project roots.
 #[cfg(feature = "test-universal")]
 #[test]

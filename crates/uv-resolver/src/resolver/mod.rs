@@ -68,7 +68,7 @@ use crate::resolver::derivation::DerivationChainBuilder;
 pub use crate::resolver::environment::ResolverEnvironment;
 use crate::resolver::environment::{
     ForkingPossibility, fork_on_no_solution, fork_version_by_marker,
-    fork_version_by_python_requirement,
+    fork_version_by_python_requirement, restart_on_no_solution,
 };
 pub(crate) use crate::resolver::fork_map::{ForkMap, ForkSet};
 pub use crate::resolver::index::InMemoryIndex;
@@ -350,6 +350,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         );
         let mut preferences = self.preferences.clone();
         let mut forked_states = self.env.initial_forked_states(initial_state.clone())?;
+        let mut restarted_environments = FxHashSet::default();
 
         self.sort_root_fork_states(&mut forked_states);
         let mut resolutions = vec![];
@@ -372,14 +373,17 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                         let result = state.pubgrub.unit_propagation(state.next);
                         match result {
                             Err(err) => {
-                                if let Some(children) =
-                                    self.restart_failed_fork(&initial_state, &state, &err)
-                                {
+                                if let Some(children) = self.restart_failed_fork(
+                                    &initial_state,
+                                    &state,
+                                    &err,
+                                    &mut restarted_environments,
+                                ) {
                                     forked_states.extend(children);
                                     drop_derivation_tree(err);
                                     continue 'FORK;
                                 }
-                                // No strict environment partition separates the proof's markers.
+                                // The proof has no eligible partition or pristine restart.
                                 return Err(self.convert_no_solution_err(
                                     err,
                                     state.fork_urls,
@@ -882,31 +886,60 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         }
     }
 
-    /// Restart a failed conservative approximation in two strictly narrower environments.
+    /// Restart a failed conservative approximation without inheriting its solver constraints.
     fn restart_failed_fork(
         &self,
         initial: &ForkState,
         failed: &ForkState,
         error: &ErrorTree,
-    ) -> Option<[ForkState; 2]> {
-        let (with_marker, without_marker) = {
+        restarted_environments: &mut FxHashSet<UniversalMarker>,
+    ) -> Option<Vec<ForkState>> {
+        let recovery = {
             let unavailable_packages = self.unavailable_packages.pin();
             let incomplete_packages = self.incomplete_packages.pin();
-            fork_on_no_solution(&failed.env, &failed.python_requirement, error, |name| {
+            let has_metadata_failure = |name: &PackageName| {
                 unavailable_packages
                     .get(name)
                     .is_some_and(UnavailablePackage::is_metadata_failure)
                     || incomplete_packages.contains_key(name)
-            })
-        }?;
-        debug!("Retrying failed universal resolution as {with_marker} and {without_marker}");
+            };
+            if let Some(partition) = fork_on_no_solution(
+                &failed.env,
+                &failed.python_requirement,
+                error,
+                has_metadata_failure,
+            ) {
+                Either::Left(partition)
+            } else if restart_on_no_solution(
+                &failed.env,
+                &failed.python_requirement,
+                error,
+                restarted_environments,
+                has_metadata_failure,
+            ) {
+                Either::Right(failed.env.clone())
+            } else {
+                return None;
+            }
+        };
 
-        // The failed approximation may have learned incompatibilities that are invalid in either
-        // child. Restart from the root so dependencies, source selections, and solver caches are
-        // all reconstructed for the narrowed environment.
-        let mut children = [with_marker, without_marker].map(|env| initial.clone().with_env(env));
-        self.sort_root_fork_states(&mut children);
-        Some(children)
+        // Learned incompatibilities can be invalid in a narrowed environment. Reconstruct
+        // dependencies, source selections, and solver caches from the pristine root state.
+        match recovery {
+            Either::Left((with_marker, without_marker)) => {
+                debug!(
+                    "Retrying failed universal resolution as {with_marker} and {without_marker}"
+                );
+                let mut children =
+                    [with_marker, without_marker].map(|env| initial.clone().with_env(env));
+                self.sort_root_fork_states(&mut children);
+                Some(Vec::from(children))
+            }
+            Either::Right(env) => {
+                debug!("Retrying failed universal resolution in {env} from the root");
+                Some(vec![initial.clone().with_env(env)])
+            }
+        }
     }
 
     /// Convert the dependency [`Fork`]s into [`ForkState`]s.

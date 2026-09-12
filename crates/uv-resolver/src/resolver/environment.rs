@@ -717,22 +717,75 @@ pub(crate) fn fork_on_no_solution(
     has_metadata_failure: impl Fn(&PackageName) -> bool,
 ) -> Option<(ResolverEnvironment, ResolverEnvironment)> {
     env.fork_markers()?;
-    if derivation_tree_has_metadata_failure(error) {
-        return None;
-    }
-    let packages: Vec<_> = derivation_tree_packages(error).collect();
-    if packages
-        .iter()
-        .filter_map(|package| package.name_no_root())
-        .any(has_metadata_failure)
-    {
-        return None;
-    }
     fork_on_disjoint_markers(
         env,
         python_requirement,
-        packages.into_iter().map(PubGrubPackage::marker),
+        no_solution_markers(error, has_metadata_failure)?,
     )
+}
+
+/// Record a pristine restart when a semantic proof uses a dependency excluded by its environment.
+///
+/// Dependency-created forks can inherit constraints from a broader parent. The full effective
+/// environment, including conflict rules and Python bounds, permits at most one pristine restart.
+pub(crate) fn restart_on_no_solution(
+    env: &ResolverEnvironment,
+    python_requirement: &PythonRequirement,
+    error: &ErrorTree,
+    restarted_environments: &mut FxHashSet<UniversalMarker>,
+    has_metadata_failure: impl Fn(&PackageName) -> bool,
+) -> bool {
+    if env.fork_markers().is_none() {
+        return false;
+    }
+    let Some(markers) = no_solution_markers(error, has_metadata_failure) else {
+        return false;
+    };
+    restart_on_excluded_markers(env, python_requirement, markers, restarted_environments)
+}
+
+/// Collect markers only when the proof describes a semantic dependency failure.
+fn no_solution_markers(
+    error: &ErrorTree,
+    has_metadata_failure: impl Fn(&PackageName) -> bool,
+) -> Option<Vec<MarkerTree>> {
+    if derivation_tree_has_metadata_failure(error) {
+        return None;
+    }
+    let mut markers = Vec::new();
+    for package in derivation_tree_packages(error) {
+        if package.name_no_root().is_some_and(&has_metadata_failure) {
+            return None;
+        }
+        markers.push(package.marker());
+    }
+    Some(markers)
+}
+
+/// Record a same-environment restart only if the proof contains an inapplicable marker.
+fn restart_on_excluded_markers(
+    env: &ResolverEnvironment,
+    python_requirement: &PythonRequirement,
+    markers: impl IntoIterator<Item = MarkerTree>,
+    restarted_environments: &mut FxHashSet<UniversalMarker>,
+) -> bool {
+    let Some(mut effective) = env.try_universal_markers() else {
+        return false;
+    };
+    effective.and(UniversalMarker::new(
+        python_requirement.to_marker_tree(),
+        ConflictMarker::TRUE,
+    ));
+    if effective.is_false() {
+        return false;
+    }
+    let has_excluded_marker = markers
+        .into_iter()
+        .any(|marker| is_environment_marker(marker) && effective.pep508().is_disjoint(marker));
+
+    // The marker's canonical identity accounts for equivalent syntax and conflict selections.
+    // Inserting before the retry also bounds an eager fork that recreates the same environment.
+    has_excluded_marker && restarted_environments.insert(effective)
 }
 
 /// Find a strict environment partition that separates disjoint markers from a failed resolution.
@@ -1096,6 +1149,127 @@ mod tests {
     }
 
     #[test]
+    fn excluded_marker_restart_uses_effective_domain_once() {
+        let python_requirement = PythonRequirement::from_marker_environment(
+            &MARKER_ENV,
+            RequiresPython::from_specifiers(">=3.12,<3.15".parse().expect("valid Python range")),
+        );
+        let env = ResolverEnvironment::universal(vec![]).narrow_environment(marker(
+            "python_version >= '3.13' and sys_platform != 'win32'",
+        ));
+        let excluded = marker("sys_platform == 'win32'");
+        let mut restarted = FxHashSet::default();
+        assert!(restart_on_excluded_markers(
+            &env,
+            &python_requirement,
+            [excluded],
+            &mut restarted,
+        ));
+
+        // The same domain can be expressed in the fork marker or in `Requires-Python`.
+        let equivalent = ResolverEnvironment::universal(vec![])
+            .narrow_environment(marker("sys_platform != 'win32'"));
+        let narrower_python = PythonRequirement::from_marker_environment(
+            &MARKER_ENV,
+            RequiresPython::from_specifiers(">=3.13,<3.15".parse().expect("valid Python range")),
+        );
+        assert!(!restart_on_excluded_markers(
+            &equivalent,
+            &narrower_python,
+            [excluded],
+            &mut restarted,
+        ));
+        assert!(restart_on_excluded_markers(
+            &env.narrow_environment(marker("python_version >= '3.14'")),
+            &python_requirement,
+            [excluded],
+            &mut restarted,
+        ));
+        assert_eq!(restarted.len(), 2);
+    }
+
+    #[test]
+    fn excluded_marker_restart_distinguishes_conflict_rules() {
+        let package: PackageName = "project".parse().expect("valid package");
+        let extra: ExtraName = "feature".parse().expect("valid extra");
+        let group: GroupName = "dev".parse().expect("valid group");
+        let extra = ConflictItem::from((package.clone(), extra));
+        let group = ConflictItem::from((package, group));
+        let env = ResolverEnvironment::universal(vec![])
+            .narrow_environment(marker("sys_platform != 'win32'"));
+        let include = env
+            .filter_by_group([Ok(extra.clone()), Err(group.clone())])
+            .expect("consistent conflict rules");
+        let exclude = env
+            .filter_by_group([Err(extra), Err(group)])
+            .expect("consistent conflict rules");
+        let mut restarted = FxHashSet::default();
+        for env in [&include, &exclude] {
+            assert!(restart_on_excluded_markers(
+                env,
+                &python_requirement("3.12"),
+                [marker("sys_platform == 'win32'")],
+                &mut restarted,
+            ));
+            assert!(!restart_on_excluded_markers(
+                env,
+                &python_requirement("3.12"),
+                [marker("sys_platform == 'win32'")],
+                &mut restarted,
+            ));
+        }
+        assert_eq!(restarted.len(), 2);
+    }
+
+    #[test]
+    fn excluded_marker_restart_requires_an_inapplicable_environment_marker() {
+        let python_requirement = PythonRequirement::from_marker_environment(
+            &MARKER_ENV,
+            RequiresPython::from_specifiers(">=3.12,<3.15".parse().expect("valid Python range")),
+        );
+        let universal = ResolverEnvironment::universal(vec![]);
+        let env = universal.narrow_environment(marker("sys_platform != 'win32'"));
+        let mut restarted = FxHashSet::default();
+        assert!(!restart_on_excluded_markers(
+            &universal,
+            &python_requirement,
+            [marker("sys_platform == 'win32'")],
+            &mut restarted,
+        ));
+        for selection in [
+            "extra == 'feature'",
+            "'feature' in extras",
+            "'dev' in dependency_groups",
+        ] {
+            assert!(!restart_on_excluded_markers(
+                &env,
+                &python_requirement,
+                [marker(&format!("{selection} and sys_platform == 'win32'"))],
+                &mut restarted,
+            ));
+        }
+        let specific =
+            ResolverEnvironment::specific(ResolverMarkerEnvironment::from(MARKER_ENV.clone()));
+        for rejected in [specific, universal.narrow_environment(MarkerTree::FALSE)] {
+            assert!(!restart_on_excluded_markers(
+                &rejected,
+                &python_requirement,
+                [marker("sys_platform == 'win32'")],
+                &mut restarted,
+            ));
+        }
+        assert!(restarted.is_empty());
+
+        // A proof marker can also be excluded by the Python domain rather than the fork marker.
+        assert!(restart_on_excluded_markers(
+            &universal,
+            &python_requirement,
+            [marker("python_version >= '3.15'")],
+            &mut restarted,
+        ));
+    }
+
+    #[test]
     fn no_solution_recovery_excludes_metadata_failures() {
         let env = ResolverEnvironment::universal(vec![]);
         let python_requirement = python_requirement("3.12");
@@ -1131,6 +1305,22 @@ mod tests {
 
         let absent = proof(UnavailableReason::Package(UnavailablePackage::NotFound));
         assert!(fork_on_no_solution(&env, &python_requirement, &absent, |_| false).is_some());
+        let narrowed = env.narrow_environment(marker("sys_platform != 'win32'"));
+        let mut restarted = FxHashSet::default();
+        assert!(restart_on_no_solution(
+            &narrowed,
+            &python_requirement,
+            &absent,
+            &mut restarted,
+            |_| false,
+        ));
+        assert!(!restart_on_no_solution(
+            &narrowed,
+            &python_requirement,
+            &absent,
+            &mut restarted,
+            |_| false,
+        ));
         // A proxy's `NoVersions` leaf can hide a package-level retrieval failure.
         let masked = ErrorTree::Derived(Derived {
             terms: Map::default(),
@@ -1152,6 +1342,13 @@ mod tests {
             }),
             None
         );
+        assert!(!restart_on_no_solution(
+            &narrowed,
+            &python_requirement,
+            &masked,
+            &mut FxHashSet::default(),
+            |name| name == missing.name_no_root().expect("named package"),
+        ));
 
         for reason in [
             UnavailableReason::Package(UnavailablePackage::Offline),
@@ -1167,10 +1364,18 @@ mod tests {
                 StatusCode::SERVICE_UNAVAILABLE,
             )),
         ] {
+            let error = proof(reason);
             assert_eq!(
-                fork_on_no_solution(&env, &python_requirement, &proof(reason), |_| false),
+                fork_on_no_solution(&env, &python_requirement, &error, |_| false),
                 None
             );
+            assert!(!restart_on_no_solution(
+                &narrowed,
+                &python_requirement,
+                &error,
+                &mut FxHashSet::default(),
+                |_| false,
+            ));
         }
     }
 }

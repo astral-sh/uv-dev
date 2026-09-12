@@ -1,0 +1,26 @@
+name = "fork-non-local-fork-marker-eager-unsatisfiable"
+description = '''
+The missing non-Windows dependency is unreachable from the Windows-only root.
+After dropping that stale requirement, Python 3.14 on Windows still requires
+the unavailable `absent` package, so the universal resolution must fail.
+'''
+
+[testgen]
+disable = true
+
+[resolver_options]
+universal = true
+
+[expected]
+satisfiable = false
+
+[root]
+requires_python = ">=3.12,<3.15"
+requires = ["a; sys_platform == 'win32'"]
+
+[packages.a.versions."1.0.0"]
+requires = [
+  "missing; python_version >= '3.13' and sys_platform != 'win32'",
+  "absent; python_version >= '3.14' and sys_platform == 'win32'",
+]
+sdist = false
