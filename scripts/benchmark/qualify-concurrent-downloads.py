@@ -116,20 +116,25 @@ class FixtureServer:
         manifest: Path,
         delay_ms: float,
         body_delay_ms: float = 0,
+        *,
+        core_metadata: bool = True,
     ) -> None:
+        command = [
+            str(python),
+            str(Path(__file__).with_name("serve-fixtures.py")),
+            "--directory",
+            str(directory),
+            "--manifest",
+            str(manifest),
+            "--delay-ms",
+            str(delay_ms),
+            "--body-delay-ms",
+            str(body_delay_ms),
+        ]
+        if not core_metadata:
+            command.append("--no-core-metadata")
         self.process = subprocess.Popen(
-            [
-                str(python),
-                str(Path(__file__).with_name("serve-fixtures.py")),
-                "--directory",
-                str(directory),
-                "--manifest",
-                str(manifest),
-                "--delay-ms",
-                str(delay_ms),
-                "--body-delay-ms",
-                str(body_delay_ms),
-            ],
+            command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,

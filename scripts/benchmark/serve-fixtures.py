@@ -23,7 +23,14 @@ def normalize(name: str) -> str:
 
 
 class Fixtures:
-    def __init__(self, directory: Path, manifest: Path, lockfiles: list[Path]) -> None:
+    def __init__(
+        self,
+        directory: Path,
+        manifest: Path,
+        lockfiles: list[Path],
+        *,
+        core_metadata: bool = True,
+    ) -> None:
         self.files: dict[str, Path] = {}
         self.metadata: dict[str, bytes] = {}
         packages: dict[str, dict[str, dict]] = {}
@@ -74,7 +81,7 @@ class Fixtures:
                 "hashes": {"sha256": item["sha256"]},
                 "size": path.stat().st_size,
                 "requires-python": headers.get("Requires-Python"),
-                "core-metadata": {"sha256": digest},
+                "core-metadata": {"sha256": digest} if core_metadata else False,
             }
         self.simple = {
             name: json.dumps(
@@ -283,11 +290,17 @@ def main() -> None:
     parser.add_argument("--lockfile", type=Path, action="append", default=[])
     parser.add_argument("--delay-ms", type=float, default=20)
     parser.add_argument("--body-delay-ms", type=float, default=0)
+    parser.add_argument("--no-core-metadata", action="store_true")
     args = parser.parse_args()
     if args.delay_ms < 0 or args.body_delay_ms < 0:
         parser.error("request and body delays must be nonnegative")
     server = Server(
-        Fixtures(args.directory, args.manifest, args.lockfile),
+        Fixtures(
+            args.directory,
+            args.manifest,
+            args.lockfile,
+            core_metadata=not args.no_core_metadata,
+        ),
         args.delay_ms / 1000,
         args.body_delay_ms / 1000,
     )
