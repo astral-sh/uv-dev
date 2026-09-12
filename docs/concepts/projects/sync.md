@@ -76,6 +76,16 @@ $ uv sync
 Syncing the environment manually is especially useful for ensuring your editor has the correct
 versions of dependencies.
 
+### Machine-readable output
+
+Use `uv sync --output-format json` to report the sync target, environment, package changes, and any
+lockfile operation as JSON. Add `--dry-run` to inspect planned changes without updating the
+environment or lockfile.
+
+The [JSON Schema](../../reference/internals/sync.schema.json) is generated from the report types
+with `cargo dev generate-json-schema --target sync`. The format is in preview and may change without
+warning.
+
 ### Editable installation
 
 When the environment is synced, uv will install the project (and other workspace members) as

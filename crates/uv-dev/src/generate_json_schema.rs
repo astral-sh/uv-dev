@@ -43,6 +43,8 @@ pub(crate) enum Target {
     WorkspaceMetadata,
     /// The preview `uv tool list` JSON output format.
     ToolList,
+    /// The preview `uv sync` JSON output format.
+    Sync,
 }
 
 impl Target {
@@ -51,6 +53,7 @@ impl Target {
             Self::Configuration => "uv.schema.json",
             Self::WorkspaceMetadata => "docs/reference/internals/metadata.schema.json",
             Self::ToolList => "docs/reference/internals/tool-list.schema.json",
+            Self::Sync => "docs/reference/internals/sync.schema.json",
         }
     }
 
@@ -59,6 +62,7 @@ impl Target {
             Self::Configuration => "cargo dev generate-json-schema",
             Self::WorkspaceMetadata => "cargo dev generate-json-schema --target workspace-metadata",
             Self::ToolList => "cargo dev generate-json-schema --target tool-list",
+            Self::Sync => "cargo dev generate-json-schema --target sync",
         }
     }
 }
@@ -131,6 +135,7 @@ fn schema(target: Target) -> schemars::Schema {
             .into_generator()
             .into_root_schema_for::<uv_resolver::Metadata>(),
         Target::ToolList => uv::commands::tool_list_json_schema(),
+        Target::Sync => uv::commands::sync_json_schema(),
     }
 }
 
@@ -242,6 +247,56 @@ mod tests {
             definitions["CommandReport"]["properties"]["name"]["type"],
             "string"
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn sync_schema_describes_serialized_values() -> anyhow::Result<()> {
+        let schema = serde_json::to_value(schema(Target::Sync))?;
+        let definitions = &schema["definitions"];
+        let sync = &definitions["SyncReport"];
+        let package = &definitions["PackageChangeReport"];
+
+        assert_eq!(schema["title"], "uv sync (preview)");
+        assert_eq!(definitions["SchemaVersion"]["oneOf"][0]["const"], "preview");
+        assert_eq!(
+            definitions["PythonReport"]["properties"]["key"]["type"],
+            "string"
+        );
+        assert_eq!(package["properties"]["version"]["type"], "string");
+        assert!(
+            package["required"]
+                .as_array()
+                .is_some_and(|fields| fields.iter().all(|field| field != "version"))
+        );
+        assert_eq!(definitions["PackageChangesReport"]["type"], "array");
+        assert_eq!(
+            schema["properties"]["project"]["allOf"][0]["$ref"],
+            "#/definitions/ProjectReport"
+        );
+        assert_eq!(
+            schema["properties"]["script"]["allOf"][0]["$ref"],
+            "#/definitions/ScriptReport"
+        );
+        assert_eq!(schema["properties"]["lock"]["anyOf"][1]["type"], "null");
+        assert!(sync["properties"].get("dry_run").is_none());
+        assert!(sync["properties"].get("target").is_none());
+        assert!(
+            definitions["LockReport"]["properties"]
+                .get("dry_run")
+                .is_none()
+        );
+        assert!(
+            schema["required"]
+                .as_array()
+                .is_some_and(|fields| fields.iter().any(|field| field == "lock"))
+        );
+        assert!(schema["required"].as_array().is_some_and(|fields| {
+            fields
+                .iter()
+                .all(|field| field != "project" && field != "script")
+        }));
 
         Ok(())
     }

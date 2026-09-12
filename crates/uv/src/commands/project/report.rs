@@ -19,6 +19,7 @@ use crate::commands::report::{EnvironmentReport, SchemaReport};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct WorkspaceReport {
     /// The workspace directory path.
     path: PortablePathBuf,
@@ -33,9 +34,11 @@ impl From<&Workspace> for WorkspaceReport {
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct ProjectReport {
-    //
+    /// The selected project directory path.
     path: PortablePathBuf,
+    /// The workspace containing the project.
     workspace: WorkspaceReport,
 }
 
@@ -58,6 +61,7 @@ impl From<&SyncTarget> for TargetName {
 }
 
 #[derive(Serialize, Debug)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct ScriptReport {
     /// The path to the script.
     path: PortablePathBuf,
@@ -71,31 +75,45 @@ impl From<&Pep723Script> for ScriptReport {
     }
 }
 
-/// A report of the uv sync operation
+/// The preview `uv sync` JSON report.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schemars", schemars(title = "uv sync (preview)"))]
 pub(super) struct Report {
     /// The schema of this report.
     schema: SchemaReport,
     /// The target of the sync operation, either a project or a script.
     target: TargetName,
-    /// The report for a [`TargetName::Project`], if applicable.
+    /// Project details when `target` is `project`.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "ProjectReport"))]
     project: Option<ProjectReport>,
-    /// The report for a [`TargetName::Script`], if applicable.
+    /// Script details when `target` is `script`.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "ScriptReport"))]
     script: Option<ScriptReport>,
     /// The report for the sync operation.
     sync: SyncReport,
-    /// The report for the lock operation.
+    /// The report for the lock operation, or null if no lock operation was performed.
     lock: Option<LockReport>,
     /// Whether this is a dry run.
     dry_run: bool,
 }
 
+/// Generate the preview `uv sync` output schema for repository development tools.
+#[cfg(feature = "schemars")]
+pub fn json_schema() -> schemars::Schema {
+    schemars::generate::SchemaSettings::draft07()
+        .for_serialize()
+        .into_generator()
+        .into_root_schema_for::<Report>()
+}
+
 /// The kind of target
 #[derive(Debug, Serialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 enum TargetName {
     Project,
     Script,
@@ -113,6 +131,7 @@ impl std::fmt::Display for TargetName {
 /// Represents the action taken during a sync.
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 enum SyncAction {
     /// The environment was checked and required no updates.
     Check,
@@ -170,6 +189,7 @@ impl SyncAction {
 /// Represents the action taken during a lock.
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 enum LockAction {
     /// The lockfile was used without checking.
     Use,
@@ -212,6 +232,7 @@ impl From<&SyncEnvironment> for EnvironmentReport {
 
 /// The report for a sync operation.
 #[derive(Serialize, Debug)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub(super) struct SyncReport {
     /// The environment.
     environment: EnvironmentReport,
@@ -273,6 +294,7 @@ impl SyncReport {
 
 /// A summary of all package changes performed during sync.
 #[derive(Serialize, Debug, Clone, Default)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct PackageChangesReport(Vec<PackageChangeReport>);
 
 impl PackageChangesReport {
@@ -302,11 +324,13 @@ impl PackageChangesReport {
 
 /// A summary of a single package change performed during sync.
 #[derive(Serialize, Debug, Clone)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct PackageChangeReport {
     /// The normalized package name.
     name: PackageName,
     /// The resolved version of the package.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "String"))]
     version: Option<uv_pep440::Version>,
     /// The action that was taken for the package.
     action: PackageChangeAction,
@@ -325,6 +349,7 @@ impl PackageChangeReport {
 /// The action taken on an individual package during sync.
 #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 enum PackageChangeAction {
     Uninstalled,
     Installed,
@@ -333,8 +358,9 @@ enum PackageChangeAction {
 
 /// The report for a lock operation.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub(super) struct LockReport {
-    /// The path to the lockfile
+    /// The path to the lockfile.
     path: PortablePathBuf,
     /// Whether the lockfile was preserved, created, or updated.
     action: LockAction,
