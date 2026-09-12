@@ -123,9 +123,7 @@ impl Metadata23 {
         let metadata_version = headers
             .get_first_value("Metadata-Version")
             .ok_or(MetadataError::FieldNotFound("Metadata-Version"))?;
-        let name = headers
-            .get_first_value("Name")
-            .ok_or(MetadataError::FieldNotFound("Name"))?;
+        let name = headers.get_name()?;
         let version = headers
             .get_first_value("Version")
             .ok_or(MetadataError::FieldNotFound("Version"))?;
