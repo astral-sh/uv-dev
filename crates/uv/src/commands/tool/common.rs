@@ -752,8 +752,45 @@ pub(crate) fn finalize_tool_install(
         executable_directory.user_display()
     );
 
-    let mut installed_entrypoints: Vec<ToolEntrypoint> = Vec::new();
     let site_packages = SitePackages::from_environment(environment)?;
+    if installed_tools.get_tool_receipt(name)?.is_none() {
+        let installed = site_packages.get_packages(name);
+        let Some(root) = installed.first() else {
+            writeln!(
+                printer.stdout(),
+                "No executables are provided by package `{}`; removing tool",
+                name.cyan()
+            )?;
+            installed_tools.remove_environment(name)?;
+
+            return Err(NoExecutablesError::Root {
+                package: name.clone(),
+                matching_dependency_packages: Vec::new(),
+            }
+            .into());
+        };
+
+        // Validate new tools before touching dependency entrypoints owned by another tool.
+        if entrypoint_paths(&site_packages, root.name(), root.version())?.is_empty() {
+            let err = NoExecutablesError::Root {
+                package: name.clone(),
+                matching_dependency_packages: matching_packages(name.as_ref(), &site_packages)
+                    .into_iter()
+                    .map(|dist| dist.name().clone())
+                    .collect(),
+            };
+            writeln!(
+                printer.stdout(),
+                "No executables are provided by package `{}`; removing tool",
+                name.cyan()
+            )?;
+            installed_tools.remove_environment(name)?;
+
+            return Err(err.into());
+        }
+    }
+
+    let mut installed_entrypoints: Vec<ToolEntrypoint> = Vec::new();
     let ordered_packages = entrypoints
         // Install dependencies first
         .iter()

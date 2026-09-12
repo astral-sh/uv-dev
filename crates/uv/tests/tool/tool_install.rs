@@ -3012,6 +3012,69 @@ fn tool_install_no_entrypoints() {
         .assert(predicate::path::missing());
 }
 
+/// A failed forced installation must not remove another tool's existing executable.
+#[test]
+fn tool_install_failure_preserves_existing_additional_entrypoints() {
+    let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let links = context.workspace_root.join("test/links");
+
+    context
+        .tool_install()
+        .arg("simple-launcher")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(&links)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let executable = bin_dir.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
+    executable.assert(predicate::path::exists());
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("basic-package")
+        .arg("--with-executables-from")
+        .arg("simple-launcher")
+        .arg("--force")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(&links)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 2 (failure)
+    ----- stdout -----
+    No executables are provided by package `basic-package`; removing tool
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 2 packages in [TIME]
+     + basic-package==0.1.0
+     + simple-launcher==0.1.0
+    error: Failed to install entrypoints for `basic-package`
+    ");
+
+    tool_dir
+        .child("basic-package")
+        .assert(predicate::path::missing());
+    tool_dir
+        .child("simple-launcher")
+        .child("uv-receipt.toml")
+        .assert(predicate::path::exists());
+    executable.assert(predicate::path::exists());
+
+    uv_snapshot!(context.filters(), Command::new(executable.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hi from the simple launcher!
+    ");
+}
+
 /// Test that a failed tool installation removes entrypoints installed from additional packages.
 #[test]
 fn tool_install_failure_removes_additional_entrypoints() -> Result<()> {
@@ -3047,7 +3110,6 @@ fn tool_install_failure_removes_additional_entrypoints() -> Result<()> {
      + packaging==24.0
      + pathspec==0.12.1
      + platformdirs==4.2.0
-    Installed 2 executables from `black`: black, blackd
     error: Failed to install entrypoints for `iniconfig`
     ");
 
