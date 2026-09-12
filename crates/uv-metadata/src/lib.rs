@@ -297,7 +297,8 @@ pub fn read_flat_wheel_metadata(
 
 #[cfg(test)]
 mod test {
-    use super::find_archive_dist_info;
+    use super::{Error, find_archive_dist_info};
+    use std::error::Error as StdError;
     use std::str::FromStr;
     use uv_distribution_filename::WheelFilename;
 
@@ -318,5 +319,51 @@ mod test {
         let (_, dist_info_prefix) =
             find_archive_dist_info(&filename, files.into_iter().map(|file| (file, file))).unwrap();
         assert_eq!(dist_info_prefix, "Mastodon.py-1.5.1");
+    }
+
+    #[test]
+    fn test_dist_info_version_spellings() -> Result<(), Box<dyn StdError>> {
+        for (wheel, prefix) in [
+            (
+                "friendly_bard-1.0.post1-py3-none-any.whl",
+                "friendly_bard-1.0-1",
+            ),
+            (
+                "friendly_bard-1.0.post1-py3-none-any.whl",
+                "friendly_bard-1.0.post1",
+            ),
+            (
+                "friendly_bard-1.0+local.1-py3-none-any.whl",
+                "Friendly.Bard-1.0+LOCAL_1",
+            ),
+        ] {
+            let filename = WheelFilename::from_str(wheel)?;
+            let metadata_path = format!("{prefix}.dist-info/METADATA");
+            let files = [(1, "unrelated.txt"), (17, metadata_path.as_str())];
+            let (payload, actual_prefix) = find_archive_dist_info(&filename, files.into_iter())?;
+            assert_eq!(payload, 17);
+            assert_eq!(actual_prefix, prefix);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_dist_info_version_spelling_wrong_name() -> Result<(), Box<dyn StdError>> {
+        let filename = WheelFilename::from_str("friendly_bard-1.0+local-py3-none-any.whl")?;
+        let error = find_archive_dist_info(
+            &filename,
+            [(17, "Unrelated.Name-1.0+local.dist-info/METADATA")].into_iter(),
+        )
+        .expect_err("an unrelated package name must not match");
+        assert_eq!(
+            error.to_string(),
+            "The .dist-info directory Unrelated.Name-1.0+local does not start with the normalized package name: friendly-bard"
+        );
+        let Error::MissingDistInfoPackageName(prefix, name) = error else {
+            return Err("unexpected error variant".into());
+        };
+        assert_eq!(prefix, "Unrelated.Name-1.0+local");
+        assert_eq!(name, "friendly-bard");
+        Ok(())
     }
 }
