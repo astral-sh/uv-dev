@@ -92,6 +92,17 @@
       "conditions": {
         "/sender/type": "User"
       },
+      "workflow": "request-promotion.yml"
+    },
+    {
+      "repository": "uv-security",
+      "on": {
+        "pull_request": ["labeled"]
+      },
+      "conditions": {
+        "/label/name": "bot:promote",
+        "/sender/type": "User"
+      },
       "workflow": "promote-pull-request.yml"
     },
     {
