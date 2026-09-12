@@ -692,6 +692,39 @@ async fn perform_install(
         installation.finalize()?;
     }
 
+    let minor_versions =
+        PythonInstallationMinorVersionKey::highest_installations_by_minor_version_key(
+            installations
+                .iter()
+                .copied()
+                .chain(existing_installations.iter()),
+        );
+
+    // Retargeting a minor-version directory can change the apparent owner of an existing
+    // executable. Keep its previous target and ownership for replacement policy and reporting.
+    let mut bin_links = BinLinkStates::default();
+    if let Some(bin_dir) = bin_dir.as_ref()
+        && minor_versions.values().any(|installation| {
+            PythonMinorVersionLink::from_installation(installation)
+                .is_some_and(|link| !link.exists())
+        })
+    {
+        bin_links = BinLinkStates::capture(
+            bin_dir,
+            &installations,
+            &existing_installations,
+            default,
+            is_default_install,
+            preview,
+        );
+    }
+
+    // Executable links may point through these directories. Prepare those targets before writing
+    // entry points so a failed minor-version link cannot publish a new unresolved executable.
+    for installation in minor_versions.values() {
+        installation.ensure_minor_version_link()?;
+    }
+
     for installation in &installations {
         let upgradeable = (default || is_default_install)
             || requested_minor_versions.contains(&installation.key().version().python_version());
@@ -711,6 +744,7 @@ async fn perform_install(
                 is_default_install,
                 &existing_installations,
                 &installations,
+                &mut bin_links,
                 &mut changelog,
                 &mut errors,
                 preview,
@@ -732,18 +766,6 @@ async fn perform_install(
                 }
             }
         }
-    }
-
-    let minor_versions =
-        PythonInstallationMinorVersionKey::highest_installations_by_minor_version_key(
-            installations
-                .iter()
-                .copied()
-                .chain(existing_installations.iter()),
-        );
-
-    for installation in minor_versions.values() {
-        installation.ensure_minor_version_link()?;
     }
 
     if changelog.installed.is_empty() && errors.is_empty() {
@@ -977,6 +999,107 @@ async fn perform_install(
     Ok(ExitStatus::Success)
 }
 
+#[derive(Debug)]
+struct BinLinkState {
+    encoded_target: PathBuf,
+    owner: Option<ManagedPythonInstallation>,
+    // `uv python upgrade` only updates entry points that already exist.
+    path_exists: bool,
+    // Broken Unix links can be replaced without `--force`; unknown Windows launchers cannot.
+    valid_link: bool,
+}
+
+/// Executable-link state from before minor-version directories were retargeted.
+#[derive(Debug, Default)]
+struct BinLinkStates {
+    states: FxHashMap<PathBuf, BinLinkState>,
+}
+
+impl BinLinkStates {
+    fn capture(
+        bin: &Path,
+        installations: &[&ManagedPythonInstallation],
+        existing_installations: &[ManagedPythonInstallation],
+        default: bool,
+        is_default_install: bool,
+        preview: Preview,
+    ) -> Self {
+        let mut states = FxHashMap::default();
+        for name in installations
+            .iter()
+            .flat_map(|installation| {
+                bin_link_names(installation.key(), default, is_default_install, preview)
+            })
+            .unique()
+        {
+            let path = bin.join(name);
+            let Some(encoded_target) = read_bin_link_target(&path) else {
+                continue;
+            };
+            let owner = resolve_bin_link_target(&path, &encoded_target)
+                .and_then(|target| {
+                    installations
+                        .iter()
+                        .copied()
+                        .chain(existing_installations.iter())
+                        .find(|installation| installation.executable(false) == target)
+                })
+                .cloned();
+            let state = BinLinkState {
+                encoded_target,
+                owner,
+                path_exists: path.try_exists().unwrap_or_default(),
+                valid_link: is_valid_unmanaged_bin_link(&path),
+            };
+            states.insert(path, state);
+        }
+        Self { states }
+    }
+
+    /// Only use captured ownership while the executable still encodes the same target.
+    fn get(&self, path: &Path) -> Option<&BinLinkState> {
+        let state = self.states.get(path)?;
+        let encoded_target = read_bin_link_target(path)?;
+        (encoded_target == state.encoded_target).then_some(state)
+    }
+
+    fn record(&mut self, path: &Path, executable: &Path, installation: &ManagedPythonInstallation) {
+        self.states.insert(
+            path.to_path_buf(),
+            BinLinkState {
+                // Windows launchers store simplified paths in their metadata.
+                encoded_target: dunce::simplified(executable).to_path_buf(),
+                owner: Some(installation.clone()),
+                path_exists: path.try_exists().unwrap_or_default(),
+                valid_link: true,
+            },
+        );
+    }
+}
+
+fn bin_link_names(
+    key: &PythonInstallationKey,
+    default: bool,
+    is_default_install: bool,
+    preview: Preview,
+) -> Vec<String> {
+    // TODO(zanieb): We want more feedback on the `is_default_install` behavior before stabilizing
+    // it. In particular, it may be confusing because it does not apply when versions are loaded
+    // from a `.python-version` file.
+    let should_create_default_links =
+        default || (is_default_install && preview.is_enabled(PreviewFeature::PythonInstallDefault));
+
+    if should_create_default_links {
+        vec![
+            key.executable_name_minor(),
+            key.executable_name_major(),
+            key.executable_name(),
+        ]
+    } else {
+        vec![key.executable_name_minor()]
+    }
+}
+
 /// Link the binaries of a managed Python installation to the bin directory.
 ///
 /// This function is fallible, but errors are pushed to `errors` instead of being thrown.
@@ -992,31 +1115,21 @@ fn create_bin_links(
     is_default_install: bool,
     existing_installations: &[ManagedPythonInstallation],
     installations: &[&ManagedPythonInstallation],
+    bin_links: &mut BinLinkStates,
     changelog: &mut Changelog,
     errors: &mut Vec<(InstallErrorKind, PythonInstallationKey, Error)>,
     preview: Preview,
 ) {
-    // TODO(zanieb): We want more feedback on the `is_default_install` behavior before stabilizing
-    // it. In particular, it may be confusing because it does not apply when versions are loaded
-    // from a `.python-version` file.
-    let should_create_default_links =
-        default || (is_default_install && preview.is_enabled(PreviewFeature::PythonInstallDefault));
-
-    let targets = if should_create_default_links {
-        vec![
-            installation.key().executable_name_minor(),
-            installation.key().executable_name_major(),
-            installation.key().executable_name(),
-        ]
-    } else {
-        vec![installation.key().executable_name_minor()]
-    };
-
     let mut existing_unmanaged = Vec::new();
 
-    for target in targets {
+    for target in bin_link_names(installation.key(), default, is_default_install, preview) {
         let target = bin.join(target);
-        if upgrade && !target.try_exists().unwrap_or_default() {
+        if upgrade
+            && !bin_links.get(&target).map_or_else(
+                || target.try_exists().unwrap_or_default(),
+                |state| state.path_exists,
+            )
+        {
             continue;
         }
         let executable = if upgradeable {
@@ -1033,6 +1146,7 @@ fn create_bin_links(
 
         match create_link_to_executable(&target, PythonExecutable::console(&executable)) {
             Ok(()) => {
+                bin_links.record(&target, &executable, installation);
                 debug!(
                     "Installed executable at `{}` for {}",
                     target.simplified_display(),
@@ -1053,29 +1167,30 @@ fn create_bin_links(
                     target.simplified_display()
                 );
 
-                //  Figure out what installation it references, if any
-                let existing = find_matching_bin_link(
-                    installations
-                        .iter()
-                        .copied()
-                        .chain(existing_installations.iter()),
-                    &target,
-                );
+                // A minor-version link may already point to the new patch. Recheck the encoded
+                // executable target before relying on its owner from before that retargeting.
+                let captured = bin_links.get(&target);
+                let valid_link = captured.map(|state| state.valid_link);
+                let existing = captured
+                    .map(|state| state.owner.as_ref())
+                    .unwrap_or_else(|| {
+                        find_matching_bin_link(
+                            installations
+                                .iter()
+                                .copied()
+                                .chain(existing_installations.iter()),
+                            &target,
+                        )
+                    })
+                    .cloned();
 
-                match existing {
+                match existing.as_ref() {
                     None => {
                         // Determine if the link is valid, i.e., if it points to an existing
                         // Python we don't manage. On Windows, we just assume it is valid because
                         // symlinks are not common for Python interpreters.
-                        let valid_link = cfg!(windows)
-                            || target
-                                .read_link()
-                                .and_then(|target| target.try_exists())
-                                .inspect_err(|err| {
-                                    debug!("Failed to inspect executable with error: {err}");
-                                })
-                                // If we can't verify the link, assume it is valid.
-                                .unwrap_or(true);
+                        let valid_link =
+                            valid_link.unwrap_or_else(|| is_valid_unmanaged_bin_link(&target));
 
                         // There's an existing executable we don't manage, require `--force`
                         if valid_link {
@@ -1174,7 +1289,7 @@ fn create_bin_links(
                     continue;
                 }
 
-                if let Some(existing) = existing {
+                if let Some(existing) = existing.as_ref() {
                     // Ensure we do not report installation of this executable for an existing
                     // key if we undo it
                     changelog
@@ -1184,6 +1299,7 @@ fn create_bin_links(
                         .remove(&target);
                 }
 
+                bin_links.record(&target, &executable, installation);
                 debug!(
                     "Updated executable at `{}` to {}",
                     target.simplified_display(),
@@ -1345,24 +1461,46 @@ fn find_matching_bin_link<'a>(
     mut installations: impl Iterator<Item = &'a ManagedPythonInstallation>,
     path: &Path,
 ) -> Option<&'a ManagedPythonInstallation> {
-    if cfg!(unix) {
-        if !path.is_symlink() {
-            return None;
-        }
-        let target = fs_err::canonicalize(path).ok()?;
+    let encoded_target = read_bin_link_target(path)?;
+    let target = resolve_bin_link_target(path, &encoded_target)?;
+    installations.find(|installation| installation.executable(false) == target)
+}
 
-        installations.find(|installation| installation.executable(false) == target)
+/// Read the target stored in a Unix symlink or a Windows Python launcher.
+fn read_bin_link_target(path: &Path) -> Option<PathBuf> {
+    if cfg!(unix) {
+        fs_err::read_link(path).ok()
     } else if cfg!(windows) {
         let launcher = Launcher::try_from_path(path).ok()??;
         if !matches!(launcher.kind, LauncherKind::Python) {
             return None;
         }
-        let target = dunce::canonicalize(launcher.python_path).ok()?;
-
-        installations.find(|installation| installation.executable(false) == target)
+        Some(launcher.python_path)
     } else {
         unreachable!("Only Unix and Windows are supported")
     }
+}
+
+fn resolve_bin_link_target(path: &Path, encoded_target: &Path) -> Option<PathBuf> {
+    if cfg!(unix) {
+        fs_err::canonicalize(path).ok()
+    } else if cfg!(windows) {
+        dunce::canonicalize(encoded_target).ok()
+    } else {
+        unreachable!("Only Unix and Windows are supported")
+    }
+}
+
+fn is_valid_unmanaged_bin_link(path: &Path) -> bool {
+    cfg!(windows)
+        || path
+            .read_link()
+            .and_then(|target| target.try_exists())
+            .inspect_err(|err| {
+                debug!("Failed to inspect executable with error: {err}");
+            })
+            // If we can't verify the link, assume it is valid.
+            .unwrap_or(true)
 }
 
 /// Check if a download's build version matches an installation's build version.
@@ -1387,10 +1525,14 @@ mod tests {
     use uv_preview::Preview;
     use uv_python::managed::{
         ManagedPythonInstallation, ManagedPythonInstallations, PythonExecutable,
-        create_link_to_executable, platform_key_from_env,
+        PythonMinorVersionLink, create_link_to_executable, platform_key_from_env,
+        replace_link_to_executable,
     };
 
-    use super::{Changelog, InstallErrorKind, create_bin_links, find_matching_bin_link};
+    use super::{
+        BinLinkStates, Changelog, InstallErrorKind, create_bin_links, find_matching_bin_link,
+        read_bin_link_target,
+    };
 
     fn create_installation(root: &Path, version: &str) -> Result<ManagedPythonInstallation> {
         let managed = root.join("managed");
@@ -1415,6 +1557,7 @@ mod tests {
         fs_err::create_dir_all(&bin)?;
         let target = bin.join(installation.key().executable_name_minor());
         fs_err::write(&target, b"unmanaged executable")?;
+        let mut bin_links = BinLinkStates::default();
         let mut changelog = Changelog::default();
         let mut errors = Vec::new();
 
@@ -1429,6 +1572,7 @@ mod tests {
             false,
             &[],
             &[&installation],
+            &mut bin_links,
             &mut changelog,
             &mut errors,
             Preview::default(),
@@ -1436,6 +1580,7 @@ mod tests {
         assert_eq!(fs_err::read(&target)?, b"unmanaged executable");
         assert!(changelog.installed.is_empty());
         assert!(changelog.installed_executables.is_empty());
+        assert!(bin_links.states.is_empty());
         let [(InstallErrorKind::Bin, key, _)] = errors.as_slice() else {
             anyhow::bail!("unexpected errors: {errors:?}");
         };
@@ -1453,6 +1598,7 @@ mod tests {
             false,
             &[],
             &[&installation],
+            &mut bin_links,
             &mut changelog,
             &mut errors,
             Preview::default(),
@@ -1464,6 +1610,13 @@ mod tests {
             Some(installation.key())
         );
         assert!(changelog.installed.contains(installation.key()));
+        assert_eq!(
+            bin_links
+                .get(&target)
+                .and_then(|state| state.owner.as_ref())
+                .map(ManagedPythonInstallation::key),
+            Some(installation.key())
+        );
         assert_eq!(
             changelog.installed_executables.get(installation.key()),
             Some(&[target].into_iter().collect())
@@ -1480,6 +1633,7 @@ mod tests {
         let bin = root.join("bin");
         let target = bin.join(older.key().executable_name_minor());
         create_link_to_executable(&target, PythonExecutable::console(&older.executable(false)))?;
+        let mut bin_links = BinLinkStates::default();
         let mut changelog = Changelog::default();
         changelog.installed.insert(older.key().clone());
         changelog
@@ -1498,6 +1652,7 @@ mod tests {
             false,
             std::slice::from_ref(&older),
             &[&newer],
+            &mut bin_links,
             &mut changelog,
             &mut errors,
             Preview::default(),
@@ -1509,6 +1664,13 @@ mod tests {
             Some(newer.key())
         );
         assert!(changelog.installed.contains(newer.key()));
+        assert_eq!(
+            bin_links
+                .get(&target)
+                .and_then(|state| state.owner.as_ref())
+                .map(ManagedPythonInstallation::key),
+            Some(newer.key())
+        );
         assert!(
             changelog
                 .installed_executables
@@ -1534,6 +1696,7 @@ mod tests {
         fs_err::create_dir_all(&target)?;
         let existing = target.join("existing");
         fs_err::write(&existing, b"existing directory contents")?;
+        let mut bin_links = BinLinkStates::default();
         let mut changelog = Changelog::default();
         let mut errors = Vec::new();
 
@@ -1548,6 +1711,7 @@ mod tests {
             false,
             &[],
             &[&installation],
+            &mut bin_links,
             &mut changelog,
             &mut errors,
             Preview::default(),
@@ -1556,10 +1720,189 @@ mod tests {
         assert_eq!(fs_err::read(&existing)?, b"existing directory contents");
         assert!(changelog.installed.is_empty());
         assert!(changelog.installed_executables.is_empty());
+        assert!(bin_links.states.is_empty());
         let [(InstallErrorKind::Bin, key, _)] = errors.as_slice() else {
             anyhow::bail!("unexpected errors: {errors:?}");
         };
         assert_eq!(key, installation.key());
+        Ok(())
+    }
+
+    #[test]
+    fn create_bin_links_keeps_owner_across_minor_retarget() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let root = dunce::canonicalize(temp_dir.path())?;
+        let older = create_installation(&root, "3.12.6")?;
+        let newer = create_installation(&root, "3.12.8")?;
+        let bin = root.join("bin");
+        let target = bin.join(older.key().executable_name_minor());
+        older.ensure_minor_version_link()?;
+        let minor_link = PythonMinorVersionLink::from_installation(&older)
+            .context("CPython must have a minor-version link")?;
+        create_link_to_executable(
+            &target,
+            PythonExecutable::console(&minor_link.symlink_executable),
+        )?;
+        let mut bin_links = BinLinkStates::capture(
+            &bin,
+            &[&newer],
+            std::slice::from_ref(&older),
+            false,
+            false,
+            Preview::default(),
+        );
+
+        newer.ensure_minor_version_link()?;
+        assert_eq!(
+            find_matching_bin_link([&older, &newer].into_iter(), &target)
+                .map(ManagedPythonInstallation::key),
+            Some(newer.key())
+        );
+        assert_eq!(
+            bin_links
+                .get(&target)
+                .and_then(|state| state.owner.as_ref())
+                .map(ManagedPythonInstallation::key),
+            Some(older.key())
+        );
+
+        let mut changelog = Changelog::default();
+        changelog.installed.insert(older.key().clone());
+        changelog
+            .installed_executables
+            .insert(older.key().clone(), [target.clone()].into_iter().collect());
+        let mut errors = Vec::new();
+        create_bin_links(
+            &newer,
+            &bin,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            std::slice::from_ref(&older),
+            &[&newer],
+            &mut bin_links,
+            &mut changelog,
+            &mut errors,
+            Preview::default(),
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(
+            read_bin_link_target(&target).as_deref(),
+            Some(dunce::simplified(&newer.executable(false)))
+        );
+        assert_eq!(
+            bin_links
+                .get(&target)
+                .and_then(|state| state.owner.as_ref())
+                .map(ManagedPythonInstallation::key),
+            Some(newer.key())
+        );
+        assert!(
+            changelog
+                .installed_executables
+                .get(older.key())
+                .context("missing previous executable owner")?
+                .is_empty()
+        );
+        assert_eq!(
+            changelog.installed_executables.get(newer.key()),
+            Some(&[target].into_iter().collect())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn create_bin_links_rechecks_a_captured_target() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let root = dunce::canonicalize(temp_dir.path())?;
+        let older = create_installation(&root, "3.12.6")?;
+        let newer = create_installation(&root, "3.12.8")?;
+        let bin = root.join("bin");
+        let target = bin.join(older.key().executable_name_minor());
+        create_link_to_executable(&target, PythonExecutable::console(&older.executable(false)))?;
+        let mut bin_links = BinLinkStates::capture(
+            &bin,
+            &[&newer],
+            std::slice::from_ref(&older),
+            false,
+            false,
+            Preview::default(),
+        );
+
+        let unmanaged = root.join("unmanaged-python");
+        fs_err::write(&unmanaged, b"unmanaged executable")?;
+        replace_link_to_executable(&target, PythonExecutable::console(&unmanaged))?;
+        assert!(bin_links.get(&target).is_none());
+
+        let mut changelog = Changelog::default();
+        let mut errors = Vec::new();
+        create_bin_links(
+            &newer,
+            &bin,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            std::slice::from_ref(&older),
+            &[&newer],
+            &mut bin_links,
+            &mut changelog,
+            &mut errors,
+            Preview::default(),
+        );
+        assert_eq!(
+            read_bin_link_target(&target).as_deref(),
+            Some(dunce::simplified(&unmanaged))
+        );
+        assert!(changelog.installed.is_empty());
+        assert!(changelog.installed_executables.is_empty());
+        let [(InstallErrorKind::Bin, key, _)] = errors.as_slice() else {
+            anyhow::bail!("unexpected errors: {errors:?}");
+        };
+        assert_eq!(key, newer.key());
+        assert_eq!(
+            bin_links
+                .states
+                .get(&target)
+                .and_then(|state| state.owner.as_ref())
+                .map(ManagedPythonInstallation::key),
+            Some(older.key())
+        );
+
+        errors.clear();
+        create_bin_links(
+            &newer,
+            &bin,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            std::slice::from_ref(&older),
+            &[&newer],
+            &mut bin_links,
+            &mut changelog,
+            &mut errors,
+            Preview::default(),
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(
+            bin_links
+                .get(&target)
+                .and_then(|state| state.owner.as_ref())
+                .map(ManagedPythonInstallation::key),
+            Some(newer.key())
+        );
+        assert_eq!(
+            changelog.installed_executables.get(newer.key()),
+            Some(&[target].into_iter().collect())
+        );
         Ok(())
     }
 }
