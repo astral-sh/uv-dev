@@ -13,6 +13,8 @@ use insta::assert_json_snapshot;
 use insta::assert_snapshot;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "test-universal")]
+use uv_static::EnvVars;
 use uv_test::{copy_dir_ignore, make_project, uv_snapshot};
 
 fn workspaces_dir() -> PathBuf {
@@ -1078,6 +1080,37 @@ fn workspace_nonempty_member_no_pyproject() -> Result<()> {
     error: Workspace member `[TEMP_DIR]/workspace/packages/c` is missing a `pyproject.toml` (matches: `packages/*`)
     "
     );
+
+    Ok(())
+}
+
+/// Warnings and the first error follow member discovery order when reads are prefetched.
+#[cfg(feature = "test-universal")]
+#[test]
+fn workspace_member_warning_and_error_order() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let workspace = context.temp_dir.child("workspace");
+    workspace.child("pyproject.toml").write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["packages/*"]
+    "#})?;
+
+    fs_err::create_dir_all(workspace.join("packages").join("b-error"))?;
+    fs_err::write(workspace.join("packages").join("a-before"), "file")?;
+    fs_err::write(
+        workspace.join("packages").join("b-error").join("README.md"),
+        "nonempty directory",
+    )?;
+    fs_err::write(workspace.join("packages").join("c-after"), "file")?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .current_dir(&workspace)
+        .env(EnvVars::RUST_LOG, "warn"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    WARN Ignoring non-directory workspace member: `[TEMP_DIR]/workspace/packages/a-before`
+    error: Workspace member `[TEMP_DIR]/workspace/packages/b-error` is missing a `pyproject.toml` (matches: `packages/*`)
+    ");
 
     Ok(())
 }

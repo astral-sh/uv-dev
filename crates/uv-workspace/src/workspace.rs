@@ -10,7 +10,8 @@ use std::hash::BuildHasherDefault;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use glob::{GlobError, MatchOptions, Pattern, PatternError, glob};
+use futures::{StreamExt, pin_mut};
+use glob::{GlobError, MatchOptions, Pattern, PatternError};
 use itertools::Itertools;
 use rustc_hash::{FxHashSet, FxHasher};
 use tracing::{debug, trace, warn};
@@ -32,6 +33,12 @@ use crate::pyproject::{
     OverrideDependency, Project, PyProjectToml, PyprojectTomlError, Source, Sources, ToolUvSources,
     ToolUvWorkspace, WorkspaceReference,
 };
+
+use self::members::{
+    IgnoreReason, MemberCandidates, MemberEvent, MemberPath, MemberRead, read_members,
+};
+
+mod members;
 
 /// The workspace project environment selected by configuration and command-line options.
 #[derive(Debug)]
@@ -1170,198 +1177,166 @@ impl Workspace {
             );
         }
 
-        // Prepare exclusions only after finding a member that is not explicitly ignored.
-        let mut exclusions = None;
-
-        // Add all other workspace members.
-        for member_glob in workspace_definition.members.as_deref().unwrap_or_default() {
-            // Normalize the member glob to remove leading `./` and other relative path components
-            let normalized_glob = normalize_path(Path::new(member_glob.as_str()));
-            let absolute_glob = PathBuf::from(glob::Pattern::escape(
-                workspace_root.simplified().to_string_lossy().as_ref(),
-            ))
-            .join(normalized_glob.as_ref())
-            .to_string_lossy()
-            .to_string();
-            for member_root in glob(&absolute_glob)
-                .map_err(|err| WorkspaceErrorKind::Pattern(absolute_glob.clone(), err))?
-            {
-                let member_root = member_root
-                    .map_err(|err| WorkspaceErrorKind::GlobWalk(absolute_glob.clone(), err))?;
-                if external_cache_root
-                    .as_ref()
-                    .is_some_and(|cache_root| member_root.starts_with(cache_root))
-                {
-                    debug!(
-                        "Ignoring cache directory while discovering workspace members: `{}`",
-                        member_root.simplified_display()
-                    );
+        // Overlap reads, but handle diagnostics and validate members in discovery order.
+        let candidates = MemberCandidates::new(
+            workspace_root,
+            workspace_definition,
+            &options.members,
+            external_cache_root,
+            seen,
+        );
+        let member_reads = read_members(candidates);
+        pin_mut!(member_reads);
+        while let Some(event) = member_reads.next().await {
+            let member = match event {
+                MemberEvent::Member(member) => member,
+                MemberEvent::Ignored { root, reason } => {
+                    match reason {
+                        IgnoreReason::Cache => debug!(
+                            "Ignoring cache directory while discovering workspace members: `{}`",
+                            root.simplified_display()
+                        ),
+                        IgnoreReason::Member => {
+                            debug!("Ignoring workspace member: `{}`", root.simplified_display());
+                        }
+                    }
                     continue;
                 }
-                if !seen.insert(member_root.clone()) {
-                    continue;
-                }
-                let member_root =
-                    std::path::absolute(&member_root).map_err(WorkspaceErrorKind::Normalize)?;
+                MemberEvent::Error(error) => return Err(error),
+            };
+            let MemberRead {
+                member:
+                    MemberPath {
+                        root: member_root,
+                        matched_by: member_glob,
+                    },
+                pyproject_path,
+                contents,
+            } = member;
 
-                // If the directory is explicitly ignored, skip it.
-                let skip = match &options.members {
-                    MemberDiscovery::All | MemberDiscovery::Existing => false,
-                    MemberDiscovery::None => true,
-                    MemberDiscovery::Ignore(ignore) => ignore.contains(member_root.as_path()),
-                };
-                if skip {
-                    debug!(
-                        "Ignoring workspace member: `{}`",
-                        member_root.simplified_display()
-                    );
-                    continue;
-                }
+            trace!(
+                "Processing workspace member: `{}`",
+                member_root.user_display()
+            );
 
-                // If the member is excluded, ignore it.
-                if exclusions
-                    .get_or_insert_with(|| {
-                        WorkspaceExclusions::new(workspace_root, workspace_definition)
-                    })
-                    .as_ref()
-                    .map_err(WorkspaceError::clone)?
-                    .matches(&member_root)
-                {
-                    debug!(
-                        "Ignoring workspace member: `{}`",
-                        member_root.simplified_display()
-                    );
-                    continue;
-                }
+            let contents = match contents {
+                Ok(contents) => contents,
+                Err(err) => {
+                    let metadata = match fs_err::metadata(&member_root) {
+                        Ok(metadata) => metadata,
+                        Err(err)
+                            if matches!(options.members, MemberDiscovery::Existing)
+                                && err.kind() == std::io::ErrorKind::NotFound =>
+                        {
+                            debug!(
+                                "Ignoring missing workspace member: `{}`",
+                                member_root.simplified_display()
+                            );
+                            continue;
+                        }
+                        Err(err) => return Err(err.into()),
+                    };
+                    if !metadata.is_dir() {
+                        warn!(
+                            "Ignoring non-directory workspace member: `{}`",
+                            member_root.simplified_display()
+                        );
+                        continue;
+                    }
 
-                trace!(
-                    "Processing workspace member: `{}`",
-                    member_root.user_display()
-                );
-
-                // Read the member `pyproject.toml`.
-                let pyproject_path = member_root.join("pyproject.toml");
-                let contents = match fs_err::tokio::read_to_string(&pyproject_path).await {
-                    Ok(contents) => contents,
-                    Err(err) => {
-                        let metadata = match fs_err::metadata(&member_root) {
-                            Ok(metadata) => metadata,
-                            Err(err)
-                                if matches!(options.members, MemberDiscovery::Existing)
-                                    && err.kind() == std::io::ErrorKind::NotFound =>
-                            {
-                                debug!(
-                                    "Ignoring missing workspace member: `{}`",
-                                    member_root.simplified_display()
-                                );
-                                continue;
-                            }
-                            Err(err) => return Err(err.into()),
-                        };
-                        if !metadata.is_dir() {
-                            warn!(
-                                "Ignoring non-directory workspace member: `{}`",
+                    // A directory exists, but it doesn't contain a `pyproject.toml`.
+                    if err.kind() == std::io::ErrorKind::NotFound {
+                        // If the directory is hidden, skip it.
+                        if member_root
+                            .file_name()
+                            .is_some_and(|name| name.as_encoded_bytes().starts_with(b"."))
+                        {
+                            debug!(
+                                "Ignoring hidden workspace member: `{}`",
                                 member_root.simplified_display()
                             );
                             continue;
                         }
 
-                        // A directory exists, but it doesn't contain a `pyproject.toml`.
-                        if err.kind() == std::io::ErrorKind::NotFound {
-                            // If the directory is hidden, skip it.
-                            if member_root
-                                .file_name()
-                                .is_some_and(|name| name.as_encoded_bytes().starts_with(b"."))
-                            {
-                                debug!(
-                                    "Ignoring hidden workspace member: `{}`",
-                                    member_root.simplified_display()
-                                );
-                                continue;
-                            }
-
-                            // If the directory only contains gitignored files
-                            // (e.g., `__pycache__`), skip it.
-                            if has_only_gitignored_files(&member_root) {
-                                debug!(
-                                    "Ignoring workspace member with only gitignored files: `{}`",
-                                    member_root.simplified_display()
-                                );
-                                continue;
-                            }
-
-                            if matches!(options.members, MemberDiscovery::Existing) {
-                                debug!(
-                                    "Ignoring missing workspace member: `{}`",
-                                    member_root.simplified_display()
-                                );
-                                continue;
-                            }
-
-                            return Err(WorkspaceError::from(
-                                WorkspaceErrorKind::MissingPyprojectTomlMember(
-                                    member_root,
-                                    member_glob.to_string(),
-                                ),
-                            ));
+                        // If the directory only contains gitignored files
+                        // (e.g., `__pycache__`), skip it.
+                        if has_only_gitignored_files(&member_root) {
+                            debug!(
+                                "Ignoring workspace member with only gitignored files: `{}`",
+                                member_root.simplified_display()
+                            );
+                            continue;
                         }
 
-                        return Err(err.into());
+                        if matches!(options.members, MemberDiscovery::Existing) {
+                            debug!(
+                                "Ignoring missing workspace member: `{}`",
+                                member_root.simplified_display()
+                            );
+                            continue;
+                        }
+
+                        return Err(WorkspaceError::from(
+                            WorkspaceErrorKind::MissingPyprojectTomlMember(
+                                member_root,
+                                member_glob.to_string(),
+                            ),
+                        ));
                     }
-                };
-                let pyproject_toml = PyProjectToml::from_string(contents, &pyproject_path)
-                    .map_err(|err| {
-                        WorkspaceErrorKind::Toml(pyproject_path.clone(), Box::new(err))
-                    })?;
 
-                // Check if the current project is explicitly marked as unmanaged.
-                if pyproject_toml
-                    .tool
-                    .as_ref()
-                    .and_then(|tool| tool.uv.as_ref())
-                    .and_then(|uv| uv.managed)
-                    == Some(false)
-                {
-                    if let Some(project) = pyproject_toml.project.as_ref() {
-                        debug!(
-                            "Project `{}` is marked as unmanaged; omitting from workspace members",
-                            project.name
-                        );
-                    } else {
-                        debug!(
-                            "Workspace member at `{}` is marked as unmanaged; omitting from workspace members",
-                            member_root.simplified_display()
-                        );
-                    }
-                    continue;
+                    return Err(err.into());
                 }
+            };
+            let pyproject_toml = PyProjectToml::from_string(contents, &pyproject_path)
+                .map_err(|err| WorkspaceErrorKind::Toml(pyproject_path.clone(), Box::new(err)))?;
 
-                // Extract the package name.
-                let Some(project) = pyproject_toml.project.clone() else {
-                    return Err(WorkspaceError::from(WorkspaceErrorKind::MissingProject(
-                        pyproject_path,
-                    )));
-                };
-
-                debug!(
-                    "Adding discovered workspace member: `{}`",
-                    member_root.simplified_display()
-                );
-
-                if let Some(existing) = workspace_members.insert(
-                    project.name.clone(),
-                    WorkspaceMember {
-                        root: member_root.clone(),
-                        project,
-                        pyproject_toml,
-                    },
-                ) {
-                    return Err(WorkspaceError::from(WorkspaceErrorKind::DuplicatePackage {
-                        name: existing.project.name,
-                        first: existing.root.clone(),
-                        second: member_root,
-                    }));
+            // Check if the current project is explicitly marked as unmanaged.
+            if pyproject_toml
+                .tool
+                .as_ref()
+                .and_then(|tool| tool.uv.as_ref())
+                .and_then(|uv| uv.managed)
+                == Some(false)
+            {
+                if let Some(project) = pyproject_toml.project.as_ref() {
+                    debug!(
+                        "Project `{}` is marked as unmanaged; omitting from workspace members",
+                        project.name
+                    );
+                } else {
+                    debug!(
+                        "Workspace member at `{}` is marked as unmanaged; omitting from workspace members",
+                        member_root.simplified_display()
+                    );
                 }
+                continue;
+            }
+
+            // Extract the package name.
+            let Some(project) = pyproject_toml.project.clone() else {
+                return Err(WorkspaceError::from(WorkspaceErrorKind::MissingProject(
+                    pyproject_path,
+                )));
+            };
+
+            debug!(
+                "Adding discovered workspace member: `{}`",
+                member_root.simplified_display()
+            );
+
+            if let Some(existing) = workspace_members.insert(
+                project.name.clone(),
+                WorkspaceMember {
+                    root: member_root.clone(),
+                    project,
+                    pyproject_toml,
+                },
+            ) {
+                return Err(WorkspaceError::from(WorkspaceErrorKind::DuplicatePackage {
+                    name: existing.project.name,
+                    first: existing.root.clone(),
+                    second: member_root,
+                }));
             }
         }
 
