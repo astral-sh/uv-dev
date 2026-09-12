@@ -23,7 +23,8 @@ use uv_workspace::pyproject::{ExtraBuildDependency, Sources};
 pub use uv_configuration::ExcludeDependency;
 pub use uv_workspace::pyproject::OverrideDependency;
 
-static FINDER: LazyLock<Finder> = LazyLock::new(|| Finder::new(b"# /// script"));
+const SCRIPT_TAG: &[u8] = b"# /// script";
+static FINDER: LazyLock<Finder> = LazyLock::new(|| Finder::new(SCRIPT_TAG));
 
 /// A PEP 723 item, either read from a script on disk or provided via `stdin`.
 #[derive(Debug)]
@@ -498,14 +499,14 @@ impl ScriptTag {
     /// See: <https://peps.python.org/pep-0723/>
     pub fn parse(contents: &[u8]) -> Result<Option<Self>, Pep723Error> {
         // Identify the opening pragma.
-        let Some(index) = FINDER.find(contents) else {
+        let Some(index) = FINDER.find_iter(contents).find(|index| {
+            (*index == 0 || matches!(contents[*index - 1], b'\r' | b'\n'))
+                && contents
+                    .get(*index + SCRIPT_TAG.len())
+                    .is_none_or(|byte| matches!(byte, b'\r' | b'\n'))
+        }) else {
             return Ok(None);
         };
-
-        // The opening pragma must be the first line, or immediately preceded by a newline.
-        if !(index == 0 || matches!(contents[index - 1], b'\r' | b'\n')) {
-            return Ok(None);
-        }
 
         // Extract the preceding content.
         let prelude = std::str::from_utf8(&contents[..index])?;
@@ -832,6 +833,37 @@ mod tests {
     "};
 
         assert_eq!(ScriptTag::parse(contents.as_bytes()).unwrap(), None);
+    }
+
+    #[test]
+    fn similar_opening_tag_does_not_shadow_script_block() {
+        let contents = indoc::indoc! {r"
+        # /// script-extra
+        # ///
+
+        # /// script
+        # requires-python = '>=3.11'
+        # ///
+    "};
+
+        let actual = ScriptTag::parse(contents.as_bytes()).unwrap().unwrap();
+
+        assert_eq!(actual.metadata, "requires-python = '>=3.11'\n");
+    }
+
+    #[test]
+    fn inline_opening_tag_does_not_shadow_script_block() {
+        let contents = indoc::indoc! {r"
+        pass # /// script
+
+        # /// script
+        # requires-python = '>=3.11'
+        # ///
+    "};
+
+        let actual = ScriptTag::parse(contents.as_bytes()).unwrap().unwrap();
+
+        assert_eq!(actual.metadata, "requires-python = '>=3.11'\n");
     }
 
     #[test]
