@@ -45,6 +45,21 @@ fn direct_url_lock(c: &mut Criterion<WallTime>) {
         // The lock and cache are produced by the ordinary resolver. A populated metadata cache
         // also keeps the full-validation path usable when comparing implementations.
         run_command(&mut command());
+        run_command(
+            server
+                .command(&cache)
+                .args([
+                    "pip",
+                    "install",
+                    "--no-index",
+                    "--no-deps",
+                    "--python-platform",
+                    "aarch64-manylinux2014",
+                    "--target",
+                ])
+                .arg(directory.path().join("environment"))
+                .arg(server.url(&format!("/files/{filename}"))),
+        );
         let contents = fs_err::read(project.join("uv.lock")).expect("Missing generated lock");
         group.bench_function(BenchmarkId::new("offline_cached", name), |b| {
             b.iter(|| run_command(command().args(["--offline", "--locked"])));
