@@ -675,19 +675,19 @@ async fn python_install_hash_mismatch() -> anyhow::Result<()> {
             exit_code: 1 (failure)
             ----- stderr -----
             error: Failed to install cpython-3.10.0-[PLATFORM]
-              Caused by: Hash mismatch for `cpython-3.10.0-[PLATFORM]`
+              cause: Hash mismatch for `cpython-3.10.0-[PLATFORM]`
 
-                Expected:
-                0000000000000000000000000000000000000000000000000000000000000000
+                     Expected:
+                     0000000000000000000000000000000000000000000000000000000000000000
 
-                Computed:
-                [ACTUAL_HASH]
+                     Computed:
+                     [ACTUAL_HASH]
             ");
         }
 
         if cache_archive {
             assert_eq!(
-                fs_err::symlink_metadata(archive_cache.child(format!("000000000-{filename}")),)
+                fs_err::symlink_metadata(archive_cache.child(format!("000000000-{filename}")))
                     .expect_err("a checksum-mismatched cached archive must be removed")
                     .kind(),
                 io::ErrorKind::NotFound,
