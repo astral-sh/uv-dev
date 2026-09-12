@@ -322,10 +322,6 @@ fn parse_shell_from_path(path: &Path) -> Option<Shell> {
 
 /// Escape a string for use in a shell command by inserting backslashes.
 fn backslash_escape(s: &str) -> Cow<'_, str> {
-    if !s.chars().any(|c| matches!(c, '\\' | '"')) {
-        return Cow::Borrowed(s);
-    }
-
     let mut escaped = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
@@ -339,13 +335,6 @@ fn backslash_escape(s: &str) -> Cow<'_, str> {
 
 /// Escape a string for use in a `PowerShell` command by inserting backticks.
 fn backtick_escape(s: &str) -> Cow<'_, str> {
-    if !s
-        .chars()
-        .any(|c| matches!(c, '"' | '`' | '\u{201C}' | '\u{201D}' | '\u{201E}' | '$'))
-    {
-        return Cow::Borrowed(s);
-    }
-
     let mut escaped = String::with_capacity(s.len());
     for c in s.chars() {
         match c {

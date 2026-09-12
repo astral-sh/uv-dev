@@ -30,11 +30,7 @@ pub fn shlex_posix(executable: impl AsRef<Path>) -> String {
 /// As a solution, use implicit string concatenations, by putting the single quote into double
 /// quotes.
 pub fn escape_posix_for_single_quotes(string: &str) -> Cow<'_, str> {
-    if string.contains('\'') {
-        Cow::Owned(string.replace('\'', r#"'"'"'"#))
-    } else {
-        Cow::Borrowed(string)
-    }
+    Cow::Owned(string.replace('\'', r#"'"'"'"#))
 }
 
 /// Quote a path, if necessary, for safe use in `PowerShell` and `cmd`.
