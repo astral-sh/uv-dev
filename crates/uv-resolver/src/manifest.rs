@@ -117,7 +117,7 @@ impl Manifest {
         mode: DependencyMode,
     ) -> impl Iterator<Item = Cow<'a, Requirement>> + 'a {
         self.requirements_no_overrides(env, mode)
-            .chain(self.overrides(env, mode))
+            .chain(self.overrides(env))
     }
 
     /// Return all requirements that affect manifest-wide candidate selection policy.
@@ -213,30 +213,12 @@ impl Manifest {
     pub(crate) fn overrides<'a>(
         &'a self,
         env: &'a ResolverEnvironment,
-        mode: DependencyMode,
     ) -> impl Iterator<Item = Cow<'a, Requirement>> + 'a {
-        match mode {
-            // Include all direct and transitive requirements, with constraints and overrides applied.
-            DependencyMode::Transitive => Either::Left(
-                self.overrides
-                    .global_requirements()
-                    .filter(|requirement| !self.excludes.contains(&requirement.name))
-                    .filter(move |requirement| {
-                        requirement.evaluate_markers(env.marker_environment(), &[])
-                    })
-                    .map(Cow::Borrowed),
-            ),
-            // Include direct requirements, with constraints and overrides applied.
-            DependencyMode::Direct => Either::Right(
-                self.overrides
-                    .global_requirements()
-                    .filter(|requirement| !self.excludes.contains(&requirement.name))
-                    .filter(move |requirement| {
-                        requirement.evaluate_markers(env.marker_environment(), &[])
-                    })
-                    .map(Cow::Borrowed),
-            ),
-        }
+        self.overrides
+            .global_requirements()
+            .filter(|requirement| !self.excludes.contains(&requirement.name))
+            .filter(move |requirement| requirement.evaluate_markers(env.marker_environment(), &[]))
+            .map(Cow::Borrowed)
     }
 
     /// Return an iterator over the names of all user-provided requirements.
@@ -301,5 +283,154 @@ impl Manifest {
     /// Returns the number of input requirements.
     pub fn num_requirements(&self) -> usize {
         self.requirements.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+    use std::error::Error;
+
+    use uv_configuration::{Constraints, Excludes, Override, Overrides, PackageOverride};
+    use uv_distribution_types::Requirement;
+    use uv_git::GitResolver;
+    use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder};
+    use uv_pypi_types::VerbatimParsedUrl;
+    use uv_types::RequestedRequirements;
+
+    use crate::resolver::Urls;
+    use crate::{DependencyMode, Manifest, ResolverEnvironment};
+
+    type TestResult<T = ()> = Result<T, Box<dyn Error>>;
+
+    fn requirement(value: &str) -> TestResult<Requirement> {
+        Ok(value
+            .parse::<uv_pep508::Requirement<VerbatimParsedUrl>>()?
+            .into())
+    }
+
+    fn linux() -> TestResult<ResolverEnvironment> {
+        let markers = MarkerEnvironment::try_from(MarkerEnvironmentBuilder {
+            implementation_name: "cpython",
+            implementation_version: "3.12.0",
+            os_name: "posix",
+            platform_machine: "x86_64",
+            platform_python_implementation: "CPython",
+            platform_release: "6.0",
+            platform_system: "Linux",
+            platform_version: "fixture",
+            python_full_version: "3.12.0",
+            python_version: "3.12",
+            sys_platform: "linux",
+        })?;
+        Ok(ResolverEnvironment::specific(markers.into()))
+    }
+
+    #[test]
+    fn global_overrides_preserve_order_in_both_dependency_modes() -> TestResult {
+        let direct = requirement("direct==1")?;
+        let constraint = requirement("constrained<4")?;
+        let lookahead = requirement("lookahead==2")?;
+        let first = requirement("demo>=1")?;
+        let second = requirement("demo<4 ; sys_platform == 'linux'")?;
+        let third = requirement("demo!=2 ; sys_platform == 'win32'")?;
+        let scoped = requirement("scoped-only==9")?;
+        let mut manifest = Manifest::simple(vec![direct.clone()])
+            .with_constraints(Constraints::from_requirements(std::iter::once(
+                constraint.clone(),
+            )))
+            .with_lookaheads(vec![RequestedRequirements::new(
+                "parent".parse()?,
+                "1.0".parse()?,
+                Box::new([]),
+                vec![lookahead.clone()].into_boxed_slice(),
+                true,
+            )]);
+        manifest.overrides = Overrides::from_entries(vec![
+            Override::Requirement(first.clone()),
+            Override::Requirement(requirement("blocked==7")?),
+            Override::Requirement(second.clone()),
+            Override::Package(PackageOverride {
+                package: serde_json::from_str(r#"{"name":"parent","version":"1.0"}"#)?,
+                dependencies: vec![scoped.clone()].into_boxed_slice(),
+            }),
+            Override::Requirement(third.clone()),
+        ])?;
+        manifest.excludes = Excludes::from_iter(["blocked".parse()?]);
+
+        for (env, overrides) in [
+            (linux()?, vec![first.clone(), second.clone()]),
+            (
+                ResolverEnvironment::universal(Vec::new()),
+                vec![first, second, third],
+            ),
+        ] {
+            for mode in [DependencyMode::Direct, DependencyMode::Transitive] {
+                let mut expected = match mode {
+                    DependencyMode::Direct => Vec::new(),
+                    DependencyMode::Transitive => vec![lookahead.clone(), scoped.clone()],
+                };
+                expected.extend([direct.clone(), constraint.clone()]);
+                expected.extend(overrides.iter().cloned());
+                assert_eq!(
+                    manifest
+                        .requirements(&env, mode)
+                        .map(Cow::into_owned)
+                        .collect::<Vec<_>>(),
+                    expected,
+                );
+
+                // Scoped overrides are also included in candidate-selection policy, but not
+                // in the global overrides appended to the ordinary requirement iterator.
+                expected.push(scoped.clone());
+                assert_eq!(
+                    manifest
+                        .candidate_selection_requirements(&env, mode)
+                        .map(Cow::into_owned)
+                        .collect::<Vec<_>>(),
+                    expected,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn global_url_overrides_apply_in_both_dependency_modes() -> TestResult {
+        let original = requirement("demo @ https://example.invalid/demo-1.0-py3-none-any.whl")?;
+        let constraint = requirement("demo @ https://example.invalid/demo-2.0-py3-none-any.whl")?;
+        let replacement = requirement("demo @ https://example.invalid/demo-3.0-py3-none-any.whl")?;
+        let blocked =
+            requirement("blocked @ https://example.invalid/blocked-1.0-py3-none-any.whl")?;
+        let mut manifest = Manifest::simple(vec![original.clone(), blocked.clone()])
+            .with_constraints(Constraints::from_requirements(std::iter::once(constraint)));
+        manifest.overrides = Overrides::from_requirements(vec![replacement.clone(), blocked]);
+        manifest.excludes = Excludes::from_iter(["blocked".parse()?]);
+        let original_url = original
+            .source
+            .to_verbatim_parsed_url()
+            .ok_or("fixture must be a URL")?;
+        let replacement_url = replacement
+            .source
+            .to_verbatim_parsed_url()
+            .ok_or("fixture must be a URL")?;
+        let git = GitResolver::default();
+
+        for env in [linux()?, ResolverEnvironment::universal(Vec::new())] {
+            for mode in [DependencyMode::Direct, DependencyMode::Transitive] {
+                let urls = Urls::from_manifest(&manifest, &env, &git, mode);
+                assert!(urls.any_url(&original.name));
+                assert!(!urls.any_url(&"blocked".parse()?));
+                for requested_url in [None, Some(&original_url)] {
+                    assert_eq!(
+                        urls.get_url(&env, &original.name, requested_url, &git)?
+                            .map(|url| url.verbatim.to_string())
+                            .collect::<Vec<_>>(),
+                        [replacement_url.verbatim.to_string()],
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 }
