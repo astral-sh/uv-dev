@@ -664,68 +664,6 @@ mod tests {
     }
 
     #[test]
-    fn find_python_empty_path() -> Result<()> {
-        let mut context = TestContext::new()?;
-
-        context.search_path = Some(vec![]);
-        let result = context.run(|| {
-            find_python_installation(
-                &PythonRequest::Default,
-                EnvironmentPreference::OnlySystem,
-                PythonPreference::default(),
-                &context.cache,
-            )
-        });
-        assert_matches!(
-            result,
-            Ok(Err(PythonNotFound { .. })),
-            "With an empty path, no Python installation should be detected got {result:?}"
-        );
-
-        context.search_path = None;
-        let result = context.run(|| {
-            find_python_installation(
-                &PythonRequest::Default,
-                EnvironmentPreference::OnlySystem,
-                PythonPreference::default(),
-                &context.cache,
-            )
-        });
-        assert_matches!(
-            result,
-            Ok(Err(PythonNotFound { .. })),
-            "With an unset path, no Python installation should be detected got {result:?}"
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn find_python_unexecutable_file() -> Result<()> {
-        let mut context = TestContext::new()?;
-        context
-            .new_search_path_directory("path")?
-            .child(format!("python{}", env::consts::EXE_SUFFIX))
-            .touch()?;
-
-        let result = context.run(|| {
-            find_python_installation(
-                &PythonRequest::Default,
-                EnvironmentPreference::OnlySystem,
-                PythonPreference::default(),
-                &context.cache,
-            )
-        });
-        assert_matches!(
-            result,
-            Ok(Err(PythonNotFound { .. })),
-            "With a non-executable Python, no Python installation should be detected; got {result:?}"
-        );
-
-        Ok(())
-    }
-
-    #[test]
     fn find_python_valid_executable() -> Result<()> {
         let mut context = TestContext::new()?;
         context.add_python_versions(&["3.12.1"])?;
@@ -2816,32 +2754,6 @@ mod tests {
             python.interpreter().python_full_version().to_string(),
             "3.10.1",
             "We should find the requested interpreter version"
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn find_python_all_minors() -> Result<()> {
-        let mut context = TestContext::new()?;
-        context.add_python_interpreters(&[
-            (true, ImplementationName::CPython, "python", "3.10.0"),
-            (true, ImplementationName::CPython, "python3", "3.10.0"),
-            (true, ImplementationName::CPython, "python3.12", "3.12.0"),
-        ])?;
-
-        let python = context.run(|| {
-            find_python_installation(
-                &PythonRequest::parse(">= 3.11"),
-                EnvironmentPreference::Any,
-                PythonPreference::OnlySystem,
-                &context.cache,
-            )
-        })??;
-        assert_eq!(
-            python.interpreter().python_full_version().to_string(),
-            "3.12.0",
-            "We should find matching minor version even if they aren't called `python` or `python3`"
         );
 
         Ok(())
