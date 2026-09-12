@@ -735,8 +735,7 @@ jobs:
             pip3 install --upgrade --require-hashes -r /pip-requirements.txt
             pip install ${PACKAGE_NAME}_build --no-index --find-links /dist --force-reinstall
             ${MODULE_NAME}-build --help
-            # TODO(konsti): Enable this test on all platforms, currently `find_uv_bin` is failing to discover uv here.
-            # python -m ${MODULE_NAME}_build --help
+            python -m ${MODULE_NAME}_build --help
       - name: "Upload wheels uv-build"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -852,8 +851,7 @@ jobs:
             pip3 install --upgrade --require-hashes -r /pip-requirements.txt
             pip install ${PACKAGE_NAME}-build --no-index --find-links /dist --force-reinstall
             ${MODULE_NAME}-build --help
-            # TODO(konsti): Enable this test on all platforms, currently `find_uv_bin` is failing to discover uv here.
-            # python -m ${MODULE_NAME}-build --help
+            python -m ${MODULE_NAME}_build --help
       - name: "Upload wheels uv-build"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -1080,8 +1078,7 @@ jobs:
             pip3 install --upgrade --require-hashes -r /pip-requirements.txt
             pip install ${PACKAGE_NAME}-build --no-index --find-links /dist --force-reinstall
             ${MODULE_NAME}-build --help
-            # TODO(konsti): Enable this test on all platforms, currently `find_uv_bin` is failing to discover uv here.
-            # python -m ${MODULE_NAME}-build --help
+            python -m ${MODULE_NAME}_build --help
       - name: "Upload wheels uv-build"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -1190,8 +1187,7 @@ jobs:
             .venv/bin/pip install --upgrade --require-hashes -r /pip-requirements.txt
             .venv/bin/pip install ${PACKAGE_NAME}-build --no-index --find-links /dist --force-reinstall
             .venv/bin/${MODULE_NAME}-build --help
-            # TODO(konsti): Enable this test on all platforms, currently `find_uv_bin` is failing to discover uv here.
-            # .venv/bin/python -m ${MODULE_NAME}_build --help
+            .venv/bin/python -m ${MODULE_NAME}_build --help
       - name: "Upload wheels uv-build"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -1332,8 +1328,7 @@ jobs:
             python -m venv .venv
             .venv/bin/pip install ${PACKAGE_NAME}-build --no-index --find-links /dist --force-reinstall
             .venv/bin/${MODULE_NAME}-build --help
-            # TODO(konsti): Enable this test on all platforms, currently `find_uv_bin` is failing to discover uv here.
-            # .venv/bin/python -m ${MODULE_NAME}_build --help
+            .venv/bin/python -m ${MODULE_NAME}_build --help
       - name: "Test wheel (manylinux)"
         uses: astral-sh/github-actions/release-smoke-test@76d2758fc5c4394ada46510f46605deb7cec477e
         if: matrix.platform.arch == 'aarch64'
@@ -1347,8 +1342,7 @@ jobs:
             pip3 install --upgrade --require-hashes -r /pip-requirements.txt
             pip install ${PACKAGE_NAME}-build --no-index --find-links /dist --force-reinstall
             ${MODULE_NAME}-build --help
-            # TODO(konsti): Enable this test on all platforms, currently `find_uv_bin` is failing to discover uv here.
-            # python -m ${MODULE_NAME}_build --help
+            python -m ${MODULE_NAME}_build --help
       - name: "Upload wheels"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
