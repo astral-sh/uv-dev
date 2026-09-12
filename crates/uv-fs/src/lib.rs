@@ -1,4 +1,5 @@
 use std::io::{self, Write};
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -30,6 +31,8 @@ pub use crate::read::ValidatedReader;
 pub use crate::space::{PhysicalSpaceError, physical_space, supports_fine_grained_accounting};
 
 pub mod cachedir;
+#[cfg(target_os = "linux")]
+mod hardlink_linux;
 #[cfg(target_os = "macos")]
 mod hardlink_macos;
 pub mod link;
@@ -69,24 +72,52 @@ pub fn hardlink_count(_path: &Path) -> io::Result<u64> {
 /// A reusable scanner for file-store objects that have no external hardlinks.
 pub struct HardlinkScanner {
     enabled: bool,
+    #[cfg(target_os = "linux")]
+    linux: hardlink_linux::Scanner,
 }
 
 impl HardlinkScanner {
     /// Enable any bulk metadata reads available on this platform.
     pub fn new() -> Self {
-        Self { enabled: true }
+        Self {
+            enabled: true,
+            #[cfg(target_os = "linux")]
+            linux: hardlink_linux::Scanner::new(NonZeroU32::new(64).expect("non-zero queue depth")),
+        }
     }
 
     /// Always request the caller's ordinary recursive-walk fallback.
     pub fn disabled() -> Self {
-        Self { enabled: false }
+        let mut scanner = Self::new();
+        scanner.enabled = false;
+        scanner
+    }
+
+    /// Set the maximum number of Linux metadata requests in each batch.
+    ///
+    /// This replaces any existing Linux ring. Other platforms ignore the queue depth.
+    #[must_use]
+    pub fn with_queue_depth(self, queue_depth: NonZeroU32) -> Self {
+        #[cfg(target_os = "linux")]
+        {
+            Self {
+                linux: hardlink_linux::Scanner::new(queue_depth),
+                ..self
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = queue_depth;
+            self
+        }
     }
 
     /// Collect regular files whose only hardlink is their entry in this directory.
     ///
-    /// Ignores symlink entries and uses bulk metadata reads on macOS. Returns `None` when the fast
-    /// path is unavailable, required attributes are missing, or subdirectories need a recursive
-    /// walk. No candidates are returned unless the entire directory can use the fast path.
+    /// Ignores symlink entries and uses bulk metadata reads on macOS and Linux. Returns `None` when
+    /// the fast path is unavailable, required attributes are missing, or subdirectories need a
+    /// recursive walk. No candidates are returned unless the entire directory can use the fast
+    /// path.
     ///
     /// Callers deleting these files must prevent concurrent changes to the directory and hardlink
     /// counts throughout both the scan and deletion.
@@ -98,7 +129,11 @@ impl HardlinkScanner {
         {
             hardlink_macos::files_with_one_hardlink(path)
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        {
+            self.linux.files_with_one_hardlink(path)
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             let _ = path;
             Ok(None)

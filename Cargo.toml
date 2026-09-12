@@ -171,6 +171,7 @@ http-content-range = { version = "0.2.4" }
 indexmap = { version = "2.5.0" }
 indicatif = { version = "0.18.0" }
 indoc = { version = "2.0.5" }
+io-uring = { version = "0.7.14", default-features = false }
 itertools = { version = "0.14.0" }
 jiff = { version = "0.2.0", features = ["serde"] }
 junction = { version = "2.0.0" }
