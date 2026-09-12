@@ -16,8 +16,13 @@ PYTHON = "3.11.13"
 def main() -> None:
     root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--uv", type=Path, default=root / "target/profiling/uv")
+    parser.add_argument(
+        "--uv",
+        type=Path,
+        default=root / "target/profiling" / ("uv.exe" if os.name == "nt" else "uv"),
+    )
     parser.add_argument("--discovery", action="store_true")
+    parser.add_argument("--discovery-only", action="store_true")
     parser.add_argument("--project-caches", action="store_true")
     args = parser.parse_args()
     cache = root / ".cache"
@@ -29,10 +34,14 @@ def main() -> None:
     }
     environment["UV_PYTHON_INSTALL_DIR"] = str(cache / "bench-python")
     command = [str(args.uv.resolve()), "--no-config"]
-    workloads = json.loads((root / "scripts/benchmark/environments.json").read_text())
+    workloads = (
+        []
+        if args.discovery_only
+        else json.loads((root / "scripts/benchmark/environments.json").read_text())
+    )
     versions = sorted({PYTHON, *(workload["python"] for workload in workloads)})
-    if args.discovery:
-        versions = sorted({*versions, "3.10.18", "3.13.4"})
+    if args.discovery or args.discovery_only:
+        versions = sorted({*versions, "3.10.18", "3.12.11", "3.13.4"})
     subprocess.run(
         [
             *command,
@@ -47,6 +56,8 @@ def main() -> None:
         env=environment,
         check=True,
     )
+    if args.discovery_only:
+        return
     environment["UV_PYTHON_DOWNLOADS"] = "never"
     temporary_root = root / "target"
     temporary_root.mkdir(exist_ok=True)

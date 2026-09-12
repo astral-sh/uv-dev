@@ -145,6 +145,14 @@ Register walltime targets in `.github/workflows/bench.yml`. Expensive filesystem
 targets use `common::walltime_criterion()` to bound sampling cost; adjust that policy only after
 checking the resulting distributions.
 
+Use `--discovery-only` to prepare those interpreters without the package-environment fixtures. The
+existing `python_discovery` suite also searches one, two, and four real installations on `PATH`,
+with the requested version last. It reports untimed interpreter-query, cache-hit, and metadata-skip
+counts before measuring warm and cold discovery. When `CRITERION_HOME` is set, the counts are also
+saved in `python-discovery-probes.json` beside the Criterion measurements. Set `UV_BENCH_BINARY` to
+an absolute uv binary path to compare revisions against the same prepared interpreters; measured
+commands do not enable tracing.
+
 ## Getting Started
 
 From the `scripts/benchmark` directory:
