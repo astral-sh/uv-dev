@@ -428,7 +428,6 @@ impl InstalledDist {
             InstalledDistKind::Registry(_) | InstalledDistKind::Url(_) => {
                 let path = self.install_path().join("METADATA");
                 let contents = fs::read(&path)?;
-                // TODO(zanieb): Update this to use thiserror so we can unpack parse errors downstream
                 uv_pypi_types::ResolutionMetadata::parse_metadata(&contents).map_err(|err| {
                     InstalledDistError::MetadataParse {
                         path: path.clone(),
