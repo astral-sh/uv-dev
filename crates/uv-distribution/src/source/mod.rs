@@ -28,7 +28,9 @@ use uv_client::{
     BaseClientBuilder, CacheControl, CachedClientError, Connectivity, DataWithCachePolicy,
     RegistryClient, RetryState,
 };
-use uv_configuration::{BuildKind, BuildOutput, NoSources};
+use uv_configuration::{
+    BuildKind, BuildOutput, NoSources, SourcePreparationConcurrency, SourcePreparationPermit,
+};
 use uv_distribution_filename::{SourceDistExtension, WheelFilename};
 use uv_distribution_types::{
     ArchiveHashPolicy, BuildInfo, BuildVariables, BuildableSource, ConfigSettings,
@@ -212,6 +214,7 @@ pub(crate) struct SourceDistributionBuilder<'a, T: BuildContext> {
     build_context: &'a T,
     build_stack: Option<&'a BuildStack>,
     reporter: Option<Arc<dyn Reporter>>,
+    concurrency: Arc<SourcePreparationConcurrency>,
 }
 
 /// The name of the file that contains the revision ID for a remote distribution, encoded via `MsgPack`.
@@ -231,11 +234,15 @@ const SOURCE: &str = "src";
 
 impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
     /// Initialize a [`SourceDistributionBuilder`] from a [`BuildContext`].
-    pub(crate) fn new(build_context: &'a T) -> Self {
+    pub(crate) fn new(
+        build_context: &'a T,
+        concurrency: Arc<SourcePreparationConcurrency>,
+    ) -> Self {
         Self {
             build_context,
             build_stack: None,
             reporter: None,
+            concurrency,
         }
     }
 
@@ -255,6 +262,17 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             reporter: Some(reporter),
             ..self
         }
+    }
+
+    /// Admit source preparation before opening a cache lock. Build dependencies use the next
+    /// depth so they can progress while their parent retains its own source-cache lock.
+    async fn acquire_concurrency_permit(&self) -> SourcePreparationPermit {
+        self.concurrency
+            .acquire(
+                self.build_stack
+                    .map_or(0, BuildStack::source_preparation_depth),
+            )
+            .await
     }
 
     /// Download and build a [`SourceDist`].
@@ -1397,7 +1415,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             },
         );
 
-        // Acquire the advisory lock.
+        // Bound source preparation before retaining its advisory lock.
+        let _permit = self.acquire_concurrency_permit().await;
         let _lock = cache_shard.lock().await.map_err(Error::CacheLock)?;
 
         // Fetch the revision for the source distribution.
@@ -1534,7 +1553,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             },
         );
 
-        // Acquire the advisory lock.
+        // Bound source preparation before retaining its advisory lock.
+        let _permit = self.acquire_concurrency_permit().await;
         let _lock = cache_shard.lock().await.map_err(Error::CacheLock)?;
 
         // Fetch the revision for the source distribution.

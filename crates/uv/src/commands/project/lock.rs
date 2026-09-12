@@ -924,6 +924,7 @@ async fn do_lock(
             &client,
             &validation_build_dispatch,
             concurrency.downloads_semaphore.clone(),
+            concurrency.source_preparation.clone(),
         );
         match Box::pin(ValidatedLock::validate(
             existing_lock,
@@ -999,6 +1000,7 @@ async fn do_lock(
                 &client,
                 &build_dispatch,
                 concurrency.downloads_semaphore.clone(),
+                concurrency.source_preparation.clone(),
             );
 
             // Determine whether we can reuse the existing package versions.

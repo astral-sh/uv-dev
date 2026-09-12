@@ -325,15 +325,45 @@ impl Deref for AnyErrorBuild {
 
 /// The stack of packages being built.
 #[derive(Debug, Clone, Default)]
-pub struct BuildStack(FxHashSet<DistributionId>);
+pub struct BuildStack {
+    distributions: FxHashSet<DistributionId>,
+    source_preparation_depth: usize,
+}
 
 impl BuildStack {
     pub fn contains(&self, id: &DistributionId) -> bool {
-        self.0.contains(id)
+        self.distributions.contains(id)
     }
 
     /// Push a package onto the stack.
     pub fn insert(&mut self, id: DistributionId) -> bool {
-        self.0.insert(id)
+        self.distributions.insert(id)
+    }
+
+    /// Return the preparation depth of this build's dependencies.
+    pub fn source_preparation_depth(&self) -> usize {
+        self.source_preparation_depth
+    }
+
+    /// Enter a source build, including one whose distribution identity is not yet known.
+    pub fn enter_source_preparation(&mut self) {
+        self.source_preparation_depth += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BuildStack;
+
+    #[test]
+    fn source_preparation_depth_includes_unnamed_builds() {
+        let mut parent = BuildStack::default();
+        assert_eq!(parent.source_preparation_depth(), 0);
+        parent.enter_source_preparation();
+
+        let mut child = parent.clone();
+        child.enter_source_preparation();
+        assert_eq!(parent.source_preparation_depth(), 1);
+        assert_eq!(child.source_preparation_depth(), 2);
     }
 }

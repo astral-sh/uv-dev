@@ -23,7 +23,7 @@ use uv_client::{
     CacheControl, CachedClientError, Connectivity, DataWithCachePolicy, RegistryClient,
     RequestBuilder, RetryState,
 };
-use uv_configuration::initialize_rayon_once;
+use uv_configuration::{SourcePreparationConcurrency, initialize_rayon_once};
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
     ArchiveHashPolicy, BuildInfo, BuildableSource, BuiltDist, Dist, DistRef, HashCollection,
@@ -74,6 +74,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         client: &'a RegistryClient,
         build_context: &'a Context,
         downloads_semaphore: Arc<Semaphore>,
+        source_preparation: Arc<SourcePreparationConcurrency>,
     ) -> Self {
         // When ZIP validation is disabled, the extracted tree can contain files that aren't
         // represented in the central directory and therefore aren't included in its digest.
@@ -82,7 +83,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             && !uv_extract::insecure_no_validate();
         Self {
             build_context,
-            builder: SourceDistributionBuilder::new(build_context),
+            builder: SourceDistributionBuilder::new(build_context, source_preparation),
             client: ManagedClient::new(client, downloads_semaphore),
             reporter: None,
             content_addressed_cache,

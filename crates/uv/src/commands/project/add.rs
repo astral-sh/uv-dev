@@ -513,6 +513,7 @@ pub(crate) async fn add(
                         &client,
                         &build_dispatch,
                         concurrency.downloads_semaphore.clone(),
+                        concurrency.source_preparation.clone(),
                     ),
                 )
                 .with_reporter(Arc::new(ResolverReporter::from(printer)))
