@@ -395,8 +395,6 @@ pub(crate) async fn sync(
     // Identify the installation target.
     let sync_target = identify_installation_target(&target, outcome.lock(), all_packages, &package);
 
-    // TODO(lucab): improve warning content
-    // <https://github.com/astral-sh/uv/issues/7428>
     if let SyncTarget::Project(project) = &target {
         let roots = sync_target.roots().collect::<FxHashSet<_>>();
         for (name, member) in project.workspace().packages() {
@@ -404,8 +402,10 @@ pub(crate) async fn sync(
                 && member.pyproject_toml().has_scripts()
                 && !member.pyproject_toml().is_package(true)
             {
+                let entry_points = describe_skipped_entry_points(&member.pyproject_toml().raw)
+                    .unwrap_or_else(|| "entry points (`project.scripts`)".to_owned());
                 warn_user!(
-                    "Skipping installation of entry points (`project.scripts`) for package `{}` because this project is not packaged; to install entry points, set `tool.uv.package = true` or define a `build-system`",
+                    "Skipping installation of {entry_points} for package `{}` because this project is not packaged; to install entry points, set `tool.uv.package = true` or define a `build-system`",
                     name
                 );
             }
@@ -471,6 +471,67 @@ pub(crate) async fn sync(
             Err(UvError::user(ProjectError::LockMismatch(prev, cur, lock_source)).into())
         }
     }
+}
+
+/// Describe entry points without validating their targets.
+///
+/// Workspace metadata keeps entry-point values opaque. Unknown table shapes use the generic
+/// warning, and keys are escaped before they are displayed in the terminal.
+fn describe_skipped_entry_points(raw: &str) -> Option<String> {
+    const MAX_INLINE_ENTRY_POINTS: usize = 3;
+
+    let pyproject = toml::from_str::<toml::Table>(raw).ok()?;
+    let project = pyproject.get("project")?.as_table()?;
+    let mut sections = Vec::with_capacity(2);
+
+    // An opaque sibling requires the generic warning, even if the other table is large.
+    for section in ["scripts", "gui-scripts"] {
+        let Some(value) = project.get(section) else {
+            continue;
+        };
+        let entries = value.as_table()?;
+        if !entries.is_empty() {
+            sections.push((section, entries));
+        }
+    }
+
+    let count = sections
+        .iter()
+        .map(|(_, entries)| entries.len())
+        .sum::<usize>();
+    if count == 0 {
+        return None;
+    }
+    if count > MAX_INLINE_ENTRY_POINTS {
+        let sections = sections
+            .iter()
+            .map(|(section, _)| format!("`project.{section}`"))
+            .join(" and ");
+        return Some(format!("{count} entry points ({sections})"));
+    }
+
+    let mut entry_points = Vec::with_capacity(count);
+    for (section, entries) in sections {
+        // Keep the output stable even when TOML tables preserve source order.
+        let mut names = entries.keys().map(String::as_str).collect::<Vec<_>>();
+        names.sort_unstable();
+        entry_points.extend(names.into_iter().map(|name| (section, name)));
+    }
+
+    let entries = entry_points
+        .into_iter()
+        .map(|(section, name)| {
+            let name = name.escape_default().to_string().replace('`', r"\u{60}");
+            format!("`{name}` (`project.{section}`)")
+        })
+        .join(", ");
+    let label = if count == 1 {
+        "entry point"
+    } else {
+        "entry points"
+    };
+
+    Some(format!("{label} {entries}"))
 }
 
 /// The outcome of a `lock` operation within a `sync` operation.
@@ -1679,4 +1740,187 @@ fn write_sync_report(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use uv_workspace::pyproject::PyProjectToml;
+
+    use super::describe_skipped_entry_points;
+
+    #[test]
+    fn skipped_entry_points_describes_names() {
+        for (raw, expected) in [
+            (
+                "[project.scripts]\nentry = 42\n",
+                "entry point `entry` (`project.scripts`)",
+            ),
+            (
+                "[project.gui-scripts]\nwindow = { target = true }\n",
+                "entry point `window` (`project.gui-scripts`)",
+            ),
+            (
+                "[project.scripts]\nsecond = false\nfirst = true\n",
+                "entry points `first` (`project.scripts`), `second` (`project.scripts`)",
+            ),
+            (
+                "[project.scripts]\nentry = true\n[project.gui-scripts]\nentry = false\n",
+                "entry points `entry` (`project.scripts`), `entry` (`project.gui-scripts`)",
+            ),
+        ] {
+            assert_eq!(
+                describe_skipped_entry_points(raw).as_deref(),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn skipped_entry_points_keep_opaque_metadata() {
+        for section in ["scripts", "gui-scripts"] {
+            for value in [
+                "42",
+                "1.5",
+                "false",
+                "\"opaque\"",
+                "1979-05-27",
+                "[\"opaque\"]",
+                "{}",
+            ] {
+                let raw = format!(
+                    "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n{section} = {value}\n"
+                );
+                let pyproject =
+                    PyProjectToml::from_string(raw, "pyproject.toml").expect("valid TOML metadata");
+                assert!(pyproject.has_scripts());
+                assert!(!pyproject.is_package(true));
+                assert_eq!(describe_skipped_entry_points(&pyproject.raw), None);
+            }
+        }
+
+        for raw in [
+            "",
+            "[",
+            "[project]\nname = \"demo\"\n",
+            "[project.scripts]\n[project.gui-scripts]\n",
+            "[project]\ngui-scripts = 42\n[project.scripts]\nentry = true\n",
+        ] {
+            assert_eq!(describe_skipped_entry_points(raw), None);
+        }
+    }
+
+    #[test]
+    fn skipped_entry_points_escape_keys() {
+        let raw = r#"
+[project.scripts]
+"entry\n\u001B[31m`\u009B2J\u202Eé" = false
+"#;
+        let description = describe_skipped_entry_points(raw).expect("entry-point table");
+        assert_eq!(
+            description,
+            r"entry point `entry\n\u{1b}[31m\u{60}\u{9b}2J\u{202e}\u{e9}` (`project.scripts`)"
+        );
+        assert!(description.is_ascii());
+        assert!(!description.chars().any(char::is_control));
+
+        assert_eq!(
+            describe_skipped_entry_points(
+                r#"[project.scripts]
+"slash\\quote\"single'" = 42
+"#
+            )
+            .as_deref(),
+            Some(r#"entry point `slash\\quote\"single\'` (`project.scripts`)"#)
+        );
+    }
+
+    #[test]
+    fn skipped_entry_points_bounded_list() {
+        for (raw, expected) in [
+            (
+                r#"
+[project.gui-scripts]
+aaa = true
+[project.scripts]
+"é" = false
+z = 42
+"#,
+                r"entry points `z` (`project.scripts`), `\u{e9}` (`project.scripts`), `aaa` (`project.gui-scripts`)",
+            ),
+            (
+                r"
+[project.gui-scripts]
+b = true
+a = false
+[project.scripts]
+z = 42
+y = {}
+",
+                "4 entry points (`project.scripts` and `project.gui-scripts`)",
+            ),
+            (
+                "[project.scripts]\nd = true\nc = false\nb = 42\na = {}\n",
+                "4 entry points (`project.scripts`)",
+            ),
+        ] {
+            assert_eq!(
+                describe_skipped_entry_points(raw).as_deref(),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn skipped_entry_points_escape_multiple_keys() {
+        let raw = r#"
+[project.gui-scripts]
+"window\u001B[31m`\u009B2J\u202Eé" = true
+[project.scripts]
+"line\nslash\\quote\"single'" = false
+"#;
+        let description = describe_skipped_entry_points(raw).expect("entry-point tables");
+        assert_eq!(
+            description,
+            concat!(
+                r#"entry points `line\nslash\\quote\"single\'` (`project.scripts`), "#,
+                r"`window\u{1b}[31m\u{60}\u{9b}2J\u{202e}\u{e9}` (`project.gui-scripts`)"
+            )
+        );
+        assert!(description.is_ascii());
+        assert!(!description.chars().any(char::is_control));
+    }
+
+    #[test]
+    fn skipped_entry_points_require_both_table_shapes() {
+        for raw in [
+            r#"
+[project]
+name = "demo"
+version = "0.1.0"
+gui-scripts = 42
+[project.scripts]
+a = true
+b = false
+c = 42
+d = {}
+"#,
+            r#"
+[project]
+name = "demo"
+version = "0.1.0"
+scripts = false
+[project.gui-scripts]
+a = true
+b = false
+c = 42
+d = {}
+"#,
+        ] {
+            let pyproject = PyProjectToml::from_string(raw.to_owned(), "pyproject.toml")
+                .expect("valid TOML metadata");
+            assert!(pyproject.has_scripts());
+            assert!(!pyproject.is_package(true));
+            assert_eq!(describe_skipped_entry_points(&pyproject.raw), None);
+        }
+    }
 }
