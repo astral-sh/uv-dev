@@ -41,11 +41,14 @@ TRACE_CALLS = (
     "readlink",
     "readlinkat",
 )
+PATHNAME_TRACE_CALLS = (*TRACE_CALLS, "execve")
 HEX256 = re.compile(r"[0-9a-f]{64}\Z")
 SAFE_ID = re.compile(r"[a-zA-Z0-9_-]+\Z")
 TRACE_PREFIX = re.compile(r"^(?:(?:\[pid\s+(\d+)\]|(\d+))\s+)?(\d+\.\d+)\s+(.*)$")
 TRACE_BODY = re.compile(r"^(\w+)\((.*)\)\s+=\s+(.+?)\s+<([0-9.]+)>$")
 TRACE_RESUMED = re.compile(r"^<\.\.\. (\w+) resumed>(.*)$")
+TRACE_EXITED = re.compile(r"^\+\+\+ exited with (\d+) \+\+\+$")
+TRACE_KILLED = re.compile(r"^\+\+\+ killed by (SIG\w+)(?: \(core dumped\))? \+\+\+$")
 TRACE_PATH = re.compile(r'"(?:\\.|[^"\\])*"|<[^>]*>')
 
 
@@ -403,7 +406,9 @@ def verify_manifest(path: Path, expected_sha256: str) -> tuple[Path, dict]:
     return stage, manifest
 
 
-def trace_records(text: str) -> tuple[list[tuple[str, str, str, float]], list[str]]:
+def trace_records(
+    text: str,
+) -> tuple[list[tuple[str, str, str, str, float]], list[str]]:
     pending = {}
     records = []
     unparsed = []
@@ -415,7 +420,15 @@ def trace_records(text: str) -> tuple[list[tuple[str, str, str, float]], list[st
             continue
         process = match[1] or match[2] or "main"
         body = match[4]
-        if body.startswith(("--- ", "+++ ")):
+        if body.startswith("--- "):
+            continue
+        exited = TRACE_EXITED.fullmatch(body)
+        if exited is not None:
+            records.append((process, "process_exit", body, exited[1], 0.0))
+            continue
+        killed = TRACE_KILLED.fullmatch(body)
+        if killed is not None:
+            records.append((process, "process_killed", body, killed[1], 0.0))
             continue
         if body.endswith("<unfinished ...>"):
             if process in pending:
@@ -430,21 +443,22 @@ def trace_records(text: str) -> tuple[list[tuple[str, str, str, float]], list[st
                 continue
             body = prefix + resumed[2]
         parsed = TRACE_BODY.match(body)
-        if parsed is None or parsed[1] not in TRACE_CALLS:
+        if parsed is None or parsed[1] not in PATHNAME_TRACE_CALLS:
             unparsed.append(line)
             continue
-        records.append((parsed[1], parsed[2], parsed[3], float(parsed[4])))
+        records.append((process, parsed[1], parsed[2], parsed[3], float(parsed[4])))
     unparsed.extend(pending.values())
     return records, unparsed
 
 
 def first_arguments(arguments: str, count: int) -> list[str]:
-    """Split only the leading syscall arguments, respecting strings and FD annotations."""
+    """Split leading syscall arguments, respecting strings, structs, and FD annotations."""
     fields = []
     start = 0
     quoted = False
     escaped = False
     angle_depth = 0
+    nested_depth = 0
     for index, character in enumerate(arguments):
         if quoted:
             if escaped:
@@ -459,7 +473,11 @@ def first_arguments(arguments: str, count: int) -> list[str]:
             angle_depth += 1
         elif character == ">" and angle_depth:
             angle_depth -= 1
-        elif character == "," and angle_depth == 0:
+        elif character in "([{" and angle_depth == 0:
+            nested_depth += 1
+        elif character in ")]}" and nested_depth and angle_depth == 0:
+            nested_depth -= 1
+        elif character == "," and angle_depth == 0 and nested_depth == 0:
             fields.append(arguments[start:index].strip())
             if len(fields) == count:
                 return fields
@@ -519,6 +537,34 @@ def attributable(path: str, root: str) -> bool:
     return path == root or path.startswith(root + "/")
 
 
+def metadata_arguments(
+    syscall: str, arguments: str
+) -> tuple[str, str, str, str] | None:
+    """Return the dirfd, pathname, flags, and returned metadata of a stat call."""
+    if syscall not in ("statx", "newfstatat"):
+        return None
+    fields = first_arguments(arguments, 6)
+    if syscall == "statx" and len(fields) == 5:
+        return fields[0], fields[1], fields[2], fields[4]
+    if syscall == "newfstatat" and len(fields) == 4:
+        return fields[0], fields[1], fields[3], fields[2]
+    return None
+
+
+def flag_set(flags: str) -> set[str]:
+    return {flag.strip() for flag in flags.split("|")}
+
+
+def metadata_value(attributes: str, name: str) -> str | None:
+    match = re.search(r"(?:\{|,)\s*" + re.escape(name) + r"=([^,}]+)", attributes)
+    return match[1].strip() if match else None
+
+
+def descriptor_number(value: str) -> int | None:
+    match = re.fullmatch(r"(\d+)(?:<[^<>]*>)?", value)
+    return int(match[1]) if match else None
+
+
 def attribute_trace(text: str, wheelhouse: Path, cwd: Path | None = None) -> dict:
     root = str(wheelhouse)
     records, unparsed = trace_records(text)
@@ -530,7 +576,9 @@ def attribute_trace(text: str, wheelhouse: Path, cwd: Path | None = None) -> dic
     wheel_opens = Counter()
     wheel_reads = defaultdict(lambda: {"calls": 0, "bytes": 0})
     nofollow = 0
-    for syscall, arguments, result, duration in records:
+    for _, syscall, arguments, result, duration in records:
+        if syscall not in TRACE_CALLS:
+            continue
         total[syscall] += 1
         failed = result.startswith("-1 ")
         if failed:
@@ -546,7 +594,8 @@ def attribute_trace(text: str, wheelhouse: Path, cwd: Path | None = None) -> dic
         seconds[syscall] += duration
         if failed:
             attributed_errors[syscall] += 1
-        if syscall in ("statx", "newfstatat") and "AT_SYMLINK_NOFOLLOW" in arguments:
+        metadata = metadata_arguments(syscall, arguments)
+        if metadata is not None and "AT_SYMLINK_NOFOLLOW" in flag_set(metadata[2]):
             nofollow += 1
         wheels = {
             str(PurePosixPath(path).relative_to(root))
@@ -575,6 +624,270 @@ def attribute_trace(text: str, wheelhouse: Path, cwd: Path | None = None) -> dic
         "unparsed_lines": unparsed,
         "complete": not unparsed,
     }
+
+
+def catalog_trace_coverage(
+    text: str, wheelhouse: Path, entries: list[dict], cwd: Path | None = None
+) -> dict:
+    """Check the frozen synthetic catalog independently of trace-parser completeness."""
+    root = str(wheelhouse)
+    require(
+        wheelhouse.is_absolute() and posixpath.normpath(root) == root,
+        "catalog trace directory must be an absolute normalized path",
+    )
+    expected = {}
+    for entry in entries:
+        name = entry["filename"]
+        require(
+            isinstance(name, str)
+            and PurePosixPath(name).name == name
+            and name not in ("", ".", "..")
+            and "\\" not in name
+            and "\0" not in name
+            and name.endswith(".whl")
+            and name not in expected
+            and type(entry["size"]) is int
+            and entry["size"] > 0,
+            "invalid frozen catalog entry",
+        )
+        expected[name] = entry["size"]
+    require(bool(expected), "empty frozen catalog")
+    expected_paths = {root + "/" + name: name for name in expected}
+    allowed = {root, *expected_paths}
+    covered = Counter()
+    enumeration_data = 0
+    enumeration_eof = 0
+    enumeration_pending = set()
+    enumeration_complete = []
+    unexpected = set()
+    contradictions = []
+
+    def contradict(reason: str, syscall: str, path: str, result: str) -> None:
+        contradictions.append(
+            {"reason": reason, "syscall": syscall, "path": path, "result": result}
+        )
+
+    records, _ = trace_records(text)
+    for process, syscall, arguments, result, _ in records:
+        if syscall not in TRACE_CALLS:
+            continue
+        first = first_arguments(arguments, 1)[0]
+        descriptor = descriptor_number(first)
+        identity = (process, descriptor)
+        requested = {
+            posixpath.normpath(path)
+            for path in operation_paths(syscall, arguments, cwd)
+        }
+        returned = (
+            {posixpath.normpath(path) for path in path_tokens(result)}
+            if syscall == "openat"
+            else set()
+        )
+        if syscall == "close" and result == "0" and identity in enumeration_pending:
+            enumeration_pending.remove(identity)
+            contradict("directory closed before EOF", syscall, root, result)
+        if syscall == "openat":
+            opened = (process, descriptor_number(result))
+            if opened in enumeration_pending:
+                enumeration_pending.remove(opened)
+                contradict(
+                    "directory descriptor reused before EOF", syscall, root, result
+                )
+        if (
+            syscall == "getdents64"
+            and identity in enumeration_pending
+            and requested != {root}
+        ):
+            enumeration_pending.remove(identity)
+            contradict("directory descriptor changed before EOF", syscall, root, result)
+        observed = (
+            requested
+            | returned
+            | {posixpath.normpath(path) for path in path_tokens(first)}
+        )
+        observed = {path for path in observed if attributable(path, root)}
+        if not observed:
+            continue
+        for path in sorted(observed - allowed):
+            unexpected.add(path)
+            contradict("unexpected catalog path", syscall, path, result)
+        if (
+            syscall == "openat"
+            and requested & allowed
+            and returned
+            and requested != returned
+        ):
+            for path in sorted(requested & allowed):
+                contradict("opened catalog path differs", syscall, path, result)
+        for field in (first, result if syscall == "openat" else ""):
+            if " (deleted)>" in field:
+                for path in sorted(path_tokens(field)):
+                    if attributable(path, root):
+                        contradict("deleted catalog descriptor", syscall, path, result)
+        for path in sorted(requested & allowed):
+            if syscall == "getdents64":
+                if (
+                    path != root
+                    or descriptor is None
+                    or re.fullmatch(r"\d+", result) is None
+                ):
+                    contradict("invalid directory enumeration", syscall, path, result)
+                elif int(result) > 0:
+                    enumeration_data += 1
+                    enumeration_pending.add(identity)
+                else:
+                    enumeration_eof += 1
+                    if identity in enumeration_pending:
+                        enumeration_pending.remove(identity)
+                        enumeration_complete.append(
+                            {"process": process, "fd": descriptor}
+                        )
+                continue
+            if syscall not in ("statx", "newfstatat"):
+                continue
+            metadata = metadata_arguments(syscall, arguments)
+            if metadata is None:
+                contradict("invalid metadata arguments", syscall, path, result)
+                continue
+            if syscall == "statx" and result.startswith("-1 ENOSYS "):
+                # The ordinary implementation can fall back to newfstatat.
+                continue
+            if result != "0":
+                contradict("failed metadata lookup", syscall, path, result)
+                continue
+            _, pathname, flags, attributes = metadata
+            prefix = "stx_" if syscall == "statx" else "st_"
+            mode = metadata_value(attributes, prefix + "mode")
+            size = metadata_value(attributes, prefix + "size")
+            mask = flag_set(metadata_value(attributes, "stx_mask") or "")
+            has_type = syscall == "newfstatat" or bool(
+                mask & {"STATX_TYPE", "STATX_BASIC_STATS", "STATX_ALL"}
+            )
+            has_size = syscall == "newfstatat" or bool(
+                mask & {"STATX_SIZE", "STATX_BASIC_STATS", "STATX_ALL"}
+            )
+            file_type = "S_IFDIR" if path == root else "S_IFREG"
+            if has_type and mode is not None and mode.split("|", 1)[0] != file_type:
+                contradict("metadata file type differs", syscall, path, result)
+                continue
+            if path == root:
+                continue
+            name = expected_paths[path]
+            if has_size and size is not None and size != str(expected[name]):
+                contradict("metadata file size differs", syscall, path, result)
+                continue
+            flags = flag_set(flags)
+            if (
+                has_type
+                and mode is not None
+                and has_size
+                and size is not None
+                and "AT_SYMLINK_NOFOLLOW" in flags
+                and "AT_EMPTY_PATH" not in flags
+                and pathname != '""'
+            ):
+                covered[name] += 1
+    missing = sorted(expected.keys() - covered.keys())
+    return {
+        "directory": root,
+        "expected_entries": len(expected),
+        "enumeration_data_calls": enumeration_data,
+        "enumeration_eof_calls": enumeration_eof,
+        "enumeration_complete": enumeration_complete,
+        "enumeration_pending": [
+            {"process": process, "fd": descriptor}
+            for process, descriptor in sorted(enumeration_pending)
+        ],
+        "successful_nofollow_metadata": dict(sorted(covered.items())),
+        "missing_entries": missing,
+        "unexpected_paths": sorted(unexpected),
+        "contradictions": contradictions,
+        "accepted": bool(enumeration_complete)
+        and not enumeration_pending
+        and not missing
+        and not unexpected
+        and not contradictions,
+    }
+
+
+def tracee_termination(text: str, uv: Path) -> dict:
+    """Bind the direct tracee's successful exec to its own terminal status."""
+    records, _ = trace_records(text)
+    expected = str(uv)
+    require(uv.is_absolute(), "tracee executable must be an absolute checked path")
+    matches = []
+    for index, (process, syscall, arguments, result, _) in enumerate(records):
+        if syscall != "execve" or result != "0":
+            continue
+        try:
+            path = ast.literal_eval(first_arguments(arguments, 1)[0])
+        except (SyntaxError, ValueError):
+            continue
+        if path == expected:
+            matches.append({"process": process, "path": path, "record_index": index})
+    exec_record = matches[0] if len(matches) == 1 else None
+    contradictions = []
+    terminal = None
+    if (
+        exec_record is None
+        or exec_record["record_index"] != 0
+        or not exec_record["process"].isdigit()
+        or int(exec_record["process"]) <= 0
+    ):
+        contradictions.append(
+            "the trace must begin with one successful execve of the checked uv"
+        )
+    else:
+        process = exec_record["process"]
+        for index, (record_process, syscall, arguments, result, _) in enumerate(
+            records[1:], 1
+        ):
+            if record_process != process:
+                continue
+            if terminal is not None:
+                contradictions.append("a tracee record follows its terminal status")
+            elif syscall == "execve" and result == "0":
+                contradictions.append("the checked uv tracee executed another image")
+            elif syscall in ("process_exit", "process_killed"):
+                terminal = {
+                    "process": process,
+                    "record_index": index,
+                    "record": arguments,
+                    "exit_code": int(result) if syscall == "process_exit" else None,
+                    "signal": result if syscall == "process_killed" else None,
+                }
+        if terminal is None:
+            contradictions.append("the checked uv tracee has no terminal status")
+        elif terminal["exit_code"] != 0:
+            contradictions.append("the checked uv tracee did not exit zero")
+    return {
+        "expected_executable": expected,
+        "trace_filter": ["execve"],
+        "matching_execve_count": len(matches),
+        "execve": exec_record,
+        "terminal": terminal,
+        "contradictions": contradictions,
+        "accepted": not contradictions,
+    }
+
+
+def require_capture_trace(attribution: dict, trace_path: Path) -> None:
+    require(attribution["complete"], f"incomplete pathname attribution: {trace_path}")
+    coverage = attribution["catalog_coverage"]
+    require(
+        coverage["accepted"],
+        f"incomplete catalog coverage: {trace_path}; "
+        f"missing={len(coverage['missing_entries'])}, "
+        f"unexpected={len(coverage['unexpected_paths'])}, "
+        f"contradictions={len(coverage['contradictions'])}, "
+        f"enumeration={len(coverage['enumeration_complete'])} complete/"
+        f"{len(coverage['enumeration_pending'])} pending",
+    )
+    require(
+        attribution["tracee_termination"]["accepted"],
+        f"incomplete tracee termination: {trace_path}; "
+        + "; ".join(attribution["tracee_termination"]["contradictions"]),
+    )
 
 
 def clean_environment(temporary: Path) -> dict[str, str]:
@@ -608,6 +921,25 @@ def uv_command(
         "--no-header",
         "--no-annotate",
         str(requirements),
+    ]
+
+
+def pathname_trace_command(strace: Path, trace: Path, command: list[str]) -> list[str]:
+    return [
+        str(strace),
+        "-f",
+        "-q",
+        "-ttt",
+        "-T",
+        "-yy",
+        "-s",
+        "4096",
+        "-e",
+        f"trace={','.join(PATHNAME_TRACE_CALLS)}",
+        "-o",
+        str(trace),
+        "--",
+        *command,
     ]
 
 
@@ -697,7 +1029,7 @@ def capture(args: argparse.Namespace) -> None:
         directory = new_directory(run / catalog["id"])
         for name in ("cache", "tmp", "results", "traces"):
             (directory / name).mkdir()
-        wheelhouse = relative_file(stage, catalog["path"])
+        wheelhouse = relative_file(stage, catalog["path"]).resolve(strict=True)
         requirements = relative_file(stage, manifest["requirements"])
         command = uv_command(uv, python, directory / "cache", wheelhouse, requirements)
         environment = clean_environment(directory / "tmp")
@@ -721,28 +1053,16 @@ def capture(args: argparse.Namespace) -> None:
         ]
         capture_process(summary_command, environment, directory, "strace-summary")
         trace_path = directory / "traces" / "pathnames.txt"
-        trace_command = [
-            str(strace),
-            "-f",
-            "-qq",
-            "-ttt",
-            "-T",
-            "-yy",
-            "-s",
-            "4096",
-            "-e",
-            f"trace={','.join(TRACE_CALLS)}",
-            "-o",
-            str(trace_path),
-            "--",
-            *command,
-        ]
+        trace_command = pathname_trace_command(strace, trace_path, command)
         capture_process(trace_command, environment, directory, "strace-pathnames")
-        attribution = attribute_trace(trace_path.read_text(), wheelhouse, directory)
-        write_json(directory / "traces" / "attribution.json", attribution)
-        require(
-            attribution["complete"], f"incomplete pathname attribution: {trace_path}"
+        trace_text = trace_path.read_text()
+        attribution = attribute_trace(trace_text, wheelhouse, directory)
+        attribution["catalog_coverage"] = catalog_trace_coverage(
+            trace_text, wheelhouse, catalog["entries"], directory
         )
+        attribution["tracee_termination"] = tracee_termination(trace_text, uv)
+        write_json(directory / "traces" / "attribution.json", attribution)
+        require_capture_trace(attribution, trace_path)
         metadata["catalogs"].append(
             {
                 "id": catalog["id"],
