@@ -100,7 +100,7 @@ class Fixtures:
                 for query in queries:
                     key = (normalize(query["name"]), query["version"])
                     self.osv_queries.setdefault(key, []).append(record["id"])
-            if not filename.endswith(".whl"):
+            if not filename.endswith(".whl") or not item.get("replay", True):
                 continue
             if not path.is_file():
                 raise FileNotFoundError(f"Run prepare-fixtures.py first: {path}")

@@ -1,5 +1,29 @@
 [
   {
+    "filename": "flask-3.1.1-py3-none-any.whl",
+    "replay": false,
+    "url": "https://files.pythonhosted.org/packages/3d/68/9d4508e893976286d2ead7f8f571314af6c2037af34853a30fd769c02e9d/flask-3.1.1-py3-none-any.whl",
+    "sha256": "07aae2bb5eaf77993ef57e357491839f5fd9f4dc281593a81a9e4d79a24f295c"
+  },
+  {
+    "filename": "jupyterlab-4.4.6-py3-none-any.whl",
+    "replay": false,
+    "url": "https://files.pythonhosted.org/packages/53/38/6182d63f39428821e705e86fba61704fc69769a24ca5a9578c2c04986c9a/jupyterlab-4.4.6-py3-none-any.whl",
+    "sha256": "e877e930f46dde2e3ee9da36a935c6cd4fdb15aa7440519d0fde696f9fadb833"
+  },
+  {
+    "filename": "numpy-2.2.5-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    "replay": false,
+    "url": "https://files.pythonhosted.org/packages/e5/32/a66db7a5c8b5301ec329ab36d0ecca23f5e18907f43dbd593c8ec326d57c/numpy-2.2.5-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    "sha256": "369e0d4647c17c9363244f3468f2227d557a74b6781cb62ce57cf3ef5cc7c610"
+  },
+  {
+    "filename": "sympy-1.13.3-py3-none-any.whl",
+    "replay": false,
+    "url": "https://files.pythonhosted.org/packages/99/ff/c87e0622b1dadea79d2fb0b25ade9ed98954c9033722eb707053d310d4f3/sympy-1.13.3-py3-none-any.whl",
+    "sha256": "54612cf55a62755ee71824ce692986f23c88ffa77207b30c1368eda4a7060f73"
+  },
+  {
     "filename": "setuptools-80.9.0-py3-none-any.whl",
     "url": "https://files.pythonhosted.org/packages/a3/dc/17031897dae0efacfea57dfd3a82fdd2a2aeb58e0ff71b77b87e44edc772/setuptools-80.9.0-py3-none-any.whl",
     "sha256": "062d34222ad13e0cc312a4c02d73f059e86a4acbfbdea8f8f76b28c99f306922"
