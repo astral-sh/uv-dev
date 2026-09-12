@@ -12,6 +12,10 @@ license = { workspace = true }
 [lib]
 doctest = false
 
+[[test]]
+name = "locked_file"
+required-features = ["tokio"]
+
 [lints]
 workspace = true
 
