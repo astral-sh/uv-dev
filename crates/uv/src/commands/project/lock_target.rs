@@ -32,6 +32,13 @@ pub(crate) enum LockTarget<'lock> {
     Script(&'lock Pep723Script),
 }
 
+/// An existing [`Lock`] and the exact TOML contents from which it was parsed.
+#[derive(Debug)]
+pub(crate) struct LockWithContents {
+    pub(crate) lock: Lock,
+    pub(crate) contents: String,
+}
+
 impl<'lock> From<&'lock Workspace> for LockTarget<'lock> {
     fn from(workspace: &'lock Workspace) -> Self {
         Self::Workspace(workspace)
@@ -344,19 +351,22 @@ impl<'lock> LockTarget<'lock> {
         Ok(self
             .read_with_contents()
             .await?
-            .map(|(lock, _contents)| lock))
+            .map(|existing| existing.lock))
     }
 
     /// Read the lockfile and return the exact contents that were parsed.
     ///
     /// Returns `Ok(None)` if the lockfile does not exist.
-    pub(crate) async fn read_with_contents(self) -> Result<Option<(Lock, String)>, ProjectError> {
+    pub(crate) async fn read_with_contents(self) -> Result<Option<LockWithContents>, ProjectError> {
         let lock_path = self.lock_path();
         match fs_err::tokio::read_to_string(&lock_path).await {
             Ok(encoded) => {
                 let lock = info_span!("parse uv lock", path = %lock_path.display())
                     .in_scope(|| Lock::from_toml(&encoded))?;
-                Ok(Some((lock, encoded)))
+                Ok(Some(LockWithContents {
+                    lock,
+                    contents: encoded,
+                }))
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(err) => Err(err.into()),
