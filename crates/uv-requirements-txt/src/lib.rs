@@ -1537,7 +1537,9 @@ enum VisitedFiles<'a> {
 /// Return a stable identity for a requirements file without changing the path used to read it.
 fn visited_file(path: &Path) -> PathBuf {
     if path.starts_with("http://") || path.starts_with("https://") {
-        path.to_path_buf()
+        path.to_str()
+            .and_then(|path| Url::parse(path).ok())
+            .map_or_else(|| path.to_path_buf(), |url| PathBuf::from(url.as_str()))
     } else {
         normalize_path(path).into_owned()
     }
@@ -1600,7 +1602,7 @@ mod test {
 
     use uv_fs::Simplified;
 
-    use crate::{RequirementsTxt, calculate_row_column};
+    use crate::{RequirementsTxt, calculate_row_column, visited_file};
 
     fn workspace_test_data_dir() -> PathBuf {
         Path::new("./test-data").simple_canonicalize().unwrap()
@@ -2968,6 +2970,13 @@ mod test {
 
         // Assert line and columns are expected
         assert_eq!(line_column, expected, "Issues with input: {input}");
+    }
+
+    /// Normalize remote path aliases before checking for recursive inclusions.
+    #[test_case("http://example.com/sub/../sub/recursive.txt", "http://example.com/sub/recursive.txt"; "dot segments")]
+    #[test_case("https://example.com/sub/%2e%2e/sub/recursive.txt", "https://example.com/sub/recursive.txt"; "encoded dot segments")]
+    fn normalize_remote_visited_file(input: &str, expected: &str) {
+        assert_eq!(visited_file(Path::new(input)), PathBuf::from(expected));
     }
 
     /// Test different kinds of recursive inclusions with requirements and constraints
