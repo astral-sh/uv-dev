@@ -169,6 +169,37 @@ fn python_reinstall() {
 }
 
 #[test]
+fn python_uninstall_unmatched() {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+
+    uv_snapshot!(context.filters(), context.python_uninstall().arg("3.12"), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+
+    ----- stderr -----
+    Searching for Python versions matching: Python 3.12
+    No existing installations found for: Python 3.12
+    No Python installations found matching the requests
+    ");
+}
+
+#[test]
+fn python_uninstall_all_empty() {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+
+    uv_snapshot!(context.filters(), context.python_uninstall().arg("--all"), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+
+    ----- stderr -----
+    Searching for Python installations
+    No Python installations found
+    ");
+}
+
+#[test]
 fn python_reinstall_patch() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()

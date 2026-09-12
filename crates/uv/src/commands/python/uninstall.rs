@@ -35,7 +35,7 @@ pub(crate) async fn uninstall(
     let _lock = installations.lock().await?;
 
     // Perform the uninstallation.
-    do_uninstall(&installations, targets, all, printer).await?;
+    let status = do_uninstall(&installations, targets, all, printer).await?;
 
     // Clean up any empty directories.
     if uv_fs::directories(installations.root())?.all(|path| uv_fs::is_temporary(&path)) {
@@ -55,7 +55,7 @@ pub(crate) async fn uninstall(
         }
     }
 
-    Ok(ExitStatus::Success)
+    Ok(status)
 }
 
 /// Perform the uninstallation of managed Python installations.
