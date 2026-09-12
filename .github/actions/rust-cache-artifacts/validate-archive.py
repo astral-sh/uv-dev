@@ -49,6 +49,8 @@ def main():
     if compression == "gzip":
         with gzip.open(filename, "rb") as stream:
             validate(stream, roots)
+            while stream.read(1024 * 1024):
+                pass
     elif compression in ("zstd", "zstd-without-long"):
         with subprocess.Popen(
             ["zstd", "--decompress", "--stdout", filename],
