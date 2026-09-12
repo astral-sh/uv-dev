@@ -675,8 +675,8 @@ impl Display for UnsupportedOption {
 }
 
 /// Returns `true` if the character is a newline or a comment character.
-const fn is_terminal(c: char) -> bool {
-    matches!(c, '\n' | '\r' | '#')
+fn is_terminal(c: char) -> bool {
+    ['\n', '\r', '#'].contains(&c)
 }
 
 /// Parse a single entry, that is a requirement, an inclusion or a comment line.
