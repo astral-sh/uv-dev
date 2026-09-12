@@ -465,7 +465,9 @@ fn target_environment(scenario: &Scenario, target: &ScenarioTarget) -> Result<Ma
             .root
             .requires_python
             .as_ref()
-            .is_none_or(|specifier| specifier.contains(environment.python_full_version())),
+            .is_none_or(|specifier| {
+                specifier.contains(&environment.python_full_version().only_release())
+            }),
         "Python {} is outside the scenario root's supported range",
         target.python
     );

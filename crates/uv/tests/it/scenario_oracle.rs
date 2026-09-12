@@ -21,6 +21,7 @@ fn fixed_scenarios_match_the_exhaustive_oracle() -> Result<()> {
         "incompatible_versions/transitive-incompatible-with-root-version.toml",
         "extras/all-extras-required.toml",
         "fork/basic.toml",
+        "requires_python/python-less-than-current.toml",
     ];
     let mut outcomes = Vec::new();
     for path in paths {
@@ -56,6 +57,10 @@ fn fixed_scenarios_match_the_exhaustive_oracle() -> Result<()> {
         ),
         (
             "fork-basic",
+            true,
+        ),
+        (
+            "python-less-than-current",
             true,
         ),
         (
