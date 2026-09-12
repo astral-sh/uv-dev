@@ -19,13 +19,7 @@ pub enum BuildIsolation<'a> {
 impl BuildIsolation<'_> {
     /// Returns `true` if build isolation is enforced for the given package name.
     pub fn is_isolated(&self, package: Option<&PackageName>) -> bool {
-        match self {
-            Self::Isolated => true,
-            Self::Shared(_) => false,
-            Self::SharedPackage(_, packages) => {
-                package.is_none_or(|package| !packages.iter().any(|p| p == package))
-            }
-        }
+        self.shared_environment(package).is_none()
     }
 
     /// Returns the shared environment for a given package, if build isolation is not enforced.
