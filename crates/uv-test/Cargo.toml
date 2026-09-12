@@ -64,3 +64,9 @@ toml = { workspace = true }
 url = { workspace = true }
 walkdir = { workspace = true }
 wiremock = { workspace = true }
+
+[dev-dependencies]
+uv-distribution-types = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+rustix = { workspace = true }
