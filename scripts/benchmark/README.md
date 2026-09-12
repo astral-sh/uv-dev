@@ -37,9 +37,12 @@ env -u RUST_LOG -u RAYON_NUM_THREADS \
 Set `UV_BENCH_PYTHON` to a fixed interpreter when comparing builds. An unset
 `UV_BENCH_CONCURRENT_INSTALLS` uses Rayon's default; `1` selects the production serial path. The
 benchmark sets `RAYON_PARALLELISM` before the global pool can initialize. Changing
-`RAYON_NUM_THREADS` alone does not select the explicitly single-threaded installed-index path. The
-untimed index check warms the pool when a row needs it, so these are steady-state, warm-filesystem
-measurements, not process-startup or cold-cache measurements.
+`RAYON_NUM_THREADS` alone does not select the explicitly single-threaded installed-index path. For
+an explicit width above one, the first selected row initializes the pool outside timing and checks
+its observed width. Width one and the unset/default setting stay lazy; the default's reported CPU
+parallelism is only an inference, not an observed pool size. The untimed index check warms the pool
+when a row needs it, so these are steady-state, warm-filesystem measurements, not process-startup or
+cold-cache measurements.
 
 For a fresh-process comparison, create the same fixture once with the benchmark's shared generator:
 

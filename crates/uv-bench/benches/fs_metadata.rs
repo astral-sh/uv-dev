@@ -11,16 +11,18 @@ extern crate uv_performance_memory_allocator;
 use std::cell::OnceCell;
 use std::env;
 use std::hint::black_box;
+use std::io::{self, Write};
 use std::num::NonZeroUsize;
 use std::process::Command;
 use std::sync::atomic::Ordering;
+use std::thread;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main, measurement::WallTime};
 use sha2::{Digest, Sha256};
 
 use uv_cache::{ArchiveFileId, ArchiveId, Cache};
 use uv_cache_info::CacheInfo;
-use uv_configuration::RAYON_PARALLELISM;
+use uv_configuration::{RAYON_PARALLELISM, initialize_rayon_once};
 use uv_distribution_types::Name;
 use uv_installer::SitePackages;
 use uv_python::{Interpreter, PythonEnvironment, Target};
@@ -53,7 +55,7 @@ fn python_environment() -> PythonEnvironment {
     PythonEnvironment::from_interpreter(interpreter)
 }
 
-fn configure_installer_parallelism() {
+fn configure_installer_parallelism() -> usize {
     let parallelism = env::var_os("UV_BENCH_CONCURRENT_INSTALLS").map_or(0, |value| {
         value
             .into_string()
@@ -63,6 +65,39 @@ fn configure_installer_parallelism() {
             .get()
     });
     RAYON_PARALLELISM.store(parallelism, Ordering::Relaxed);
+    parallelism
+}
+
+fn report_installer_parallelism(parallelism: usize) {
+    if parallelism > 1 {
+        initialize_rayon_once();
+        let observed = rayon::current_num_threads();
+        assert_eq!(
+            observed, parallelism,
+            "The installer pool must use the requested benchmark width"
+        );
+        writeln!(
+            io::stderr().lock(),
+            "installed_package_sidecars: configured_width={parallelism}, observed_width={observed}"
+        )
+        .expect("Failed to report installer pool width");
+    } else if parallelism == 1 {
+        writeln!(
+            io::stderr().lock(),
+            "installed_package_sidecars: configured_width=1, sidecar_path=serial, observed_width=unqueried"
+        )
+        .expect("Failed to report serial installer configuration");
+    } else {
+        let available = thread::available_parallelism().map_or_else(
+            |_| "unavailable".to_owned(),
+            |value| value.get().to_string(),
+        );
+        writeln!(
+            io::stderr().lock(),
+            "installed_package_sidecars: configured_width=default, inferred_available_parallelism={available}, observed_width=unqueried"
+        )
+        .expect("Failed to report default installer configuration");
+    }
 }
 
 fn installed_package_sidecars(criterion: &mut Criterion<WallTime>) {
@@ -70,7 +105,8 @@ fn installed_package_sidecars(criterion: &mut Criterion<WallTime>) {
         return;
     }
 
-    configure_installer_parallelism();
+    let parallelism = configure_installer_parallelism();
+    let reported_parallelism = OnceCell::new();
     let base_environment = OnceCell::new();
     let mut group = criterion.benchmark_group("installed_package_sidecars");
     for sidecars in [
@@ -87,6 +123,8 @@ fn installed_package_sidecars(criterion: &mut Criterion<WallTime>) {
                     // Criterion applies its row filter before invoking this closure. Keep one
                     // fixture for a selected row without creating the other file-count sweeps.
                     let (_root, environment) = fixture.get_or_init(|| {
+                        reported_parallelism
+                            .get_or_init(|| report_installer_parallelism(parallelism));
                         let root =
                             tempfile::tempdir().expect("Failed to create site-packages fixture");
                         installed_packages::create(root.path(), package_count, sidecars);
