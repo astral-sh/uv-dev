@@ -162,7 +162,8 @@ impl InstalledTools {
             else {
                 continue;
             };
-            let Ok(name) = PackageName::from_str(name) else {
+            let name = name.to_owned();
+            let Ok(name) = PackageName::from_str(&name) else {
                 warn_user!(
                     "Ignoring tool directory `{}` with an invalid package name; move it outside the tool directory, or remove it if no longer needed",
                     directory.user_display()
