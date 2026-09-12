@@ -1233,7 +1233,6 @@ fn reported_versions(package: &PubGrubPackage, cause: &ErrorTree) -> Range<Versi
     }
 }
 
-
 /// Given a [`DerivationTree`], collapse any derived trees with two `NoVersions` nodes for the same
 /// package. For example, if we have a tree like:
 ///
