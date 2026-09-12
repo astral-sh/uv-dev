@@ -595,6 +595,7 @@ pub(crate) fn create(
 
     let mut pyvenv_cfg = BufWriter::new(File::create(location.join("pyvenv.cfg"))?);
     write_cfg(&mut pyvenv_cfg, &pyvenv_cfg_data)?;
+    pyvenv_cfg.flush()?;
     drop(pyvenv_cfg);
 
     // Construct the path to the `site-packages` directory.
