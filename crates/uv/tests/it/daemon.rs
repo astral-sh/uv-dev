@@ -1,7 +1,8 @@
+use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -10,7 +11,7 @@ use assert_fs::prelude::*;
 use indoc::indoc;
 use nix::errno::Errno;
 use nix::libc;
-use nix::sys::signal::{Signal, kill};
+use nix::sys::signal::{self, SigSet, SigmaskHow, Signal, kill};
 use nix::unistd::Pid;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -53,6 +54,20 @@ fn isolated_command(mut command: Command) -> Command {
                 }
             }
             Ok(())
+        });
+    }
+    command
+}
+
+#[allow(unsafe_code)]
+fn block_sigchld(mut command: Command) -> Command {
+    let signals = SigSet::from(Signal::SIGCHLD);
+    // SAFETY: The child closure only changes its signal mask with async-signal-safe sigprocmask.
+    // The signal set is prepared before fork, and the test harness's mask is not modified.
+    unsafe {
+        command.pre_exec(move || {
+            signal::sigprocmask(SigmaskHow::SIG_BLOCK, Some(&signals), None)
+                .map_err(io::Error::from)
         });
     }
     command
@@ -137,6 +152,43 @@ impl Drop for Daemon {
             .stderr(Stdio::null())
             .status();
     }
+}
+
+/// Wait without sending status requests, which could conceal a missed child notification by
+/// waking the daemon's listener. A failed wait wakes the server only to clean up the test.
+fn wait_without_daemon_requests(
+    daemon: &Daemon,
+    context: &TestContext,
+    mut children: Vec<Child>,
+) -> Result<Vec<Output>> {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let finished = loop {
+        let mut finished = true;
+        for child in &mut children {
+            if child.try_wait()?.is_none() {
+                finished = false;
+            }
+        }
+        if finished || Instant::now() >= deadline {
+            break finished;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    if !finished {
+        let _ = daemon.status(context);
+        for child in &mut children {
+            let _ = child.kill();
+        }
+    }
+    let outputs = children
+        .into_iter()
+        .map(Child::wait_with_output)
+        .collect::<io::Result<Vec<_>>>()?;
+    ensure!(
+        finished,
+        "Daemon commands did not finish without additional requests"
+    );
+    Ok(outputs)
 }
 
 fn write_project(context: &TestContext) -> Result<String> {
@@ -330,8 +382,78 @@ fn daemon_reaps_workers_after_inherited_ignored_sigchld() -> Result<()> {
         .arg("--daemon")
         .output()?;
     daemon.assert_success(&output)?;
-    daemon.assert_success(&daemon.export(&context, false)?)?;
+    let child = daemon
+        .command(&context)
+        .args(["export", "--frozen", "--no-header", "--no-hashes"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    for output in wait_without_daemon_requests(&daemon, &context, vec![child])? {
+        daemon.assert_success(&output)?;
+    }
     assert_eq!(daemon.status(&context)?["completed_requests"], 1);
+    Ok(())
+}
+
+#[test]
+fn daemon_reaps_workers_after_inherited_blocked_sigchld() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    write_project(&context)?;
+    let Some(daemon) = Daemon::start(&context)? else {
+        return Ok(());
+    };
+    daemon.assert_success(&daemon.command(&context).arg("--no-daemon").output()?)?;
+    let output = block_sigchld(daemon.command(&context))
+        .arg("--daemon")
+        .output()?;
+    daemon.assert_success(&output)?;
+
+    let child = daemon
+        .command(&context)
+        .args(["export", "--frozen", "--no-header", "--no-hashes"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    for output in wait_without_daemon_requests(&daemon, &context, vec![child])? {
+        daemon.assert_success(&output)?;
+    }
+    let status = daemon.status(&context)?;
+    assert_eq!(status["active_workers"], 0);
+    assert_eq!(status["completed_requests"], 1);
+    Ok(())
+}
+
+#[test]
+fn daemon_reaps_short_command_bursts() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let Some(daemon) = Daemon::start(&context)? else {
+        return Ok(());
+    };
+    let local = daemon
+        .command(&context)
+        .args(["--no-daemon", "cache", "dir"])
+        .output()?;
+    daemon.assert_success(&local)?;
+
+    let mut children = Vec::new();
+    for _ in 0..16 {
+        children.push(
+            daemon
+                .command(&context)
+                .args(["cache", "dir"])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?,
+        );
+    }
+    for output in wait_without_daemon_requests(&daemon, &context, children)? {
+        daemon.assert_success(&output)?;
+        assert_eq!(output.stdout, local.stdout);
+        assert_eq!(output.stderr, local.stderr);
+    }
+    let status = daemon.status(&context)?;
+    assert_eq!(status["active_workers"], 0);
+    assert_eq!(status["completed_requests"], 16);
     Ok(())
 }
 
@@ -430,9 +552,11 @@ fn daemon_concurrent_commands_and_shutdown() -> Result<()> {
     }
     let drained_early = stop.try_wait()?.is_some();
     context.temp_dir.child("release").write_str("")?;
-    let first = first.wait_with_output()?;
-    let second = second.wait_with_output()?;
-    let stop = stop.wait_with_output()?;
+    let mut outputs =
+        wait_without_daemon_requests(&daemon, &context, vec![first, second, stop])?.into_iter();
+    let first = outputs.next().context("first worker output")?;
+    let second = outputs.next().context("second worker output")?;
+    let stop = outputs.next().context("drain output")?;
     ensure!(
         both_started,
         "both workers must reach their readiness barrier"
@@ -445,6 +569,10 @@ fn daemon_concurrent_commands_and_shutdown() -> Result<()> {
     daemon.assert_success(&stop)?;
     assert_eq!(first.stdout, b"first\n");
     assert_eq!(second.stdout, b"second\n");
+    let status: Value = serde_json::from_slice(&stop.stdout)?;
+    assert_eq!(status["active_workers"], 0);
+    assert_eq!(status["completed_requests"], 2);
+    assert_eq!(status["stopping"], true);
     Ok(())
 }
 

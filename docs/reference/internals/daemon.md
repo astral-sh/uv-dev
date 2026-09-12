@@ -98,9 +98,10 @@ MessagePack frames. It accepts no TCP connections and never logs request environ
 
 Startup uses an exclusive lock file. The holder may remove a stale, same-owner socket and bind the
 replacement. Concurrent starters converge on that socket. A parent handles at most 64 workers and
-exits after 15 idle minutes. A graceful stop rejects new work and waits for existing workers before
-removing its socket. Disabling the mode prevents future automatic restarts; other session daemons
-retire when idle.
+exits after 15 idle minutes. Child exits wake the listener through a nonblocking `SIGCHLD` pipe;
+notifications may be coalesced, so each wakeup reaps every exited worker. A graceful stop rejects
+new work and waits for existing workers before removing its socket. Disabling the mode prevents
+future automatic restarts; other session daemons retire when idle.
 
 Submission has an explicit boundary. Before a request is submitted, an unavailable daemon can fall
 back to normal uv. A `RunLocally` response also guarantees that no worker was started. After a
