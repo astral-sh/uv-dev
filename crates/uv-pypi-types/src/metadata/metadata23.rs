@@ -356,16 +356,7 @@ impl Keywords {
 
     /// Write the `METADATA` format.
     pub fn as_metadata(&self) -> String {
-        let mut keywords = self.0.iter();
-        let mut rendered = String::new();
-        if let Some(keyword) = keywords.next() {
-            rendered.push_str(keyword);
-        }
-        for keyword in keywords {
-            rendered.push(',');
-            rendered.push_str(keyword);
-        }
-        rendered
+        self.0.join(",")
     }
 }
 
@@ -409,6 +400,22 @@ mod tests {
     use super::*;
     use crate::MetadataError;
     use insta::assert_snapshot;
+
+    #[test]
+    fn keywords_round_trip() {
+        for (values, expected) in [
+            (vec![], ""),
+            (vec![""], ""),
+            (vec!["", ""], ","),
+            (vec!["demo", "example", "package"], "demo,example,package"),
+            (vec!["", "demo", ""], ",demo,"),
+            (vec![" demo ", "\texample"], " demo ,\texample"),
+        ] {
+            let keywords = Keywords::new(values.into_iter().map(str::to_string).collect());
+            assert_eq!(keywords.as_metadata(), expected);
+            assert_eq!(Keywords::from_metadata(expected).as_metadata(), expected);
+        }
+    }
 
     #[test]
     fn test_parse_from_str() {
