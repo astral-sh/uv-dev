@@ -651,6 +651,50 @@ fn build_fail() -> Result<()> {
 }
 
 #[test]
+fn build_workspace_errors_quiet() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["packages/*"]
+    "#})?;
+    for name in ["first", "second"] {
+        context
+            .temp_dir
+            .child(format!("packages/{name}/pyproject.toml"))
+            .write_str(&formatdoc! {r#"
+            [project]
+            name = "{name}"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [build-system]
+            requires = []
+            build-backend = "missing"
+            backend-path = [".."]
+        "#})?;
+    }
+
+    uv_snapshot!(context.filters(), context.build()
+        .args(["--all-packages", "--wheel", "-q"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to build `first @ [TEMP_DIR]/packages/first`
+      cause: `backend-path` entry `..` must be a relative path within the source tree
+    error: Failed to build `second @ [TEMP_DIR]/packages/second`
+      cause: `backend-path` entry `..` must be a relative path within the source tree
+    ");
+    uv_snapshot!(context.filters(), context.build()
+        .args(["--all-packages", "--wheel", "-qq"]), @"
+    exit_code: 2 (failure)
+    ");
+
+    Ok(())
+}
+
+#[test]
 fn build_workspace() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filter((r"\\\.", ""))
@@ -935,13 +979,13 @@ fn build_all_with_failure() -> Result<()> {
     [PKG] Building wheel from source distribution...
     Successfully built dist/member_a-0.1.0.tar.gz
     Successfully built dist/member_a-0.1.0-py3-none-any.whl
+    Successfully built dist/project-0.1.0.tar.gz
+    Successfully built dist/project-0.1.0-py3-none-any.whl
     error: Failed to build `member-b @ [TEMP_DIR]/project/packages/member_b`
       cause: The build backend returned an error
       cause: Call to `setuptools.build_meta.build_sdist` failed (exit status: 1)
 
     hint: Build failures usually indicate a problem with the package or the build environment
-    Successfully built dist/project-0.1.0.tar.gz
-    Successfully built dist/project-0.1.0-py3-none-any.whl
     ");
 
     // project and member_a should be built, regardless of member_b build failure

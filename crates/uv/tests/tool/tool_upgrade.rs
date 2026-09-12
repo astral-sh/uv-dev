@@ -816,6 +816,23 @@ fn tool_upgrade_non_existing_package() {
       cause: `black` is not installed; run `uv tool install black` to install
     ");
 
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .args(["ruff", "black", "-q"])
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to upgrade black
+      cause: `black` is not installed; run `uv tool install black` to install
+    error: Failed to upgrade ruff
+      cause: `ruff` is not installed; run `uv tool install ruff` to install
+    ");
+
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .args(["ruff", "black", "-qq"])
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 1 (failure)
+    ");
+
     // Attempt to upgrade all.
     uv_snapshot!(context.filters(), context.tool_upgrade()
         .arg("--all")
