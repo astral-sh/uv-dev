@@ -38,6 +38,11 @@ name = "uv_pypi_types"
 path = "benches/uv_pypi_types.rs"
 harness = false
 
+[[bench]]
+name = "license_glob_matches"
+path = "benches/license_glob_matches.rs"
+harness = false
+
 [dev-dependencies]
 uv = { workspace = true }
 uv-cache = { workspace = true }
@@ -49,6 +54,7 @@ uv-distribution = { workspace = true }
 uv-distribution-filename = { workspace = true }
 uv-distribution-types = { workspace = true }
 uv-extract = { workspace = true }
+uv-globfilter = { workspace = true }
 uv-install-wheel = { workspace = true }
 uv-pep440 = { workspace = true }
 uv-pep508 = { workspace = true }
@@ -68,6 +74,7 @@ criterion = { version = "5.0.1", default-features = false, package = "codspeed-c
 flate2 = { workspace = true }
 fs-err = { workspace = true }
 futures = { workspace = true }
+globset = { workspace = true }
 jiff = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
