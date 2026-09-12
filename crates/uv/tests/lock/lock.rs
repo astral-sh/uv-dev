@@ -18501,6 +18501,89 @@ fn check_unformatted_lock() -> Result<()> {
     Ok(())
 }
 
+/// A freshly resolved lock must not retain group edges that are impossible in its version forks.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_omits_impossible_group_edges() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "impossible-group-edge"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.a.versions."1.0.0"]
+        sdist = false
+
+        [packages.a.versions."2.0.0"]
+        requires = ["missing; sys_platform == 'win32' and python_version >= '3.13'"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.15"
+
+        [dependency-groups]
+        dev = ["a; sys_platform != 'win32'"]
+        shared = ["a; python_version < '3.14'"]
+        "#})?;
+    let command = || {
+        let mut command = context.lock();
+        command
+            .arg("--no-config")
+            .arg("--index-url")
+            .arg(server.index_url())
+            .arg("--no-build")
+            .env_remove(EnvVars::UV_EXCLUDE_NEWER);
+        command
+    };
+
+    uv_snapshot!(context.filters(), command(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    let initial = context.read("uv.lock");
+
+    uv_snapshot!(context.filters(), command().arg("--check").arg("--refresh").arg("--preview-features").arg("lockfile-format-check"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), initial);
+
+    // `a==1` is selected only on Windows, where the `dev` group does not require it.
+    let lock = toml::from_str::<toml::Value>(&initial)?;
+    let project = lock["package"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|package| package["name"].as_str() == Some("project"))
+        .unwrap();
+    let dev = project["dev-dependencies"]["dev"].as_array().unwrap();
+    assert_eq!(dev.len(), 1);
+    assert_eq!(dev[0]["name"].as_str(), Some("a"));
+    assert_eq!(dev[0]["version"].as_str(), Some("2.0.0"));
+    assert_eq!(dev[0]["marker"].as_str(), Some("sys_platform != 'win32'"));
+
+    command()
+        .arg("--refresh")
+        .arg("--preview-features")
+        .arg("lockfile-format-check")
+        .assert()
+        .success();
+    assert_eq!(context.read("uv.lock"), initial);
+    Ok(())
+}
+
 /// Checks that a later `exclude-newer` cutoff does not invalidate a lock until a refresh occurs,
 /// while a more restrictive cutoff still requires an update.
 #[cfg(feature = "test-universal")]
