@@ -33,6 +33,8 @@ use uv_test::archive::write_tar_gz;
 #[cfg(feature = "test-universal")]
 use uv_test::diff_snapshot;
 use uv_test::packse::PackseServer;
+#[cfg(feature = "test-universal")]
+use uv_test::packse::generate_wheel;
 use uv_test::packse::scenario::{ArtifactMetadata, Package, PackageMetadata, Scenario};
 use uv_test::{DEFAULT_PYTHON_VERSION, TestContext, download_to_disk, uv_snapshot};
 
@@ -16027,7 +16029,92 @@ fn invalid_platform() -> Result<()> {
 
     hint: You require CPython 3.10 (`cp310`), but we only found wheels for `open3d` (v0.15.2) with the following Python ABI tags: `cp36m`, `cp37m`, `cp38`, `cp39`
 
-    hint: Wheels are available for `open3d` (v0.18.0) on the following platforms: `manylinux_2_27_aarch64`, `manylinux_2_27_x86_64`, `macosx_11_0_x86_64`, `macosx_13_0_arm64`, `win_amd64`
+    hint: Wheels are available for `open3d` (v0.18.0) on the following platforms: `manylinux_2_27_aarch64`, `manylinux_2_27_x86_64`, `macosx_11_0_x86_64`, `macosx_13_0_arm64`, `win_amd64`. The selected target uses glibc 2.17, but the listed manylinux wheels for x86_64 require glibc 2.27 or newer
+    ");
+
+    Ok(())
+}
+
+/// Explain a manylinux floor without changing ABI, architecture, or target selection.
+#[cfg(feature = "test-universal")]
+#[test]
+fn invalid_platform_glibc() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let name = PackageName::from_str("uv-glibc-diagnostic-test")?;
+    let wheels = context.temp_dir.child("wheels");
+    for (version, tag) in [
+        (1, "py3-none-manylinux_2_31_x86_64"),
+        (1, "py3-none-manylinux_2_34_x86_64"),
+        (1, "py3-none-manylinux2014_aarch64"),
+        (2, "py3-none-manylinux_2_31_aarch64"),
+        (3, "py3-none-macosx_11_0_arm64"),
+        (4, "cp313-cp313-manylinux_2_31_x86_64"),
+    ] {
+        let (filename, bytes) = generate_wheel(
+            &name,
+            &Version::new([version, 0]),
+            &[],
+            &BTreeMap::new(),
+            None,
+            tag,
+        );
+        wheels.child(filename).write_binary(&bytes)?;
+    }
+    let requirements = context.temp_dir.child("requirements.in");
+    let compile = |platform: &str| {
+        let mut command = context.pip_compile();
+        command.args([
+            "--offline",
+            "--no-index",
+            "--find-links",
+            "wheels",
+            "--no-build",
+            "--python-platform",
+            platform,
+            "requirements.in",
+        ]);
+        command
+    };
+
+    requirements.write_str("uv-glibc-diagnostic-test==1.0")?;
+    uv_snapshot!(context.filters(), compile("linux"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because uv-glibc-diagnostic-test==1.0 has no wheels with a matching platform tag (e.g., `manylinux_2_28_x86_64`) and you require uv-glibc-diagnostic-test==1.0, we can conclude that your requirements are unsatisfiable.
+
+    hint: Wheels are available for `uv-glibc-diagnostic-test` (v1.0) on the following platforms: `manylinux_2_31_x86_64`, `manylinux_2_34_x86_64`, `manylinux2014_aarch64`. The selected target uses glibc 2.28, but the listed manylinux wheels for x86_64 require glibc 2.31 or newer
+    ");
+    compile("x86_64-manylinux_2_31").assert().success();
+
+    requirements.write_str("uv-glibc-diagnostic-test==2.0")?;
+    uv_snapshot!(context.filters(), compile("linux"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because uv-glibc-diagnostic-test==2.0 has no wheels with a matching platform tag (e.g., `manylinux_2_28_x86_64`) and you require uv-glibc-diagnostic-test==2.0, we can conclude that your requirements are unsatisfiable.
+
+    hint: Wheels are available for `uv-glibc-diagnostic-test` (v2.0) on the following platform: `manylinux_2_31_aarch64`
+    ");
+
+    requirements.write_str("uv-glibc-diagnostic-test==3.0")?;
+    uv_snapshot!(context.filters(), compile("linux"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because uv-glibc-diagnostic-test==3.0 has no wheels with a matching platform tag (e.g., `manylinux_2_28_x86_64`) and you require uv-glibc-diagnostic-test==3.0, we can conclude that your requirements are unsatisfiable.
+
+    hint: Wheels are available for `uv-glibc-diagnostic-test` (v3.0) on the following platform: `macosx_11_0_arm64`
+    ");
+
+    requirements.write_str("uv-glibc-diagnostic-test==4.0")?;
+    uv_snapshot!(context.filters(), compile("linux"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because uv-glibc-diagnostic-test==4.0 has no wheels with a matching Python implementation tag (e.g., `cp312`) and you require uv-glibc-diagnostic-test==4.0, we can conclude that your requirements are unsatisfiable.
+
+    hint: You require CPython 3.12 (`cp312`), but we only found wheels for `uv-glibc-diagnostic-test` (v4.0) with the following Python implementation tag: `cp313`
     ");
 
     Ok(())
