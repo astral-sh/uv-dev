@@ -12,6 +12,12 @@ use uv_bench::{is_codspeed_simulation, run_command, uv_command_with_binary};
 #[derive(serde::Deserialize)]
 struct Workload {
     name: String,
+    #[serde(default = "default_cutoff")]
+    exclude_newer: String,
+}
+
+fn default_cutoff() -> String {
+    "2025-10-01T00:00:00Z".to_string()
 }
 
 fn release_runtime(c: &mut Criterion<WallTime>) {
@@ -24,23 +30,34 @@ fn release_runtime(c: &mut Criterion<WallTime>) {
         binaries.join("manifest.json").is_file(),
         "Run `python3 scripts/benchmark/prepare-release-binaries.py`"
     );
-    let workloads: Vec<Workload> = serde_json::from_str(include_str!(
+    let consumers: Vec<Workload> = serde_json::from_str(include_str!(
         "../../../scripts/benchmark/incremental-locks.json"
     ))
     .expect("Invalid release-runtime workloads");
+    let projects: Vec<Workload> = serde_json::from_str(include_str!(
+        "../../../scripts/benchmark/release-workloads.json"
+    ))
+    .expect("Invalid release project workloads");
+    let workloads = consumers
+        .into_iter()
+        .map(|workload| (workload, "bench-incremental-locks"))
+        .chain(
+            projects
+                .into_iter()
+                .map(|workload| (workload, "bench-release-workloads")),
+        );
     let mut group = c.benchmark_group("release_runtime");
-    for workload in workloads {
-        let prepared = std::path::absolute(
-            Path::new("../../.cache/bench-incremental-locks").join(&workload.name),
-        )
-        .expect("Failed to locate prepared application");
+    for (workload, cache) in workloads {
+        let prepared =
+            std::path::absolute(Path::new("../../.cache").join(cache).join(&workload.name))
+                .expect("Failed to locate prepared application");
         for mode in ["baseline", "pgo"] {
             let directory = tempfile::tempdir().expect("Failed to create project");
             fs_err::copy(
                 prepared.join("project/pyproject.toml"),
                 directory.path().join("pyproject.toml"),
             )
-            .expect("Run `python3 scripts/benchmark/prepare-incremental-locks.py`");
+            .expect("Run the release benchmark fixture preparation scripts");
             let binary = binaries
                 .join(mode)
                 .join(format!("uv{}", std::env::consts::EXE_SUFFIX));
@@ -59,8 +76,8 @@ fn release_runtime(c: &mut Criterion<WallTime>) {
                     "--python",
                     "3.11.13",
                     "--exclude-newer",
-                    "2025-10-01T00:00:00Z",
-                ]);
+                ])
+                .arg(&workload.exclude_newer);
             group.bench_function(BenchmarkId::new(mode, &workload.name), |b| {
                 b.iter_batched(
                     || {
