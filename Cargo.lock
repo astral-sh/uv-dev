@@ -286,12 +286,9 @@ dependencies = [
 
 [[package]]
 name = "astral-tl"
-version = "0.8.0"
+version = "0.7.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04d4bb5df351abb6758a04240b0193794ddaf34a7c0b9452fab3c25dcce39e88"
-dependencies = [
- "memchr",
-]
+checksum = "915b5af1203c9c635c62edcbdaa36ee54b17f84809f7769912d356c35f9a6cd7"
 
 [[package]]
 name = "astral-tokio-tar"
