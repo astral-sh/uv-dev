@@ -1,4 +1,9 @@
 flit-core==3.12.0
+hatchling==1.27.0
 packaging==26.3
+pathspec==0.12.1
+pluggy==1.6.0
 setuptools==80.9.0
+trove-classifiers==2025.9.11.17
+versioningit==3.3.0
 wheel==0.45.1

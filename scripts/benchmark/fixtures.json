@@ -1,5 +1,35 @@
 [
   {
+    "filename": "prefect-source.tar.gz",
+    "url": "https://codeload.github.com/PrefectHQ/prefect/tar.gz/c85deeb5f305c307181bd0001972f291ea3fd465",
+    "sha256": "7a68fdcf9e4951abafeb09a6220c86f37655a85574dc6ac67291b0f9ae34f15d"
+  },
+  {
+    "filename": "hatchling-1.27.0-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/08/e7/ae38d7a6dfba0533684e0b2136817d667588ae3ec984c1a4e5df5eb88482/hatchling-1.27.0-py3-none-any.whl",
+    "sha256": "d3a2f3567c4f926ea39849cdf924c7e99e6686c9c8e288ae1037c8fa2a5d937b"
+  },
+  {
+    "filename": "versioningit-3.3.0-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/1c/59/964ecb8008722d27d8a835baea81f56a91cea8e097b3be992bc6ccde6367/versioningit-3.3.0-py3-none-any.whl",
+    "sha256": "23b1db3c4756cded9bd6b0ddec6643c261e3d0c471707da3e0b230b81ce53e4b"
+  },
+  {
+    "filename": "pathspec-0.12.1-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/cc/20/ff623b09d963f88bfde16306a54e12ee5ea43e9b597108672ff3a408aad6/pathspec-0.12.1-py3-none-any.whl",
+    "sha256": "a0d503e138a4c123b27490a4f7beda6a01c6f288df0e4a8b79c7eb0dc7b4cc08"
+  },
+  {
+    "filename": "pluggy-1.6.0-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl",
+    "sha256": "e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746"
+  },
+  {
+    "filename": "trove_classifiers-2025.9.11.17-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/e1/85/a4ff8758c66f1fc32aa5e9a145908394bf9cf1c79ffd1113cfdeb77e74e4/trove_classifiers-2025.9.11.17-py3-none-any.whl",
+    "sha256": "5d392f2d244deb1866556457d6f3516792124a23d1c3a463a2e8668a5d1c15dd"
+  },
+  {
     "filename": "homeassistant-requirements.txt",
     "url": "https://raw.githubusercontent.com/home-assistant/core/0cda883b56c7ba4021b1a907eb08886e70ba38a4/requirements.txt",
     "sha256": "6ce04f0c628094e953cc1d84c37440b2178cb19342529e89365ef19e9cd48d14",
