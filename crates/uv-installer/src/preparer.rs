@@ -282,9 +282,7 @@ pub trait Reporter: Send + Sync {
 impl dyn Reporter {
     /// Converts this reporter to a [`uv_distribution::Reporter`].
     fn into_distribution_reporter(self: Arc<dyn Reporter>) -> Arc<dyn uv_distribution::Reporter> {
-        Arc::new(Facade {
-            reporter: self.clone(),
-        })
+        Arc::new(Facade { reporter: self })
     }
 }
 
