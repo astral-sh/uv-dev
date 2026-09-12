@@ -1,38 +1,14 @@
-use std::{borrow::Cow, str::FromStr, sync::Arc};
+use std::{borrow::Cow, str::FromStr};
 
 use jiff::Timestamp;
-use rustc_hash::FxHashMap;
 use tl::{HTMLTag, Node, Parser};
 use tracing::{debug, instrument, warn};
 
 use uv_normalize::PackageName;
-use uv_pep440::{VersionSpecifiers, VersionSpecifiersParseError};
 use uv_pypi_types::{BaseUrl, CoreMetadata, Hashes, ProjectStatus, PypiFile, Status, Yanked};
-use uv_pypi_types::{HashError, LenientVersionSpecifiers};
+use uv_pypi_types::{HashError, RequiresPythonInterner};
 use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 use uv_small_str::SmallString;
-
-type RequiresPythonResult = Result<Arc<VersionSpecifiers>, VersionSpecifiersParseError>;
-
-#[derive(Default)]
-struct RequiresPythonInterner {
-    values: FxHashMap<SmallString, RequiresPythonResult>,
-}
-
-impl RequiresPythonInterner {
-    fn parse(&mut self, value: &str) -> RequiresPythonResult {
-        if let Some(requires_python) = self.values.get(value) {
-            return requires_python.clone();
-        }
-
-        let requires_python = LenientVersionSpecifiers::from_str(value)
-            .map(VersionSpecifiers::from)
-            .map(Arc::new);
-        self.values
-            .insert(SmallString::from(value), requires_python.clone());
-        requires_python
-    }
-}
 
 /// Return `true` if this tag has the given HTML element name.
 fn is_tag(tag: &HTMLTag<'_>, name: &[u8]) -> bool {
@@ -420,7 +396,57 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+
+    #[test]
+    fn simple_html_interns_requires_python_per_response() -> anyhow::Result<()> {
+        let text = r#"
+<a href="a.whl" data-requires-python="&gt;=3.8">a.whl</a>
+<a href="b.whl" data-requires-python="&gt;=3.8">b.whl</a>
+<a href="c.whl" data-requires-python="&gt;= 3.8">c.whl</a>
+<a href="d.whl" data-requires-python="not a version specifier">d.whl</a>
+<a href="e.whl" data-requires-python="not a version specifier">e.whl</a>
+<a href="f.whl">f.whl</a>
+"#;
+        let url = DisplaySafeUrl::parse("https://example.org/simple/demo/")?;
+        let parsed = SimpleDetailHTML::parse(text, &url)?;
+        let [
+            first,
+            repeated,
+            equivalent,
+            invalid,
+            invalid_repeated,
+            absent,
+        ] = parsed.files.as_slice()
+        else {
+            anyhow::bail!("expected six files");
+        };
+        let Some(Ok(first)) = &first.requires_python else {
+            anyhow::bail!("expected a valid specifier");
+        };
+        let Some(Ok(repeated)) = &repeated.requires_python else {
+            anyhow::bail!("expected a repeated specifier");
+        };
+        let Some(Ok(equivalent)) = &equivalent.requires_python else {
+            anyhow::bail!("expected an equivalent specifier");
+        };
+        assert!(Arc::ptr_eq(first, repeated));
+        assert_eq!(first, equivalent);
+        assert!(!Arc::ptr_eq(first, equivalent));
+        assert!(invalid.requires_python.as_ref().is_some_and(Result::is_err));
+        assert_eq!(invalid.requires_python, invalid_repeated.requires_python);
+        assert!(absent.requires_python.is_none());
+
+        let separate = SimpleDetailHTML::parse(text, &url)?;
+        let Some(Ok(separate)) = &separate.files[0].requires_python else {
+            anyhow::bail!("expected a valid specifier in the second response");
+        };
+        assert_eq!(first, separate);
+        assert!(!Arc::ptr_eq(first, separate));
+        Ok(())
+    }
 
     #[test]
     fn parse_sha256() {
