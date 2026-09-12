@@ -24,6 +24,13 @@ mod publish;
 #[cfg(unix)]
 mod resource_limits;
 
+#[cfg(all(
+    feature = "test-python",
+    feature = "test-pypi",
+    feature = "test-universal"
+))]
+mod scenario_oracle;
+
 #[cfg(feature = "self-update")]
 mod self_update;
 

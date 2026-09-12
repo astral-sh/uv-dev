@@ -6,6 +6,7 @@ use tracing::instrument;
 
 use uv_settings::EnvironmentOptions;
 
+use crate::check_scenarios::Args as CheckScenariosArgs;
 use crate::clear_compile::ClearCompileArgs;
 use crate::compile::CompileArgs;
 use crate::generate_all::Args as GenerateAllArgs;
@@ -23,6 +24,7 @@ use crate::render_benchmarks::RenderBenchmarksArgs;
 use crate::validate_zip::ValidateZipArgs;
 use crate::wheel_metadata::WheelMetadataArgs;
 
+mod check_scenarios;
 mod clear_compile;
 mod compile;
 mod generate_all;
@@ -43,6 +45,8 @@ const ROOT_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../");
 
 #[derive(Parser)]
 enum Cli {
+    /// Check small Packse scenarios against an exhaustive resolver oracle.
+    CheckScenarios(CheckScenariosArgs),
     /// Display the metadata for a `.whl` at a given URL.
     WheelMetadata(WheelMetadataArgs),
     /// Validate that a `.whl` or `.zip` file at a given URL is a valid ZIP file.
@@ -78,12 +82,17 @@ enum Cli {
 
 #[instrument] // Anchor span to check for overhead
 pub async fn run() -> Result<()> {
-    uv_preview::set(uv_preview::Preview::default())?;
-    uv_preview::finalize()?;
-
     let cli = Cli::parse();
+    // Scenario checks reuse the test harness, which scopes preview state while discovering its
+    // Python interpreters. That state cannot be installed after normal process initialization.
+    if !matches!(&cli, Cli::CheckScenarios(_)) {
+        uv_preview::set(uv_preview::Preview::default())?;
+        uv_preview::finalize()?;
+    }
+
     let environment = EnvironmentOptions::new()?;
     match cli {
+        Cli::CheckScenarios(args) => check_scenarios::main(&args)?,
         Cli::WheelMetadata(args) => wheel_metadata::wheel_metadata(args, environment).await?,
         Cli::ValidateZip(args) => validate_zip::validate_zip(args, environment).await?,
         Cli::Compile(args) => compile::compile(args).await?,
@@ -118,5 +127,11 @@ mod tests {
 
         assert!(command.find_subcommand("generate-scenario-tests").is_some());
         assert!(command.find_subcommand("generate-scenarios").is_none());
+    }
+
+    #[test]
+    fn scenario_checker_command_is_registered() {
+        let command = Cli::command();
+        assert!(command.find_subcommand("check-scenarios").is_some());
     }
 }
