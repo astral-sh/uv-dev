@@ -3327,6 +3327,10 @@ mod tests {
             python.interpreter().python_full_version().to_string(),
             "3.13.2"
         );
+        assert!(PythonRequest::parse("pyodide").satisfied(python.interpreter(), &context.cache));
+        assert!(
+            PythonRequest::parse("pyodide@3.13").satisfied(python.interpreter(), &context.cache)
+        );
 
         // We should prefer the native Python to the Pyodide Python
         context.add_python_versions(&["3.15.7"])?;
