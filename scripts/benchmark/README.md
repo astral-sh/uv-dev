@@ -12,6 +12,11 @@ Source-distribution extraction compares the normal and preview tar implementatio
 Flask, Django, and NumPy archives. The inputs retain their real documentation, tests, Python
 modules, and native source files while spanning roughly 0.7–20 MB of compressed data.
 
+Requirements parsing also uses vLLM's immutable prerelease, CUDA, and development requirement
+graphs. Their real index options and include directives exercise paths absent from ordinary compiled
+requirements. Included contents are loaded before timing so CPU simulation measures parsing without
+conflating it with filesystem access.
+
 `walltime-shards.py` assigns every built walltime suite to exactly one of up to eight independent
 runs. The saved plan is checked against the extracted benchmark binaries before execution, so a
 missing or stale artifact cannot silently reduce coverage. Each shard retains its own CodSpeed
