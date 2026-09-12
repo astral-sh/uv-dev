@@ -33,7 +33,7 @@ jobs:
         with:
           save-if: false
       - name: Sync Python Releases
-        run: uv run --locked --python 3.12 --no-build --script fetch-download-metadata.py
+        run: uv run --python 3.12 --no-build --script fetch-download-metadata.py
         working-directory: ./crates/uv-python
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -45,7 +45,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Update Python version constants"
-        run: uv run --locked --python 3.12 --no-build --script scripts/sync-python-version-constants.py
+        run: uv run --python 3.12 --no-build --script scripts/sync-python-version-constants.py
 
       - name: "Get uv token"
         id: token
