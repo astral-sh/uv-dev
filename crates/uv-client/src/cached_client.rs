@@ -611,6 +611,10 @@ impl CachedClient {
 
         // Check for HTTP error status and extract problem details if available
         if let Err(status_error) = response.error_for_status_ref() {
+            trace!(
+                "Not caching response from {url} because of HTTP error status {}",
+                response.status()
+            );
             let problem_details = ProblemDetails::try_from_response(response).await;
             return Err(ErrorKind::from_reqwest_with_problem_details(
                 url.clone(),
@@ -683,6 +687,10 @@ impl CachedClient {
             .map(|retries| retries.value());
 
         if let Err(status_error) = response.error_for_status_ref() {
+            trace!(
+                "Not caching response from {url} because of HTTP error status {}",
+                response.status()
+            );
             let problem_details = ProblemDetails::try_from_response(response).await;
             return Err(Error::new(
                 ErrorKind::from_reqwest_with_problem_details(url, status_error, problem_details),
@@ -1080,5 +1088,162 @@ impl DataWithCachePolicy {
             return Err(ErrorKind::ArchiveRead(msg).into());
         }
         Ok(len_usize)
+    }
+}
+
+#[cfg(test)]
+mod http_error_cache_logging_tests {
+    use anyhow::{Context, Result, bail};
+    use reqwest::{Client, Method, Request, StatusCode, Url};
+    use tracing_test::traced_test;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use uv_cache::CacheEntry;
+
+    use crate::{AuthIntegration, BaseClientBuilder, ErrorKind, ProblemDetails};
+
+    use super::{CacheControl, CachedClient, CachedClientError};
+
+    #[tokio::test]
+    #[traced_test]
+    async fn http_error_responses_are_not_cached_and_logs_are_redacted() -> Result<()> {
+        let server = MockServer::start().await;
+        let mut url = Url::parse(&format!(
+            "{}/metadata?sig=azure-secret&X-Amz-Signature=aws-secret",
+            server.uri()
+        ))?;
+        url.set_username("log-user").expect("HTTP URL has a host");
+        url.set_password(Some("log-password"))
+            .expect("HTTP URL has a host");
+        let client = CachedClient::new(
+            BaseClientBuilder::default()
+                .custom_client(
+                    Client::builder()
+                        .no_proxy()
+                        .timeout(std::time::Duration::from_secs(10))
+                        .build()?,
+                )
+                .auth_integration(AuthIntegration::NoAuthMiddleware)
+                .retries(0)
+                .build()?,
+        );
+        let directory = tempfile::tempdir()?;
+        let cached_entry = CacheEntry::new(directory.path(), "cached");
+        let fresh_entry = CacheEntry::new(directory.path(), "fresh");
+
+        Mock::given(method("GET"))
+            .and(path("/metadata"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("cache-control", "public, max-age=3600")
+                    .insert_header("etag", "\"cached\"")
+                    .set_body_string("cached"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let cached = client
+            .get_serde_with_retry(
+                Request::new(Method::GET, url.clone()),
+                &cached_entry,
+                CacheControl::None,
+                async |response, _| response.text().await,
+            )
+            .await
+            .expect("the initial response should populate the cache");
+        assert_eq!(cached, "cached");
+        let cached_bytes = fs_err::read(cached_entry.path())?;
+        server.verify().await;
+
+        for status in [StatusCode::NOT_FOUND, StatusCode::SERVICE_UNAVAILABLE] {
+            server.reset().await;
+            Mock::given(method("GET"))
+                .and(path("/metadata"))
+                .respond_with(
+                    ResponseTemplate::new(status.as_u16())
+                        .insert_header("cache-control", "public, max-age=3600")
+                        .set_body_raw(
+                            format!(
+                                r#"{{"title":"Not cacheable","status":{},"detail":"private-problem-detail"}}"#,
+                                status.as_u16()
+                            ),
+                            ProblemDetails::CONTENT_TYPE,
+                        ),
+                )
+                .expect(2)
+                .mount(&server)
+                .await;
+
+            for (entry, cache_control) in [
+                (&fresh_entry, CacheControl::None),
+                (&cached_entry, CacheControl::MustRevalidate),
+            ] {
+                let error = client
+                    .get_serde_with_retry(
+                        Request::new(Method::GET, url.clone()),
+                        entry,
+                        cache_control,
+                        async |response, _| response.text().await,
+                    )
+                    .await
+                    .expect_err("HTTP errors must not reach the response callback");
+                let CachedClientError::Client(error) = error else {
+                    bail!("expected a client error");
+                };
+                assert_eq!(error.retries(), 0);
+                let ErrorKind::WrappedReqwestError(_, source) = error.kind() else {
+                    bail!("expected an HTTP status error");
+                };
+                assert_eq!(source.status(), Some(status));
+                assert_eq!(
+                    source.to_string(),
+                    "Server message: Not cacheable, private-problem-detail"
+                );
+            }
+
+            let requests = server
+                .received_requests()
+                .await
+                .context("request recording is enabled")?;
+            assert_eq!(requests.len(), 2);
+            assert_eq!(
+                requests
+                    .iter()
+                    .filter(|request| request.headers.contains_key("if-none-match"))
+                    .count(),
+                1
+            );
+            assert!(!fresh_entry.path().try_exists()?);
+            assert_eq!(fs_err::read(cached_entry.path())?, cached_bytes);
+            server.verify().await;
+        }
+
+        logs_assert(|lines| {
+            let decisions: Vec<_> = lines
+                .iter()
+                .filter(|line| line.contains("Not caching response from "))
+                .collect();
+            assert_eq!(decisions.len(), 4);
+            for status in [StatusCode::NOT_FOUND, StatusCode::SERVICE_UNAVAILABLE] {
+                assert_eq!(
+                    decisions
+                        .iter()
+                        .filter(|line| line.contains(&format!("HTTP error status {status}")))
+                        .count(),
+                    2
+                );
+            }
+            for line in decisions {
+                assert!(line.contains("log-user:****@"));
+                assert!(line.contains("sig=****&X-Amz-Signature=****"));
+                assert!(!line.contains("log-password"));
+                assert!(!line.contains("azure-secret"));
+                assert!(!line.contains("aws-secret"));
+                assert!(!line.contains("private-problem-detail"));
+            }
+            Ok(())
+        });
+        Ok(())
     }
 }
