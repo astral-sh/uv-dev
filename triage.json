@@ -1,0 +1,19 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 9821,
+        "title": "Building fails if you use README.org vs README.md",
+        "url": "https://github.com/astral-sh/uv/issues/9821",
+        "state": "closed",
+        "reason": "Reports the same README.org extension failure, but Hatchling raised the error and a uv maintainer closed it as outside uv. It is relevant precedent, not a canonical tracker for uv-build-backend support."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for README.org, Org README, org-mode, unknown README extensions, content-type inference, Description-Content-Type, PEP 621, uv_build, and build-backend metadata. No Org-support implementation or canonical uv tracker was found. astral-sh/uv#14761 and astral-sh/uv#14762 were ruled out because they concern parsing the explicit README table, while astral-sh/uv#8779 is a broad completed tracking issue that directs specific requests to separate issues."
+  },
+  "type": "enhancement",
+  "type_reason": "Current uv-build-backend source deliberately infers only .md, .rst, and .txt and accepts only text/markdown, text/x-rst, and text/plain metadata. Recognizing Org by default would expand supported functionality. The exact historical report astral-sh/uv#9821 concerned Hatchling, so this is not a duplicate.",
+  "summary": "The only exact precedent is astral-sh/uv#9821, where Hatchling produced the same failure. No existing issue or pull request tracks Org support in uv-build-backend.",
+  "draft_response": "uv-build-backend currently infers README metadata only for .md, .rst, and .txt files. GitHub’s ability to render repository README files does not add an Org content type to Python package metadata, so README.org cannot currently be inferred like README.md. We’ll treat this as a request to expand the supported formats. For now, if plain-text package metadata is acceptable, you can use `readme = { file = \"README.org\", content-type = \"text/plain\" }`."
+}
