@@ -824,7 +824,6 @@ impl NoSolutionError {
 
         // These need to be applied _after_ simplification of the ranges
         tree = restate_available_versions(tree, &self.included_versions);
-        tree = collapse_redundant_no_versions(tree);
 
         loop {
             let (collapsed, changed) = collapse_redundant_no_versions_tree(tree);
@@ -1234,49 +1233,6 @@ fn reported_versions(package: &PubGrubPackage, cause: &ErrorTree) -> Range<Versi
     }
 }
 
-fn can_drop_no_versions(
-    package: &PubGrubPackage,
-    versions: &Range<Version>,
-    other: &ErrorTree,
-    parent_terms: &ErrorTerms,
-) -> bool {
-    let package_terms = if let DerivationTree::Derived(derived) = other {
-        derived.terms.get(package)
-    } else {
-        parent_terms.get(package)
-    };
-    let Some(Term::Positive(term)) = package_terms else {
-        return false;
-    };
-    let versions = versions.complement();
-
-    // Retain exclusions of a single version because they produce useful messages like
-    // "only foo==1.0.0 is available". Otherwise, the clause is redundant when the conclusion
-    // covers either all versions or exactly the remaining range.
-    versions.as_singleton().is_none() && (*term == Range::full() || *term == versions)
-}
-
-fn collapse_redundant_no_versions(tree: ErrorTree) -> ErrorTree {
-    map_derivation_tree(
-        tree,
-        DerivationTree::External,
-        |metadata, cause1, cause2| {
-            if let DerivationTree::External(External::NoVersions(package, versions)) = &cause1
-                && can_drop_no_versions(package, versions, &cause2, &metadata.terms)
-            {
-                return cause2;
-            }
-
-            if let DerivationTree::External(External::NoVersions(package, versions)) = &cause2
-                && can_drop_no_versions(package, versions, &cause1, &metadata.terms)
-            {
-                return cause1;
-            }
-
-            derived_tree(metadata, cause1, cause2)
-        },
-    )
-}
 
 /// Given a [`DerivationTree`], collapse any derived trees with two `NoVersions` nodes for the same
 /// package. For example, if we have a tree like:
