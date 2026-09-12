@@ -37,6 +37,13 @@ function digest(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 
+function wireField(value, name) {
+  return (
+    value[name] ??
+    value[name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)]
+  );
+}
+
 function input(name) {
   return process.env[`INPUT_${name.toUpperCase()}`] || "";
 }
@@ -491,8 +498,11 @@ export class CacheService {
       restoreKeys: [],
     });
     if (!result.ok) return null;
-    check(result.matchedKey === key, "Cache lookup returned a prefix match");
-    return safeUrl(result.signedDownloadUrl);
+    check(
+      wireField(result, "matchedKey") === key,
+      "Cache lookup returned a prefix match",
+    );
+    return safeUrl(wireField(result, "signedDownloadUrl"));
   }
 
   async save(filename, key, version) {
@@ -506,7 +516,7 @@ export class CacheService {
       if (await this.lookup(key, version)) return false;
       throw new Error("Cache reservation failed");
     }
-    await this.upload(safeUrl(result.signedUploadUrl), filename);
+    await this.upload(safeUrl(wireField(result, "signedUploadUrl")), filename);
     const finalized = await this.call("FinalizeCacheEntryUpload", {
       key,
       version,

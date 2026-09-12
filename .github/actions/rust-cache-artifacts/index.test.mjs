@@ -3,12 +3,32 @@ import crypto from "node:crypto";
 import { test } from "node:test";
 import {
   buildExportIndex,
+  CacheService,
   cacheVersion,
   destinationPaths,
   parseCacheLog,
   validateEntry,
   validateSourceRun,
 } from "./index.mjs";
+
+test("accepts protobuf JSON cache response field names", async () => {
+  const service = Object.create(CacheService.prototype);
+  service.call = async () => ({
+    ok: true,
+    matched_key: key,
+    signed_download_url: "https://example.com/cache",
+  });
+  assert.equal(
+    (await service.lookup(key, version)).href,
+    "https://example.com/cache",
+  );
+  service.call = async () => ({
+    ok: true,
+    matched_key: `${key}-other`,
+    signed_download_url: "https://example.com/cache",
+  });
+  await assert.rejects(service.lookup(key, version), /prefix match/);
+});
 
 const sha = "8e70deb71b410d4bcf80fabdd88e8aa43a2e5878";
 const sourceRun = "34694089787";
