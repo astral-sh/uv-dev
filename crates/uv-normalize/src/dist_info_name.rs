@@ -26,19 +26,19 @@ impl<'a> DistInfoName<'a> {
     fn normalize(name: impl AsRef<str>) -> String {
         let mut normalized = String::with_capacity(name.as_ref().len());
         let mut last = None;
-        for char in name.as_ref().bytes() {
+        for char in name.as_ref().chars() {
             match char {
-                b'A'..=b'Z' => {
-                    normalized.push(char.to_ascii_lowercase() as char);
+                'A'..='Z' => {
+                    normalized.push(char.to_ascii_lowercase());
                 }
-                b'-' | b'_' | b'.' => {
-                    if matches!(last, Some(b'-' | b'_' | b'.')) {
+                '-' | '_' | '.' => {
+                    if matches!(last, Some('-' | '_' | '.')) {
                         continue;
                     }
                     normalized.push('-');
                 }
                 _ => {
-                    normalized.push(char as char);
+                    normalized.push(char);
                 }
             }
             last = Some(char);
@@ -88,6 +88,47 @@ impl AsRef<str> for DistInfoName<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preserves_unicode_during_normalization() {
+        for (input, expected) in [
+            ("Café_Name", "café-name"),
+            ("café-name", "café-name"),
+            ("Å._B", "Å-b"),
+            ("包_NAME", "包-name"),
+            ("🦀.A", "🦀-a"),
+            ("e\u{301}_X", "e\u{301}-x"),
+            ("İ._X", "İ-x"),
+            ("a\0_B", "a\0-b"),
+        ] {
+            assert_eq!(DistInfoName::normalize(input), expected, "{input}");
+        }
+    }
+
+    #[test]
+    fn unicode_normalization_paths_agree() {
+        for (input, expected) in [
+            ("Café_Name", "café-name"),
+            ("Å._B", "Å-b"),
+            ("包_NAME", "包-name"),
+            ("🦀.A", "🦀-a"),
+            ("e\u{301}_X", "e\u{301}-x"),
+            ("İ._X", "İ-x"),
+            ("Friendly--Bard", "friendly-bard"),
+        ] {
+            let owned = DistInfoName::new(input);
+            let borrowed = DistInfoName::new(expected);
+            assert!(matches!(&owned.0, Cow::Owned(_)), "{input}");
+            assert!(matches!(&borrowed.0, Cow::Borrowed(_)), "{expected}");
+            assert_eq!(owned, borrowed, "{input}");
+            assert_eq!(owned.as_ref(), expected, "{input}");
+            assert_eq!(owned.to_string(), expected, "{input}");
+
+            let normalized = DistInfoName::new(owned.as_ref());
+            assert!(matches!(&normalized.0, Cow::Borrowed(_)), "{input}");
+            assert_eq!(normalized.as_ref(), expected, "{input}");
+        }
+    }
 
     #[test]
     fn normalize() {
