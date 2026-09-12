@@ -8,6 +8,7 @@ import hashlib
 import html
 import json
 import re
+import subprocess
 import threading
 import time
 import tomllib
@@ -23,11 +24,51 @@ def normalize(name: str) -> str:
 
 
 class Fixtures:
-    def __init__(self, directory: Path, manifest: Path, lockfiles: list[Path]) -> None:
+    def __init__(
+        self,
+        directory: Path,
+        manifest: Path,
+        lockfiles: list[Path],
+        git_directory: Path | None,
+    ) -> None:
         self.files: dict[str, Path] = {}
         self.metadata: dict[str, bytes] = {}
         self.vulnerabilities: dict[str, dict] = {}
         self.osv_queries: dict[tuple[str, str], list[str]] = {}
+        self.git_commits: dict[tuple[str, str, str], bytes] = {}
+        self.git_metadata: dict[tuple[str, str, str], bytes] = {}
+        if git_directory is not None:
+            for fixture in json.loads(Path(__file__).with_name("git.json").read_text()):
+                owner, repository = (
+                    urlsplit(fixture["repository"]).path.strip("/").split("/")
+                )
+                commit, reference = fixture["commit"], fixture["reference"]
+                git = ["git", "-C", str(git_directory / f"{fixture['name']}.git")]
+                actual = subprocess.check_output(
+                    [*git, "rev-parse", f"{commit}^{{commit}}"], text=True
+                ).strip()
+                if actual != commit:
+                    raise ValueError(
+                        f"Unexpected Git commit for {fixture['name']}: {actual}"
+                    )
+                for rev in {
+                    "HEAD",
+                    commit,
+                    commit[:7],
+                    reference,
+                    reference.removeprefix("refs/heads/").removeprefix("refs/tags/"),
+                }:
+                    self.git_commits[owner, repository, rev] = commit.encode()
+                path = f"{commit}:pyproject.toml"
+                if (
+                    subprocess.run(
+                        [*git, "cat-file", "-e", path], capture_output=True, check=False
+                    ).returncode
+                    == 0
+                ):
+                    self.git_metadata[owner, repository, commit] = (
+                        subprocess.check_output([*git, "show", path])
+                    )
         packages: dict[str, dict[str, dict]] = {}
         for lockfile in lockfiles:
             with lockfile.open("rb") as file:
@@ -189,7 +230,30 @@ class Handler(BaseHTTPRequestHandler):
             self.server.counts[f"{self.command} {path}"] += 1
         time.sleep(self.server.delay)
         parts = path.strip("/").split("/")
-        if len(parts) == 4 and parts[:3] == ["osv", "v1", "vulns"]:
+        if (
+            len(parts) >= 6
+            and parts[:2] == ["github", "repos"]
+            and parts[4] == "commits"
+        ):
+            if self.headers.get("Accept") != "application/vnd.github.3.sha":
+                self.send_error(406)
+                return
+            commit = self.server.fixtures.git_commits.get(
+                (parts[2], parts[3], "/".join(parts[5:]))
+            )
+            if commit is not None:
+                self.respond(commit, "text/plain", head=head)
+                return
+        elif (
+            len(parts) == 6
+            and parts[:2] == ["github", "raw"]
+            and parts[5] == "pyproject.toml"
+        ):
+            content = self.server.fixtures.git_metadata.get(tuple(parts[2:5]))
+            if content is not None:
+                self.respond(content, "text/plain", head=head)
+                return
+        elif len(parts) == 4 and parts[:3] == ["osv", "v1", "vulns"]:
             record = self.server.fixtures.vulnerabilities.get(parts[3])
             if record is not None:
                 self.respond(json.dumps(record).encode(), "application/json", head=head)
@@ -281,13 +345,14 @@ def main() -> None:
         "--manifest", type=Path, default=Path(__file__).with_name("fixtures.json")
     )
     parser.add_argument("--lockfile", type=Path, action="append", default=[])
+    parser.add_argument("--git-directory", type=Path)
     parser.add_argument("--delay-ms", type=float, default=20)
     parser.add_argument("--require-s3", action="store_true")
     args = parser.parse_args()
     if args.delay_ms < 0:
         parser.error("--delay-ms must be nonnegative")
     server = Server(
-        Fixtures(args.directory, args.manifest, args.lockfile),
+        Fixtures(args.directory, args.manifest, args.lockfile, args.git_directory),
         args.delay_ms / 1000,
         args.require_s3,
     )
