@@ -84,13 +84,94 @@ where
 #[derive(Debug, Default, Clone)]
 pub struct Overrides {
     global: FxHashMap<PackageName, Vec<Requirement>>,
-    scoped: FxHashMap<PackageName, Vec<ScopedOverrides>>,
+    scoped: FxHashMap<PackageName, ScopedOverrideSet>,
+}
+
+const SCOPED_OVERRIDE_INDEX_THRESHOLD: usize = 32;
+
+#[derive(Debug, Default, Clone)]
+struct ScopedOverrideSet {
+    entries: Vec<ScopedOverrides>,
+    exact: Option<FxHashMap<Version, usize>>,
+    fallback: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
 struct ScopedOverrides {
     version: Option<Version>,
     overrides: FxHashMap<PackageName, Vec<Requirement>>,
+}
+
+impl ScopedOverrideSet {
+    /// Return the index of an exact-version scope, avoiding the hash lookup for the first entry.
+    fn exact_position(&self, version: &Version) -> Option<usize> {
+        if self
+            .entries
+            .first()
+            .is_some_and(|entry| entry.version.as_ref() == Some(version))
+        {
+            return Some(0);
+        }
+
+        self.exact.as_ref().map_or_else(
+            || {
+                self.entries
+                    .iter()
+                    .enumerate()
+                    .skip(1)
+                    .find_map(|(position, entry)| {
+                        (entry.version.as_ref() == Some(version)).then_some(position)
+                    })
+            },
+            |exact| exact.get(version).copied(),
+        )
+    }
+
+    /// Return an existing scope or append a new one, preserving first-seen scope order.
+    fn get_or_insert(&mut self, version: Option<Version>) -> &mut ScopedOverrides {
+        let position = match version.as_ref() {
+            Some(version) => self.exact_position(version),
+            None => self.fallback,
+        };
+        if let Some(position) = position {
+            return &mut self.entries[position];
+        }
+
+        let position = self.entries.len();
+        self.entries.push(ScopedOverrides {
+            version,
+            overrides: FxHashMap::default(),
+        });
+
+        if let Some(version) = self.entries[position].version.as_ref() {
+            if let Some(exact) = self.exact.as_mut() {
+                exact.insert(version.clone(), position);
+            }
+        } else {
+            self.fallback = Some(position);
+        }
+
+        if self.exact.is_none() && self.entries.len() >= SCOPED_OVERRIDE_INDEX_THRESHOLD {
+            self.exact = Some(
+                self.entries
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(position, entry)| {
+                        Some((entry.version.as_ref()?.clone(), position))
+                    })
+                    .collect(),
+            );
+        }
+
+        &mut self.entries[position]
+    }
+
+    /// Return the exact-version scope, or the all-versions fallback when no exact scope exists.
+    fn get(&self, version: &Version) -> Option<&ScopedOverrides> {
+        self.exact_position(version)
+            .or(self.fallback)
+            .map(|position| &self.entries[position])
+    }
 }
 
 /// An unsupported source in a scoped dependency override.
@@ -135,7 +216,7 @@ impl Overrides {
     ) -> Result<Self, ScopedOverrideSourceError> {
         let mut global: FxHashMap<PackageName, Vec<Requirement>> =
             FxHashMap::with_capacity_and_hasher(entries.len(), FxBuildHasher);
-        let mut scoped: FxHashMap<PackageName, Vec<ScopedOverrides>> = FxHashMap::default();
+        let mut scoped: FxHashMap<PackageName, ScopedOverrideSet> = FxHashMap::default();
 
         for entry in entries {
             match entry {
@@ -168,18 +249,7 @@ impl Overrides {
                         }
                     }
                     let packages = scoped.entry(package.package.name.clone()).or_default();
-                    let position = packages
-                        .iter()
-                        .position(|overrides| overrides.version == package.package.version)
-                        .unwrap_or_else(|| {
-                            let position = packages.len();
-                            packages.push(ScopedOverrides {
-                                version: package.package.version,
-                                overrides: FxHashMap::default(),
-                            });
-                            position
-                        });
-                    let overrides = &mut packages[position].overrides;
+                    let overrides = &mut packages.get_or_insert(package.package.version).overrides;
                     for requirement in package.dependencies {
                         overrides
                             .entry(requirement.name.clone())
@@ -205,7 +275,7 @@ impl Overrides {
         &self,
     ) -> impl Iterator<Item = (&PackageName, Option<&Version>, &Requirement)> {
         self.scoped.iter().flat_map(|(package, entries)| {
-            entries.iter().flat_map(move |entry| {
+            entries.entries.iter().flat_map(move |entry| {
                 entry
                     .overrides
                     .values()
@@ -228,11 +298,9 @@ impl Overrides {
 
     /// Return whether a package has overrides for an exact version.
     pub(crate) fn has_exact_scope(&self, package: &PackageName, version: &Version) -> bool {
-        self.scoped.get(package).is_some_and(|entries| {
-            entries
-                .iter()
-                .any(|entry| entry.version.as_ref() == Some(version))
-        })
+        self.scoped
+            .get(package)
+            .is_some_and(|entries| entries.exact_position(version).is_some())
     }
 
     /// Get the overrides for a package.
@@ -242,12 +310,9 @@ impl Overrides {
 
     /// Get the overrides for a specific package version.
     fn scoped_for(&self, package: &PackageName, version: &Version) -> Option<&ScopedOverrides> {
-        self.scoped.get(package).and_then(|entries| {
-            entries
-                .iter()
-                .find(|entry| entry.version.as_ref() == Some(version))
-                .or_else(|| entries.iter().find(|entry| entry.version.is_none()))
-        })
+        self.scoped
+            .get(package)
+            .and_then(|entries| entries.get(version))
     }
 
     /// Apply the overrides to a set of requirements.
@@ -364,5 +429,326 @@ impl Overrides {
                 })
             },
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+    use std::str::FromStr;
+
+    use anyhow::Result;
+
+    use uv_pep440::VersionSpecifiers;
+    use uv_pep508::RequirementOrigin;
+
+    use super::*;
+
+    fn requirement(name: &str, specifier: &str, marker: &str, origin: &str) -> Result<Requirement> {
+        Ok(Requirement {
+            name: PackageName::from_str(name)?,
+            extras: Box::new([]),
+            groups: Box::new([]),
+            marker: if marker.is_empty() {
+                MarkerTree::TRUE
+            } else {
+                MarkerTree::from_str(marker)?
+            },
+            source: RequirementSource::Registry {
+                specifier: VersionSpecifiers::from_str(specifier)?,
+                index: None,
+                conflict: None,
+            },
+            origin: Some(RequirementOrigin::File(PathBuf::from(origin))),
+        })
+    }
+
+    fn scoped(
+        package: &str,
+        version: Option<&str>,
+        dependencies: Vec<Requirement>,
+    ) -> Result<Override<Requirement>> {
+        Ok(Override::Package(PackageOverride {
+            package: PackageOverrideTarget {
+                name: PackageName::from_str(package)?,
+                version: version.map(Version::from_str).transpose()?,
+            },
+            dependencies: dependencies.into_boxed_slice(),
+        }))
+    }
+
+    fn origins<'a>(requirements: impl IntoIterator<Item = &'a Requirement>) -> Vec<&'a Path> {
+        requirements
+            .into_iter()
+            .filter_map(|requirement| requirement.origin.as_ref().map(RequirementOrigin::path))
+            .collect()
+    }
+
+    #[test]
+    fn scoped_override_index_preserves_normalized_duplicates_and_order() -> Result<()> {
+        let parent = PackageName::from_str("parent")?;
+        let mut entries = vec![scoped(
+            "parent",
+            None,
+            vec![requirement("target", "==0", "", "fallback.in")?],
+        )?];
+        for version in 1..=64 {
+            entries.push(scoped(
+                "parent",
+                Some(&format!("{version}.0")),
+                vec![requirement(
+                    "target",
+                    &format!("=={version}"),
+                    "",
+                    &format!("exact-{version}.in"),
+                )?],
+            )?);
+        }
+        entries.push(scoped(
+            "parent",
+            Some("1.0.0.0"),
+            vec![requirement(
+                "target",
+                "==101",
+                "python_version >= '3.12'",
+                "duplicate.in",
+            )?],
+        )?);
+
+        let overrides = Overrides::from_entries(entries)?;
+        let scopes = &overrides.scoped[&parent];
+        assert_eq!(scopes.entries.len(), 65);
+        assert!(scopes.exact.is_some());
+        assert_eq!(scopes.fallback, Some(0));
+
+        let normalized = Version::from_str("1.0.0")?;
+        assert!(overrides.has_exact_scope(&parent, &normalized));
+        assert_eq!(
+            origins(overrides.scoped_requirements_for(&parent, &normalized)),
+            [Path::new("exact-1.in"), Path::new("duplicate.in")]
+        );
+
+        let last = Version::from_str("64.0")?;
+        assert!(overrides.has_exact_scope(&parent, &last));
+        assert_eq!(
+            origins(overrides.scoped_requirements_for(&parent, &last)),
+            [Path::new("exact-64.in")]
+        );
+
+        let missing = Version::from_str("999.0")?;
+        assert!(!overrides.has_exact_scope(&parent, &missing));
+        assert_eq!(
+            origins(overrides.scoped_requirements_for(&parent, &missing)),
+            [Path::new("fallback.in")]
+        );
+
+        let order = overrides
+            .scoped_requirements()
+            .filter_map(|(_, _, requirement)| {
+                requirement.origin.as_ref().map(RequirementOrigin::path)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(order[0], Path::new("fallback.in"));
+        assert_eq!(order[1], Path::new("exact-1.in"));
+        assert_eq!(order[2], Path::new("duplicate.in"));
+        assert_eq!(order[3], Path::new("exact-2.in"));
+        assert_eq!(order[65], Path::new("exact-64.in"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn scoped_override_index_handles_the_threshold_with_a_late_fallback() -> Result<()> {
+        let parent = PackageName::from_str("parent")?;
+        for exact_count in [30, 31, 32] {
+            let mut entries = Vec::new();
+            for version in 1..=exact_count {
+                entries.push(scoped(
+                    "parent",
+                    Some(&format!("{version}.0")),
+                    vec![requirement(
+                        "target",
+                        &format!("=={version}"),
+                        "",
+                        &format!("exact-{version}.in"),
+                    )?],
+                )?);
+            }
+            entries.push(scoped(
+                "parent",
+                None,
+                vec![requirement("target", "==0", "", "fallback.in")?],
+            )?);
+
+            let overrides = Overrides::from_entries(entries)?;
+            let scopes = &overrides.scoped[&parent];
+            assert_eq!(
+                scopes.exact.is_some(),
+                exact_count + 1 >= SCOPED_OVERRIDE_INDEX_THRESHOLD
+            );
+            assert_eq!(scopes.fallback, Some(exact_count));
+
+            let first = Version::from_str("1.0.0")?;
+            assert!(overrides.has_exact_scope(&parent, &first));
+            assert_eq!(
+                origins(overrides.scoped_requirements_for(&parent, &first)),
+                [Path::new("exact-1.in")]
+            );
+            let last = Version::from_str(&format!("{exact_count}.0"))?;
+            assert!(overrides.has_exact_scope(&parent, &last));
+            assert_eq!(
+                origins(overrides.scoped_requirements_for(&parent, &last)),
+                [Path::new(&format!("exact-{exact_count}.in"))]
+            );
+            let missing = Version::from_str("999.0")?;
+            assert!(!overrides.has_exact_scope(&parent, &missing));
+            assert_eq!(
+                origins(overrides.scoped_requirements_for(&parent, &missing)),
+                [Path::new("fallback.in")]
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn scoped_override_lookup_preserves_precedence_markers_and_additions() -> Result<()> {
+        let parent = PackageName::from_str("parent")?;
+        let exact = Version::from_str("1.0")?;
+        let fallback = Version::from_str("2.0")?;
+        let overrides = Overrides::from_entries(vec![
+            Override::Requirement(requirement("target", "==90", "", "global-target.in")?),
+            Override::Requirement(requirement("global-only", "==91", "", "global-only.in")?),
+            scoped(
+                "parent",
+                None,
+                vec![
+                    requirement("target", "==10", "", "fallback-target.in")?,
+                    requirement("fallback-added", "==11", "", "fallback-added.in")?,
+                ],
+            )?,
+            scoped(
+                "parent",
+                Some("1.0.0"),
+                vec![
+                    requirement(
+                        "target",
+                        "==20",
+                        "python_version >= '3.12'",
+                        "exact-target-a.in",
+                    )?,
+                    requirement("zeta-added", "==22", "", "zeta-added.in")?,
+                ],
+            )?,
+            scoped(
+                "parent",
+                Some("1.0"),
+                vec![
+                    requirement(
+                        "target",
+                        "==21",
+                        "sys_platform == 'linux'",
+                        "exact-target-b.in",
+                    )?,
+                    requirement("alpha-added", "==23", "", "alpha-added.in")?,
+                ],
+            )?,
+        ])?;
+        let dependencies = vec![
+            requirement("target", ">=1", "extra == 'feature'", "original-target.in")?,
+            requirement("global-only", ">=1", "", "original-global.in")?,
+            requirement("unchanged", ">=1", "", "unchanged.in")?,
+        ];
+
+        let exact_requirements = overrides
+            .apply_for(&parent, &exact, &dependencies)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            origins(exact_requirements.iter().map(AsRef::as_ref)),
+            [
+                Path::new("exact-target-a.in"),
+                Path::new("exact-target-b.in"),
+                Path::new("global-only.in"),
+                Path::new("unchanged.in"),
+                Path::new("alpha-added.in"),
+                Path::new("zeta-added.in"),
+            ]
+        );
+        assert_eq!(
+            exact_requirements[0].marker,
+            MarkerTree::from_str("extra == 'feature' and python_version >= '3.12'")?
+        );
+        assert_eq!(
+            exact_requirements[1].marker,
+            MarkerTree::from_str("extra == 'feature' and sys_platform == 'linux'")?
+        );
+
+        let fallback_requirements = overrides
+            .apply_for(&parent, &fallback, &dependencies)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            origins(fallback_requirements.iter().map(AsRef::as_ref)),
+            [
+                Path::new("fallback-target.in"),
+                Path::new("global-only.in"),
+                Path::new("unchanged.in"),
+                Path::new("fallback-added.in"),
+            ]
+        );
+        assert_eq!(
+            fallback_requirements[0].marker,
+            MarkerTree::from_str("extra == 'feature'")?
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn empty_exact_scope_shadows_the_all_versions_fallback() -> Result<()> {
+        let parent = PackageName::from_str("parent")?;
+        let version = Version::from_str("1.0")?;
+        let overrides = Overrides::from_entries(vec![
+            Override::Requirement(requirement("global", "==3", "", "global.in")?),
+            scoped(
+                "parent",
+                None,
+                vec![requirement("fallback", "==2", "", "fallback.in")?],
+            )?,
+            scoped("parent", Some("1.0.0"), Vec::new())?,
+        ])?;
+        let dependencies = vec![requirement("global", ">=1", "", "original.in")?];
+
+        assert!(overrides.has_exact_scope(&parent, &version));
+        assert_eq!(
+            overrides.scoped_requirements_for(&parent, &version).count(),
+            0
+        );
+        let requirements = overrides
+            .apply_for(&parent, &version, &dependencies)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            origins(requirements.iter().map(AsRef::as_ref)),
+            [Path::new("global.in")]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn scoped_override_still_rejects_url_sources() -> Result<()> {
+        let url = serde_json::from_value::<Requirement>(serde_json::json!({
+            "name": "target",
+            "url": "https://example.invalid/target-1.0-py3-none-any.whl",
+        }))?;
+        let result = Overrides::from_entries(vec![scoped("parent", Some("1.0"), vec![url])?]);
+
+        assert!(matches!(
+            result,
+            Err(ScopedOverrideSourceError::Url {
+                package,
+                dependency,
+            }) if package.as_ref() == "parent" && dependency.as_ref() == "target"
+        ));
+        Ok(())
     }
 }
