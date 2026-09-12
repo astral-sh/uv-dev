@@ -1,5 +1,10 @@
 [
   {
+    "filename": "editables-0.5-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/6b/be/0f2f4a5e8adc114a02b63d92bf8edbfa24db6fc602fca83c885af2479e0e/editables-0.5-py3-none-any.whl",
+    "sha256": "61e5ffa82629e0d8bfe09bc44a07db3c1ab8ed1ce78a6980732870f19b5e7d4c"
+  },
+  {
     "filename": "prefect-source.tar.gz",
     "url": "https://codeload.github.com/PrefectHQ/prefect/tar.gz/c85deeb5f305c307181bd0001972f291ea3fd465",
     "sha256": "7a68fdcf9e4951abafeb09a6220c86f37655a85574dc6ac67291b0f9ae34f15d"
