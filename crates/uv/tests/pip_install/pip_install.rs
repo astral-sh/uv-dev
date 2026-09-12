@@ -16364,6 +16364,130 @@ fn install_missing_python_version_with_target() {
     );
 }
 
+/// Explain when a build backend returns a path instead of a wheel filename, without changing
+/// which filenames are accepted.
+#[test]
+fn build_backend_wheel_filename() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "foo"
+            version = "1.0.0"
+
+            [build-system]
+            requires = []
+            build-backend = "backend"
+            backend-path = ["."]
+        "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+        from zipfile import ZipFile
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = "foo-1.0.0-py3-none-any.whl"
+            mode = config_settings["filename"]
+            if mode == "absolute":
+                filename = Path(wheel_directory, filename).resolve().as_posix()
+            elif mode == "relative":
+                filename = "dist/" + filename
+            elif mode == "windows":
+                filename = "dist\\" + filename
+            elif mode == "malformed":
+                filename = "broken.whl"
+
+            wheel = Path(wheel_directory, filename)
+            wheel.parent.mkdir(parents=True, exist_ok=True)
+            dist_info = "foo-1.0.0.dist-info"
+            with ZipFile(wheel, "w") as archive:
+                archive.writestr(
+                    f"{dist_info}/METADATA",
+                    "Metadata-Version: 2.3\nName: foo\nVersion: 1.0.0\n",
+                )
+                archive.writestr(
+                    f"{dist_info}/WHEEL",
+                    "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+                )
+                archive.writestr(
+                    f"{dist_info}/RECORD",
+                    f"{dist_info}/METADATA,,\n{dist_info}/WHEEL,,\n{dist_info}/RECORD,,\n",
+                )
+            return filename
+    "#})?;
+
+    // The exact parser error for an absolute path depends on the number of dashes in the
+    // temporary directory. The relative paths below retain the unfiltered parser error.
+    let mut absolute_filters = context.filters();
+    absolute_filters.push((
+        r#"(?m)(The wheel filename "\[CACHE_DIR\]/builds-v0/\[TMP\]/foo-1\.0\.0-py3-none-any\.whl") [^\n]+"#,
+        "$1 [PARSE_ERROR]",
+    ));
+    uv_snapshot!(absolute_filters, context.pip_install()
+        .arg("--offline")
+        .arg("--no-build-isolation")
+        .arg("--no-deps")
+        .arg("--config-setting").arg("filename=absolute")
+        .arg("."), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+      × Failed to build `foo @ file://[TEMP_DIR]/`
+      ├─▶ Build backend must return a wheel filename, not a path
+      ╰─▶ The wheel filename \"[CACHE_DIR]/builds-v0/[TMP]/foo-1.0.0-py3-none-any.whl\" [PARSE_ERROR]
+    ");
+
+    // Both path separators are recognized, regardless of the host platform.
+    for filename in ["relative", "windows"] {
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), context.pip_install()
+                .arg("--offline")
+                .arg("--no-build-isolation")
+                .arg("--no-deps")
+                .arg("--config-setting").arg(format!("filename={filename}"))
+                .arg("."), @"
+            exit_code: 1 (failure)
+            ----- stderr -----
+            Resolved 1 package in [TIME]
+              × Failed to build `foo @ file://[TEMP_DIR]/`
+              ├─▶ Build backend must return a wheel filename, not a path
+              ╰─▶ The wheel filename \"dist/foo-1.0.0-py3-none-any.whl\" has an invalid package name
+            ");
+        }
+    }
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--offline")
+        .arg("--no-build-isolation")
+        .arg("--no-deps")
+        .arg("--config-setting").arg("filename=malformed")
+        .arg("."), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+      × Failed to build `foo @ file://[TEMP_DIR]/`
+      ├─▶ Built wheel has an invalid filename
+      ╰─▶ The wheel filename \"broken.whl\" is invalid: Must have a version
+    ");
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--offline")
+        .arg("--no-build-isolation")
+        .arg("--no-deps")
+        .arg("--config-setting").arg("filename=basename")
+        .arg("."), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + foo==1.0.0 (from file://[TEMP_DIR]/)
+    ");
+
+    Ok(())
+}
+
 /// Use a wheel that is only compatible with Python 3.13 with Python 3.12 or Python 3.13 to simulate
 /// a wheel build for the wrong platform in a cross-install scenario. Ensure that we catch this case
 /// and error accordingly. Additionally, we ensure that for a build dependency, which builds and
