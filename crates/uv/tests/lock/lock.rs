@@ -24695,7 +24695,7 @@ fn lock_overlapping_environment_inline_sibling() -> Result<()> {
         .temp_dir
         .child("pyproject.toml")
         .write_str(indoc! {r#"
-        tool = { uv = { environments = ["sys_platform == 'linux'", "sys_platform == 'linux'"], index = [{ url = "https://example.invalid/simple" }] } }
+        tool = { uv = { environments = ["sys_platform == 'linux'", "sys_platform == 'linux'"], index = [{ url = "https://user:sentinel-secret@example.invalid/simple" }] } }
 
         [project]
         name = "project"
@@ -24710,12 +24710,12 @@ fn lock_overlapping_environment_inline_sibling() -> Result<()> {
     error: Supported environments must be disjoint, but the following markers overlap: `sys_platform == 'linux'` and `sys_platform == 'linux'`
        --> pyproject.toml:1:60
         |
-      1 | tool = { uv = { environments = ["sys_platform == 'linux'", "sys_platform == 'linux'"], index = [{ url = "https://example.invalid/simple" }] } }
+      1 | tool = { uv = { environments = ["sys_platform == 'linux'", "sys_platform == 'linux'"], index = [{ url = "https://user:***************@example.invalid/simple" }] } }
         |                                                            ^^^^^^^^^^^^^^^^^^^^^^^^^
       info: The other environment is declared here
        --> pyproject.toml:1:33
         |
-      1 | tool = { uv = { environments = ["sys_platform == 'linux'", "sys_platform == 'linux'"], index = [{ url = "https://example.invalid/simple" }] } }
+      1 | tool = { uv = { environments = ["sys_platform == 'linux'", "sys_platform == 'linux'"], index = [{ url = "https://user:***************@example.invalid/simple" }] } }
         |                                 -------------------------
 
     hint: make the environment markers disjoint, or remove one of the overlapping environments
@@ -24768,7 +24768,7 @@ fn lock_overlapping_environment_inline_sibling() -> Result<()> {
                         }
                       ],
                       "line_start": 1,
-                      "text": "tool = { uv = { environments = [\"sys_platform == 'linux'\", \"sys_platform == 'linux'\"], index = [{ url = \"https://example.invalid/simple\" }] } }\n"
+                      "text": "tool = { uv = { environments = [\"sys_platform == 'linux'\", \"sys_platform == 'linux'\"], index = [{ url = \"https://user:***************@example.invalid/simple\" }] } }\n"
                     }
                   ]
                 }
@@ -24798,7 +24798,7 @@ fn lock_overlapping_environment_inline_sibling() -> Result<()> {
                     }
                   ],
                   "line_start": 1,
-                  "text": "tool = { uv = { environments = [\"sys_platform == 'linux'\", \"sys_platform == 'linux'\"], index = [{ url = \"https://example.invalid/simple\" }] } }\n"
+                  "text": "tool = { uv = { environments = [\"sys_platform == 'linux'\", \"sys_platform == 'linux'\"], index = [{ url = \"https://user:***************@example.invalid/simple\" }] } }\n"
                 }
               ]
             }

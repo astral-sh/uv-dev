@@ -153,7 +153,7 @@ fn json_error_format_does_not_change_clap_errors() -> Result<()> {
 #[cfg(feature = "test-python")]
 fn json_source_marker_suggestion_identifies_a_usable_edit() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let source = "# café\n[project]\nname = 'project'\nversion = '0.1.0'\nrequires-python = '>=3.12'\n[tool.uv.sources]\ndemo = [\n  { url = 'https://example.com/one.whl', marker = \"sys_platform == 'linux'\" },\n  { url = 'https://example.com/two.whl', marker = \"python_version >= '3.12'\" },\n]\n";
+    let source = "# café\n[project]\nname = 'project'\nversion = '0.1.0'\nrequires-python = '>=3.12'\n[tool.uv.sources]\ndemo = [\n  { url = 'https://user:sentinel-secret@example.com/one.whl', marker = \"sys_platform == 'linux'\" },\n  { url = 'https://user:sentinel-secret@example.com/two.whl', marker = \"python_version >= '3.12'\" },\n]\n";
     let pyproject = context.temp_dir.child("pyproject.toml");
     pyproject.write_str(source)?;
 
@@ -166,13 +166,18 @@ fn json_source_marker_suggestion_identifies_a_usable_edit() -> Result<()> {
     let errors = report["errors"]
         .as_array()
         .context("error chain is an array")?;
+    let redacted_url = format!(
+        "https://user:{}@example.com/two.whl",
+        "*".repeat("sentinel-secret".len())
+    );
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("sentinel-secret"));
     assert!(errors.iter().any(|error| {
         error["sources"].as_array().is_some_and(|sources| {
             sources.iter().any(|source| {
                 source["kind"] == "snippet"
                     && source["windows"][0]["text"]
                         .as_str()
-                        .is_some_and(|text| text.contains("https://example.com/two.whl"))
+                        .is_some_and(|text| text.contains(&redacted_url))
             })
         })
     }));
