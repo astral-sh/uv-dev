@@ -61,8 +61,7 @@ pub enum Error {
     /// that matches the entry.  Its value is a vector of the matching credentials.
     #[error("Entry is matched by multiple credentials: {0:?}")]
     Ambiguous(Vec<Box<Credential>>),
-    /// This indicates that there was no default credential builder to use;
-    /// the client must set one before creating entries.
+    /// This indicates that no built-in credential store is enabled for the current platform.
     #[error("No default credential builder is available; set one before creating entries")]
     NoDefaultCredentialBuilder,
 }

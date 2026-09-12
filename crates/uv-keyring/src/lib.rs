@@ -22,14 +22,6 @@ Entries support setting, getting, and forgetting (aka deleting) passwords (UTF-8
 and binary secrets (byte arrays). Each created entry provides security and persistence
 of its secret by wrapping a credential held in a platform-specific, secure credential store.
 
-The cross-platform API for creating an _entry_ supports specifying an (optional)
-UTF-8 _target_ attribute on entries, but the meaning of this
-attribute is credential-store (and thus platform) specific,
-and should not be thought of as part of the credential's identification. See the
-documentation of each credential store to understand the
-effect of specifying the _target_ attribute on entries in that store,
-as well as which values are allowed for _target_ by that store.
-
 The platform-specific credential identified for an entry provides the secure storage
 for that entry's password or secret.
 
@@ -44,16 +36,7 @@ For example, on macOS, the service and user provided for an entry
 are mapped to the service and user attributes that identify a
 generic credential in the macOS keychain.
 
-Typically, platform-specific credential stores (called _keystores_ in this crate)
-have a richer model of a credential than
-the one used by this crate to identify entries.
-These keystores expose their specific model in the
-concrete credential objects they use to implement the Credential trait.
-In order to allow clients to access this richer model, the Credential trait
-has an [`as_any`](credential::CredentialApi::as_any) method that returns a
-reference to the underlying
-concrete object typed as [`Any`](std::any::Any), so that it can be downgraded to
-its concrete type.
+The concrete credential-store types are internal to this crate.
 
 ### Credential store features
 
@@ -82,7 +65,7 @@ Each of the platform-specific credential stores provided by this crate uses
 an underlying store that may also be used by modules written
 in other languages.  If you want to interoperate with these third party
 credential writers, then you will need to understand the details of how the
-target, service, and user of this crate's generic model
+service and user passed to [`Entry::new`]
 are used to identify credentials in the platform-specific store.
 These details are in the implementation of this crate's keystores,
 and are documented in the headers of those modules.
@@ -199,12 +182,6 @@ impl Entry {
     ///
     /// This function will return an [`Error`] if the `service` or `user` values are invalid.
     /// The specific reasons for invalidity are platform-dependent, but include length constraints.
-    ///
-    /// # Panics
-    ///
-    /// In the very unlikely event that the internal credential builder's `RwLock` is poisoned, this function
-    /// will panic. If you encounter this, and especially if you can reproduce it, please report a bug with the
-    /// details (and preferably a backtrace) so the developers can investigate.
     pub fn new(service: &str, user: &str) -> Result<Self> {
         let entry = build_default_credential(None, service, user)?;
         Ok(entry)
