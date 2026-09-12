@@ -12,6 +12,54 @@ use wiremock::{
 };
 
 #[test]
+fn python_list_json_quiet() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let managed = context.temp_dir.join("managed");
+    fs_err::create_dir_all(&managed)?;
+    let list = || {
+        let mut command = context.python_list();
+        command
+            .args(["--offline", "--no-python-downloads", "--managed-python"])
+            .env(EnvVars::UV_PYTHON_INSTALL_DIR, &managed);
+        command
+    };
+
+    let default = uv_snapshot!(context.filters(), list().args(["--only-installed", "--output-format", "json"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    []
+    ");
+    let quiet = uv_snapshot!(context.filters(), list().args(["--only-installed", "--output-format", "json", "-q"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    []
+    ");
+    assert_eq!(default.stdout, quiet.stdout);
+
+    uv_snapshot!(context.filters(), list().args(["--only-installed", "--output-format", "json", "-qq"]), @"
+    exit_code: 0 (success)
+    ");
+    let downloads = || {
+        let mut command = list();
+        command.args([
+            "cpython@3.12",
+            "--only-downloads",
+            "--all-platforms",
+            "--output-format",
+            "text",
+        ]);
+        command
+    };
+    let text = downloads().output()?;
+    assert!(text.status.success());
+    assert!(!text.stdout.is_empty());
+    uv_snapshot!(context.filters(), downloads().arg("-q"), @"
+    exit_code: 0 (success)
+    ");
+    Ok(())
+}
+
+#[test]
 fn python_list() {
     let mut context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
         .with_filtered_python_symlinks()
