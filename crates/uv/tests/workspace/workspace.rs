@@ -13,6 +13,8 @@ use insta::assert_json_snapshot;
 use insta::assert_snapshot;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "test-universal")]
+use uv_static::EnvVars;
 use uv_test::{copy_dir_ignore, make_project, uv_snapshot};
 
 fn workspaces_dir() -> PathBuf {
@@ -1101,7 +1103,9 @@ fn workspace_member_warning_and_error_order() -> Result<()> {
     )?;
     fs_err::write(workspace.join("packages").join("c-after"), "file")?;
 
-    uv_snapshot!(context.filters(), context.lock().current_dir(&workspace), @"
+    uv_snapshot!(context.filters(), context.lock()
+        .current_dir(&workspace)
+        .env(EnvVars::RUST_LOG, "warn"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     WARN Ignoring non-directory workspace member: `[TEMP_DIR]/workspace/packages/a-before`
