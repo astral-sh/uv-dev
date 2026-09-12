@@ -113,6 +113,17 @@ export in the selected environment. An unsatisfiable lock is only confirmed when
 provides an unsatisfiable witness; a successful sample cannot prove the entire marker universe is
 satisfiable.
 
+For a reproducible set of generated graphs, provide a starting seed and an output directory:
+
+```shell
+cargo dev check-scenarios --uv target/debug/uv --seed 0 --cases 100 --output-dir generated-scenarios
+```
+
+Every input is saved as a complete Packse TOML file before uv runs. Re-run a saved file directly to
+replay a failure; the checker refuses to overwrite a different input with the same name. Use
+`--packages`, `--versions`, and `--max-states` to bound the graph and exhaustive search. Add
+`--lock` to run the same generated graphs through the lockfile checks.
+
 ### Snapshot testing
 
 uv uses [insta](https://insta.rs/) for snapshot testing. It's recommended (but not necessary) to use

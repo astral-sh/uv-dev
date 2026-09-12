@@ -117,7 +117,7 @@ pub async fn run() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use clap::CommandFactory;
+    use clap::{CommandFactory, Parser};
 
     use super::Cli;
 
@@ -133,5 +133,30 @@ mod tests {
     fn scenario_checker_command_is_registered() {
         let command = Cli::command();
         assert!(command.find_subcommand("check-scenarios").is_some());
+    }
+
+    #[test]
+    fn scenario_checker_accepts_files_or_saved_generated_inputs() {
+        assert!(
+            Cli::try_parse_from(["uv-dev", "check-scenarios", "--uv", "uv", "scenario.toml"])
+                .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from(["uv-dev", "check-scenarios", "--uv", "uv", "--seed", "0"])
+                .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "uv-dev",
+                "check-scenarios",
+                "--uv",
+                "uv",
+                "--seed",
+                "0",
+                "--output-dir",
+                "generated",
+            ])
+            .is_ok()
+        );
     }
 }

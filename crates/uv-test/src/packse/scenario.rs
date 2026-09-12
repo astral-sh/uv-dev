@@ -83,6 +83,55 @@ impl Scenario {
     }
 }
 
+/// A validated scenario document that retains every TOML field for replay and reduction.
+///
+/// Unlike serializing [`Scenario`] directly, this also retains the original representation of
+/// resolver options and artifact metadata that a particular checker may not interpret.
+#[derive(Clone, Debug)]
+pub struct ScenarioDocument(toml::Value);
+
+impl ScenarioDocument {
+    /// Read and validate a scenario while retaining its TOML document.
+    pub fn from_path(path: &Path) -> Result<Self> {
+        let contents = fs_err::read_to_string(path)
+            .with_context(|| format!("failed to read scenario file `{}`", path.display()))?;
+        contents
+            .parse()
+            .with_context(|| format!("failed to parse scenario file `{}`", path.display()))
+    }
+
+    /// Parse the retained document into the typed scenario used by the test server and oracle.
+    pub fn scenario(&self) -> Result<Scenario> {
+        self.0
+            .clone()
+            .try_into()
+            .context("failed to deserialize scenario document")
+    }
+
+    /// Serialize a complete, replayable Packse fixture.
+    pub fn to_toml(&self) -> Result<String> {
+        toml::to_string_pretty(&self.0).context("failed to serialize scenario document")
+    }
+
+    pub(crate) fn from_value(value: toml::Value) -> Result<Self> {
+        let document = Self(value);
+        document.scenario()?;
+        Ok(document)
+    }
+
+    pub(crate) fn value(&self) -> &toml::Value {
+        &self.0
+    }
+}
+
+impl FromStr for ScenarioDocument {
+    type Err = anyhow::Error;
+
+    fn from_str(contents: &str) -> Result<Self> {
+        Self::from_value(toml::from_str(contents)?)
+    }
+}
+
 /// A package with one or more versions.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
