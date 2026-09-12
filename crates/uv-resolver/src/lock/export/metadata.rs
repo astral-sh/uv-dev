@@ -120,6 +120,15 @@ struct MetadataEnvironment {
     python: PythonReport,
     /// Distributions present in the environment, independently of the locked resolution.
     packages: BTreeMap<String, MetadataInstalledPackage>,
+    /// Importable modules recorded by installed distributions.
+    module_owners: BTreeMap<ModuleName, Vec<MetadataInstalledModuleOwner>>,
+}
+
+/// An installed distribution whose metadata records an importable module.
+#[derive(Debug, serde::Serialize)]
+struct MetadataInstalledModuleOwner {
+    /// Key for the distribution in `environment.packages`.
+    installed_id: String,
 }
 
 /// A distribution observed in an existing Python environment.
@@ -146,7 +155,11 @@ impl MetadataInstalledPackage {
     }
 
     fn id(&self) -> String {
-        format!("installed+{}", self.path)
+        Self::id_for_path(self.path.as_ref())
+    }
+
+    fn id_for_path(path: &Path) -> String {
+        format!("installed+{}", PortablePathBuf::from(path))
     }
 }
 
@@ -1478,20 +1491,39 @@ impl Metadata {
         .to_flat())
     }
 
+    /// Return the opaque identifier for a distribution in the installed environment inventory.
+    pub fn installed_package_id(dist: &InstalledDist) -> String {
+        MetadataInstalledPackage::id_for_path(dist.install_path())
+    }
+
     #[must_use]
     pub fn with_environment<'a>(
         mut self,
         environment: &PythonEnvironment,
         packages: impl IntoIterator<Item = &'a InstalledDist>,
+        module_owners: BTreeMap<ModuleName, Vec<String>>,
     ) -> Self {
+        let packages = packages
+            .into_iter()
+            .map(MetadataInstalledPackage::from_dist)
+            .map(|package| (package.id(), package))
+            .collect::<BTreeMap<_, _>>();
+        let module_owners = module_owners
+            .into_iter()
+            .filter_map(|(module, owners)| {
+                let owners = owners
+                    .into_iter()
+                    .filter(|installed_id| packages.contains_key(installed_id))
+                    .map(|installed_id| MetadataInstalledModuleOwner { installed_id })
+                    .collect::<Vec<_>>();
+                (!owners.is_empty()).then_some((module, owners))
+            })
+            .collect();
         self.environment = Some(MetadataEnvironment {
             root: PortablePathBuf::from(environment.root()),
             python: PythonReport::from(environment.interpreter()),
-            packages: packages
-                .into_iter()
-                .map(MetadataInstalledPackage::from_dist)
-                .map(|package| (package.id(), package))
-                .collect(),
+            packages,
+            module_owners,
         });
         self
     }

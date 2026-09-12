@@ -246,7 +246,11 @@ pub(crate) async fn metadata(
                 .await
                 .context("Failed to collect module owners")?;
                 export = export
-                    .with_environment(&environment, collected.packages.iter())
+                    .with_environment(
+                        &environment,
+                        collected.packages.iter(),
+                        collected.installed_module_owners,
+                    )
                     .with_module_owners(collected.module_owners);
             }
 
