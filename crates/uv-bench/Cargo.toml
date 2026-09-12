@@ -164,6 +164,11 @@ path = "benches/entrypoint_startup.rs"
 harness = false
 
 [[bench]]
+name = "tool_list"
+path = "benches/tool_list.rs"
+harness = false
+
+[[bench]]
 name = "uv_pypi_types"
 path = "benches/uv_pypi_types.rs"
 harness = false
