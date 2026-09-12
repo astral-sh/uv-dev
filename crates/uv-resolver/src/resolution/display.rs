@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use owo_colors::OwoColorize;
 use petgraph::visit::EdgeRef;
 use petgraph::{Directed, Direction, Graph};
-use rustc_hash::{FxBuildHasher, FxHashMap};
+use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use uv_distribution_types::{DistributionMetadata, Name, SourceAnnotation, SourceAnnotations};
 use uv_normalize::PackageName;
@@ -11,6 +11,8 @@ use uv_pep508::MarkerTree;
 
 use crate::resolution::{RequirementsTxtDist, ResolutionGraphNode};
 use crate::{ResolverEnvironment, ResolverOutput};
+
+const NO_EMIT_INDEX_THRESHOLD: usize = 32;
 
 /// A [`std::fmt::Display`] implementation for the resolution graph.
 #[derive(Debug)]
@@ -190,13 +192,21 @@ impl std::fmt::Display for DisplayResolutionGraph<'_> {
             strip_extras(&graph)
         };
 
-        // Collect all packages.
+        // Index large exclusion lists before collecting all packages.
+        let no_emit_index = (self.no_emit_packages.len() > NO_EMIT_INDEX_THRESHOLD).then(|| {
+            self.no_emit_packages
+                .iter()
+                .collect::<FxHashSet<&PackageName>>()
+        });
         let mut nodes = graph
             .node_indices()
             .filter_map(|index| {
                 let dist = &graph[index];
                 let name = dist.name();
-                if self.no_emit_packages.contains(name) {
+                if no_emit_index.as_ref().map_or_else(
+                    || self.no_emit_packages.contains(name),
+                    |packages| packages.contains(name),
+                ) {
                     return None;
                 }
 
