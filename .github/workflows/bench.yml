@@ -5,6 +5,24 @@ on:
         required: false
         type: string
         default: "true"
+      native-baseline-revision:
+        required: false
+        type: string
+        default: ""
+      native-candidate-revision:
+        required: false
+        type: string
+        default: ""
+  workflow_dispatch:
+    inputs:
+      native-baseline-revision:
+        description: "Exact same-repository commit SHA for the Windows baseline"
+        required: true
+        type: string
+      native-candidate-revision:
+        description: "Exact same-repository commit SHA for the Windows candidate"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -24,7 +42,7 @@ jobs:
     # codspeed-macro doesn't support Ubuntu 24.04 yet
     runs-on: depot-ubuntu-22.04-arm-4
     # uv-dev benchmarks pull requests but imports its main-branch measurements from uv.
-    if: ${{ github.repository == 'astral-sh/uv' || (github.repository == 'astral-sh/uv-dev' && github.ref != 'refs/heads/main') }}
+    if: ${{ inputs.native-baseline-revision == '' && inputs.native-candidate-revision == '' && (github.repository == 'astral-sh/uv' || (github.repository == 'astral-sh/uv-dev' && github.ref != 'refs/heads/main')) }}
     timeout-minutes: 30
     steps:
       - name: "Checkout Branch"
@@ -174,7 +192,7 @@ jobs:
   benchmarks-macos:
     name: "walltime on macos"
     runs-on: namespace-profile-macos-15
-    if: ${{ github.repository == 'astral-sh/uv' || (github.repository == 'astral-sh/uv-dev' && github.ref != 'refs/heads/main') }}
+    if: ${{ inputs.native-baseline-revision == '' && inputs.native-candidate-revision == '' && (github.repository == 'astral-sh/uv' || (github.repository == 'astral-sh/uv-dev' && github.ref != 'refs/heads/main')) }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -249,8 +267,10 @@ jobs:
   benchmarks-windows:
     name: "native walltime on windows"
     runs-on: namespace-profile-windows-2022-x86-64-16x32
-    if: ${{ github.repository == 'astral-sh/uv' || (github.repository == 'astral-sh/uv-dev' && github.ref != 'refs/heads/main') }}
+    if: ${{ github.repository == 'astral-sh/uv' || (github.repository == 'astral-sh/uv-dev' && (github.ref != 'refs/heads/main' || inputs.native-baseline-revision != '' || inputs.native-candidate-revision != '')) }}
     timeout-minutes: 180
+    env:
+      NATIVE_COMPARISON: ${{ inputs.native-baseline-revision != '' || inputs.native-candidate-revision != '' }}
     defaults:
       run:
         shell: pwsh
@@ -260,6 +280,32 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
+      - name: "Validate comparison revisions"
+        if: ${{ env.NATIVE_COMPARISON == 'true' }}
+        env:
+          BASELINE_REVISION: ${{ inputs.native-baseline-revision }}
+          CANDIDATE_REVISION: ${{ inputs.native-candidate-revision }}
+        run: |
+          if ($env:BASELINE_REVISION -notmatch '^[0-9a-f]{40}$' -or $env:CANDIDATE_REVISION -notmatch '^[0-9a-f]{40}$') {
+            throw 'Both comparison revisions must be exact 40-character commit SHAs'
+          }
+
+      - name: "Checkout comparison baseline"
+        if: ${{ env.NATIVE_COMPARISON == 'true' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.native-baseline-revision }}
+          path: target/benchmark-programs/baseline
+          persist-credentials: false
+
+      - name: "Checkout comparison candidate"
+        if: ${{ env.NATIVE_COMPARISON == 'true' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.native-candidate-revision }}
+          path: target/benchmark-programs/candidate
+          persist-credentials: false
+
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13.4"
@@ -267,6 +313,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ inputs.save-rust-cache == 'true' }}
+          cache-targets: ${{ env.NATIVE_COMPARISON != 'true' }}
 
       - name: "Install Rust toolchain"
         run: rustup show
@@ -286,30 +333,125 @@ jobs:
           }
           "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Append
 
+      - name: "Build comparison binaries"
+        id: comparison-binaries
+        if: ${{ env.NATIVE_COMPARISON == 'true' }}
+        env:
+          BASELINE_REVISION: ${{ inputs.native-baseline-revision }}
+          CANDIDATE_REVISION: ${{ inputs.native-candidate-revision }}
+        run: |
+          function Get-NativeOutput([string]$program, [string[]]$arguments) {
+            $output = & $program @arguments
+            if ($LASTEXITCODE -ne 0) {
+              throw "$program failed with exit code $LASTEXITCODE"
+            }
+            return ($output -join [Environment]::NewLine).Trim()
+          }
+
+          $comparisonSources = Join-Path $env:GITHUB_WORKSPACE 'target/benchmark-programs'
+          $comparisonTargets = Join-Path $env:RUNNER_TEMP "uv-bench-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $comparisonResults = Join-Path $env:RUNNER_TEMP "criterion-windows-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          New-Item -ItemType Directory -Path $comparisonResults -Force | Out-Null
+          $comparisonMetadata = [ordered]@{
+            driver_revision = (Get-NativeOutput 'git' @('rev-parse', 'HEAD'))
+            profile = 'profiling'
+            order = @('baseline', 'candidate')
+          }
+          $expectedCompiler = $null
+          $expectedCargo = $null
+          $expectedProfiles = $null
+          foreach ($caseName in @('baseline', 'candidate')) {
+            $expectedRevision = if ($caseName -eq 'baseline') { $env:BASELINE_REVISION } else { $env:CANDIDATE_REVISION }
+            $comparisonSource = Join-Path $comparisonSources $caseName
+            $revision = Get-NativeOutput 'git' @('-C', $comparisonSource, 'rev-parse', 'HEAD')
+            if ($revision -ne $expectedRevision -or (Get-NativeOutput 'git' @('-C', $comparisonSource, 'status', '--porcelain'))) {
+              throw "The $caseName checkout does not match its clean requested revision"
+            }
+            $comparisonTarget = Join-Path $comparisonTargets "$caseName-$($revision.Substring(0, 12))"
+            Push-Location $comparisonSource
+            try {
+              $compiler = Get-NativeOutput 'rustc' @('-Vv')
+              $cargo = Get-NativeOutput 'cargo' @('-Vv')
+              $profiles = Get-NativeOutput 'python' @('-c', 'import json, sys, tomllib; print(json.dumps(tomllib.load(open(sys.argv[1], "rb")).get("profile", {}), sort_keys=True))', 'Cargo.toml')
+              if (($null -ne $expectedCompiler -and $compiler -cne $expectedCompiler) -or ($null -ne $expectedCargo -and $cargo -cne $expectedCargo) -or ($null -ne $expectedProfiles -and $profiles -cne $expectedProfiles)) {
+                throw 'Comparison revisions must use identical Rust toolchains and Cargo profiles'
+              }
+              $expectedCompiler = $compiler
+              $expectedCargo = $cargo
+              $expectedProfiles = $profiles
+              $env:CARGO_TARGET_DIR = $comparisonTarget
+              cargo build --locked --profile profiling --bin uv
+              if ($LASTEXITCODE -ne 0) {
+                throw "The $caseName profiling build failed with exit code $LASTEXITCODE"
+              }
+            } finally {
+              Pop-Location
+            }
+            $comparisonBinary = Join-Path $comparisonTarget 'profiling/uv.exe'
+            $comparisonMetadata[$caseName] = [ordered]@{
+              revision = $revision
+              tree = (Get-NativeOutput 'git' @('-C', $comparisonSource, 'rev-parse', 'HEAD^{tree}'))
+              cargo_lock = (Get-NativeOutput 'git' @('-C', $comparisonSource, 'rev-parse', 'HEAD:Cargo.lock'))
+              rustc = $compiler
+              cargo = $cargo
+              cargo_profiles = ($profiles | ConvertFrom-Json)
+              binary_sha256 = (Get-FileHash $comparisonBinary -Algorithm SHA256).Hash.ToLowerInvariant()
+              binary_version = (Get-NativeOutput $comparisonBinary @('--version'))
+            }
+            "$($caseName)-binary=$comparisonBinary" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          }
+          $comparisonMetadata | ConvertTo-Json -Depth 10 | Set-Content -Path (Join-Path $comparisonResults 'comparison-inputs.json') -Encoding utf8NoBOM
+
       - name: "Build optimized benchmark command"
+        if: ${{ env.NATIVE_COMPARISON != 'true' }}
         run: cargo build --locked --profile profiling --bin uv
 
       - name: "Prepare immutable benchmark fixtures"
+        if: ${{ env.NATIVE_COMPARISON != 'true' }}
         run: python scripts/benchmark/prepare-fixtures.py
 
       - name: "Prepare pinned Python archives"
         run: python scripts/benchmark/prepare-python-archives.py
 
-      - name: "Install replay-server Python"
+      - name: "Install pinned benchmark Pythons"
         env:
+          BENCH_PREPARE_BINARY: ${{ steps.comparison-binaries.outputs.candidate-binary }}
           UV_PYTHON_INSTALL_DIR: .cache/bench-python
           UV_PYTHON_CACHE_DIR: .cache/bench-python-archives
           UV_PYTHON_DOWNLOADS_JSON_URL: scripts/benchmark/python-archives.json
-        run: ./target/profiling/uv.exe --no-config --offline python install --no-bin --no-registry 3.11.13
+        run: |
+          $benchmarkBinary = if ($env:BENCH_PREPARE_BINARY) { $env:BENCH_PREPARE_BINARY } else { './target/profiling/uv.exe' }
+          & $benchmarkBinary --no-config --offline python install --no-bin --no-registry 3.10.18 3.11.13 3.12.11 3.13.4
+          if ($LASTEXITCODE -ne 0) {
+            throw "Installing benchmark Pythons failed with exit code $LASTEXITCODE"
+          }
 
       - name: "Check result aggregation"
         run: python -m unittest discover -s scripts/tests -p test_criterion_runs.py
 
       # CodSpeed's runner does not support Windows. Retain real Criterion samples instead.
       - name: "Run independent native measurements"
+        if: ${{ env.NATIVE_COMPARISON != 'true' }}
         run: >-
           python scripts/benchmark/criterion-runs.py --output "$env:RUNNER_TEMP/criterion-windows-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-          --bench python_install --bench python_concurrent_install
+          --bench python_install --bench python_concurrent_install --bench python_discovery
+
+      - name: "Compare exact revisions on the same runner"
+        if: ${{ env.NATIVE_COMPARISON == 'true' }}
+        env:
+          BASELINE_BINARY: ${{ steps.comparison-binaries.outputs.baseline-binary }}
+          CANDIDATE_BINARY: ${{ steps.comparison-binaries.outputs.candidate-binary }}
+          CARGO_TARGET_DIR: ${{ runner.temp }}/criterion-driver-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          $comparisonResults = Join-Path $env:RUNNER_TEMP "criterion-windows-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          python scripts/benchmark/criterion-runs.py --binary $env:BASELINE_BINARY --bench python_discovery --filter python_discovery/path_ --output (Join-Path $comparisonResults 'baseline')
+          if ($LASTEXITCODE -ne 0) {
+            throw "Baseline measurement failed with exit code $LASTEXITCODE"
+          }
+          python scripts/benchmark/criterion-runs.py --binary $env:CANDIDATE_BINARY --bench python_discovery --filter python_discovery/path_ --output (Join-Path $comparisonResults 'candidate')
+          if ($LASTEXITCODE -ne 0) {
+            throw "Candidate measurement failed with exit code $LASTEXITCODE"
+          }
 
       - name: "Upload native benchmark samples"
         if: ${{ always() }}
@@ -324,7 +466,7 @@ jobs:
     name: "simulated"
     runs-on: depot-ubuntu-24.04-4
     # Only uv measures main; uv-dev reuses the resulting profiles.
-    if: ${{ github.repository == 'astral-sh/uv' || (github.repository == 'astral-sh/uv-dev' && github.ref != 'refs/heads/main') }}
+    if: ${{ inputs.native-baseline-revision == '' && inputs.native-candidate-revision == '' && (github.repository == 'astral-sh/uv' || (github.repository == 'astral-sh/uv-dev' && github.ref != 'refs/heads/main')) }}
     timeout-minutes: 30
     permissions:
       contents: read
