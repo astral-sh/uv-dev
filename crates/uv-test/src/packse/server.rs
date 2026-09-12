@@ -76,6 +76,12 @@ pub struct PackseServer {
     index: Arc<ServerIndex>,
 }
 
+#[derive(Clone, Copy)]
+enum BuildDependencies {
+    Include,
+    Exclude,
+}
+
 impl PackseServer {
     /// Load a scenario from a TOML path (relative to the vendored scenarios directory)
     /// and start a mock server for it.
@@ -95,17 +101,26 @@ impl PackseServer {
 
     /// Start a mock server for the given scenario.
     pub fn from_scenario(scenario: &Scenario) -> Self {
-        Self::start(scenario, true)
+        Self::start(scenario, true, BuildDependencies::Include)
+    }
+
+    /// Start a mock server exposing exactly the packages in the scenario.
+    ///
+    /// This is useful for finite-graph resolver checks: vendored build dependencies must not add
+    /// candidates that are absent from the graph being checked. Source builds are unavailable
+    /// unless their build dependencies are explicitly included in the scenario.
+    pub fn from_scenario_without_build_dependencies(scenario: &Scenario) -> Self {
+        Self::start(scenario, true, BuildDependencies::Exclude)
     }
 
     /// Start a mock server that omits hashes from the Simple API, mimicking indexes that don't
     /// provide hashes, such as HTML-only indexes.
     pub fn from_scenario_without_hashes(scenario: &Scenario) -> Self {
-        Self::start(scenario, false)
+        Self::start(scenario, false, BuildDependencies::Include)
     }
 
-    fn start(scenario: &Scenario, hashes: bool) -> Self {
-        let index = Arc::new(build_server_index(scenario));
+    fn start(scenario: &Scenario, hashes: bool, build_dependencies: BuildDependencies) -> Self {
+        let index = Arc::new(build_server_index(scenario, build_dependencies));
         let server_index = Arc::clone(&index);
         let server = HttpServer::start(move |request, server_uri| {
             handle_request(request, server_uri, &server_index, hashes)
@@ -135,7 +150,7 @@ impl PackseServer {
 }
 
 /// Build the complete [`ServerIndex`] from a scenario and cached build dependencies.
-fn build_server_index(scenario: &Scenario) -> ServerIndex {
+fn build_server_index(scenario: &Scenario, build_dependencies: BuildDependencies) -> ServerIndex {
     let mut packages = HashMap::new();
     let mut files: HashMap<String, FileData> = HashMap::new();
 
@@ -194,7 +209,10 @@ fn build_server_index(scenario: &Scenario) -> ServerIndex {
         packages.insert(package_name.clone(), PackageEntry { dists });
     }
 
-    for artifact in vendor_artifacts() {
+    for artifact in vendor_artifacts()
+        .iter()
+        .filter(|_| matches!(build_dependencies, BuildDependencies::Include))
+    {
         if !Path::new(artifact.filename)
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("whl"))
@@ -413,7 +431,7 @@ mod tests {
     use crate::vendor::vendor_artifacts;
 
     use super::{
-        PackseServer, Scenario, build_server_index, extract_package_name,
+        BuildDependencies, PackseServer, Scenario, build_server_index, extract_package_name,
         mount_mismatched_distribution,
     };
 
@@ -432,13 +450,51 @@ mod tests {
 
     #[test]
     fn server_index_construction_does_not_load_vendor_artifacts() {
-        let _index = build_server_index(&Scenario::empty());
+        let _index = build_server_index(&Scenario::empty(), BuildDependencies::Include);
 
         assert!(
             vendor_artifacts()
                 .iter()
                 .all(|artifact| !artifact.is_loaded())
         );
+    }
+
+    #[tokio::test]
+    async fn closed_world_index_omits_vendored_candidates() -> Result<()> {
+        let scenario = toml::from_str::<Scenario>(
+            r#"
+name = "closed-world"
+[root]
+requires = ["packaging"]
+[expected]
+satisfiable = true
+[packages.packaging.versions."1.0.0"]
+sdist = false
+"#,
+        )?;
+        let server = PackseServer::from_scenario_without_build_dependencies(&scenario);
+        let packages: serde_json::Value = reqwest::get(format!("{}packaging/", server.index_url()))
+            .await?
+            .json()
+            .await?;
+        assert_eq!(packages["files"].as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            packages["files"][0]["filename"],
+            "packaging-1.0.0-py3-none-any.whl"
+        );
+        assert_eq!(
+            reqwest::get(format!("{}setuptools/", server.index_url()))
+                .await?
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            reqwest::get(server.file_url("packaging-23.2-py3-none-any.whl"))
+                .await?
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        Ok(())
     }
 
     #[tokio::test]
