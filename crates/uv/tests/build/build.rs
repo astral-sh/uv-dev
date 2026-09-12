@@ -110,7 +110,7 @@ fn build_basic() -> Result<()> {
     ");
 
     // Build to a specified path, even if builds are disabled for the project by name.
-    uv_snapshot!(context.filters(), context.build().arg("--out-dir").arg("out").arg("--no-build-package").arg("project").current_dir(project.path()), @"
+    uv_snapshot!(context.filters(), context.build().arg("--output-dir").arg("out").arg("--no-build-package").arg("project").current_dir(project.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Building source distribution...
@@ -2504,7 +2504,7 @@ fn build_list_files_errors() -> Result<()> {
     ----- stderr -----
     error: the argument '--list' cannot be used with '--force-pep517'
 
-    Usage: uv build --cache-dir [CACHE_DIR] --out-dir <OUT_DIR> --exclude-newer <EXCLUDE_NEWER> <SRC>
+    Usage: uv build --cache-dir [CACHE_DIR] --output-dir <OUTPUT_DIR> --exclude-newer <EXCLUDE_NEWER> <SRC>
 
     For more information, try '--help'.
     ");

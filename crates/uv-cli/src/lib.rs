@@ -3037,8 +3037,14 @@ pub struct BuildArgs {
     ///
     /// Defaults to the `dist` subdirectory within the source directory, or the
     /// directory containing the source distribution archive.
-    #[arg(long, short, value_parser = parse_file_path, value_hint = ValueHint::DirPath)]
-    pub out_dir: Option<PathBuf>,
+    #[arg(
+        long = "output-dir",
+        short,
+        alias = "out-dir",
+        value_parser = parse_file_path,
+        value_hint = ValueHint::DirPath
+    )]
+    pub output_dir: Option<PathBuf>,
 
     /// Build a source distribution ("sdist") from the given directory.
     #[arg(long)]
