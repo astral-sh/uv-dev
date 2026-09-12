@@ -20,10 +20,11 @@ use insta::{allow_duplicates, assert_snapshot};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tokio_stream::wrappers::ReceiverStream;
-use wiremock::matchers::{any, method};
+use wiremock::matchers::{any, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 use uv_static::EnvVars;
+use uv_test::archive::write_tar_gz;
 use uv_test::{TestContext, uv_snapshot};
 
 /// Creates a CONNECT tunnel proxy that forwards connections to the target.
@@ -608,6 +609,108 @@ async fn python_install_io_error() {
       cause: client error (SendRequest)
       cause: connection closed before message completed
     ");
+}
+
+/// Reject a managed Python archive with the wrong hash before publishing the installation.
+#[tokio::test]
+async fn python_install_hash_mismatch() -> anyhow::Result<()> {
+    let mut archive = Vec::new();
+    write_tar_gz(
+        &mut archive,
+        &[("python/README", "inert Python distribution fixture\n")],
+    )?;
+    let actual_hash = hex::encode(Sha256::digest(&archive));
+    let expected_hash = "0".repeat(64);
+    let filename = "cpython-3.10.0-aarch64-apple-darwin.tar.gz";
+
+    for cache_archive in [false, true] {
+        let context = uv_test::test_context_with_versions!(&[])
+            .with_filtered_python_keys()
+            .with_managed_python_dirs()
+            .with_filter((actual_hash.clone(), "[ACTUAL_HASH]"));
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/20211017/{filename}")))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(archive.clone()))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let downloads = json!({
+            "cpython-3.10.0-darwin-aarch64-none": {
+                "arch": { "family": "aarch64", "variant": null },
+                "libc": "none",
+                "major": 3,
+                "minor": 10,
+                "name": "cpython",
+                "os": "darwin",
+                "patch": 0,
+                "prerelease": "",
+                "sha256": expected_hash,
+                "url": format!("https://github.com/astral-sh/python-build-standalone/releases/download/20211017/{filename}"),
+                "variant": null
+            }
+        });
+        let downloads_path = context.temp_dir.child("python-downloads.json");
+        downloads_path.write_str(&serde_json::to_string(&downloads)?)?;
+
+        let archive_cache = context.temp_dir.child("archive-cache");
+        let mut command = context.python_install();
+        command
+            .arg("cpython-3.10.0-darwin-aarch64-none")
+            .arg("--python-downloads-json-url")
+            .arg(downloads_path.path())
+            .env(EnvVars::UV_PYTHON_INSTALL_MIRROR, server.uri());
+        if cache_archive {
+            command.env(EnvVars::UV_PYTHON_CACHE_DIR, archive_cache.path());
+        } else {
+            command.env(EnvVars::UV_PYTHON_CACHE_DIR, "");
+        }
+
+        insta::allow_duplicates! {
+            uv_snapshot!(context.filters(), command, @"
+            exit_code: 1 (failure)
+            ----- stderr -----
+            error: Failed to install cpython-3.10.0-[PLATFORM]
+              Caused by: Hash mismatch for `cpython-3.10.0-[PLATFORM]`
+
+                Expected:
+                0000000000000000000000000000000000000000000000000000000000000000
+
+                Computed:
+                [ACTUAL_HASH]
+            ");
+        }
+
+        if cache_archive {
+            assert_eq!(
+                fs_err::read(archive_cache.child(format!("000000000-{filename}")))?,
+                archive,
+            );
+        } else {
+            assert!(!archive_cache.exists());
+        }
+
+        for published_path in [
+            context
+                .temp_dir
+                .child("managed/cpython-3.10.0-macos-aarch64-none"),
+            context
+                .bin_dir
+                .child(format!("python3.10{}", std::env::consts::EXE_SUFFIX)),
+        ] {
+            assert_eq!(
+                fs_err::symlink_metadata(published_path.path())
+                    .expect_err("a rejected archive must not publish an installation or executable")
+                    .kind(),
+                io::ErrorKind::NotFound,
+            );
+        }
+        server.verify().await;
+    }
+
+    Ok(())
 }
 
 #[tokio::test]
