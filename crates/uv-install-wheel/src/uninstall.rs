@@ -87,12 +87,15 @@ pub fn uninstall_wheel(
                 }
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => match fs_err::remove_dir_all(&path) {
+            Err(err) => match fs_err::remove_dir(&path) {
                 Ok(()) => {
                     trace!("Removed directory: {}", path.display());
                     dir_count += 1;
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) if err.kind() == std::io::ErrorKind::DirectoryNotEmpty => {
+                    trace!("Skipped non-empty directory: {}", path.display());
+                }
                 Err(_) => return Err(err.into()),
             },
         }
