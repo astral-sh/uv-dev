@@ -65,6 +65,12 @@ jobs:
       - name: "Prime installed-environment fixtures"
         run: python3 scripts/benchmark/prepare-environments.py --discovery --project-caches
 
+      - name: "Prepare immutable source trees"
+        run: >-
+          UV_PYTHON_INSTALL_DIR=.cache/bench-python ./target/profiling/uv
+          --no-config --offline run --no-project --managed-python --python 3.12.11
+          scripts/benchmark/prepare-sources.py
+
       - name: "Prime tool-environment fixtures"
         run: python3 scripts/benchmark/prepare-tools.py --individual-caches
 
