@@ -479,6 +479,37 @@ fn lock_exclude_newer_package_relative() -> Result<()> {
     Ok(())
 }
 
+/// Local dates in persistent configuration warn because their interpretation depends on the
+/// system timezone.
+#[test]
+fn lock_exclude_newer_package_local_date_pyproject() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+
+        [tool.uv]
+        exclude-newer-package = { iniconfig = "2024-01-01" }
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context
+        .lock()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: `2024-01-01` is a local date without a timezone. `exclude-newer` values in persistent configuration should use a full timestamp with a timezone (for example, `2024-01-01T00:00:00Z`); local dates will be rejected in a future release
+    Resolved 2 packages in [TIME]
+    "#);
+
+    Ok(())
+}
+
 /// Lock with a relative exclude-newer value from the `pyproject.toml`.
 ///
 /// Uses idna which has releases at:
