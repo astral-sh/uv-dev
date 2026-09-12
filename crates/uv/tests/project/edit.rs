@@ -668,7 +668,7 @@ fn add_git_lfs() -> Result<()> {
     let ok_checkout_file = git_checkouts
         .child(cache_digest(&repo_url.with_lfs(Some(true))))
         .child("261c828")
-        .child(".ok");
+        .child(".git/.ok");
 
     uv_snapshot!(context.filters(), context.add()
         .arg("--no-cache")
