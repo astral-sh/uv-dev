@@ -108,7 +108,11 @@ impl ToolListReport {
         match format {
             ToolListFormat::Text => self.render_text(output, printer),
             ToolListFormat::Json => {
-                writeln!(printer.stdout(), "{}", serde_json::to_string_pretty(self)?)?;
+                writeln!(
+                    printer.stdout_important(),
+                    "{}",
+                    serde_json::to_string_pretty(self)?
+                )?;
                 Ok(())
             }
         }
