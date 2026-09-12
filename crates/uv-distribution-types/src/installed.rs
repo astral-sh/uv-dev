@@ -5,6 +5,7 @@ use std::str::FromStr;
 use std::sync::OnceLock;
 
 use fs_err as fs;
+use serde::de::DeserializeOwned;
 use thiserror::Error;
 use tracing::warn;
 use url::Url;
@@ -73,6 +74,8 @@ pub enum InstalledDistError {
 #[derive(Debug, Clone)]
 pub struct InstalledDist {
     pub kind: InstalledDistKind,
+    // A malformed optional sidecar is distinct from metadata omitted by another installer.
+    installer_metadata_invalid: bool,
     // Cache data that must be read from the `.dist-info` directory. These are safe to cache as
     // the `InstalledDist` is immutable after creation.
     metadata_cache: OnceLock<uv_pypi_types::ResolutionMetadata>,
@@ -83,6 +86,7 @@ impl From<InstalledDistKind> for InstalledDist {
     fn from(kind: InstalledDistKind) -> Self {
         Self {
             kind,
+            installer_metadata_invalid: false,
             metadata_cache: OnceLock::new(),
             tags_cache: OnceLock::new(),
         }
@@ -92,12 +96,14 @@ impl From<InstalledDistKind> for InstalledDist {
 impl std::hash::Hash for InstalledDist {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.kind.hash(state);
+        self.installer_metadata_invalid.hash(state);
     }
 }
 
 impl PartialEq for InstalledDist {
     fn eq(&self, other: &Self) -> bool {
         self.kind == other.kind
+            && self.installer_metadata_invalid == other.installer_metadata_invalid
     }
 }
 
@@ -163,6 +169,26 @@ pub struct InstalledLegacyEditable {
     pub egg_info: Box<Path>,
 }
 
+/// The result of reading optional metadata written by the installer.
+enum OptionalInstallerMetadata<T> {
+    Missing,
+    Valid(T),
+    Invalid,
+}
+
+impl<T> OptionalInstallerMetadata<T> {
+    fn is_invalid(&self) -> bool {
+        matches!(self, Self::Invalid)
+    }
+
+    fn into_option(self) -> Option<T> {
+        match self {
+            Self::Valid(value) => Some(value),
+            Self::Missing | Self::Invalid => None,
+        }
+    }
+}
+
 impl InstalledDist {
     /// Try to parse a distribution from a `.dist-info` directory name (like `django-5.0a1.dist-info`).
     ///
@@ -184,45 +210,46 @@ impl InstalledDist {
             let version = Version::from_str(version)?;
             let cache_info = Self::read_cache_info(path)?;
             let build_info = Self::read_build_info(path)?;
+            let installer_metadata_invalid = cache_info.is_invalid() || build_info.is_invalid();
+            let cache_info = cache_info.into_option();
+            let build_info = build_info.into_option();
 
-            return if let Some(direct_url) = Self::read_direct_url(path)? {
+            let kind = if let Some(direct_url) = Self::read_direct_url(path)? {
                 match DisplaySafeUrl::try_from(&direct_url) {
-                    Ok(url) => Ok(Some(Self::from(InstalledDistKind::Url(
-                        InstalledDirectUrlDist {
-                            name,
-                            version,
-                            editable: matches!(&direct_url, DirectUrl::LocalDirectory { dir_info, .. } if dir_info.editable == Some(true)),
-                            direct_url: Box::new(direct_url),
-                            url,
-                            path: path.to_path_buf().into_boxed_path(),
-                            cache_info,
-                            build_info,
-                        },
-                    )))),
-                    Err(err) => {
-                        warn!("Failed to parse direct URL: {err}");
-                        Ok(Some(Self::from(InstalledDistKind::Registry(
-                            InstalledRegistryDist {
-                                name,
-                                version,
-                                path: path.to_path_buf().into_boxed_path(),
-                                cache_info,
-                                build_info,
-                            },
-                        ))))
-                    }
-                }
-            } else {
-                Ok(Some(Self::from(InstalledDistKind::Registry(
-                    InstalledRegistryDist {
+                    Ok(url) => InstalledDistKind::Url(InstalledDirectUrlDist {
                         name,
                         version,
+                        editable: matches!(&direct_url, DirectUrl::LocalDirectory { dir_info, .. } if dir_info.editable == Some(true)),
+                        direct_url: Box::new(direct_url),
+                        url,
                         path: path.to_path_buf().into_boxed_path(),
                         cache_info,
                         build_info,
-                    },
-                ))))
+                    }),
+                    Err(err) => {
+                        warn!("Failed to parse direct URL: {err}");
+                        InstalledDistKind::Registry(InstalledRegistryDist {
+                            name,
+                            version,
+                            path: path.to_path_buf().into_boxed_path(),
+                            cache_info,
+                            build_info,
+                        })
+                    }
+                }
+            } else {
+                InstalledDistKind::Registry(InstalledRegistryDist {
+                    name,
+                    version,
+                    path: path.to_path_buf().into_boxed_path(),
+                    cache_info,
+                    build_info,
+                })
             };
+            return Ok(Some(Self {
+                installer_metadata_invalid,
+                ..Self::from(kind)
+            }));
         }
 
         // Ex) `zstandard-0.22.0-py3.12.egg-info` or `vtk-9.2.6.egg-info`
@@ -380,6 +407,13 @@ impl InstalledDist {
         }
     }
 
+    /// Return whether an optional installer metadata file could not be decoded.
+    ///
+    /// The distribution can be inspected, but must be reinstalled before reuse.
+    pub fn has_invalid_installer_metadata(&self) -> bool {
+        self.installer_metadata_invalid
+    }
+
     /// Read the `direct_url.json` file from a `.dist-info` directory.
     fn read_direct_url(path: &Path) -> Result<Option<DirectUrl>, InstalledDistError> {
         let path = path.join("direct_url.json");
@@ -394,41 +428,38 @@ impl InstalledDist {
     }
 
     /// Read the `uv_cache.json` file from a `.dist-info` directory.
-    fn read_cache_info(path: &Path) -> Result<Option<CacheInfo>, InstalledDistError> {
-        let path = path.join("uv_cache.json");
-        let file = match fs_err::File::open(&path) {
-            Ok(file) => file,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(err) => return Err(err.into()),
-        };
-        match serde_json::from_reader::<BufReader<fs_err::File>, CacheInfo>(BufReader::new(file)) {
-            Ok(cache_info) => Ok(Some(cache_info)),
-            Err(err) => {
-                warn_user_once!(
-                    "Ignoring invalid installer metadata at `{}`: {err}",
-                    path.user_display()
-                );
-                Ok(None)
-            }
-        }
+    fn read_cache_info(
+        path: &Path,
+    ) -> Result<OptionalInstallerMetadata<CacheInfo>, InstalledDistError> {
+        Self::read_installer_metadata(&path.join("uv_cache.json"))
     }
 
     /// Read the `uv_build.json` file from a `.dist-info` directory.
-    fn read_build_info(path: &Path) -> Result<Option<BuildInfo>, InstalledDistError> {
-        let path = path.join("uv_build.json");
-        let file = match fs_err::File::open(&path) {
+    fn read_build_info(
+        path: &Path,
+    ) -> Result<OptionalInstallerMetadata<BuildInfo>, InstalledDistError> {
+        Self::read_installer_metadata(&path.join("uv_build.json"))
+    }
+
+    fn read_installer_metadata<T: DeserializeOwned>(
+        path: &Path,
+    ) -> Result<OptionalInstallerMetadata<T>, InstalledDistError> {
+        let file = match fs_err::File::open(path) {
             Ok(file) => file,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(OptionalInstallerMetadata::Missing);
+            }
             Err(err) => return Err(err.into()),
         };
-        match serde_json::from_reader::<BufReader<fs_err::File>, BuildInfo>(BufReader::new(file)) {
-            Ok(build_info) => Ok(Some(build_info)),
-            Err(err) => {
+        match serde_json::from_reader::<_, T>(BufReader::new(file)) {
+            Ok(metadata) => Ok(OptionalInstallerMetadata::Valid(metadata)),
+            Err(err) if err.is_io() => Err(err.into()),
+            Err(_) => {
                 warn_user_once!(
-                    "Ignoring invalid installer metadata at `{}`: {err}",
+                    "Ignoring invalid installer metadata at `{}`: invalid JSON data",
                     path.user_display()
                 );
-                Ok(None)
+                Ok(OptionalInstallerMetadata::Invalid)
             }
         }
     }

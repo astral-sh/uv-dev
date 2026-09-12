@@ -50,6 +50,12 @@ impl RequirementSatisfaction {
             distribution, source
         );
 
+        // A known-corrupt record cannot establish that the installed artifact is reusable.
+        if distribution.has_invalid_installer_metadata() {
+            debug!("Invalid installer metadata for {name}: {distribution}");
+            return Self::OutOfDate;
+        }
+
         // If the distribution was built with other settings, it is out of date.
         if distribution.build_info().is_some_and(|dist_build_info| {
             let config_settings =

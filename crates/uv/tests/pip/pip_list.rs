@@ -90,16 +90,15 @@ fn list_invalid_installer_metadata() -> Result<()> {
     dist_info.child("uv_build.json").write_str("{")?;
 
     uv_snapshot!(context.filters(), context.pip_list(), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     Package Version
     ------- -------
     project 1.0.0
 
     ----- stderr -----
-    warning: Ignoring invalid installer metadata at `[SITE_PACKAGES]/project-1.0.0.dist-info/uv_cache.json`: EOF while parsing an object at line 1 column 1
-    warning: Ignoring invalid installer metadata at `[SITE_PACKAGES]/project-1.0.0.dist-info/uv_build.json`: EOF while parsing an object at line 1 column 1
+    warning: Ignoring invalid installer metadata at `[SITE_PACKAGES]/project-1.0.0.dist-info/uv_cache.json`: invalid JSON data
+    warning: Ignoring invalid installer metadata at `[SITE_PACKAGES]/project-1.0.0.dist-info/uv_build.json`: invalid JSON data
     ");
 
     Ok(())
