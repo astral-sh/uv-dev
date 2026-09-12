@@ -13,7 +13,7 @@ impl DependencyMode {
         matches!(self, Self::Transitive)
     }
 
-    /// Returns `true` if (only) direct dependencies should be excluded.
+    /// Returns `true` if only direct dependencies should be included.
     pub fn is_direct(self) -> bool {
         matches!(self, Self::Direct)
     }
