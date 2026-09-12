@@ -261,7 +261,14 @@ fn tool_run_overrides() {
 fn tool_run_suggest_valid_commands() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
-    let context = context.with_filtered_exe_suffix().with_tool_dirs();
+    // Executable suffixes change the ordering of these names on Windows.
+    let context = context
+        .with_filtered_exe_suffix()
+        .with_filter((
+            r"- format-tool-daemon\r?\n- format-tool\b",
+            "- format-tool\n- format-tool-daemon",
+        ))
+        .with_tool_dirs();
     uv_snapshot!(
         context.filters(),
         context
@@ -1326,7 +1333,20 @@ fn tool_run_csv_with() -> anyhow::Result<()> {
             .arg("extra-requirement,other-requirement")
             .arg("run-tool")
             .arg("--version"),
-        @""
+        @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    run-tool 8.1.1
+
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + extra-requirement==2.0.0
+     + other-requirement==4.10.0
+     + run-helper==1.4.0
+     + run-tool==8.1.1
+    "#
     );
     Ok(())
 }
@@ -1425,7 +1445,20 @@ fn tool_run_repeated_with() -> anyhow::Result<()> {
             .arg("other-requirement")
             .arg("run-tool")
             .arg("--version"),
-        @""
+        @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    run-tool 8.1.1
+
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + extra-requirement==2.0.0
+     + other-requirement==4.10.0
+     + run-helper==1.4.0
+     + run-tool==8.1.1
+    "#
     );
     Ok(())
 }
