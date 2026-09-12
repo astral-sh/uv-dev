@@ -28,11 +28,17 @@ impl FileData {
 /// A running HTTP server that serves files from a directory as a flat links page.
 pub struct FindLinksServer {
     server: HttpServer,
+    page_url: String,
 }
 
 impl FindLinksServer {
     /// Start a server that serves all files in the given directory.
     pub fn new(directory: &Path) -> Self {
+        Self::new_at_path(directory, "/")
+    }
+
+    /// Start a server that serves the flat links page at the given URL path.
+    pub fn new_at_path(directory: &Path, page_path: &str) -> Self {
         let mut files: HashMap<String, FileData> = HashMap::new();
         let mut filenames: Vec<String> = Vec::new();
 
@@ -53,11 +59,18 @@ impl FindLinksServer {
 
         let files = Arc::new(files);
         let filenames = Arc::new(filenames);
+        let page_path = normalize_page_path(page_path);
+        let request_page_path = page_path.clone();
         let server = HttpServer::start(move |request, server_uri| {
-            handle_request(request, server_uri, &files, &filenames)
+            handle_request(request, server_uri, &request_page_path, &files, &filenames)
         });
+        let page_url = if page_path == "/" {
+            server.url().to_string()
+        } else {
+            format!("{}{page_path}", server.url())
+        };
 
-        Self { server }
+        Self { server, page_url }
     }
 
     /// Start a server that serves the pinned registry artifacts used by tests.
@@ -74,27 +87,38 @@ impl FindLinksServer {
         let files = Arc::new(files);
         let filenames = Arc::new(filenames);
         let server = HttpServer::start(move |request, server_uri| {
-            handle_request(request, server_uri, &files, &filenames)
+            handle_request(request, server_uri, "/", &files, &filenames)
         });
+        let page_url = server.url().to_string();
 
-        Self { server }
+        Self { server, page_url }
     }
 
-    /// The base URL of the server (for use with `--find-links`).
+    /// The URL of the flat links page (for use with `--find-links`).
     pub fn url(&self) -> &str {
-        self.server.url()
+        &self.page_url
+    }
+
+    /// Return the URL of a file served by this index.
+    pub fn file_url(&self, filename: &str) -> String {
+        format!("{}/{filename}", self.server.url())
     }
 }
 
 fn handle_request(
     request: &Request,
     server_uri: &str,
+    page_path: &str,
     files: &HashMap<String, FileData>,
     filenames: &[String],
 ) -> ResponseTemplate {
     let path = request.url.path();
 
-    if path == "/" {
+    if if page_path == "/" {
+        path == "/"
+    } else {
+        path.trim_end_matches('/') == page_path
+    } {
         let links = filenames
             .iter()
             .map(|filename| format!("<a href=\"{server_uri}/{filename}\">{filename}</a>"))
@@ -116,6 +140,15 @@ fn handle_request(
     ResponseTemplate::new(404)
 }
 
+fn normalize_page_path(page_path: &str) -> String {
+    let page_path = page_path.trim_matches('/');
+    if page_path.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{page_path}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::FindLinksServer;
@@ -125,10 +158,6 @@ mod tests {
     fn vendor_server_construction_does_not_load_artifacts() {
         let _server = FindLinksServer::vendor();
 
-        assert!(
-            vendor_artifacts()
-                .iter()
-                .all(|artifact| !artifact.is_loaded())
-        );
+        assert!(vendor_artifacts().all(|artifact| !artifact.is_loaded()));
     }
 }

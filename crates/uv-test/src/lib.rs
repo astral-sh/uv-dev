@@ -15,9 +15,11 @@ use std::iter::Iterator;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::str::FromStr;
+use std::sync::LazyLock;
 use std::{env, io};
 use uv_python::downloads::ManagedPythonDownloadList;
 
+use anyhow::Context;
 use assert_cmd::assert::{Assert, OutputAssertExt};
 use assert_fs::assert::PathAssert;
 use assert_fs::fixture::{
@@ -40,10 +42,18 @@ use uv_python::{
 };
 use uv_static::EnvVars;
 
+use crate::packse::scenario::{ArtifactMetadata, Package, PackageMetadata, Scenario};
+
 // Shared test timestamp for deterministic package availability and relative times.
 static TEST_TIMESTAMP: &str = "2024-03-25T00:00:00Z";
 
 pub const DEFAULT_PYTHON_VERSION: &str = "3.12";
+
+fn default_packse_index_url() -> String {
+    static INDEX: LazyLock<packse::PackseServer> =
+        LazyLock::new(|| packse::PackseServer::new("packages/pip-install.toml"));
+    INDEX.index_url()
+}
 
 // The expected latest patch version for each Python minor version.
 const LATEST_PYTHON_3_15: &str = "3.15.0rc2";
@@ -161,6 +171,9 @@ pub struct TestContext {
     /// on alternate filesystems created by [`TestContext::with_cache_on_cow_fs`]).
     #[allow(dead_code)]
     _extra_tempdirs: Vec<tempfile::TempDir>,
+
+    /// Local indexes kept alive for commands created by this context.
+    packse_servers: Vec<packse::PackseServer>,
 }
 
 impl TestContext {
@@ -216,6 +229,71 @@ impl TestContext {
     pub fn with_env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
         self.extra_env.push((key.into(), value.into()));
         self
+    }
+
+    /// Replace the implicit PyPI fallback for commands created by this context.
+    /// Explicit indexes from arguments, configuration, and tool receipts take precedence.
+    #[must_use]
+    pub fn with_default_index(self, index: &str) -> Self {
+        self.with_env(EnvVars::UV_INTERNAL__TEST_DEFAULT_INDEX, index)
+    }
+
+    /// Opt into the public PyPI service for tests of its real behavior.
+    #[must_use]
+    pub fn with_pypi_access(self) -> Self {
+        self.with_default_index("https://pypi.org/simple")
+            .with_env(EnvVars::UV_INTERNAL__TEST_DENY_PYPI, "0")
+    }
+
+    /// Serve a local Packse scenario as this context's default index.
+    #[must_use]
+    pub fn with_packse_index(mut self, scenario_path: &str) -> Self {
+        let server = packse::PackseServer::new(scenario_path);
+        self.extra_env.push((
+            EnvVars::UV_INTERNAL__TEST_DEFAULT_INDEX.into(),
+            server.index_url().into(),
+        ));
+        self.packse_servers.push(server);
+        self
+    }
+
+    /// Serve the real in-tree `uv_build` Python shim, backed by this context's uv executable.
+    pub fn with_uv_build_backend(mut self) -> anyhow::Result<Self> {
+        let shim = fs_err::read_to_string(
+            self.workspace_root
+                .join("crates/uv-build/python/uv_build/__init__.py"),
+        )?;
+        anyhow::ensure!(shim.contains("USE_UV_EXECUTABLE = False"));
+        let shim = shim.replace("USE_UV_EXECUTABLE = False", "USE_UV_EXECUTABLE = True");
+        let mut scenario = Scenario::empty();
+        scenario.packages.insert(
+            "uv-build".parse()?,
+            Package {
+                versions: std::collections::BTreeMap::from([(
+                    uv_version::version().parse()?,
+                    PackageMetadata {
+                        init_py: Some(shim),
+                        wheel: Some(ArtifactMetadata::default()),
+                        ..PackageMetadata::default()
+                    },
+                )]),
+            },
+        );
+        let server = packse::PackseServer::from_scenario(&scenario);
+        let mut path = vec![
+            self.uv_bin
+                .parent()
+                .context("uv binary must have a parent")?
+                .to_path_buf(),
+        ];
+        path.extend(env::split_paths(
+            &env::var_os(EnvVars::PATH).unwrap_or_default(),
+        ));
+        self = self
+            .with_default_index(&server.index_url())
+            .with_env(EnvVars::PATH, env::join_paths(path)?);
+        self.packse_servers.push(server);
+        Ok(self)
     }
 
     /// Set the "exclude newer" timestamp for all commands in this context.
@@ -1190,18 +1268,25 @@ impl TestContext {
             python_versions,
             uv_bin,
             filters,
-            extra_env: vec![(
-                EnvVars::UV_PYTHON_CACHE_DIR.into(),
-                // Respect `UV_PYTHON_CACHE_DIR` if set, or use the default cache directory.
-                env::var_os(EnvVars::UV_PYTHON_CACHE_DIR).unwrap_or_else(|| {
-                    Cache::from_settings(false, None)
-                        .expect("Failed to determine the shared Python download cache")
-                        .bucket(CacheBucket::Python)
-                        .into()
-                }),
-            )],
+            extra_env: vec![
+                (
+                    EnvVars::UV_PYTHON_CACHE_DIR.into(),
+                    // Respect `UV_PYTHON_CACHE_DIR` if set, or use the default cache directory.
+                    env::var_os(EnvVars::UV_PYTHON_CACHE_DIR).unwrap_or_else(|| {
+                        Cache::from_settings(false, None)
+                            .expect("Failed to determine the shared Python download cache")
+                            .bucket(CacheBucket::Python)
+                            .into()
+                    }),
+                ),
+                (
+                    EnvVars::UV_INTERNAL__TEST_DEFAULT_INDEX.into(),
+                    default_packse_index_url().into(),
+                ),
+            ],
             _root: root,
             _extra_tempdirs: vec![],
+            packse_servers: vec![],
         }
     }
 
@@ -1325,6 +1410,8 @@ impl TestContext {
             // Installations are not allowed by default; see `Self::with_managed_python_dirs`
             .env(EnvVars::UV_PYTHON_DOWNLOADS, "never")
             .env(EnvVars::UV_PYTHON_SEARCH_PATH, self.python_path())
+            .env(EnvVars::UV_INTERNAL__TEST_PYTHON_CEILING, self.root.path())
+            .env(EnvVars::UV_INTERNAL__TEST_DENY_PYPI, "1")
             .env(EnvVars::UV_EXCLUDE_NEWER, TEST_TIMESTAMP)
             .env(EnvVars::UV_TEST_CURRENT_TIMESTAMP, TEST_TIMESTAMP)
             .env(EnvVars::UV_TEST_AVAILABLE_VERSION_CUTOFF, TEST_TIMESTAMP)
@@ -2057,6 +2144,25 @@ impl TestContext {
             .unwrap_or_else(|_| panic!("Missing file: `{}`", file.user_display()))
     }
 
+    /// Rewrite registry identities in a lockfile without changing its artifact URLs.
+    pub fn rewrite_lock_registry_sources(&self, registry: &str) -> anyhow::Result<()> {
+        let mut lock: toml_edit::DocumentMut = self.read("uv.lock").parse()?;
+        let Some(packages) = lock["package"].as_array_of_tables_mut() else {
+            anyhow::bail!("lockfile should contain packages");
+        };
+        for package in packages.iter_mut() {
+            if let Some(source) = package
+                .get_mut("source")
+                .and_then(toml_edit::Item::as_inline_table_mut)
+                && source.get("registry").is_some()
+            {
+                source.insert("registry", toml_edit::Value::from(registry));
+            }
+        }
+        fs_err::write(self.temp_dir.join("uv.lock"), lock.to_string())?;
+        Ok(())
+    }
+
     /// Creates a new `Command` that is intended to be suitable for use in
     /// all tests.
     fn new_command(&self) -> Command {
@@ -2565,6 +2671,7 @@ pub async fn download_to_disk(url: &str, path: &Path) {
 
     let client = uv_client::BaseClientBuilder::default()
         .allow_insecure_host(trusted_hosts)
+        .deny_pypi_for_tests(true)
         .build()
         .expect("failed to build base client");
     let url = url.parse().unwrap();

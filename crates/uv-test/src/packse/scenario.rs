@@ -9,7 +9,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 use uv_configuration::TargetTriple;
 use uv_distribution_filename::WheelFilename;
@@ -94,17 +94,40 @@ pub struct Package {
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct PackageMetadata {
-    /// The `Requires-Python` specifier. Defaults to `">=3.12"`.
-    #[serde(default = "default_requires_python")]
+    /// The `Requires-Python` specifier. Defaults to `">=3.12"`; `false` omits it.
+    #[serde(
+        default = "default_requires_python",
+        deserialize_with = "deserialize_requires_python"
+    )]
     pub requires_python: Option<VersionSpecifiers>,
 
     /// Dependency requirements.
     #[serde(default)]
     pub requires: Vec<Requirement>,
 
+    /// Build requirements for the generated source distribution.
+    #[serde(default)]
+    pub build_requires: Vec<Requirement>,
+
+    /// Literal `Requires-Dist` lines for tests of invalid or unusual metadata.
+    #[serde(default)]
+    pub raw_requires_dist: Vec<String>,
+
     /// Extra names mapped to their optional dependency requirements.
     #[serde(default)]
     pub extras: BTreeMap<ExtraName, Vec<Requirement>>,
+
+    /// Console script names and their Python entry points.
+    #[serde(default)]
+    pub scripts: BTreeMap<String, String>,
+
+    /// Import package name, when different from the normalized distribution name.
+    #[serde(default)]
+    pub module_name: Option<String>,
+
+    /// Contents of the generated package's `__init__.py`.
+    #[serde(default)]
+    pub init_py: Option<String>,
 
     /// Whether to produce a source distribution, and optionally its metadata.
     #[serde(
@@ -113,6 +136,14 @@ pub struct PackageMetadata {
     )]
     pub sdist: Option<ArtifactMetadata>,
 
+    /// Build backend included in a generated source distribution.
+    #[serde(default)]
+    pub sdist_backend: SdistBackend,
+
+    /// Project directory beneath the source archive's top-level directory.
+    #[serde(default)]
+    pub sdist_subdirectory: Option<String>,
+
     /// Whether to produce wheels, and optionally their shared metadata.
     #[serde(
         default = "default_artifact",
@@ -120,14 +151,94 @@ pub struct PackageMetadata {
     )]
     pub wheel: Option<ArtifactMetadata>,
 
-    /// Whether this version is yanked.
+    /// Whether this version is yanked, including an optional reason.
     #[serde(default)]
-    pub yanked: bool,
+    pub yanked: Yanked,
+
+    /// Upload time shared by artifacts without a more specific upload time.
+    #[serde(default)]
+    pub upload_time: Option<String>,
 
     /// Specific wheel tags to produce (e.g., `["cp312-abi3-win_amd64"]`).
     /// An empty list means produce only the default `py3-none-any` wheel.
     #[serde(default)]
     pub wheel_tags: Vec<WheelTag>,
+}
+
+fn deserialize_requires_python<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<VersionSpecifiers>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        Specifiers(VersionSpecifiers),
+        Enabled(bool),
+    }
+
+    match Value::deserialize(deserializer)? {
+        Value::Specifiers(specifiers) => Ok(Some(specifiers)),
+        Value::Enabled(false) => Ok(None),
+        Value::Enabled(true) => Err(serde::de::Error::custom(
+            "requires_python must be a version specifier or false",
+        )),
+    }
+}
+
+/// Backend used by a generated source distribution.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SdistBackend {
+    /// A self-contained PEP 517 backend requiring no packages from an index.
+    InTree,
+    /// Hatchling, for coverage that requires a separate build backend.
+    #[default]
+    Hatchling,
+    /// A legacy setuptools project without `pyproject.toml` or static metadata.
+    LegacySetuptools,
+}
+
+/// Yanked release metadata exposed by the Simple API.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(from = "YankedValue")]
+pub enum Yanked {
+    #[default]
+    No,
+    Yes,
+    Reason(String),
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum YankedValue {
+    Enabled(bool),
+    Reason(String),
+}
+
+impl From<YankedValue> for Yanked {
+    fn from(value: YankedValue) -> Self {
+        match value {
+            YankedValue::Enabled(false) => Self::No,
+            YankedValue::Enabled(true) => Self::Yes,
+            YankedValue::Reason(reason) => Self::Reason(reason),
+        }
+    }
+}
+
+impl Yanked {
+    pub fn is_yanked(&self) -> bool {
+        !matches!(self, Self::No)
+    }
+
+    pub(super) fn simple_api_value(&self) -> Option<serde_json::Value> {
+        match self {
+            Self::No => None,
+            Self::Yes => Some(serde_json::Value::Bool(true)),
+            Self::Reason(reason) => Some(serde_json::Value::String(reason.clone())),
+        }
+    }
 }
 
 fn deserialize_artifact<'de, D>(
@@ -338,7 +449,60 @@ fn default_python() -> PythonVersion {
 
 #[cfg(test)]
 mod tests {
+    use walkdir::WalkDir;
+
     use super::*;
+
+    #[test]
+    fn fixture_scenarios_parse() -> Result<()> {
+        for entry in WalkDir::new(crate::packse::scenarios_dir().join("packages")) {
+            let entry = entry?;
+            if entry.file_type().is_file()
+                && entry
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "toml")
+            {
+                let scenario = Scenario::from_path(entry.path())?;
+                assert!(scenario.testgen.disable, "{}", entry.path().display());
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn parse_representative_package_metadata() -> Result<()> {
+        let metadata: PackageMetadata = toml::from_str(
+            r#"
+requires_python = false
+requires = ["dependency>=2"]
+build_requires = ["build-dependency"]
+raw_requires_dist = ["deliberately invalid ;"]
+module_name = "import_name"
+init_py = "answer = 42\n"
+sdist_backend = "legacy-setuptools"
+sdist_subdirectory = "project"
+yanked = "broken release"
+upload_time = "2024-01-01T00:00:00Z"
+
+[scripts]
+example = "import_name:main"
+"#,
+        )?;
+        assert!(metadata.requires_python.is_none());
+        assert_eq!(metadata.requires[0].to_string(), "dependency>=2");
+        assert_eq!(metadata.build_requires[0].to_string(), "build-dependency");
+        assert_eq!(metadata.raw_requires_dist, ["deliberately invalid ;"]);
+        assert_eq!(metadata.module_name.as_deref(), Some("import_name"));
+        assert_eq!(metadata.sdist_subdirectory.as_deref(), Some("project"));
+        assert_eq!(
+            metadata.yanked.simple_api_value(),
+            Some(serde_json::json!("broken release"))
+        );
+        assert_eq!(metadata.scripts["example"], "import_name:main");
+        assert_eq!(metadata.sdist_backend, SdistBackend::LegacySetuptools);
+        Ok(())
+    }
 
     #[test]
     fn parse_basic_scenario() {

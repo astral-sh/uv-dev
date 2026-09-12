@@ -1,0 +1,2 @@
+class KeyringBackend:
+    pass

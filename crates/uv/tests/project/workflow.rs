@@ -1,16 +1,32 @@
+use anyhow::Result;
+use assert_fs::fixture::{FileWriteStr, PathChild};
 use insta::assert_snapshot;
-use uv_test::{diff_snapshot, uv_snapshot};
+use uv_test::packse::PackseServer;
+use uv_test::{TestContext, diff_snapshot, uv_snapshot};
+
+fn local_workflow_context() -> Result<(TestContext, PackseServer)> {
+    let server = PackseServer::new("packages/workflow.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "workflow-project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["workflow-direct"]
+        "#,
+    )?;
+    Ok((context, server))
+}
 
 #[test]
-fn packse_add_remove_one_package() {
-    let context = uv_test::test_context!("3.12");
-    context.copy_ecosystem_project("packse");
+fn add_remove_one_package() -> Result<()> {
+    let (context, _server) = local_workflow_context()?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
-    Resolved 49 packages in [TIME]
+    Resolved 3 packages in [TIME]
     ");
 
     let lock = context.read("uv.lock");
@@ -22,7 +38,7 @@ fn packse_add_remove_one_package() {
 
     let diff = context.diff_lock(|context| {
         let mut add_cmd = context.add();
-        add_cmd.arg("--no-sync").arg("tzdata");
+        add_cmd.arg("--no-sync").arg("workflow-added");
         add_cmd
     });
     insta::with_settings!({
@@ -31,86 +47,65 @@ fn packse_add_remove_one_package() {
         assert_snapshot!(diff, @r#"
         --- old
         +++ new
-        @@ -307,20 +307,21 @@
-         name = "packse"
-         version = "0.0.0"
-         source = { editable = "." }
-         dependencies = [
-             { name = "chevron-blue" },
-             { name = "hatchling" },
-             { name = "msgspec" },
-             { name = "pyyaml" },
-             { name = "setuptools" },
-             { name = "twine" },
-        +    { name = "tzdata" },
-         ]
+        @@ -1,38 +1,51 @@
+         version = 1
+         revision = 3
+         requires-python = ">=3.12"
 
-         [package.optional-dependencies]
-         index = [
-             { name = "pypiserver" },
-         ]
-         serve = [
-             { name = "pypiserver" },
-             { name = "watchfiles" },
-         ]
-        @@ -335,20 +336,21 @@
-         [package.metadata]
-         requires-dist = [
-             { name = "chevron-blue", specifier = ">=0.2.1" },
-             { name = "hatchling", specifier = ">=1.20.0" },
-             { name = "msgspec", specifier = ">=0.18.4" },
-             { name = "packse", extras = ["index"], marker = "extra == 'serve'" },
-             { name = "pypiserver", marker = "extra == 'index'", specifier = ">=2.0.1" },
-             { name = "pyyaml", specifier = ">=6.0.1" },
-             { name = "setuptools", specifier = ">=69.1.1" },
-             { name = "twine", specifier = ">=4.0.2" },
-        +    { name = "tzdata", specifier = ">=2024.1" },
-             { name = "watchfiles", marker = "extra == 'serve'", specifier = ">=0.21.0" },
-         ]
-         provides-extras = ["index", "serve"]
-
-         [package.metadata.requires-dev]
-         dev = [
-             { name = "psutil", specifier = ">=5.9.7" },
-             { name = "pytest", specifier = ">=7.4.3" },
-             { name = "syrupy", specifier = ">=4.6.0" },
-         ]
-        @@ -601,20 +603,29 @@
-             { name = "rfc3986" },
-             { name = "rich" },
-             { name = "urllib3" },
-         ]
-         sdist = { url = "https://files.pythonhosted.org/packages/d3/cc/8025ad5102a5c754023092143b8b511e184ec087dfbfb357d7d88fb82bff/twine-5.0.0.tar.gz", hash = "sha256:89b0cc7d370a4b66421cc6102f269aa910fe0f1861c124f573cf2ddedbc10cf4", size = 222119, upload-time = "2024-02-11T19:59:40.377Z" }
-         wheels = [
-             { url = "https://files.pythonhosted.org/packages/9a/d4/4db90c4a2b8c1006ea3e6291f36b50b66e45887cf17b3b958b5d646fb837/twine-5.0.0-py3-none-any.whl", hash = "sha256:a262933de0b484c53408f9edae2e7821c1c45a3314ff2df9bdd343aa7ab8edc0", size = 37138, upload-time = "2024-02-11T19:59:38.163Z" },
-         ]
+         [options]
+         exclude-newer = "2024-03-25T00:00:00Z"
 
          [[package]]
-        +name = "tzdata"
-        +version = "2024.1"
-        +source = { registry = "https://pypi.org/simple" }
-        +sdist = { url = "https://files.pythonhosted.org/packages/74/5b/e025d02cb3b66b7b76093404392d4b44343c69101cc85f4d180dd5784717/tzdata-2024.1.tar.gz", hash = "sha256:2674120f8d891909751c38abcdfd386ac0a5a1127954fbc332af6b5ceae07efd", size = 190559, upload-time = "2024-02-11T23:22:40.2Z" }
+        +name = "workflow-added"
+        +version = "3.0.0"
+        +source = { registry = "http://[LOCALHOST]/simple/" }
+        +sdist = { url = "http://[LOCALHOST]/files/workflow_added-3.0.0.tar.gz", hash = "sha256:5d32f9ef844c1a14f5c09b732f14e7290777e91c41848204653b90d2c0be4a45", upload-time = "2024-03-24T00:00:00Z" }
         +wheels = [
-        +    { url = "https://files.pythonhosted.org/packages/65/58/f9c9e6be752e9fcb8b6a0ee9fb87e6e7a1f6bcab2cdc73f02bb7ba91ada0/tzdata-2024.1-py2.py3-none-any.whl", hash = "sha256:9068bc196136463f5245e51efda838afa15aaeca9903f49050dfa2679db4d252", size = 345370, upload-time = "2024-02-11T23:22:38.223Z" },
+        +    { url = "http://[LOCALHOST]/files/workflow_added-3.0.0-py3-none-any.whl", hash = "sha256:7e68eee77089f1476bcf7e1abd325011040fbdfd84ce1a15f13daa39aa453f1f", upload-time = "2024-03-24T00:00:00Z" },
         +]
         +
         +[[package]]
-         name = "urllib3"
-         version = "2.2.1"
-         source = { registry = "https://pypi.org/simple" }
-         sdist = { url = "https://files.pythonhosted.org/packages/7a/50/7fd50a27caa0652cd4caf224aa87741ea41d3265ad13f010886167cfcc79/urllib3-2.2.1.tar.gz", hash = "sha256:d0570876c61ab9e520d776c38acbbb5b05a776d3f9ff98a5c8fd5162a444cf19", size = 291020, upload-time = "2024-02-18T03:55:57.539Z" }
+         name = "workflow-direct"
+         version = "1.0.0"
+         source = { registry = "http://[LOCALHOST]/simple/" }
+         dependencies = [
+             { name = "workflow-transitive" },
+         ]
+         sdist = { url = "http://[LOCALHOST]/files/workflow_direct-1.0.0.tar.gz", hash = "sha256:fa0578253d11f61c77812a6750cd10af24b439bd5c5175d14ff4279f57e774bb", upload-time = "2024-03-24T00:00:00Z" }
          wheels = [
-             { url = "https://files.pythonhosted.org/packages/a2/73/a68704750a7679d0b6d3ad7aa8d4da8e14e151ae82e6fee774e6e0d05ec8/urllib3-2.2.1-py3-none-any.whl", hash = "sha256:450b20ec296a467077128bff42b73080516e71b56ff59a60a02bef2232c4fa9d", size = 121067, upload-time = "2024-02-18T03:55:54.704Z" },
+             { url = "http://[LOCALHOST]/files/workflow_direct-1.0.0-py3-none-any.whl", hash = "sha256:a1fe63a562d9624824ba4879835665e98e06d0998addb88da0cc483195ed3b5a", upload-time = "2024-03-24T00:00:00Z" },
          ]
 
          [[package]]
-         name = "watchfiles"
+         name = "workflow-project"
+         version = "0.1.0"
+         source = { virtual = "." }
+         dependencies = [
+        +    { name = "workflow-added" },
+             { name = "workflow-direct" },
+         ]
+
+         [package.metadata]
+        -requires-dist = [{ name = "workflow-direct" }]
+        +requires-dist = [
+        +    { name = "workflow-added", specifier = ">=3.0.0" },
+        +    { name = "workflow-direct" },
+        +]
+
+         [[package]]
+         name = "workflow-transitive"
+         version = "2.0.0"
+         source = { registry = "http://[LOCALHOST]/simple/" }
+         sdist = { url = "http://[LOCALHOST]/files/workflow_transitive-2.0.0.tar.gz", hash = "sha256:dfe258f151e3c2c8e7975dcd06a49c3e36fb839d1df7eb8cb64e0405ae31a2a5", upload-time = "2024-03-24T00:00:00Z" }
+         wheels = [
+             { url = "http://[LOCALHOST]/files/workflow_transitive-2.0.0-py3-none-any.whl", hash = "sha256:1be1acb7f1842ce7bad0b4d5b3a6eda3d2c0fa66fd089dc80dbce947d05b4483", upload-time = "2024-03-24T00:00:00Z" },
+         ]
         "#);
     });
 
     let diff = context.diff_lock(|context| {
         let mut remove_cmd = context.remove();
-        remove_cmd.arg("--no-sync").arg("tzdata");
+        remove_cmd.arg("--no-sync").arg("workflow-added");
         remove_cmd
     });
     insta::with_settings!({
@@ -119,79 +114,58 @@ fn packse_add_remove_one_package() {
         assert_snapshot!(diff, @r#"
         --- old
         +++ new
-        @@ -307,21 +307,20 @@
-         name = "packse"
-         version = "0.0.0"
-         source = { editable = "." }
-         dependencies = [
-             { name = "chevron-blue" },
-             { name = "hatchling" },
-             { name = "msgspec" },
-             { name = "pyyaml" },
-             { name = "setuptools" },
-             { name = "twine" },
-        -    { name = "tzdata" },
-         ]
+        @@ -1,51 +1,38 @@
+         version = 1
+         revision = 3
+         requires-python = ">=3.12"
 
-         [package.optional-dependencies]
-         index = [
-             { name = "pypiserver" },
-         ]
-         serve = [
-             { name = "pypiserver" },
-             { name = "watchfiles" },
-         ]
-        @@ -336,21 +335,20 @@
-         [package.metadata]
-         requires-dist = [
-             { name = "chevron-blue", specifier = ">=0.2.1" },
-             { name = "hatchling", specifier = ">=1.20.0" },
-             { name = "msgspec", specifier = ">=0.18.4" },
-             { name = "packse", extras = ["index"], marker = "extra == 'serve'" },
-             { name = "pypiserver", marker = "extra == 'index'", specifier = ">=2.0.1" },
-             { name = "pyyaml", specifier = ">=6.0.1" },
-             { name = "setuptools", specifier = ">=69.1.1" },
-             { name = "twine", specifier = ">=4.0.2" },
-        -    { name = "tzdata", specifier = ">=2024.1" },
-             { name = "watchfiles", marker = "extra == 'serve'", specifier = ">=0.21.0" },
-         ]
-         provides-extras = ["index", "serve"]
+         [options]
+         exclude-newer = "2024-03-25T00:00:00Z"
 
-         [package.metadata.requires-dev]
-         dev = [
-             { name = "psutil", specifier = ">=5.9.7" },
-             { name = "pytest", specifier = ">=7.4.3" },
-             { name = "syrupy", specifier = ">=4.6.0" },
-         ]
-        @@ -600,29 +598,20 @@
-             { name = "readme-renderer" },
-             { name = "requests" },
-             { name = "requests-toolbelt" },
-             { name = "rfc3986" },
-             { name = "rich" },
-             { name = "urllib3" },
-         ]
-         sdist = { url = "https://files.pythonhosted.org/packages/d3/cc/8025ad5102a5c754023092143b8b511e184ec087dfbfb357d7d88fb82bff/twine-5.0.0.tar.gz", hash = "sha256:89b0cc7d370a4b66421cc6102f269aa910fe0f1861c124f573cf2ddedbc10cf4", size = 222119, upload-time = "2024-02-11T19:59:40.377Z" }
-         wheels = [
-             { url = "https://files.pythonhosted.org/packages/9a/d4/4db90c4a2b8c1006ea3e6291f36b50b66e45887cf17b3b958b5d646fb837/twine-5.0.0-py3-none-any.whl", hash = "sha256:a262933de0b484c53408f9edae2e7821c1c45a3314ff2df9bdd343aa7ab8edc0", size = 37138, upload-time = "2024-02-11T19:59:38.163Z" },
+         [[package]]
+        -name = "workflow-added"
+        -version = "3.0.0"
+        -source = { registry = "http://[LOCALHOST]/simple/" }
+        -sdist = { url = "http://[LOCALHOST]/files/workflow_added-3.0.0.tar.gz", hash = "sha256:5d32f9ef844c1a14f5c09b732f14e7290777e91c41848204653b90d2c0be4a45", upload-time = "2024-03-24T00:00:00Z" }
+        -wheels = [
+        -    { url = "http://[LOCALHOST]/files/workflow_added-3.0.0-py3-none-any.whl", hash = "sha256:7e68eee77089f1476bcf7e1abd325011040fbdfd84ce1a15f13daa39aa453f1f", upload-time = "2024-03-24T00:00:00Z" },
         -]
         -
         -[[package]]
-        -name = "tzdata"
-        -version = "2024.1"
-        -source = { registry = "https://pypi.org/simple" }
-        -sdist = { url = "https://files.pythonhosted.org/packages/74/5b/e025d02cb3b66b7b76093404392d4b44343c69101cc85f4d180dd5784717/tzdata-2024.1.tar.gz", hash = "sha256:2674120f8d891909751c38abcdfd386ac0a5a1127954fbc332af6b5ceae07efd", size = 190559, upload-time = "2024-02-11T23:22:40.2Z" }
-        -wheels = [
-        -    { url = "https://files.pythonhosted.org/packages/65/58/f9c9e6be752e9fcb8b6a0ee9fb87e6e7a1f6bcab2cdc73f02bb7ba91ada0/tzdata-2024.1-py2.py3-none-any.whl", hash = "sha256:9068bc196136463f5245e51efda838afa15aaeca9903f49050dfa2679db4d252", size = 345370, upload-time = "2024-02-11T23:22:38.223Z" },
+         name = "workflow-direct"
+         version = "1.0.0"
+         source = { registry = "http://[LOCALHOST]/simple/" }
+         dependencies = [
+             { name = "workflow-transitive" },
+         ]
+         sdist = { url = "http://[LOCALHOST]/files/workflow_direct-1.0.0.tar.gz", hash = "sha256:fa0578253d11f61c77812a6750cd10af24b439bd5c5175d14ff4279f57e774bb", upload-time = "2024-03-24T00:00:00Z" }
+         wheels = [
+             { url = "http://[LOCALHOST]/files/workflow_direct-1.0.0-py3-none-any.whl", hash = "sha256:a1fe63a562d9624824ba4879835665e98e06d0998addb88da0cc483195ed3b5a", upload-time = "2024-03-24T00:00:00Z" },
          ]
 
          [[package]]
-         name = "urllib3"
-         version = "2.2.1"
-         source = { registry = "https://pypi.org/simple" }
-         sdist = { url = "https://files.pythonhosted.org/packages/7a/50/7fd50a27caa0652cd4caf224aa87741ea41d3265ad13f010886167cfcc79/urllib3-2.2.1.tar.gz", hash = "sha256:d0570876c61ab9e520d776c38acbbb5b05a776d3f9ff98a5c8fd5162a444cf19", size = 291020, upload-time = "2024-02-18T03:55:57.539Z" }
+         name = "workflow-project"
+         version = "0.1.0"
+         source = { virtual = "." }
+         dependencies = [
+        -    { name = "workflow-added" },
+             { name = "workflow-direct" },
+         ]
+
+         [package.metadata]
+        -requires-dist = [
+        -    { name = "workflow-added", specifier = ">=3.0.0" },
+        -    { name = "workflow-direct" },
+        -]
+        +requires-dist = [{ name = "workflow-direct" }]
+
+         [[package]]
+         name = "workflow-transitive"
+         version = "2.0.0"
+         source = { registry = "http://[LOCALHOST]/simple/" }
+         sdist = { url = "http://[LOCALHOST]/files/workflow_transitive-2.0.0.tar.gz", hash = "sha256:dfe258f151e3c2c8e7975dcd06a49c3e36fb839d1df7eb8cb64e0405ae31a2a5", upload-time = "2024-03-24T00:00:00Z" }
          wheels = [
-             { url = "https://files.pythonhosted.org/packages/a2/73/a68704750a7679d0b6d3ad7aa8d4da8e14e151ae82e6fee774e6e0d05ec8/urllib3-2.2.1-py3-none-any.whl", hash = "sha256:450b20ec296a467077128bff42b73080516e71b56ff59a60a02bef2232c4fa9d", size = 121067, upload-time = "2024-02-18T03:55:54.704Z" },
+             { url = "http://[LOCALHOST]/files/workflow_transitive-2.0.0-py3-none-any.whl", hash = "sha256:1be1acb7f1842ce7bad0b4d5b3a6eda3d2c0fa66fd089dc80dbce947d05b4483", upload-time = "2024-03-24T00:00:00Z" },
          ]
         "#);
     });
@@ -204,18 +178,18 @@ fn packse_add_remove_one_package() {
     }, {
         assert_snapshot!(diff, @"");
     });
+
+    Ok(())
 }
 
 #[test]
-fn packse_add_remove_existing_package_noop() {
-    let context = uv_test::test_context!("3.12");
-    context.copy_ecosystem_project("packse");
+fn add_remove_existing_package_noop() -> Result<()> {
+    let (context, _server) = local_workflow_context()?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
-    Resolved 49 packages in [TIME]
+    Resolved 3 packages in [TIME]
     ");
 
     let lock = context.read("uv.lock");
@@ -227,7 +201,7 @@ fn packse_add_remove_existing_package_noop() {
 
     let diff = context.diff_lock(|context| {
         let mut add_cmd = context.add();
-        add_cmd.arg("--no-sync").arg("pyyaml");
+        add_cmd.arg("--no-sync").arg("workflow-direct");
         add_cmd
     });
     insta::with_settings!({
@@ -235,20 +209,20 @@ fn packse_add_remove_existing_package_noop() {
     }, {
         assert_snapshot!(diff, @"");
     });
+
+    Ok(())
 }
 
 /// This test adds a new direct dependency that was already a
 /// transitive dependency.
 #[test]
-fn packse_promote_transitive_to_direct_then_remove() {
-    let context = uv_test::test_context!("3.12");
-    context.copy_ecosystem_project("packse");
+fn promote_transitive_to_direct_then_remove() -> Result<()> {
+    let (context, _server) = local_workflow_context()?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
-    Resolved 49 packages in [TIME]
+    Resolved 3 packages in [TIME]
     ");
 
     let lock = context.read("uv.lock");
@@ -260,7 +234,7 @@ fn packse_promote_transitive_to_direct_then_remove() {
 
     let diff = context.diff_lock(|context| {
         let mut add_cmd = context.add();
-        add_cmd.arg("--no-sync").arg("sniffio");
+        add_cmd.arg("--no-sync").arg("workflow-transitive");
         add_cmd
     });
     insta::with_settings!({
@@ -269,56 +243,41 @@ fn packse_promote_transitive_to_direct_then_remove() {
         assert_snapshot!(diff, @r#"
         --- old
         +++ new
-        @@ -306,20 +306,21 @@
-         [[package]]
-         name = "packse"
-         version = "0.0.0"
-         source = { editable = "." }
-         dependencies = [
-             { name = "chevron-blue" },
-             { name = "hatchling" },
-             { name = "msgspec" },
-             { name = "pyyaml" },
-             { name = "setuptools" },
-        +    { name = "sniffio" },
-             { name = "twine" },
+        @@ -16,23 +16,27 @@
+         wheels = [
+             { url = "http://[LOCALHOST]/files/workflow_direct-1.0.0-py3-none-any.whl", hash = "sha256:a1fe63a562d9624824ba4879835665e98e06d0998addb88da0cc483195ed3b5a", upload-time = "2024-03-24T00:00:00Z" },
          ]
 
-         [package.optional-dependencies]
-         index = [
-             { name = "pypiserver" },
+         [[package]]
+         name = "workflow-project"
+         version = "0.1.0"
+         source = { virtual = "." }
+         dependencies = [
+             { name = "workflow-direct" },
+        +    { name = "workflow-transitive" },
          ]
-         serve = [
-             { name = "pypiserver" },
-             { name = "watchfiles" },
-        @@ -334,20 +335,21 @@
 
          [package.metadata]
-         requires-dist = [
-             { name = "chevron-blue", specifier = ">=0.2.1" },
-             { name = "hatchling", specifier = ">=1.20.0" },
-             { name = "msgspec", specifier = ">=0.18.4" },
-             { name = "packse", extras = ["index"], marker = "extra == 'serve'" },
-             { name = "pypiserver", marker = "extra == 'index'", specifier = ">=2.0.1" },
-             { name = "pyyaml", specifier = ">=6.0.1" },
-             { name = "setuptools", specifier = ">=69.1.1" },
-        +    { name = "sniffio", specifier = ">=1.3.1" },
-             { name = "twine", specifier = ">=4.0.2" },
-             { name = "watchfiles", marker = "extra == 'serve'", specifier = ">=0.21.0" },
-         ]
-         provides-extras = ["index", "serve"]
+        -requires-dist = [{ name = "workflow-direct" }]
+        +requires-dist = [
+        +    { name = "workflow-direct" },
+        +    { name = "workflow-transitive", specifier = ">=2.0.0" },
+        +]
 
-         [package.metadata.requires-dev]
-         dev = [
-             { name = "psutil", specifier = ">=5.9.7" },
-             { name = "pytest", specifier = ">=7.4.3" },
-             { name = "syrupy", specifier = ">=4.6.0" },
+         [[package]]
+         name = "workflow-transitive"
+         version = "2.0.0"
+         source = { registry = "http://[LOCALHOST]/simple/" }
+         sdist = { url = "http://[LOCALHOST]/files/workflow_transitive-2.0.0.tar.gz", hash = "sha256:dfe258f151e3c2c8e7975dcd06a49c3e36fb839d1df7eb8cb64e0405ae31a2a5", upload-time = "2024-03-24T00:00:00Z" }
+         wheels = [
+             { url = "http://[LOCALHOST]/files/workflow_transitive-2.0.0-py3-none-any.whl", hash = "sha256:1be1acb7f1842ce7bad0b4d5b3a6eda3d2c0fa66fd089dc80dbce947d05b4483", upload-time = "2024-03-24T00:00:00Z" },
+         ]
         "#);
     });
 
     let diff = context.diff_lock(|context| {
         let mut remove_cmd = context.remove();
-        remove_cmd.arg("--no-sync").arg("sniffio");
+        remove_cmd.arg("--no-sync").arg("workflow-transitive");
         remove_cmd
     });
     insta::with_settings!({
@@ -327,50 +286,35 @@ fn packse_promote_transitive_to_direct_then_remove() {
         assert_snapshot!(diff, @r#"
         --- old
         +++ new
-        @@ -306,21 +306,20 @@
-         [[package]]
-         name = "packse"
-         version = "0.0.0"
-         source = { editable = "." }
-         dependencies = [
-             { name = "chevron-blue" },
-             { name = "hatchling" },
-             { name = "msgspec" },
-             { name = "pyyaml" },
-             { name = "setuptools" },
-        -    { name = "sniffio" },
-             { name = "twine" },
+        @@ -16,27 +16,23 @@
+         wheels = [
+             { url = "http://[LOCALHOST]/files/workflow_direct-1.0.0-py3-none-any.whl", hash = "sha256:a1fe63a562d9624824ba4879835665e98e06d0998addb88da0cc483195ed3b5a", upload-time = "2024-03-24T00:00:00Z" },
          ]
 
-         [package.optional-dependencies]
-         index = [
-             { name = "pypiserver" },
+         [[package]]
+         name = "workflow-project"
+         version = "0.1.0"
+         source = { virtual = "." }
+         dependencies = [
+             { name = "workflow-direct" },
+        -    { name = "workflow-transitive" },
          ]
-         serve = [
-             { name = "pypiserver" },
-             { name = "watchfiles" },
-        @@ -335,21 +334,20 @@
 
          [package.metadata]
-         requires-dist = [
-             { name = "chevron-blue", specifier = ">=0.2.1" },
-             { name = "hatchling", specifier = ">=1.20.0" },
-             { name = "msgspec", specifier = ">=0.18.4" },
-             { name = "packse", extras = ["index"], marker = "extra == 'serve'" },
-             { name = "pypiserver", marker = "extra == 'index'", specifier = ">=2.0.1" },
-             { name = "pyyaml", specifier = ">=6.0.1" },
-             { name = "setuptools", specifier = ">=69.1.1" },
-        -    { name = "sniffio", specifier = ">=1.3.1" },
-             { name = "twine", specifier = ">=4.0.2" },
-             { name = "watchfiles", marker = "extra == 'serve'", specifier = ">=0.21.0" },
-         ]
-         provides-extras = ["index", "serve"]
+        -requires-dist = [
+        -    { name = "workflow-direct" },
+        -    { name = "workflow-transitive", specifier = ">=2.0.0" },
+        -]
+        +requires-dist = [{ name = "workflow-direct" }]
 
-         [package.metadata.requires-dev]
-         dev = [
-             { name = "psutil", specifier = ">=5.9.7" },
-             { name = "pytest", specifier = ">=7.4.3" },
-             { name = "syrupy", specifier = ">=4.6.0" },
+         [[package]]
+         name = "workflow-transitive"
+         version = "2.0.0"
+         source = { registry = "http://[LOCALHOST]/simple/" }
+         sdist = { url = "http://[LOCALHOST]/files/workflow_transitive-2.0.0.tar.gz", hash = "sha256:dfe258f151e3c2c8e7975dcd06a49c3e36fb839d1df7eb8cb64e0405ae31a2a5", upload-time = "2024-03-24T00:00:00Z" }
+         wheels = [
+             { url = "http://[LOCALHOST]/files/workflow_transitive-2.0.0-py3-none-any.whl", hash = "sha256:1be1acb7f1842ce7bad0b4d5b3a6eda3d2c0fa66fd089dc80dbce947d05b4483", upload-time = "2024-03-24T00:00:00Z" },
+         ]
         "#);
     });
 
@@ -382,4 +326,6 @@ fn packse_promote_transitive_to_direct_then_remove() {
     }, {
         assert_snapshot!(diff, @"");
     });
+
+    Ok(())
 }

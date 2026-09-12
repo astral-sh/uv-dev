@@ -1,0 +1,15 @@
+name = "pip-sync-hashes"
+description = "A wheel and source distribution for registry hash verification."
+
+[root]
+requires = ["hash-package==1.0.0"]
+
+[expected]
+satisfiable = true
+
+[packages.hash-package.versions."1.0.0"]
+requires_python = ">=3.8"
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true

@@ -10,6 +10,7 @@ mod wheel;
 
 use std::path::{Path, PathBuf};
 
+pub(crate) use server::distribution_file_response;
 pub use server::{PackseServer, mount_mismatched_distribution};
 pub use wheel::{generate_wheel, generate_wheel_with_files};
 

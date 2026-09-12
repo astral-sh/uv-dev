@@ -1,0 +1,19 @@
+name = "lock-index-preferences-cpu"
+description = "An explicit index with a CPU local version for lock preference tests."
+
+[root]
+requires = []
+
+[expected]
+satisfiable = true
+
+[packages.sniffio.versions."1.3.1"]
+requires_python = ">=3.8"
+sdist_backend = "in-tree"
+
+[packages.sniffio.versions."1.3.1+cpu"]
+requires_python = ">=3.8"
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true

@@ -14,6 +14,7 @@ use uv_test::{uv_snapshot, venv_bin_path};
 #[test]
 fn tool_run_args() {
     let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/tool-run.toml")
         .with_filtered_counts()
         .with_tool_dirs();
     let context = context
@@ -29,38 +30,38 @@ fn tool_run_args() {
     // We treat arguments before the command as uv tool run arguments
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--help")
-        .arg("pytest"), @"
+        .arg("run-tool"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Run a command provided by a Python package
 
-    [UV TOOL RUN HELP]");
+    [UV TOOL RUN HELP]
+    ");
 
     // We don't treat arguments after the command as uv tool run arguments
     uv_snapshot!(context.filters(), context.tool_run()
-        .arg("pytest")
+        .arg("run-tool")
         .arg("--help"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    [PYTEST HELP]
+    run-tool 8.1.1
+
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
+     + run-helper==1.4.0
+     + run-tool==8.1.1
     ");
 
     // Can use `--` to separate uv arguments from the command arguments.
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--")
-        .arg("pytest")
+        .arg("run-tool")
         .arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.1.1
+    run-tool 8.1.1
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
@@ -69,49 +70,47 @@ fn tool_run_args() {
 
 #[test]
 fn tool_run_at_version() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("pytest@8.0.0")
-        .arg("--version"), @"
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_exe_suffix().with_tool_dirs();
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("run-tool@8.0.0").arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.0.0
+    run-tool 8.0.0
 
     ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.0.0
-    ");
-
-    // Empty versions are just treated as package and command names
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("pytest@")
-        .arg("--version"), @"
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + run-helper==1.4.0
+     + run-tool==8.0.0
+    "
+    ); // Empty versions are just treated as package and command names
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("run-tool@").arg("--version"),
+        @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to parse: `pytest@`
+    error: Failed to parse: `run-tool@`
       cause: Expected URL
-             pytest@
-                    ^
-    ");
-
-    // Invalid versions are just treated as package and command names
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("pytest@invalid")
-        .arg("--version"), @"
+             run-tool@
+                      ^
+    "
+    ); // Invalid versions are just treated as package and command names
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("run-tool@invalid").arg("--version"),
+        @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to resolve tool requirement
       cause: Distribution not found at: file://[TEMP_DIR]/invalid
-    ");
-
+    "
+    );
     let filters = context
         .filters()
         .into_iter()
@@ -120,28 +119,28 @@ fn tool_run_at_version() {
             "cause: program not found",
             "cause: No such file or directory (os error 2)",
         )])
-        .collect::<Vec<_>>();
-
-    // When `--from` is used, `@` is not treated as a version request
-    uv_snapshot!(filters, context.tool_run()
-        .arg("--from")
-        .arg("pytest")
-        .arg("pytest@8.0.0")
-        .arg("--version"), @"
+        .collect::<Vec<_>>(); // When `--from` is used, `@` is not treated as a version request
+    uv_snapshot!(
+        filters,
+        context
+            .tool_run()
+            .arg("--from")
+            .arg("run-tool")
+            .arg("run-tool@8.0.0")
+            .arg("--version"),
+        @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 4 packages in [TIME]
+    Resolved 2 packages in [TIME]
     Prepared 1 package in [TIME]
-    Installed 4 packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
-    An executable named `pytest@8.0.0` is not provided by package `pytest`.
+    Installed 2 packages in [TIME]
+     + run-helper==1.4.0
+     + run-tool==8.1.1
+    An executable named `run-tool@8.0.0` is not provided by package `run-tool`.
     The following executables are available:
-    - py.test
-    - pytest
-    ");
+    - run-tool
+    "
+    );
 }
 
 #[test]
@@ -179,664 +178,593 @@ fn tool_run_no_binary_package_env_var() {
 
 #[test]
 fn tool_run_from_version() {
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_default_index(&_server.index_url())
+        .with_tool_dirs();
 
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--from")
-        .arg("pytest==8.0.0")
-        .arg("pytest")
+        .arg("run-tool==8.0.0")
+        .arg("run-tool")
         .arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.0.0
+    run-tool 8.0.0
 
     ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.0.0
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + run-helper==1.4.0
+     + run-tool==8.0.0
     ");
 }
 
 #[test]
 fn tool_run_constraints() {
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_default_index(&_server.index_url())
+        .with_tool_dirs();
 
     let constraints_txt = context.temp_dir.child("constraints.txt");
-    constraints_txt.write_str("pluggy<1.4.0").unwrap();
+    constraints_txt.write_str("run-helper<1.4.0").unwrap();
 
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--constraints")
         .arg("constraints.txt")
-        .arg("pytest")
+        .arg("run-tool")
         .arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.0.2
+    run-tool 8.0.2
 
     ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.3.0
-     + pytest==8.0.2
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + run-helper==1.3.0
+     + run-tool==8.0.2
     ");
 }
 
 #[test]
 fn tool_run_overrides() {
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_default_index(&_server.index_url())
+        .with_tool_dirs();
 
     let overrides_txt = context.temp_dir.child("overrides.txt");
-    overrides_txt.write_str("pluggy<1.4.0").unwrap();
+    overrides_txt.write_str("run-helper<1.4.0").unwrap();
 
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--overrides")
         .arg("overrides.txt")
-        .arg("pytest")
+        .arg("run-tool")
         .arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.1.1
+    run-tool 8.1.1
 
     ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.3.0
-     + pytest==8.1.1
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + run-helper==1.3.0
+     + run-tool==8.1.1
     ");
 }
 
 #[test]
 fn tool_run_suggest_valid_commands() {
-    let context = uv_test::test_context!("3.12")
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    // Executable suffixes change the ordering of these names on Windows.
+    let context = context
         .with_filtered_exe_suffix()
+        .with_filter((
+            r"- format-tool-daemon\r?\n- format-tool\b",
+            "- format-tool\n- format-tool-daemon",
+        ))
         .with_tool_dirs();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-    .arg("--from")
-    .arg("black")
-    .arg("orange"), @"
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--from")
+            .arg("format-tool")
+            .arg("orange"),
+        @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Prepared 6 packages in [TIME]
-    Installed 6 packages in [TIME]
-     + black==24.3.0
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    An executable named `orange` is not provided by package `black`.
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + format-support==1.0.0
+     + format-tool==24.3.0
+    An executable named `orange` is not provided by package `format-tool`.
     The following executables are available:
-    - black
-    - blackd
-    ");
-
-    uv_snapshot!(context.filters(), context.tool_run()
-    .arg("fastapi-cli"), @"
+    - format-tool
+    - format-tool-daemon
+    "
+    );
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("no-script"),
+        @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + fastapi-cli==0.0.1
-     + importlib-metadata==1.7.0
-     + zipp==3.18.1
-    Package `fastapi-cli` does not provide any executables.
-    ");
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + no-script==2.31.0
+     + no-script-leaf==1.0.0
+    Package `no-script` does not provide any executables.
+    "
+    );
 }
 
 #[test]
 fn tool_run_warn_executable_not_in_from() {
-    // FastAPI 0.111 is only available from this date onwards.
-    let context = uv_test::test_context!("3.12")
-        .with_exclude_newer("2024-05-04T00:00:00Z")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    let context = context
-        .with_filter(("\\+ uvloop(.+)\n ", ""))
-        // Strip off the `fastapi` command output.
-        .with_filter(("(?s)fastapi` instead.*", "fastapi` instead."));
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("fastapi")
-        .arg("fastapi"), @"
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_exe_suffix().with_tool_dirs();
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--from")
+            .arg("cli-provider")
+            .arg("cli-provider"),
+        @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Resolved 35 packages in [TIME]
-    Prepared 35 packages in [TIME]
-    Installed 35 packages in [TIME]
-     + annotated-types==0.6.0
-     + anyio==4.3.0
-     + certifi==2024.2.2
-     + click==8.1.7
-     + dnspython==2.6.1
-     + email-validator==2.1.1
-     + fastapi==0.111.0
-     + fastapi-cli==0.0.2
-     + h11==0.14.0
-     + httpcore==1.0.5
-     + httptools==0.6.1
-     + httpx==0.27.0
-     + idna==3.7
-     + jinja2==3.1.3
-     + markdown-it-py==3.0.0
-     + markupsafe==2.1.5
-     + mdurl==0.1.2
-     + orjson==3.10.3
-     + pydantic==2.7.1
-     + pydantic-core==2.18.2
-     + pygments==2.17.2
-     + python-dotenv==1.0.1
-     + python-multipart==0.0.9
-     + pyyaml==6.0.1
-     + rich==13.7.1
-     + shellingham==1.5.4
-     + sniffio==1.3.1
-     + starlette==0.37.2
-     + typer==0.12.3
-     + typing-extensions==4.11.0
-     + ujson==5.9.0
-     + uvicorn==0.29.0
-     + watchfiles==0.21.0
-     + websockets==12.0
-    warning: An executable named `fastapi` is not provided by package `fastapi` but is available via the dependency `fastapi-cli`. Consider using `uv tool run --from fastapi-cli fastapi` instead.
-    ");
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + cli-provider==0.1.0
+     + provider-cli==0.1.0
+    warning: An executable named `cli-provider` is not provided by package `cli-provider` but is available via the dependency `provider-cli`. Consider using `uv tool run --from provider-cli cli-provider` instead.
+    "
+    );
 }
 
 #[test]
 fn tool_run_from_install() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
-    // Install `black` at a specific version.
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs(); // Install `format-tool` at a specific version.
     context
         .tool_install()
-        .arg("black==24.1.0")
+        .arg("format-tool==24.1.0")
         .assert()
-        .success();
-
-    // Verify that `tool run black` uses the already-installed version.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("black")
-        .arg("--version"), @"
+        .success(); // Verify that `tool run format-tool` uses the already-installed version.
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("format-tool").arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black, 24.1.0 (compiled: yes)
-    Python (CPython) 3.12.[X]
-    ");
-
-    // Verify that `--isolated` uses an isolated environment.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--isolated")
-        .arg("black")
-        .arg("--version"), @"
+    format-tool 24.1.0
+    "
+    ); // Verify that `--isolated` uses an isolated environment.
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--isolated")
+            .arg("format-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black, 24.3.0 (compiled: yes)
-    Python (CPython) 3.12.[X]
+    format-tool 24.3.0
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + black==24.3.0
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    ");
-
-    // Verify that `tool run black` at a different version installs the new version.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("black@24.1.1")
-        .arg("--version"), @"
+     + format-support==1.0.0
+     + format-tool==24.3.0
+    "
+    ); // Verify that `tool run format-tool` at a different version installs the new version.
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("format-tool@24.1.1")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black, 24.1.1 (compiled: yes)
-    Python (CPython) 3.12.[X]
+    format-tool 24.1.1
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + black==24.1.1
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    ");
-
-    // Verify that `--with` installs a new version.
+     + format-support==1.0.0
+     + format-tool==24.1.1
+    "
+    ); // Verify that `--with` installs a new version.
     // TODO(charlie): This could (in theory) layer the `--with` requirements on top of the existing
     // environment.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--with")
-        .arg("iniconfig")
-        .arg("black")
-        .arg("--version"), @"
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--with")
+            .arg("extra-requirement")
+            .arg("format-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black, 24.3.0 (compiled: yes)
-    Python (CPython) 3.12.[X]
+    format-tool 24.3.0
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + black==24.3.0
-     + click==8.1.7
-     + iniconfig==2.0.0
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    ");
-
-    // Verify that `tool run black` at a different version (via `--from`) installs the new version.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("black==24.2.0")
-        .arg("black")
-        .arg("--version"), @"
+     + extra-requirement==2.0.0
+     + format-support==1.0.0
+     + format-tool==24.3.0
+    "
+    ); // Verify that `tool run format-tool` at a different version (via `--from`) installs the new version.
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--from")
+            .arg("format-tool==24.2.0")
+            .arg("format-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black, 24.2.0 (compiled: yes)
-    Python (CPython) 3.12.[X]
+    format-tool 24.2.0
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + black==24.2.0
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    ");
+     + format-support==1.0.0
+     + format-tool==24.2.0
+    "
+    );
 }
 
 #[test]
 fn tool_run_from_install_constraints() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
-    // Install `flask` at a specific version.
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs(); // Install `web-tool` at a specific version.
     context
         .tool_install()
-        .arg("flask==3.0.0")
+        .arg("web-tool==3.0.0")
         .assert()
-        .success();
-
-    // Verify that `tool run flask` uses the already-installed version.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("flask")
-        .arg("--version"), @"
+        .success(); // Verify that `tool run web-tool` uses the already-installed version.
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("web-tool").arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.0
-    Werkzeug 3.0.1
-    ");
-
-    // Verify that `tool run flask` with a compatible constraint uses the already-installed version.
+    web-tool 3.0.0
+    "
+    ); // Verify that `tool run web-tool` with a compatible constraint uses the already-installed version.
     context
         .temp_dir
         .child("constraints.txt")
-        .write_str("werkzeug<4.0.0")
+        .write_str("web-runtime<4.0.0")
         .unwrap();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--constraints")
-        .arg("constraints.txt")
-        .arg("flask")
-        .arg("--version"), @"
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--constraints")
+            .arg("constraints.txt")
+            .arg("web-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.0
-    Werkzeug 3.0.1
-    ");
-
-    // Verify that `tool run flask` with an incompatible constraint installs a new version.
+    web-tool 3.0.0
+    "
+    ); // Verify that `tool run web-tool` with an incompatible constraint installs a new version.
     context
         .temp_dir
         .child("constraints.txt")
-        .write_str("werkzeug<3.0.0")
+        .write_str("web-runtime<3.0.0")
         .unwrap();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--constraints")
-        .arg("constraints.txt")
-        .arg("flask")
-        .arg("--version"), @"
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--constraints")
+            .arg("constraints.txt")
+            .arg("web-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 2.3.3
-    Werkzeug 2.3.8
+    web-tool 2.3.3
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==2.3.3
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==2.3.8
-    ");
-
-    // Verify that `tool run flask` with a compatible override uses the already-installed version.
+     + web-runtime==2.3.8
+     + web-tool==2.3.3
+    "
+    ); // Verify that `tool run web-tool` with a compatible override uses the already-installed version.
     context
         .temp_dir
         .child("override.txt")
-        .write_str("werkzeug==3.0.1")
+        .write_str("web-runtime==3.0.1")
         .unwrap();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--override")
-        .arg("override.txt")
-        .arg("flask")
-        .arg("--version"), @"
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--override")
+            .arg("override.txt")
+            .arg("web-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.0
-    Werkzeug 3.0.1
-    ");
-
-    // Verify that `tool run flask` with an incompatible override installs a new version.
+    web-tool 3.0.0
+    "
+    ); // Verify that `tool run web-tool` with an incompatible override installs a new version.
     context
         .temp_dir
         .child("override.txt")
-        .write_str("werkzeug==3.0.0")
+        .write_str("web-runtime==3.0.0")
         .unwrap();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--override")
-        .arg("override.txt")
-        .arg("flask")
-        .arg("--version"), @"
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--override")
+            .arg("override.txt")
+            .arg("web-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.2
-    Werkzeug 3.0.0
+    web-tool 3.0.2
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.0
-    ");
-
-    // Verify that an override that enables a new extra also invalidates the environment.
+     + web-runtime==3.0.0
+     + web-tool==3.0.2
+    "
+    ); // Verify that an override that enables a new extra also invalidates the environment.
     context
         .temp_dir
         .child("override.txt")
-        .write_str("flask[dotenv]")
+        .write_str("web-tool[dotenv]")
         .unwrap();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--override")
-        .arg("override.txt")
-        .arg("flask")
-        .arg("--version"), @"
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--override")
+            .arg("override.txt")
+            .arg("web-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.2
-    Werkzeug 3.0.1
-
-    ----- stderr -----
-    Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + python-dotenv==1.0.1
-     + werkzeug==3.0.1
-    ");
+    web-tool 3.0.0
+    "
+    );
 }
 
 #[test]
 fn tool_run_cache() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
-        .with_filtered_counts()
-        .with_tool_dirs();
-
-    // Verify that `tool run black` installs the latest version.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("-p")
-        .arg("3.12")
-        .arg("black")
-        .arg("--version"), @"
+        .with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs(); // Verify that `tool run format-tool` installs the latest version.
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("-p")
+            .arg("3.12")
+            .arg("format-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black, 24.3.0 (compiled: yes)
-    Python (CPython) 3.12.[X]
+    format-tool 24.3.0
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + black==24.3.0
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    ");
-
-    // Verify that `tool run black` uses the cached version.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("-p")
-        .arg("3.12")
-        .arg("black")
-        .arg("--version"), @"
+     + format-support==1.0.0
+     + format-tool==24.3.0
+    "
+    ); // Verify that `tool run format-tool` uses the cached version.
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("-p")
+            .arg("3.12")
+            .arg("format-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black, 24.3.0 (compiled: yes)
-    Python (CPython) 3.12.[X]
+    format-tool 24.3.0
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    ");
-
-    // Verify that `--refresh` allows cache reuse.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("-p")
-        .arg("3.12")
-        .arg("--refresh")
-        .arg("black")
-        .arg("--version"), @"
+    "
+    ); // Verify that `--refresh` allows cache reuse.
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("-p")
+            .arg("3.12")
+            .arg("--refresh")
+            .arg("format-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black, 24.3.0 (compiled: yes)
-    Python (CPython) 3.12.[X]
+    format-tool 24.3.0
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    ");
-
-    // Verify that `--refresh-package` allows cache reuse.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("-p")
-        .arg("3.12")
-        .arg("--refresh-package")
-        .arg("packaging")
-        .arg("black")
-        .arg("--version"), @"
+    "
+    ); // Verify that `--refresh-package` allows cache reuse.
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("-p")
+            .arg("3.12")
+            .arg("--refresh-package")
+            .arg("format-support")
+            .arg("format-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black, 24.3.0 (compiled: yes)
-    Python (CPython) 3.12.[X]
+    format-tool 24.3.0
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    ");
-
-    // Verify that varying the interpreter leads to a fresh environment.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("-p")
-        .arg("3.11")
-        .arg("black")
-        .arg("--version"), @"
+    "
+    ); // Verify that varying the interpreter leads to a fresh environment.
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("-p")
+            .arg("3.11")
+            .arg("format-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black, 24.3.0 (compiled: yes)
-    Python (CPython) 3.11.[X]
+    format-tool 24.3.0
+
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + format-support==1.0.0
+     + format-tool==24.3.0
+    "
+    ); // But that re-invoking with the previous interpreter retains the cached version.
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("-p")
+            .arg("3.12")
+            .arg("format-tool")
+            .arg("--version"),
+        @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    format-tool 24.3.0
+
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    "
+    ); // Verify that `--with` leads to a fresh environment.
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("-p")
+            .arg("3.12")
+            .arg("--with")
+            .arg("extra-requirement")
+            .arg("format-tool")
+            .arg("--version"),
+        @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    format-tool 24.3.0
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + black==24.3.0
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    ");
-
-    // But that re-invoking with the previous interpreter retains the cached version.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("-p")
-        .arg("3.12")
-        .arg("black")
-        .arg("--version"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    black, 24.3.0 (compiled: yes)
-    Python (CPython) 3.12.[X]
-
-    ----- stderr -----
-    Resolved [N] packages in [TIME]
-    ");
-
-    // Verify that `--with` leads to a fresh environment.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("-p")
-        .arg("3.12")
-        .arg("--with")
-        .arg("iniconfig")
-        .arg("black")
-        .arg("--version"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    black, 24.3.0 (compiled: yes)
-    Python (CPython) 3.12.[X]
-
-    ----- stderr -----
-    Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     + black==24.3.0
-     + click==8.1.7
-     + iniconfig==2.0.0
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    ");
+     + extra-requirement==2.0.0
+     + format-support==1.0.0
+     + format-tool==24.3.0
+    "
+    );
 }
 
 #[test]
 fn tool_run_url() {
+    let registry_artifacts = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
+        .with_default_index(&registry_artifacts.index_url())
         .with_filtered_counts()
         .with_tool_dirs();
 
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--from")
-        .arg("flask @ https://files.pythonhosted.org/packages/61/80/ffe1da13ad9300f87c93af113edd0638c75138c42a0994becfacac078c06/flask-3.0.3-py3-none-any.whl")
-        .arg("flask")
+        .arg(format!("run-tool @ {}", registry_artifacts.file_url("run_tool-8.1.1-py3-none-any.whl")))
+        .arg("run-tool")
         .arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.3
-    Werkzeug 3.0.1
+    run-tool 8.1.1
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.3 (from https://files.pythonhosted.org/packages/61/80/ffe1da13ad9300f87c93af113edd0638c75138c42a0994becfacac078c06/flask-3.0.3-py3-none-any.whl)
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
+     + run-helper==1.4.0
+     + run-tool==8.1.1 (from http://[LOCALHOST]/files/run_tool-8.1.1-py3-none-any.whl)
     ");
 
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--from")
-        .arg("https://files.pythonhosted.org/packages/61/80/ffe1da13ad9300f87c93af113edd0638c75138c42a0994becfacac078c06/flask-3.0.3-py3-none-any.whl")
-        .arg("flask")
+        .arg(registry_artifacts.file_url("run_tool-8.1.1-py3-none-any.whl"))
+        .arg("run-tool")
         .arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.3
-    Werkzeug 3.0.1
+    run-tool 8.1.1
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     ");
 
     uv_snapshot!(context.filters(), context.tool_run()
-        .arg("flask @ https://files.pythonhosted.org/packages/61/80/ffe1da13ad9300f87c93af113edd0638c75138c42a0994becfacac078c06/flask-3.0.3-py3-none-any.whl")
+        .arg(format!("run-tool @ {}", registry_artifacts.file_url("run_tool-8.1.1-py3-none-any.whl")))
         .arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.3
-    Werkzeug 3.0.1
+    run-tool 8.1.1
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     ");
 
     uv_snapshot!(context.filters(), context.tool_run()
-        .arg("https://files.pythonhosted.org/packages/61/80/ffe1da13ad9300f87c93af113edd0638c75138c42a0994becfacac078c06/flask-3.0.3-py3-none-any.whl")
+        .arg(registry_artifacts.file_url("run_tool-8.1.1-py3-none-any.whl"))
         .arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.3
-    Werkzeug 3.0.1
+    run-tool 8.1.1
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
@@ -846,38 +774,35 @@ fn tool_run_url() {
 /// Test running a tool with a Git requirement.
 #[test]
 #[cfg(feature = "test-git")]
-fn tool_run_git() {
+fn tool_run_git() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/tool-run.toml")
+        .with_filter((r"@[0-9a-f]{40}", "@[COMMIT]"))
         .with_filtered_counts()
         .with_tool_dirs();
+    let repository_url = crate::git::tool_repository(&context)?;
 
     uv_snapshot!(context.filters(), context.tool_run()
-        .arg("git+https://github.com/psf/black@24.2.0")
+        .arg(&repository_url)
         .arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    black, 24.2.0 (compiled: no)
-    Python (CPython) 3.12.[X]
+    git-tool 1.0.0
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + black==24.2.0 (from git+https://github.com/psf/black@6fdf8a4af28071ed1d079c01122b34c5d587207a)
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
+     + extra-requirement==2.0.0
+     + git-tool==1.0.0 (from git+file://[TEMP_DIR]/repository@[COMMIT])
     ");
 
     uv_snapshot!(context.filters(), context.tool_run()
-        .arg("black @ git+https://github.com/psf/black@24.2.0")
+        .arg(format!("git-tool @ {repository_url}"))
         .arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    black, 24.2.0 (compiled: no)
-    Python (CPython) 3.12.[X]
+    git-tool 1.0.0
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
@@ -888,39 +813,35 @@ fn tool_run_git() {
 
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--from")
-        .arg("git+https://github.com/psf/black@24.2.0")
-        .arg("black")
+        .arg(&repository_url)
+        .arg("git-tool")
         .arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    black, 24.2.0 (compiled: no)
-    Python (CPython) 3.12.[X]
+    git-tool 1.0.0
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + black==24.2.0 (from git+https://github.com/psf/black@6fdf8a4af28071ed1d079c01122b34c5d587207a)
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
+     + extra-requirement==2.0.0
+     + git-tool==1.0.0 (from git+file://[TEMP_DIR]/repository@[COMMIT])
     ");
 
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--from")
-        .arg("black @ git+https://github.com/psf/black@24.2.0")
-        .arg("black")
+        .arg(format!("git-tool @ {repository_url}"))
+        .arg("git-tool")
         .arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    black, 24.2.0 (compiled: no)
-    Python (CPython) 3.12.[X]
+    git-tool 1.0.0
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     ");
+
+    Ok(())
 }
 
 /// Test that running a tool from Git uses statically available `requires-python` metadata before
@@ -1128,109 +1049,94 @@ fn tool_run_git_lfs() {
 /// Read requirements from a `requirements.txt` file.
 #[test]
 fn tool_run_requirements_txt() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs();
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("iniconfig").unwrap();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--with-requirements")
-        .arg("requirements.txt")
-        .arg("--with")
-        .arg("typing-extensions")
-        .arg("flask")
-        .arg("--version"), @"
+    requirements_txt.write_str("extra-requirement").unwrap();
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--with-requirements")
+            .arg("requirements.txt")
+            .arg("--with")
+            .arg("other-requirement")
+            .arg("web-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.2
-    Werkzeug 3.0.1
+    web-tool 3.0.2
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + iniconfig==2.0.0
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + typing-extensions==4.10.0
-     + werkzeug==3.0.1
-    ");
+     + extra-requirement==2.0.0
+     + other-requirement==4.10.0
+     + web-runtime==3.0.1
+     + web-tool==3.0.2
+    "
+    );
 }
 
 /// Ignore and warn when (e.g.) the `--index-url` argument is a provided `requirements.txt`.
 #[test]
 fn tool_run_requirements_txt_arguments() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
         .write_str(indoc! { r"
         --index-url https://test.pypi.org/simple
-        idna
-        "
-        })
+        no-script-leaf
+        " })
         .unwrap();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--with-requirements")
-        .arg("requirements.txt")
-        .arg("flask")
-        .arg("--version"), @"
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--with-requirements")
+            .arg("requirements.txt")
+            .arg("web-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.2
-    Werkzeug 3.0.1
+    web-tool 3.0.2
 
     ----- stderr -----
     warning: Ignoring `--index-url` from requirements file: `https://test.pypi.org/simple`. Instead, use the `--index-url` command-line argument, or set `index-url` in a `uv.toml` or `pyproject.toml` file.
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + idna==3.6
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
-    ");
+     + no-script-leaf==1.0.0
+     + web-runtime==3.0.1
+     + web-tool==3.0.2
+    "
+    );
 }
 
 /// List installed tools when no command arg is given (e.g. `uv tool run`).
 #[test]
 fn tool_run_list_installed() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    // No tools installed.
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_exe_suffix().with_tool_dirs(); // No tools installed.
     uv_snapshot!(context.filters(), context.tool_run(), @"
     exit_code: 2 (failure)
     ----- stdout -----
     Provide a command to run with `uv tool run <command>`.
 
     See `uv tool run --help` for more information.
-    ");
-
-    // Install `black`.
+    "); // Install `format-tool`.
     context
         .tool_install()
-        .arg("black==24.2.0")
+        .arg("format-tool==24.2.0")
         .assert()
-        .success();
-
-    // List installed tools.
+        .success(); // List installed tools.
     uv_snapshot!(context.filters(), context.tool_run(), @"
     exit_code: 2 (failure)
     ----- stdout -----
@@ -1238,7 +1144,7 @@ fn tool_run_list_installed() {
 
     The following tools are installed:
 
-    - black v24.2.0
+    - format-tool v24.2.0
 
     See `uv tool run --help` for more information.
     ");
@@ -1247,338 +1153,320 @@ fn tool_run_list_installed() {
 /// By default, omit resolver and installer output.
 #[test]
 fn tool_run_without_output() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
-    // On the first run, only show the summary line.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .env_remove(EnvVars::UV_SHOW_RESOLUTION)
-        .arg("--")
-        .arg("pytest")
-        .arg("--version"), @"
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs(); // On the first run, only show the summary line.
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .env_remove(EnvVars::UV_SHOW_RESOLUTION)
+            .arg("--")
+            .arg("run-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.1.1
+    run-tool 8.1.1
 
     ----- stderr -----
     Installed [N] packages in [TIME]
-    ");
-
-    // Subsequent runs are quiet.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .env_remove(EnvVars::UV_SHOW_RESOLUTION)
-        .arg("--")
-        .arg("pytest")
-        .arg("--version"), @"
+    "
+    ); // Subsequent runs are quiet.
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .env_remove(EnvVars::UV_SHOW_RESOLUTION)
+            .arg("--")
+            .arg("run-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.1.1
-    ");
+    run-tool 8.1.1
+    "
+    );
 }
 
 #[test]
 #[cfg(not(windows))]
 fn tool_run_csv_with_shorthand() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs();
     let anyio_local = context.temp_dir.child("src").child("anyio_local");
     copy_dir_all(
         context.workspace_root.join("test/packages/anyio_local"),
         &anyio_local,
     )?;
-
     let black_editable = context.temp_dir.child("src").child("black_editable");
     copy_dir_all(
         context.workspace_root.join("test/packages/black_editable"),
         &black_editable,
     )?;
-
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
         [project]
         name = "foo"
         version = "1.0.0"
         requires-python = ">=3.8"
-        dependencies = ["anyio", "sniffio==1.3.1"]
-        "#
-    })?;
-
+        dependencies = ["no-script", "no-script-leaf==1.0.0"]
+        "# })?;
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r"
-        import sniffio
-       "
-    })?;
-
-    // Performs a tool run with a comma-separated `--with` flag.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("-w")
-        .arg("iniconfig,typing-extensions")
-        .arg("pytest")
-        .arg("--version"), @"
+        import no_script_leaf
+       " })?; // Performs a tool run with a comma-separated `--with` flag.
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("-w")
+            .arg("extra-requirement,other-requirement")
+            .arg("run-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.1.1
+    run-tool 8.1.1
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
-     + typing-extensions==4.10.0
-    ");
-
+     + extra-requirement==2.0.0
+     + other-requirement==4.10.0
+     + run-helper==1.4.0
+     + run-tool==8.1.1
+    "
+    );
     Ok(())
 }
 
 #[test]
 #[cfg(not(windows))]
 fn tool_run_csv_with() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs();
     let anyio_local = context.temp_dir.child("src").child("anyio_local");
     copy_dir_all(
         context.workspace_root.join("test/packages/anyio_local"),
         &anyio_local,
     )?;
-
     let black_editable = context.temp_dir.child("src").child("black_editable");
     copy_dir_all(
         context.workspace_root.join("test/packages/black_editable"),
         &black_editable,
     )?;
-
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
         [project]
         name = "foo"
         version = "1.0.0"
         requires-python = ">=3.8"
-        dependencies = ["anyio", "sniffio==1.3.1"]
-        "#
-    })?;
-
+        dependencies = ["no-script", "no-script-leaf==1.0.0"]
+        "# })?;
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r"
-        import sniffio
-       "
-    })?;
-
-    // Performs a tool run with a comma-separated `--with` flag.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--with")
-        .arg("iniconfig,typing-extensions")
-        .arg("pytest")
-        .arg("--version"), @"
+        import no_script_leaf
+       " })?; // Performs a tool run with a comma-separated `--with` flag.
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--with")
+            .arg("extra-requirement,other-requirement")
+            .arg("run-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.1.1
+    run-tool 8.1.1
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
-     + typing-extensions==4.10.0
-    ");
-
+     + extra-requirement==2.0.0
+     + other-requirement==4.10.0
+     + run-helper==1.4.0
+     + run-tool==8.1.1
+    "
+    );
     Ok(())
 }
 
 #[test]
 #[cfg(windows)]
 fn tool_run_csv_with() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs();
     let anyio_local = context.temp_dir.child("src").child("anyio_local");
     copy_dir_all(
         context.workspace_root.join("test/packages/anyio_local"),
         &anyio_local,
     )?;
-
     let black_editable = context.temp_dir.child("src").child("black_editable");
     copy_dir_all(
         context.workspace_root.join("test/packages/black_editable"),
         &black_editable,
     )?;
-
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
         [project]
         name = "foo"
         version = "1.0.0"
         requires-python = ">=3.8"
-        dependencies = ["anyio", "sniffio==1.3.1"]
-        "#
-    })?;
-
+        dependencies = ["no-script", "no-script-leaf==1.0.0"]
+        "# })?;
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r"
-        import sniffio
-       "
-    })?;
-
-    // Performs a tool run with a comma-separated `--with` flag.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--with")
-        .arg("iniconfig,typing-extensions")
-        .arg("pytest")
-        .arg("--version"), @r###"
+        import no_script_leaf
+       " })?; // Performs a tool run with a comma-separated `--with` flag.
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--with")
+            .arg("extra-requirement,other-requirement")
+            .arg("run-tool")
+            .arg("--version"),
+        @r#"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.1.1
+    run-tool 8.1.1
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
-     + typing-extensions==4.10.0
-    "###);
-
+     + extra-requirement==2.0.0
+     + other-requirement==4.10.0
+     + run-helper==1.4.0
+     + run-tool==8.1.1
+    "#
+    );
     Ok(())
 }
 
 #[test]
 #[cfg(not(windows))]
 fn tool_run_repeated_with() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs();
     let anyio_local = context.temp_dir.child("src").child("anyio_local");
     copy_dir_all(
         context.workspace_root.join("test/packages/anyio_local"),
         &anyio_local,
     )?;
-
     let black_editable = context.temp_dir.child("src").child("black_editable");
     copy_dir_all(
         context.workspace_root.join("test/packages/black_editable"),
         &black_editable,
     )?;
-
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
         [project]
         name = "foo"
         version = "1.0.0"
         requires-python = ">=3.8"
-        dependencies = ["anyio", "sniffio==1.3.1"]
-        "#
-    })?;
-
+        dependencies = ["no-script", "no-script-leaf==1.0.0"]
+        "# })?;
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r"
-        import sniffio
-       "
-    })?;
-
-    // Performs a tool run with a repeated `--with` flag.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--with")
-        .arg("iniconfig")
-        .arg("--with")
-        .arg("typing-extensions")
-        .arg("pytest")
-        .arg("--version"), @"
+        import no_script_leaf
+       " })?; // Performs a tool run with a repeated `--with` flag.
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--with")
+            .arg("extra-requirement")
+            .arg("--with")
+            .arg("other-requirement")
+            .arg("run-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.1.1
+    run-tool 8.1.1
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
-     + typing-extensions==4.10.0
-    ");
-
+     + extra-requirement==2.0.0
+     + other-requirement==4.10.0
+     + run-helper==1.4.0
+     + run-tool==8.1.1
+    "
+    );
     Ok(())
 }
 
 #[test]
 #[cfg(windows)]
 fn tool_run_repeated_with() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs();
     let anyio_local = context.temp_dir.child("src").child("anyio_local");
     copy_dir_all(
         context.workspace_root.join("test/packages/anyio_local"),
         &anyio_local,
     )?;
-
     let black_editable = context.temp_dir.child("src").child("black_editable");
     copy_dir_all(
         context.workspace_root.join("test/packages/black_editable"),
         &black_editable,
     )?;
-
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
         [project]
         name = "foo"
         version = "1.0.0"
         requires-python = ">=3.8"
-        dependencies = ["anyio", "sniffio==1.3.1"]
-        "#
-    })?;
-
+        dependencies = ["no-script", "no-script-leaf==1.0.0"]
+        "# })?;
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r"
-        import sniffio
-       "
-    })?;
-
-    // Performs a tool run with a repeated `--with` flag.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--with")
-        .arg("iniconfig")
-        .arg("--with")
-        .arg("typing-extensions")
-        .arg("pytest")
-        .arg("--version"), @r###"
+        import no_script_leaf
+       " })?; // Performs a tool run with a repeated `--with` flag.
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--with")
+            .arg("extra-requirement")
+            .arg("--with")
+            .arg("other-requirement")
+            .arg("run-tool")
+            .arg("--version"),
+        @r#"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.1.1
+    run-tool 8.1.1
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
-     + typing-extensions==4.10.0
-    "###);
-
+     + extra-requirement==2.0.0
+     + other-requirement==4.10.0
+     + run-helper==1.4.0
+     + run-tool==8.1.1
+    "#
+    );
     Ok(())
 }
 
 #[test]
 fn tool_run_with_editable() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/tool-run.toml")
         .with_filtered_counts()
         .with_tool_dirs();
 
@@ -1600,13 +1488,13 @@ fn tool_run_with_editable() -> anyhow::Result<()> {
         name = "foo"
         version = "1.0.0"
         requires-python = ">=3.8"
-        dependencies = ["anyio", "sniffio==1.3.1"]
+        dependencies = ["no-script", "no-script-leaf==1.0.0"]
         "#
     })?;
 
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r"
-        import sniffio
+        import no_script_leaf
        "
     })?;
 
@@ -1614,76 +1502,54 @@ fn tool_run_with_editable() -> anyhow::Result<()> {
         .arg("--with-editable")
         .arg("./src/black_editable")
         .arg("--with")
-        .arg("iniconfig")
-        .arg("flask")
+        .arg("extra-requirement")
+        .arg("web-tool")
         .arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.2
-    Werkzeug 3.0.1
+    web-tool 3.0.2
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
      + black==0.1.0 (from file://[TEMP_DIR]/src/black_editable)
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + iniconfig==2.0.0
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
+     + extra-requirement==2.0.0
+     + web-runtime==3.0.1
+     + web-tool==3.0.2
     ");
 
     // Requesting an editable requirement should install it in a layer, even if it satisfied
-    uv_snapshot!(context.filters(), context.tool_run().arg("--with-editable").arg("./src/anyio_local").arg("flask").arg("--version"),
+    uv_snapshot!(context.filters(), context.tool_run().arg("--with-editable").arg("./src/anyio_local").arg("web-tool").arg("--version"),
     @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.2
-    Werkzeug 3.0.1
+    web-tool 3.0.2
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
      + anyio==4.3.0+foo (from file://[TEMP_DIR]/src/anyio_local)
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
+     + web-runtime==3.0.1
+     + web-tool==3.0.2
     ");
 
     // Requesting the project itself should use a new environment.
-    uv_snapshot!(context.filters(), context.tool_run().arg("--with-editable").arg(".").arg("flask").arg("--version"), @"
+    uv_snapshot!(context.filters(), context.tool_run().arg("--with-editable").arg(".").arg("web-tool").arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.2
-    Werkzeug 3.0.1
+    web-tool 3.0.2
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + anyio==4.3.0
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
      + foo==1.0.0 (from file://[TEMP_DIR]/)
-     + idna==3.6
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + sniffio==1.3.1
-     + werkzeug==3.0.1
+     + no-script==2.31.0
+     + no-script-leaf==1.0.0
+     + web-runtime==3.0.1
+     + web-tool==3.0.2
     ");
 
     Ok(())
@@ -1710,256 +1576,241 @@ fn tool_run_invalid_with() {
 
 #[test]
 fn warn_no_executables_found() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("requests"), @"
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_exe_suffix().with_tool_dirs();
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("no-script"),
+        @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 5 packages in [TIME]
-    Prepared 5 packages in [TIME]
-    Installed 5 packages in [TIME]
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + idna==3.6
-     + requests==2.31.0
-     + urllib3==2.2.1
-    Package `requests` does not provide any executables.
-    ");
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + no-script==2.31.0
+     + no-script-leaf==1.0.0
+    Package `no-script` does not provide any executables.
+    "
+    );
 }
 
 /// Warn when a user passes `--upgrade` to `uv tool run`.
 #[test]
 fn tool_run_upgrade_warn() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--upgrade")
-        .arg("pytest")
-        .arg("--version"), @"
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs();
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--upgrade")
+            .arg("run-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.1.1
+    run-tool 8.1.1
 
     ----- stderr -----
     warning: Tools cannot be upgraded via `uv tool run`; use `uv tool upgrade --all` to upgrade all installed tools, or `uv tool run package@latest` to run the latest version of a tool.
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
-    ");
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--upgrade")
-        .arg("--with")
-        .arg("typing-extensions")
-        .arg("pytest")
-        .arg("--version"), @"
+     + run-helper==1.4.0
+     + run-tool==8.1.1
+    "
+    );
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--upgrade")
+            .arg("--with")
+            .arg("other-requirement")
+            .arg("run-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.1.1
+    run-tool 8.1.1
 
     ----- stderr -----
     warning: Tools cannot be upgraded via `uv tool run`; use `uv tool upgrade --all` to upgrade all installed tools, `uv tool run package@latest` to run the latest version of a tool, or `uv tool run --refresh package` to upgrade any `--with` dependencies.
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
-     + typing-extensions==4.10.0
-    ");
+     + other-requirement==4.10.0
+     + run-helper==1.4.0
+     + run-tool==8.1.1
+    "
+    );
 }
 
 /// If we fail to resolve the tool, we should include "tool" in the error message.
 #[test]
 fn tool_run_resolution_error() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("add"), @"
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs();
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("add"),
+        @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving tool dependencies
-      cause: Because there are no versions of add and you require add, we can conclude that your requirements are unsatisfiable.
-    ");
+      cause: Because add was not found in the package registry and you require add, we can conclude that your requirements are unsatisfiable.
+    "
+    );
 }
 
 #[test]
 fn tool_run_latest() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    // Install `pytest` at a specific version.
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_exe_suffix().with_tool_dirs(); // Install `run-tool` at a specific version.
     context
         .tool_install()
-        .arg("pytest==7.0.0")
+        .arg("run-tool==7.0.0")
         .assert()
-        .success();
-
-    // Run `pytest`, which should use the installed version.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("pytest")
-        .arg("--version"), @"
+        .success(); // Run `run-tool`, which should use the installed version.
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("run-tool").arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 7.0.0
-    ");
-
-    // Run `pytest@latest`, which should use the latest version.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("pytest@latest")
-        .arg("--version"), @"
+    run-tool 7.0.0
+    "
+    ); // Run `run-tool@latest`, which should use the latest version.
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("run-tool@latest").arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.1.1
+    run-tool 8.1.1
 
     ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
-    ");
-
-    // Run `pytest`, which should use the installed version.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("pytest")
-        .arg("--version"), @"
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + run-helper==1.4.0
+     + run-tool==8.1.1
+    "
+    ); // Run `run-tool`, which should use the installed version.
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("run-tool").arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 7.0.0
-    ");
+    run-tool 7.0.0
+    "
+    );
 }
 
 #[test]
 fn tool_run_latest_extra() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("flask[dotenv]@latest")
-        .arg("--version"), @"
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_exe_suffix().with_tool_dirs();
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("web-tool[dotenv]@latest")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.2
-    Werkzeug 3.0.1
+    web-tool 3.0.2
 
     ----- stderr -----
-    Resolved 8 packages in [TIME]
-    Prepared 8 packages in [TIME]
-    Installed 8 packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + python-dotenv==1.0.1
-     + werkzeug==3.0.1
-    ");
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("flask[dotenv]@3.0.0")
-        .arg("--version"), @"
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + web-extra==1.0.1
+     + web-runtime==3.0.1
+     + web-tool==3.0.2
+    "
+    );
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("web-tool[dotenv]@3.0.0")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.0
-    Werkzeug 3.0.1
+    web-tool 3.0.0
 
     ----- stderr -----
-    Resolved 8 packages in [TIME]
+    Resolved 2 packages in [TIME]
     Prepared 1 package in [TIME]
-    Installed 8 packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.0
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + python-dotenv==1.0.1
-     + werkzeug==3.0.1
-    ");
+    Installed 2 packages in [TIME]
+     + web-runtime==3.0.1
+     + web-tool==3.0.0
+    warning: The package `web-tool==3.0.0` does not have an extra named `dotenv`
+    "
+    );
 }
 
 #[test]
 fn tool_run_extra() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("flask[dotenv]")
-        .arg("--version"), @"
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_exe_suffix().with_tool_dirs();
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("web-tool[dotenv]").arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.2
-    Werkzeug 3.0.1
+    web-tool 3.0.2
 
     ----- stderr -----
-    Resolved 8 packages in [TIME]
-    Prepared 8 packages in [TIME]
-    Installed 8 packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + python-dotenv==1.0.1
-     + werkzeug==3.0.1
-    ");
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + web-extra==1.0.1
+     + web-runtime==3.0.1
+     + web-tool==3.0.2
+    "
+    );
 }
 
 #[test]
 fn tool_run_specifier() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("flask<3.0.0")
-        .arg("--version"), @"
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_exe_suffix().with_tool_dirs();
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("web-tool<3.0.0").arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 2.3.3
-    Werkzeug 3.0.1
+    web-tool 2.3.3
 
     ----- stderr -----
-    Resolved 7 packages in [TIME]
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==2.3.3
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
-    ");
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + web-runtime==2.3.8
+     + web-tool==2.3.3
+    "
+    );
 }
 
 #[test]
 fn tool_run_python() {
-    let context = uv_test::test_context!("3.12").with_filtered_counts();
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts();
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("python")
         .arg("--version"), @"
@@ -1987,7 +1838,10 @@ fn tool_run_python() {
 
 #[test]
 fn tool_run_python_at_version() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+        .with_default_index(&_server.index_url());
+    let context = context
         .with_filtered_counts()
         .with_filtered_python_sources();
 
@@ -2162,7 +2016,10 @@ fn tool_run_python_at_version() {
 
 #[test]
 fn tool_run_hint_version_not_available() {
-    let context = uv_test::test_context_with_versions!(&[])
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context =
+        uv_test::test_context_with_versions!(&[]).with_default_index(&_server.index_url());
+    let context = context
         .with_filtered_counts()
         .with_filtered_python_sources();
 
@@ -2214,7 +2071,10 @@ fn tool_run_hint_version_not_available() {
 
 #[test]
 fn tool_run_python_from_global_version_file() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+        .with_default_index(&_server.index_url());
+    let context = context
         .with_filtered_counts()
         .with_filtered_python_sources();
 
@@ -2240,7 +2100,10 @@ fn tool_run_python_from_global_version_file() {
 
 #[test]
 fn tool_run_python_version_overrides_global_pin() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+        .with_default_index(&_server.index_url());
+    let context = context
         .with_filtered_counts()
         .with_filtered_python_sources();
 
@@ -2268,7 +2131,10 @@ fn tool_run_python_version_overrides_global_pin() {
 
 #[test]
 fn tool_run_python_with_explicit_default_bypasses_global_pin() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+        .with_default_index(&_server.index_url());
+    let context = context
         .with_filtered_counts()
         .with_filtered_python_sources();
 
@@ -2298,7 +2164,10 @@ fn tool_run_python_with_explicit_default_bypasses_global_pin() {
 
 #[test]
 fn tool_run_python_from() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+        .with_default_index(&_server.index_url());
+    let context = context
         .with_filtered_counts()
         .with_filtered_python_sources();
 
@@ -2508,14 +2377,11 @@ fn tool_run_from_directory_ignores_global_pin_outside_requires_python_range() {
 
 #[test]
 fn run_with_env_file() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
-    // Create a project with a custom script.
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs(); // Create a project with a custom script.
     let foo_dir = context.temp_dir.child("foo");
     let foo_pyproject_toml = foo_dir.child("pyproject.toml");
-
     foo_pyproject_toml.write_str(indoc! { r#"
         [project]
         name = "foo"
@@ -2529,10 +2395,7 @@ fn run_with_env_file() -> anyhow::Result<()> {
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
-        "#
-    })?;
-
-    // Create the `foo` module.
+        "# })?; // Create the `foo` module.
     let foo_project_src = foo_dir.child("src");
     let foo_module = foo_project_src.child("foo");
     foo_module.child("__init__.py").touch()?;
@@ -2547,13 +2410,11 @@ fn run_with_env_file() -> anyhow::Result<()> {
             print(os.environ.get('REBEL_3'))
 
         __name__ == "__main__" and run()
-       "#
-    })?;
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("./foo")
-        .arg("script"), @"
+       "# })?;
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("--from").arg("./foo").arg("script"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
     None
@@ -2566,21 +2427,24 @@ fn run_with_env_file() -> anyhow::Result<()> {
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
      + foo==1.0.0 (from file://[TEMP_DIR]/foo)
-    ");
-
+    "
+    );
     context.temp_dir.child(".file").write_str(indoc! { "
         THE_EMPIRE_VARIABLE=palpatine
         REBEL_1=leia_organa
         REBEL_2=obi_wan_kenobi
         REBEL_3=C3PO
-       "
-    })?;
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--env-file").arg(".file")
-        .arg("--from")
-        .arg("./foo")
-        .arg("script"), @"
+       " })?;
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--env-file")
+            .arg(".file")
+            .arg("--from")
+            .arg("./foo")
+            .arg("script"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
     palpatine
@@ -2590,8 +2454,8 @@ fn run_with_env_file() -> anyhow::Result<()> {
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    ");
-
+    "
+    );
     let evil_tools = context.temp_dir.child(".evil-tools");
     let evil_tool = evil_tools.child("foo");
     let evil_python = if cfg!(windows) {
@@ -2608,29 +2472,28 @@ fn run_with_env_file() -> anyhow::Result<()> {
         echo queried > queried.txt
         exit 1
     " })?;
-
     #[cfg(unix)]
     {
         let mut permissions = metadata(evil_python.path())?.permissions();
         permissions.set_mode(0o755);
         set_permissions(evil_python.path(), permissions)?;
     }
-
     context.temp_dir.child(".file").write_str(indoc! { "
         UV_TOOL_DIR=.evil-tools
         THE_EMPIRE_VARIABLE=palpatine
         REBEL_1=leia_organa
         REBEL_2=obi_wan_kenobi
         REBEL_3=C3PO
-       "
-    })?;
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("./foo")
-        .arg("script")
-        .env(EnvVars::UV_ENV_FILE, ".file")
-        , @"
+       " })?;
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--from")
+            .arg("./foo")
+            .arg("script")
+            .env(EnvVars::UV_ENV_FILE, ".file"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
     palpatine
@@ -2640,10 +2503,9 @@ fn run_with_env_file() -> anyhow::Result<()> {
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    ");
-
+    "
+    );
     assert!(!context.temp_dir.child("queried.txt").exists());
-
     Ok(())
 }
 
@@ -2661,7 +2523,7 @@ fn tool_run_from_at() {
         .arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    app 0.3.0
+    executable-application 0.3.0
 
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -2677,7 +2539,7 @@ fn tool_run_from_at() {
         .arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    app 0.2.0
+    executable-application 0.2.0
 
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -2689,74 +2551,49 @@ fn tool_run_from_at() {
 
 #[test]
 fn tool_run_verbatim_name() {
-    let context = uv_test::test_context!("3.12")
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
 
     // The normalized package name is `change-wheel-version`, but the executable is `change_wheel_version`.
     uv_snapshot!(context.filters(), context.tool_run()
-        .arg("change_wheel_version")
+        .arg("verbatim_tool")
         .arg("--help"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    usage: change_wheel_version [-h] [--local-version LOCAL_VERSION] [--version VERSION]
-                                [--delete-old-wheel] [--allow-same-version]
-                                wheel
-
-    positional arguments:
-      wheel
-
-    options:
-      -h, --help            show this help message and exit
-      --local-version LOCAL_VERSION
-      --version VERSION
-      --delete-old-wheel
-      --allow-same-version
+    verbatim-tool 0.5.0
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + change-wheel-version==0.5.0
-     + installer==0.7.0
-     + packaging==24.0
-     + wheel==0.43.0
+     + verbatim-tool==0.5.0
     ");
 
     uv_snapshot!(context.filters(), context.tool_run()
-        .arg("change-wheel-version")
+        .arg("verbatim-tool")
         .arg("--help"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    An executable named `change-wheel-version` is not provided by package `change-wheel-version`.
+    An executable named `verbatim-tool` is not provided by package `verbatim-tool`.
     The following executables are available:
-    - change_wheel_version
+    - verbatim_tool
 
-    Use `uv tool run --from change-wheel-version change_wheel_version` instead.
+    Use `uv tool run --from verbatim-tool verbatim_tool` instead.
     ");
 
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--from")
-        .arg("change-wheel-version")
-        .arg("change_wheel_version")
+        .arg("verbatim-tool")
+        .arg("verbatim_tool")
         .arg("--help"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    usage: change_wheel_version [-h] [--local-version LOCAL_VERSION] [--version VERSION]
-                                [--delete-old-wheel] [--allow-same-version]
-                                wheel
-
-    positional arguments:
-      wheel
-
-    options:
-      -h, --help            show this help message and exit
-      --local-version LOCAL_VERSION
-      --version VERSION
-      --delete-old-wheel
-      --allow-same-version
+    verbatim-tool 0.5.0
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
@@ -2765,7 +2602,9 @@ fn tool_run_verbatim_name() {
 
 #[test]
 fn tool_run_with_existing_py_script() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_counts();
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts();
     context.temp_dir.child("script.py").touch()?;
 
     uv_snapshot!(context.filters(), context.tool_run().arg("script.py"), @"
@@ -2789,7 +2628,9 @@ fn tool_run_with_existing_py_script() -> anyhow::Result<()> {
 
 #[test]
 fn tool_run_with_existing_pyw_script() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_counts();
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts();
     context.temp_dir.child("script.pyw").touch()?;
 
     // We treat arguments before the command as uv arguments
@@ -2806,7 +2647,9 @@ fn tool_run_with_existing_pyw_script() -> anyhow::Result<()> {
 
 #[test]
 fn tool_run_with_nonexistent_py_script() {
-    let context = uv_test::test_context!("3.12").with_filtered_counts();
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts();
 
     // We treat arguments before the command as uv arguments
     uv_snapshot!(context.filters(), context.tool_run()
@@ -2821,7 +2664,9 @@ fn tool_run_with_nonexistent_py_script() {
 
 #[test]
 fn tool_run_with_nonexistent_pyw_script() {
-    let context = uv_test::test_context!("3.12").with_filtered_counts();
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts();
 
     // We treat arguments before the command as uv arguments
     uv_snapshot!(context.filters(), context.tool_run()
@@ -2836,7 +2681,9 @@ fn tool_run_with_nonexistent_pyw_script() {
 
 #[test]
 fn tool_run_with_from_script() {
-    let context = uv_test::test_context!("3.12").with_filtered_counts();
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts();
 
     // We treat arguments before the command as uv arguments
     uv_snapshot!(context.filters(), context.tool_run()
@@ -2853,7 +2700,9 @@ fn tool_run_with_from_script() {
 
 #[test]
 fn tool_run_with_script_and_from_script() {
-    let context = uv_test::test_context!("3.12").with_filtered_counts();
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts();
 
     // We treat arguments before the command as uv arguments
     uv_snapshot!(context.filters(), context.tool_run()
@@ -2936,14 +2785,16 @@ fn tool_run_with_from_url_ending_in_py() {
 /// we show a helpful hint.
 #[test]
 fn tool_run_verbose_hint() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
-    // Test with --verbose flag
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("nonexistent-package-foo")
-        .arg("--verbose"), @"
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs(); // Test with --verbose flag
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("nonexistent-package-foo")
+            .arg("--verbose"),
+        @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to run tool
@@ -2951,12 +2802,12 @@ fn tool_run_verbose_hint() {
       cause: Because nonexistent-package-foo was not found in the package registry and you require nonexistent-package-foo, we can conclude that your requirements are unsatisfiable.
 
     hint: You provided `--verbose` to `nonexistent-package-foo`. Did you mean to provide it to `uv tool run`? e.g., `uv tool run --verbose nonexistent-package-foo`
-    ");
-
-    // Test with -v flag
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("nonexistent-package-bar")
-        .arg("-v"), @"
+    "
+    ); // Test with -v flag
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("nonexistent-package-bar").arg("-v"),
+        @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to run tool
@@ -2964,12 +2815,12 @@ fn tool_run_verbose_hint() {
       cause: Because nonexistent-package-bar was not found in the package registry and you require nonexistent-package-bar, we can conclude that your requirements are unsatisfiable.
 
     hint: You provided `-v` to `nonexistent-package-bar`. Did you mean to provide it to `uv tool run`? e.g., `uv tool run -v nonexistent-package-bar`
-    ");
-
-    // Test with -vv flag
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("nonexistent-package-baz")
-        .arg("-vv"), @"
+    "
+    ); // Test with -vv flag
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("nonexistent-package-baz").arg("-vv"),
+        @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to run tool
@@ -2977,22 +2828,27 @@ fn tool_run_verbose_hint() {
       cause: Because nonexistent-package-baz was not found in the package registry and you require nonexistent-package-baz, we can conclude that your requirements are unsatisfiable.
 
     hint: You provided `-vv` to `nonexistent-package-baz`. Did you mean to provide it to `uv tool run`? e.g., `uv tool run -vv nonexistent-package-baz`
-    ");
-
-    // Test for false positives
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("nonexistent-package-quux")
-        .arg("-version"), @"
+    "
+    ); // Test for false positives
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("nonexistent-package-quux")
+            .arg("-version"),
+        @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving tool dependencies
       cause: Because nonexistent-package-quux was not found in the package registry and you require nonexistent-package-quux, we can conclude that your requirements are unsatisfiable.
-    ");
+    "
+    );
 }
 
 #[test]
 fn tool_run_with_compatible_build_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.9")
+        .with_packse_index("packages/tool-build-constraints.toml")
         .with_exclude_newer("2024-05-04T00:00:00Z")
         .with_filtered_counts()
         .with_filtered_exe_suffix();
@@ -3001,26 +2857,21 @@ fn tool_run_with_compatible_build_constraints() -> Result<()> {
 
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--with")
-        .arg("requests==1.2")
+        .arg("legacy-build-requirement==1.2")
         .arg("--build-constraints")
         .arg("build_constraints.txt")
-        .arg("pytest")
+        .arg("build-tool")
         .arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.2.0
+    build-tool 1.0.0
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + exceptiongroup==1.2.1
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.5.0
-     + pytest==8.2.0
-     + requests==1.2.0
-     + tomli==2.0.1
+     + build-tool==1.0.0
+     + legacy-build-requirement==1.2.0
     ");
 
     Ok(())
@@ -3029,6 +2880,7 @@ fn tool_run_with_compatible_build_constraints() -> Result<()> {
 #[test]
 fn tool_run_with_incompatible_build_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.9")
+        .with_packse_index("packages/tool-build-constraints.toml")
         .with_exclude_newer("2024-05-04T00:00:00Z")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -3040,15 +2892,15 @@ fn tool_run_with_incompatible_build_constraints() -> Result<()> {
 
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--with")
-        .arg("requests==1.2")
+        .arg("legacy-build-requirement==1.2")
         .arg("--build-constraints")
         .arg("build_constraints.txt")
-        .arg("pytest")
+        .arg("build-tool")
         .arg("--version")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Failed to download and build `requests==1.2.0`
+    error: Failed to download and build `legacy-build-requirement==1.2.0`
       cause: Failed to resolve requirements from `setup.py` build
       cause: No solution found when resolving: `setuptools>=40.8.0`
       cause: Because you require setuptools>=40.8.0 and setuptools==2, we can conclude that your requirements are unsatisfiable.
@@ -3059,7 +2911,9 @@ fn tool_run_with_incompatible_build_constraints() -> Result<()> {
 
 #[test]
 fn tool_run_with_dependencies_from_script() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context
         .with_filtered_counts()
         .with_filtered_missing_file_error();
 
@@ -3067,11 +2921,11 @@ fn tool_run_with_dependencies_from_script() -> Result<()> {
         # /// script
         # requires-python = ">=3.11"
         # dependencies = [
-        #   "anyio",
+        #   "no-script",
         # ]
         # ///
 
-        import anyio
+        import no_script
     "#};
 
     let script = context.temp_dir.child("script.py");
@@ -3080,48 +2934,49 @@ fn tool_run_with_dependencies_from_script() -> Result<()> {
     let script_without_extension = context.temp_dir.child("script-no-ext");
     script_without_extension.write_str(script_contents)?;
 
-    // script dependencies (anyio) are now installed.
+    // script dependencies are now installed.
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--with-requirements")
         .arg("script.py")
-        .arg("black")
+        .arg("format-tool")
         .arg("script.py")
         .arg("-q"), @"
     exit_code: 0 (success)
+    ----- stdout -----
+    format-tool 24.3.0
+
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + anyio==4.3.0
-     + black==24.3.0
-     + click==8.1.7
-     + idna==3.6
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-     + sniffio==1.3.1
+     + format-support==1.0.0
+     + format-tool==24.3.0
+     + no-script==2.31.0
+     + no-script-leaf==1.0.0
     ");
 
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--with-requirements")
         .arg("script-no-ext")
-        .arg("black")
+        .arg("format-tool")
         .arg("script-no-ext")
         .arg("-q"), @"
     exit_code: 0 (success)
+    ----- stdout -----
+    format-tool 24.3.0
+
     ----- stderr -----
     Resolved [N] packages in [TIME]
     ");
 
     // Error when the script is not a valid PEP723 script.
     let script = context.temp_dir.child("not_pep723_script.py");
-    script.write_str("import anyio")?;
+    script.write_str("import no_script")?;
 
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--with-requirements")
         .arg("not_pep723_script.py")
-        .arg("black"), @"
+        .arg("format-tool"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: `not_pep723_script.py` does not contain inline script metadata
@@ -3131,7 +2986,7 @@ fn tool_run_with_dependencies_from_script() -> Result<()> {
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--with-requirements")
         .arg("missing_file.py")
-        .arg("black"), @"
+        .arg("format-tool"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: failed to read from file `missing_file.py`: [OS ERROR 2]
@@ -3148,15 +3003,12 @@ fn tool_run_with_dependencies_from_script() -> Result<()> {
 #[cfg(windows)]
 #[test]
 fn tool_run_windows_runnable_types() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
-
     let foo_dir = context.temp_dir.child("foo");
-    let foo_pyproject_toml = foo_dir.child("pyproject.toml");
-
-    // Use `script-files` which enables legacy scripts packaging.
+    let foo_pyproject_toml = foo_dir.child("pyproject.toml"); // Use `script-files` which enables legacy scripts packaging.
     foo_pyproject_toml.write_str(indoc! { r#"
         [project]
         name = "foo"
@@ -3177,19 +3029,13 @@ fn tool_run_windows_runnable_types() -> anyhow::Result<()> {
         [build-system]
         requires = ["setuptools>=42"]
         build-backend = "setuptools.build_meta"
-        "#
-    })?;
-
-    // Create the legacy scripts
+        "# })?; // Create the legacy scripts
     let custom_pydoc_bat = foo_dir.child("misc").child("custom_pydoc.bat");
     let custom_pydoc_cmd = foo_dir.child("misc").child("custom_pydoc.cmd");
     let custom_pydoc_ps1 = foo_dir.child("misc").child("custom_pydoc.ps1");
-
     custom_pydoc_bat.write_str("python.exe -m pydoc %*")?;
     custom_pydoc_cmd.write_str("python.exe -m pydoc %*")?;
-    custom_pydoc_ps1.write_str("python.exe -m pydoc $args")?;
-
-    // Create the foo module
+    custom_pydoc_ps1.write_str("python.exe -m pydoc $args")?; // Create the foo module
     let foo_project_src = foo_dir.child("src");
     let foo_module = foo_project_src.child("foo");
     let foo_main_py = foo_module.child("main.py");
@@ -3201,22 +3047,22 @@ fn tool_run_windows_runnable_types() -> anyhow::Result<()> {
             pydoc.cli()
 
         __name__ == "__main__" and run()
-       "#
-    })?;
-
-    // Install `foo` tool.
+       "# })?; // Install `foo` tool.
     context
         .tool_install()
         .arg(foo_dir.as_os_str())
         .env(EnvVars::PATH, bin_dir.as_os_str())
         .assert()
         .success();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("foo")
-        .arg("does_not_exist")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @r###"
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--from")
+            .arg("foo")
+            .arg("does_not_exist")
+            .env(EnvVars::PATH, bin_dir.as_os_str()),
+        @r###"
     exit_code: 1 (failure)
     ----- stderr -----
     An executable named `does_not_exist` is not provided by package `foo`.
@@ -3225,13 +3071,16 @@ fn tool_run_windows_runnable_types() -> anyhow::Result<()> {
     - custom_pydoc.cmd
     - custom_pydoc.exe
     - custom_pydoc.ps1
-    "###);
-
-    // Test with explicit .bat extension
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("foo")
-        .arg("custom_pydoc.bat"), @r###"
+    "###
+    ); // Test with explicit .bat extension
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--from")
+            .arg("foo")
+            .arg("custom_pydoc.bat"),
+        @r###"
     exit_code: 0 (success)
     ----- stdout -----
     pydoc - the Python documentation tool
@@ -3264,13 +3113,16 @@ fn tool_run_windows_runnable_types() -> anyhow::Result<()> {
         directory.  If <name> contains a '\', it is treated as a filename; if
         it names a directory, documentation is written for all the contents.
 
-    "###);
-
-    // Test with explicit .cmd extension
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("foo")
-        .arg("custom_pydoc.cmd"), @r###"
+    "###
+    ); // Test with explicit .cmd extension
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--from")
+            .arg("foo")
+            .arg("custom_pydoc.cmd"),
+        @r###"
     exit_code: 0 (success)
     ----- stdout -----
     pydoc - the Python documentation tool
@@ -3303,13 +3155,16 @@ fn tool_run_windows_runnable_types() -> anyhow::Result<()> {
         directory.  If <name> contains a '\', it is treated as a filename; if
         it names a directory, documentation is written for all the contents.
 
-    "###);
-
-    // Test with explicit .ps1 extension
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("foo")
-        .arg("custom_pydoc.ps1"), @r###"
+    "###
+    ); // Test with explicit .ps1 extension
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--from")
+            .arg("foo")
+            .arg("custom_pydoc.ps1"),
+        @r###"
     exit_code: 0 (success)
     ----- stdout -----
     pydoc - the Python documentation tool
@@ -3342,14 +3197,17 @@ fn tool_run_windows_runnable_types() -> anyhow::Result<()> {
         directory.  If <name> contains a '\', it is treated as a filename; if
         it names a directory, documentation is written for all the contents.
 
-    "###);
-
-    // Test with explicit .exe extension
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("foo")
-        .arg("custom_pydoc")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @r###"
+    "###
+    ); // Test with explicit .exe extension
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--from")
+            .arg("foo")
+            .arg("custom_pydoc")
+            .env(EnvVars::PATH, bin_dir.as_os_str()),
+        @r###"
     exit_code: 0 (success)
     ----- stdout -----
     pydoc - the Python documentation tool
@@ -3382,14 +3240,17 @@ fn tool_run_windows_runnable_types() -> anyhow::Result<()> {
         directory.  If <name> contains a '\', it is treated as a filename; if
         it names a directory, documentation is written for all the contents.
 
-    "###);
-
-    // Test without explicit extension (.exe should be used)
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("foo")
-        .arg("custom_pydoc")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @r###"
+    "###
+    ); // Test without explicit extension (.exe should be used)
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--from")
+            .arg("foo")
+            .arg("custom_pydoc")
+            .env(EnvVars::PATH, bin_dir.as_os_str()),
+        @r###"
     exit_code: 0 (success)
     ----- stdout -----
     pydoc - the Python documentation tool
@@ -3422,19 +3283,19 @@ fn tool_run_windows_runnable_types() -> anyhow::Result<()> {
         directory.  If <name> contains a '\', it is treated as a filename; if
         it names a directory, documentation is written for all the contents.
 
-    "###);
-
+    "###
+    );
     Ok(())
 }
 
 #[test]
 fn tool_run_reresolve_python() -> anyhow::Result<()> {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
-        .with_filtered_counts()
-        .with_tool_dirs();
+        .with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs();
     let foo_dir = context.temp_dir.child("foo");
     let foo_pyproject_toml = foo_dir.child("pyproject.toml");
-
     foo_pyproject_toml.write_str(indoc! { r#"
         [project]
         name = "foo"
@@ -3444,8 +3305,7 @@ fn tool_run_reresolve_python() -> anyhow::Result<()> {
 
         [project.scripts]
         foo = "foo:run"
-        "#
-    })?;
+        "# })?;
     let foo_project_src = foo_dir.child("src");
     let foo_module = foo_project_src.child("foo");
     let foo_init = foo_module.child("__init__.py");
@@ -3454,15 +3314,12 @@ fn tool_run_reresolve_python() -> anyhow::Result<()> {
 
         def run():
             print(".".join(str(key) for key in sys.version_info[:2]))
-       "#
-    })?;
-
-    // Although 3.11 is first on the path, we'll re-resolve with 3.12 because the `requires-python`
+       "# })?; // Although 3.11 is first on the path, we'll re-resolve with 3.12 because the `requires-python`
     // is not compatible with 3.11.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("./foo")
-        .arg("foo"), @"
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("--from").arg("./foo").arg("foo"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
     3.12
@@ -3472,37 +3329,43 @@ fn tool_run_reresolve_python() -> anyhow::Result<()> {
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
      + foo==1.0.0 (from file://[TEMP_DIR]/foo)
-    ");
-
-    // When an incompatible Python version is explicitly requested, we should not re-resolve
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("./foo")
-        .arg("--python")
-        .arg("3.11")
-        .arg("foo"), @"
+    "
+    ); // When an incompatible Python version is explicitly requested, we should not re-resolve
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--from")
+            .arg("./foo")
+            .arg("--python")
+            .arg("3.11")
+            .arg("foo"),
+        @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving tool dependencies
       cause: Because the current Python version (3.11.[X]) does not satisfy Python>=3.12 and foo==1.0.0 depends on Python>=3.12, we can conclude that foo==1.0.0 cannot be used.
              And because only foo==1.0.0 is available and you require foo, we can conclude that your requirements are unsatisfiable.
-    ");
-
-    // Unless the discovered interpreter is compatible with the request
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("./foo")
-        .arg("--python")
-        .arg(">=3.11")
-        .arg("foo"), @"
+    "
+    ); // Unless the discovered interpreter is compatible with the request
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--from")
+            .arg("./foo")
+            .arg("--python")
+            .arg(">=3.11")
+            .arg("foo"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
     3.12
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    ");
-
+    "
+    );
     Ok(())
 }
 
@@ -3512,22 +3375,21 @@ fn tool_run_reresolve_python() -> anyhow::Result<()> {
 #[cfg(windows)]
 #[test]
 fn tool_run_windows_dotted_package_name() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
-    // Copy the test package to a temporary location
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs(); // Copy the test package to a temporary location
     let workspace_packages = context.workspace_root.join("test").join("packages");
     let test_package_source = workspace_packages.join("package.name.with.dots");
     let test_package_dest = context.temp_dir.child("package.name.with.dots");
-
-    copy_dir_all(&test_package_source, &test_package_dest)?;
-
-    // Test that uv tool run can find and execute the dotted package name
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg(test_package_dest.path())
-        .arg("package.name.with.dots"), @r###"
+    copy_dir_all(&test_package_source, &test_package_dest)?; // Test that uv tool run can find and execute the dotted package name
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--from")
+            .arg(test_package_dest.path())
+            .arg("package.name.with.dots"),
+        @r###"
     exit_code: 0 (success)
     ----- stdout -----
     package.name.with.dots version 0.1.0
@@ -3537,8 +3399,8 @@ fn tool_run_windows_dotted_package_name() -> anyhow::Result<()> {
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
      + package-name-with-dots==0.1.0 (from file://[TEMP_DIR]/package.name.with.dots)
-    "###);
-
+    "###
+    );
     Ok(())
 }
 
@@ -3550,6 +3412,11 @@ async fn tool_run_latest_keyring_auth() {
     // Install our keyring plugin
     keyring_context
         .pip_install()
+        .arg(
+            keyring_context
+                .workspace_root
+                .join("test/packages/keyring_stub"),
+        )
         .arg(
             keyring_context
                 .workspace_root

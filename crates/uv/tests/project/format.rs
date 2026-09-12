@@ -86,9 +86,8 @@ fn format_project() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn format_uses_ruff_from_environment() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_packse_index("packages/tool-selection.toml");
     let tool_dir = context.root.child("tools");
     let bin_dir = context.root.child("tool-bin");
 

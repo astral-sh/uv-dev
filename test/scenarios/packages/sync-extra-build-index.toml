@@ -1,0 +1,17 @@
+name = "sync-extra-build-index"
+description = "An explicit index for extra build dependency tests."
+
+[root]
+requires = ["anyio"]
+
+[expected]
+satisfiable = true
+
+[expected.packages]
+anyio = "3.5.0"
+
+[packages.anyio.versions."3.5.0"]
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true

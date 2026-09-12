@@ -1,8 +1,61 @@
-use anyhow::Result;
-use indoc::indoc;
-use insta::assert_snapshot;
+use std::process::Command;
 
-use uv_test::{make_project, uv_snapshot};
+use anyhow::{Result, anyhow};
+use assert_cmd::prelude::*;
+use assert_fs::prelude::*;
+use indoc::{formatdoc, indoc};
+use insta::assert_snapshot;
+use url::Url;
+
+use uv_test::{TestContext, apply_filters, make_project, uv_snapshot};
+
+fn git_package_url(context: &TestContext) -> Result<Url> {
+    let repository = context.temp_dir.child("git-branch");
+    repository.child("src/git_branch").create_dir_all()?;
+    repository
+        .child("src/git_branch/__init__.py")
+        .write_str("__version__ = \"2.0.0\"\n")?;
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "git-branch"
+        version = "2.0.0"
+        requires-python = ">=3.11"
+
+        [build-system]
+        requires = ["uv_build>=0.9,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+
+    Command::new("git")
+        .arg("init")
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .arg("add")
+        .arg(".")
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .arg("-c")
+        .arg("user.name=Example")
+        .arg("-c")
+        .arg("user.email=example@example.com")
+        .arg("commit")
+        .arg("-m")
+        .arg("Initial commit")
+        .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
+        .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
+        .assert()
+        .success();
+
+    Url::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("failed to convert git package path to a file URL"))
+}
 
 /// The root package has diverging URLs for disjoint markers:
 /// ```toml
@@ -12,18 +65,21 @@ use uv_test::{make_project, uv_snapshot};
 /// ]
 /// ```
 #[test]
-#[cfg(feature = "test-pypi")]
 fn branching_urls_disjoint() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let server = uv_test::packse::PackseServer::new("packages/branching-urls.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
 
-    let deps = indoc! {r#"
+    let deps = formatdoc! {r#"
         dependencies = [
             # Valid, disjoint split
-            "iniconfig @ https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl ; python_version < '3.12'",
-            "iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl ; python_version >= '3.12'",
+            "branch-url @ {branch_url_1} ; python_version < '3.12'",
+            "branch-url @ {branch_url_2} ; python_version >= '3.12'",
         ]
-    "# };
-    make_project(context.temp_dir.path(), "a", deps)?;
+    "#,
+        branch_url_1 = server.file_url("branch_url-1.1.1-py3-none-any.whl"),
+        branch_url_2 = server.file_url("branch_url-2.0.0-py3-none-any.whl"),
+    };
+    make_project(context.temp_dir.path(), "a", &deps)?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
@@ -43,26 +99,29 @@ fn branching_urls_disjoint() -> Result<()> {
 /// ]
 /// ```
 #[test]
-#[cfg(feature = "test-pypi")]
 fn branching_urls_overlapping() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let server = uv_test::packse::PackseServer::new("packages/branching-urls.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
 
-    let deps = indoc! {r#"
+    let deps = formatdoc! {r#"
         dependencies = [
             # Conflicting split
-            "iniconfig @ https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl ; python_version < '3.12'",
-            "iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl ; python_version >= '3.11'",
+            "branch-url @ {branch_url_1} ; python_version < '3.12'",
+            "branch-url @ {branch_url_2} ; python_version >= '3.11'",
         ]
-    "# };
-    make_project(context.temp_dir.path(), "a", deps)?;
+    "#,
+        branch_url_1 = server.file_url("branch_url-1.1.1-py3-none-any.whl"),
+        branch_url_2 = server.file_url("branch_url-2.0.0-py3-none-any.whl"),
+    };
+    make_project(context.temp_dir.path(), "a", &deps)?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to resolve dependencies for package `a==0.1.0`
-      cause: Requirements contain conflicting URLs for package `iniconfig` in split `python_full_version == '3.11.*'`:
-             - https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl
-             - https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl
+      cause: Requirements contain conflicting URLs for package `branch-url` in split `python_full_version == '3.11.*'`:
+             - http://[LOCALHOST]/files/branch_url-1.1.1-py3-none-any.whl
+             - http://[LOCALHOST]/files/branch_url-2.0.0-py3-none-any.whl
     "
     );
 
@@ -78,15 +137,15 @@ fn branching_urls_overlapping() -> Result<()> {
 /// a -> b -> b2 -> https://../iniconfig-2.0.0-py3-none-any.whl
 /// ```
 #[test]
-#[cfg(feature = "test-pypi")]
 fn root_package_splits_but_transitive_conflict() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let server = uv_test::packse::PackseServer::new("packages/branching-urls.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
 
     let deps = indoc! {r#"
         dependencies = [
             # Force a split
-            "anyio==4.3.0 ; python_version >= '3.12'",
-            "anyio==4.2.0 ; python_version < '3.12'",
+            "branch-splitter==4.3.0 ; python_version >= '3.12'",
+            "branch-splitter==4.2.0 ; python_version < '3.12'",
             "b"
         ]
 
@@ -107,27 +166,31 @@ fn root_package_splits_but_transitive_conflict() -> Result<()> {
     "# };
     make_project(&context.temp_dir.path().join("b"), "b", deps)?;
 
-    let deps = indoc! {r#"
+    let deps = formatdoc! {r#"
         dependencies = [
-            "iniconfig @ https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl",
+            "branch-url @ {branch_url}",
         ]
-    "# };
-    make_project(&context.temp_dir.path().join("b1"), "b1", deps)?;
+    "#,
+        branch_url = server.file_url("branch_url-1.1.1-py3-none-any.whl"),
+    };
+    make_project(&context.temp_dir.path().join("b1"), "b1", &deps)?;
 
-    let deps = indoc! {r#"
+    let deps = formatdoc! {r#"
         dependencies = [
-            "iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl",
+            "branch-url @ {branch_url}",
         ]
-    "# };
-    make_project(&context.temp_dir.path().join("b2"), "b2", deps)?;
+    "#,
+        branch_url = server.file_url("branch_url-2.0.0-py3-none-any.whl"),
+    };
+    make_project(&context.temp_dir.path().join("b2"), "b2", &deps)?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to resolve dependencies for package `b2==0.1.0`
-      cause: Requirements contain conflicting URLs for package `iniconfig` in split `python_full_version >= '3.12'`:
-             - https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl
-             - https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl
+      cause: Requirements contain conflicting URLs for package `branch-url` in split `python_full_version >= '3.12'`:
+             - http://[LOCALHOST]/files/branch_url-1.1.1-py3-none-any.whl
+             - http://[LOCALHOST]/files/branch_url-2.0.0-py3-none-any.whl
 
     hint: `b2` (v0.1.0) was included because `a` (v0.1.0) depends on `b` (v0.1.0) which depends on `b2`
     "
@@ -147,15 +210,15 @@ fn root_package_splits_but_transitive_conflict() -> Result<()> {
 /// a -> b -> b2 ; python_version >= '3.12' -> https://../iniconfig-2.0.0-py3-none-any.whl
 /// ```
 #[test]
-#[cfg(feature = "test-pypi")]
 fn root_package_splits_transitive_too() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let server = uv_test::packse::PackseServer::new("packages/branching-urls.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
 
     let deps = indoc! {r#"
         dependencies = [
             # Force a split
-            "anyio==4.3.0 ; python_version >= '3.12'",
-            "anyio==4.2.0 ; python_version < '3.12'",
+            "branch-splitter==4.3.0 ; python_version >= '3.12'",
+            "branch-splitter==4.2.0 ; python_version < '3.12'",
             "b"
         ]
 
@@ -176,28 +239,32 @@ fn root_package_splits_transitive_too() -> Result<()> {
     "# };
     make_project(&context.temp_dir.path().join("b"), "b", deps)?;
 
-    let deps = indoc! {r#"
+    let deps = formatdoc! {r#"
         dependencies = [
-            "iniconfig @ https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl",
+            "branch-url @ {branch_url}",
         ]
-    "# };
-    make_project(&context.temp_dir.path().join("b1"), "b1", deps)?;
+    "#,
+        branch_url = server.file_url("branch_url-1.1.1-py3-none-any.whl"),
+    };
+    make_project(&context.temp_dir.path().join("b1"), "b1", &deps)?;
 
-    let deps = indoc! {r#"
+    let deps = formatdoc! {r#"
         dependencies = [
-            "iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl",
+            "branch-url @ {branch_url}",
         ]
-    "# };
-    make_project(&context.temp_dir.path().join("b2"), "b2", deps)?;
+    "#,
+        branch_url = server.file_url("branch_url-2.0.0-py3-none-any.whl"),
+    };
+    make_project(&context.temp_dir.path().join("b2"), "b2", &deps)?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 10 packages in [TIME]
+    Resolved 8 packages in [TIME]
     "
     );
 
-    assert_snapshot!(context.read("uv.lock"), @r#"
+    assert_snapshot!(apply_filters(context.read("uv.lock"), context.filters()), @r#"
     version = 1
     revision = 3
     requires-python = ">=3.11, <3.13"
@@ -214,48 +281,16 @@ fn root_package_splits_transitive_too() -> Result<()> {
     version = "0.1.0"
     source = { editable = "." }
     dependencies = [
-        { name = "anyio", version = "4.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-        { name = "anyio", version = "4.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
         { name = "b" },
+        { name = "branch-splitter", version = "4.2.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "python_full_version < '3.12'" },
+        { name = "branch-splitter", version = "4.3.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "python_full_version >= '3.12'" },
     ]
 
     [package.metadata]
     requires-dist = [
-        { name = "anyio", marker = "python_full_version < '3.12'", specifier = "==4.2.0" },
-        { name = "anyio", marker = "python_full_version >= '3.12'", specifier = "==4.3.0" },
         { name = "b", directory = "b" },
-    ]
-
-    [[package]]
-    name = "anyio"
-    version = "4.2.0"
-    source = { registry = "https://pypi.org/simple" }
-    resolution-markers = [
-        "python_full_version < '3.12'",
-    ]
-    dependencies = [
-        { name = "idna" },
-        { name = "sniffio" },
-    ]
-    sdist = { url = "https://files.pythonhosted.org/packages/2d/b8/7333d87d5f03247215d86a86362fd3e324111788c6cdd8d2e6196a6ba833/anyio-4.2.0.tar.gz", hash = "sha256:e1875bb4b4e2de1669f4bc7869b6d3f54231cdced71605e6e64c9be77e3be50f", size = 158770, upload-time = "2023-12-16T17:06:57.709Z" }
-    wheels = [
-        { url = "https://files.pythonhosted.org/packages/bf/cd/d6d9bb1dadf73e7af02d18225cbd2c93f8552e13130484f1c8dcfece292b/anyio-4.2.0-py3-none-any.whl", hash = "sha256:745843b39e829e108e518c489b31dc757de7d2131d53fac32bd8df268227bfee", size = 85481, upload-time = "2023-12-16T17:06:55.989Z" },
-    ]
-
-    [[package]]
-    name = "anyio"
-    version = "4.3.0"
-    source = { registry = "https://pypi.org/simple" }
-    resolution-markers = [
-        "python_full_version >= '3.12'",
-    ]
-    dependencies = [
-        { name = "idna" },
-        { name = "sniffio" },
-    ]
-    sdist = { url = "https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz", hash = "sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6", size = 159642, upload-time = "2024-02-19T08:36:28.641Z" }
-    wheels = [
-        { url = "https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl", hash = "sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8", size = 85584, upload-time = "2024-02-19T08:36:26.842Z" },
+        { name = "branch-splitter", marker = "python_full_version < '3.12'", specifier = "==4.2.0" },
+        { name = "branch-splitter", marker = "python_full_version >= '3.12'", specifier = "==4.3.0" },
     ]
 
     [[package]]
@@ -278,61 +313,67 @@ fn root_package_splits_transitive_too() -> Result<()> {
     version = "0.1.0"
     source = { directory = "b1" }
     dependencies = [
-        { name = "iniconfig", version = "1.1.1", source = { url = "https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl" } },
+        { name = "branch-url", version = "1.1.1", source = { url = "http://[LOCALHOST]/files/branch_url-1.1.1-py3-none-any.whl" } },
     ]
 
     [package.metadata]
-    requires-dist = [{ name = "iniconfig", url = "https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl" }]
+    requires-dist = [{ name = "branch-url", url = "http://[LOCALHOST]/files/branch_url-1.1.1-py3-none-any.whl" }]
 
     [[package]]
     name = "b2"
     version = "0.1.0"
     source = { directory = "b2" }
     dependencies = [
-        { name = "iniconfig", version = "2.0.0", source = { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl" } },
+        { name = "branch-url", version = "2.0.0", source = { url = "http://[LOCALHOST]/files/branch_url-2.0.0-py3-none-any.whl" } },
     ]
 
     [package.metadata]
-    requires-dist = [{ name = "iniconfig", url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl" }]
+    requires-dist = [{ name = "branch-url", url = "http://[LOCALHOST]/files/branch_url-2.0.0-py3-none-any.whl" }]
 
     [[package]]
-    name = "idna"
-    version = "3.6"
-    source = { registry = "https://pypi.org/simple" }
-    sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426, upload-time = "2023-11-25T15:40:54.902Z" }
+    name = "branch-splitter"
+    version = "4.2.0"
+    source = { registry = "http://[LOCALHOST]/simple/" }
+    resolution-markers = [
+        "python_full_version < '3.12'",
+    ]
+    sdist = { url = "http://[LOCALHOST]/files/branch_splitter-4.2.0.tar.gz", hash = "sha256:1fd4ba13cae1b8de1f851e4081da4cb1659bd7a5fdaf233b526a0d4538b5f0bd", upload-time = "2024-03-24T00:00:00Z" }
     wheels = [
-        { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567, upload-time = "2023-11-25T15:40:52.604Z" },
+        { url = "http://[LOCALHOST]/files/branch_splitter-4.2.0-py3-none-any.whl", hash = "sha256:2a0858629ee7c581366d70d4abba1a003cb879eb5a1f20bee029a80b40d6ec4e", upload-time = "2024-03-24T00:00:00Z" },
     ]
 
     [[package]]
-    name = "iniconfig"
+    name = "branch-splitter"
+    version = "4.3.0"
+    source = { registry = "http://[LOCALHOST]/simple/" }
+    resolution-markers = [
+        "python_full_version >= '3.12'",
+    ]
+    sdist = { url = "http://[LOCALHOST]/files/branch_splitter-4.3.0.tar.gz", hash = "sha256:ce3fcb5cdb2a0a60523cf91c7ed3029129ca2d17b8ec45f51f247bdb2d0f1c49", upload-time = "2024-03-24T00:00:00Z" }
+    wheels = [
+        { url = "http://[LOCALHOST]/files/branch_splitter-4.3.0-py3-none-any.whl", hash = "sha256:14da5de6e342e8547a7fd8962fd9ac657c4c321b693d42668b157557920d1016", upload-time = "2024-03-24T00:00:00Z" },
+    ]
+
+    [[package]]
+    name = "branch-url"
     version = "1.1.1"
-    source = { url = "https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl" }
+    source = { url = "http://[LOCALHOST]/files/branch_url-1.1.1-py3-none-any.whl" }
     resolution-markers = [
         "python_full_version < '3.12'",
     ]
     wheels = [
-        { url = "https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl", hash = "sha256:011e24c64b7f47f6ebd835bb12a743f2fbe9a26d4cecaa7f53bc4f35ee9da8b3" },
+        { url = "http://[LOCALHOST]/files/branch_url-1.1.1-py3-none-any.whl", hash = "sha256:859128ee0d6d0248a1170ee4030d342d23d20f5d8840b9568fb5802f9f0912dd" },
     ]
 
     [[package]]
-    name = "iniconfig"
+    name = "branch-url"
     version = "2.0.0"
-    source = { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl" }
+    source = { url = "http://[LOCALHOST]/files/branch_url-2.0.0-py3-none-any.whl" }
     resolution-markers = [
         "python_full_version >= '3.12'",
     ]
     wheels = [
-        { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374" },
-    ]
-
-    [[package]]
-    name = "sniffio"
-    version = "1.3.1"
-    source = { registry = "https://pypi.org/simple" }
-    sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
-    wheels = [
-        { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
+        { url = "http://[LOCALHOST]/files/branch_url-2.0.0-py3-none-any.whl", hash = "sha256:a6ec1b64c087a48cbd93ff6424a689588a48c35239c918ed85f67d299e7ea79d" },
     ]
     "#);
 
@@ -350,15 +391,15 @@ fn root_package_splits_transitive_too() -> Result<()> {
 /// a -> b2 ; python_version >= '3.12' -> iniconfig==2.0.0
 /// ```
 #[test]
-#[cfg(feature = "test-pypi")]
 fn root_package_splits_other_dependencies_too() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/branching-urls.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let deps = indoc! {r#"
         dependencies = [
             # Force a split
-            "anyio==4.3.0 ; python_version >= '3.12'",
-            "anyio==4.2.0 ; python_version < '3.12'",
+            "branch-splitter==4.3.0 ; python_version >= '3.12'",
+            "branch-splitter==4.2.0 ; python_version < '3.12'",
             # These two are currently included in both parts of the split.
             "b1 ; python_version < '3.12'",
             "b2 ; python_version >= '3.12'",
@@ -372,14 +413,14 @@ fn root_package_splits_other_dependencies_too() -> Result<()> {
 
     let deps = indoc! {r#"
         dependencies = [
-            "iniconfig==1.1.1",
+            "branch-url==1.1.1",
         ]
     "# };
     make_project(&context.temp_dir.path().join("b1"), "b1", deps)?;
 
     let deps = indoc! {r#"
         dependencies = [
-            "iniconfig==2.0.0"
+            "branch-url==2.0.0"
         ]
     "# };
     make_project(&context.temp_dir.path().join("b2"), "b2", deps)?;
@@ -387,11 +428,11 @@ fn root_package_splits_other_dependencies_too() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 9 packages in [TIME]
+    Resolved 7 packages in [TIME]
     "
     );
 
-    assert_snapshot!(context.read("uv.lock"), @r#"
+    assert_snapshot!(apply_filters(context.read("uv.lock"), context.filters()), @r#"
     version = 1
     revision = 3
     requires-python = ">=3.11, <3.13"
@@ -408,50 +449,18 @@ fn root_package_splits_other_dependencies_too() -> Result<()> {
     version = "0.1.0"
     source = { editable = "." }
     dependencies = [
-        { name = "anyio", version = "4.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-        { name = "anyio", version = "4.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
         { name = "b1", marker = "python_full_version < '3.12'" },
         { name = "b2", marker = "python_full_version >= '3.12'" },
+        { name = "branch-splitter", version = "4.2.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "python_full_version < '3.12'" },
+        { name = "branch-splitter", version = "4.3.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "python_full_version >= '3.12'" },
     ]
 
     [package.metadata]
     requires-dist = [
-        { name = "anyio", marker = "python_full_version < '3.12'", specifier = "==4.2.0" },
-        { name = "anyio", marker = "python_full_version >= '3.12'", specifier = "==4.3.0" },
         { name = "b1", marker = "python_full_version < '3.12'", directory = "b1" },
         { name = "b2", marker = "python_full_version >= '3.12'", directory = "b2" },
-    ]
-
-    [[package]]
-    name = "anyio"
-    version = "4.2.0"
-    source = { registry = "https://pypi.org/simple" }
-    resolution-markers = [
-        "python_full_version < '3.12'",
-    ]
-    dependencies = [
-        { name = "idna" },
-        { name = "sniffio" },
-    ]
-    sdist = { url = "https://files.pythonhosted.org/packages/2d/b8/7333d87d5f03247215d86a86362fd3e324111788c6cdd8d2e6196a6ba833/anyio-4.2.0.tar.gz", hash = "sha256:e1875bb4b4e2de1669f4bc7869b6d3f54231cdced71605e6e64c9be77e3be50f", size = 158770, upload-time = "2023-12-16T17:06:57.709Z" }
-    wheels = [
-        { url = "https://files.pythonhosted.org/packages/bf/cd/d6d9bb1dadf73e7af02d18225cbd2c93f8552e13130484f1c8dcfece292b/anyio-4.2.0-py3-none-any.whl", hash = "sha256:745843b39e829e108e518c489b31dc757de7d2131d53fac32bd8df268227bfee", size = 85481, upload-time = "2023-12-16T17:06:55.989Z" },
-    ]
-
-    [[package]]
-    name = "anyio"
-    version = "4.3.0"
-    source = { registry = "https://pypi.org/simple" }
-    resolution-markers = [
-        "python_full_version >= '3.12'",
-    ]
-    dependencies = [
-        { name = "idna" },
-        { name = "sniffio" },
-    ]
-    sdist = { url = "https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz", hash = "sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6", size = 159642, upload-time = "2024-02-19T08:36:28.641Z" }
-    wheels = [
-        { url = "https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl", hash = "sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8", size = 85584, upload-time = "2024-02-19T08:36:26.842Z" },
+        { name = "branch-splitter", marker = "python_full_version < '3.12'", specifier = "==4.2.0" },
+        { name = "branch-splitter", marker = "python_full_version >= '3.12'", specifier = "==4.3.0" },
     ]
 
     [[package]]
@@ -459,63 +468,69 @@ fn root_package_splits_other_dependencies_too() -> Result<()> {
     version = "0.1.0"
     source = { directory = "b1" }
     dependencies = [
-        { name = "iniconfig", version = "1.1.1", source = { registry = "https://pypi.org/simple" } },
+        { name = "branch-url", version = "1.1.1", source = { registry = "http://[LOCALHOST]/simple/" } },
     ]
 
     [package.metadata]
-    requires-dist = [{ name = "iniconfig", specifier = "==1.1.1" }]
+    requires-dist = [{ name = "branch-url", specifier = "==1.1.1" }]
 
     [[package]]
     name = "b2"
     version = "0.1.0"
     source = { directory = "b2" }
     dependencies = [
-        { name = "iniconfig", version = "2.0.0", source = { registry = "https://pypi.org/simple" } },
+        { name = "branch-url", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" } },
     ]
 
     [package.metadata]
-    requires-dist = [{ name = "iniconfig", specifier = "==2.0.0" }]
+    requires-dist = [{ name = "branch-url", specifier = "==2.0.0" }]
 
     [[package]]
-    name = "idna"
-    version = "3.6"
-    source = { registry = "https://pypi.org/simple" }
-    sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426, upload-time = "2023-11-25T15:40:54.902Z" }
-    wheels = [
-        { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567, upload-time = "2023-11-25T15:40:52.604Z" },
-    ]
-
-    [[package]]
-    name = "iniconfig"
-    version = "1.1.1"
-    source = { registry = "https://pypi.org/simple" }
+    name = "branch-splitter"
+    version = "4.2.0"
+    source = { registry = "http://[LOCALHOST]/simple/" }
     resolution-markers = [
         "python_full_version < '3.12'",
     ]
-    sdist = { url = "https://files.pythonhosted.org/packages/23/a2/97899f6bd0e873fed3a7e67ae8d3a08b21799430fb4da15cfedf10d6e2c2/iniconfig-1.1.1.tar.gz", hash = "sha256:bc3af051d7d14b2ee5ef9969666def0cd1a000e121eaea580d4a313df4b37f32", size = 8104, upload-time = "2020-10-14T10:20:18.572Z" }
+    sdist = { url = "http://[LOCALHOST]/files/branch_splitter-4.2.0.tar.gz", hash = "sha256:1fd4ba13cae1b8de1f851e4081da4cb1659bd7a5fdaf233b526a0d4538b5f0bd", upload-time = "2024-03-24T00:00:00Z" }
     wheels = [
-        { url = "https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl", hash = "sha256:011e24c64b7f47f6ebd835bb12a743f2fbe9a26d4cecaa7f53bc4f35ee9da8b3", size = 4990, upload-time = "2020-10-16T17:37:23.05Z" },
+        { url = "http://[LOCALHOST]/files/branch_splitter-4.2.0-py3-none-any.whl", hash = "sha256:2a0858629ee7c581366d70d4abba1a003cb879eb5a1f20bee029a80b40d6ec4e", upload-time = "2024-03-24T00:00:00Z" },
     ]
 
     [[package]]
-    name = "iniconfig"
-    version = "2.0.0"
-    source = { registry = "https://pypi.org/simple" }
+    name = "branch-splitter"
+    version = "4.3.0"
+    source = { registry = "http://[LOCALHOST]/simple/" }
     resolution-markers = [
         "python_full_version >= '3.12'",
     ]
-    sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
+    sdist = { url = "http://[LOCALHOST]/files/branch_splitter-4.3.0.tar.gz", hash = "sha256:ce3fcb5cdb2a0a60523cf91c7ed3029129ca2d17b8ec45f51f247bdb2d0f1c49", upload-time = "2024-03-24T00:00:00Z" }
     wheels = [
-        { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
+        { url = "http://[LOCALHOST]/files/branch_splitter-4.3.0-py3-none-any.whl", hash = "sha256:14da5de6e342e8547a7fd8962fd9ac657c4c321b693d42668b157557920d1016", upload-time = "2024-03-24T00:00:00Z" },
     ]
 
     [[package]]
-    name = "sniffio"
-    version = "1.3.1"
-    source = { registry = "https://pypi.org/simple" }
-    sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
+    name = "branch-url"
+    version = "1.1.1"
+    source = { registry = "http://[LOCALHOST]/simple/" }
+    resolution-markers = [
+        "python_full_version < '3.12'",
+    ]
+    sdist = { url = "http://[LOCALHOST]/files/branch_url-1.1.1.tar.gz", hash = "sha256:0beac3f2ad3ee94ec48aab67e9b43f48047961e1481c29940aaf6165c5b9f80b", upload-time = "2024-03-24T00:00:00Z" }
     wheels = [
-        { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
+        { url = "http://[LOCALHOST]/files/branch_url-1.1.1-py3-none-any.whl", hash = "sha256:859128ee0d6d0248a1170ee4030d342d23d20f5d8840b9568fb5802f9f0912dd", upload-time = "2024-03-24T00:00:00Z" },
+    ]
+
+    [[package]]
+    name = "branch-url"
+    version = "2.0.0"
+    source = { registry = "http://[LOCALHOST]/simple/" }
+    resolution-markers = [
+        "python_full_version >= '3.12'",
+    ]
+    sdist = { url = "http://[LOCALHOST]/files/branch_url-2.0.0.tar.gz", hash = "sha256:3f62663c8f332d34d580019d403a62f7b7962cdc39d5a7885b0c1b62ee22bf66", upload-time = "2024-03-24T00:00:00Z" }
+    wheels = [
+        { url = "http://[LOCALHOST]/files/branch_url-2.0.0-py3-none-any.whl", hash = "sha256:a6ec1b64c087a48cbd93ff6424a689588a48c35239c918ed85f67d299e7ea79d", upload-time = "2024-03-24T00:00:00Z" },
     ]
     "#);
 
@@ -531,17 +546,19 @@ fn root_package_splits_other_dependencies_too() -> Result<()> {
 /// ]
 /// ```
 #[test]
-#[cfg(feature = "test-pypi")]
 fn branching_between_registry_and_direct_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let server = uv_test::packse::PackseServer::new("packages/branching-urls.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
 
-    let deps = indoc! {r#"
+    let deps = formatdoc! {r#"
         dependencies = [
-            "iniconfig == 1.1.1 ; python_version < '3.12'",
-            "iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl ; python_version >= '3.12'",
+            "branch-url == 1.1.1 ; python_version < '3.12'",
+            "branch-url @ {branch_url} ; python_version >= '3.12'",
         ]
-    "# };
-    make_project(context.temp_dir.path(), "a", deps)?;
+    "#,
+        branch_url = server.file_url("branch_url-2.0.0-py3-none-any.whl"),
+    };
+    make_project(context.temp_dir.path(), "a", &deps)?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
@@ -551,7 +568,7 @@ fn branching_between_registry_and_direct_url() -> Result<()> {
     );
 
     // We have source dist and wheel for the registry, but only the wheel for the direct URL.
-    assert_snapshot!(context.read("uv.lock"), @r#"
+    assert_snapshot!(apply_filters(context.read("uv.lock"), context.filters()), @r#"
     version = 1
     revision = 3
     requires-python = ">=3.11, <3.13"
@@ -568,37 +585,37 @@ fn branching_between_registry_and_direct_url() -> Result<()> {
     version = "0.1.0"
     source = { editable = "." }
     dependencies = [
-        { name = "iniconfig", version = "1.1.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-        { name = "iniconfig", version = "2.0.0", source = { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl" }, marker = "python_full_version >= '3.12'" },
+        { name = "branch-url", version = "1.1.1", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "python_full_version < '3.12'" },
+        { name = "branch-url", version = "2.0.0", source = { url = "http://[LOCALHOST]/files/branch_url-2.0.0-py3-none-any.whl" }, marker = "python_full_version >= '3.12'" },
     ]
 
     [package.metadata]
     requires-dist = [
-        { name = "iniconfig", marker = "python_full_version < '3.12'", specifier = "==1.1.1" },
-        { name = "iniconfig", marker = "python_full_version >= '3.12'", url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl" },
+        { name = "branch-url", marker = "python_full_version < '3.12'", specifier = "==1.1.1" },
+        { name = "branch-url", marker = "python_full_version >= '3.12'", url = "http://[LOCALHOST]/files/branch_url-2.0.0-py3-none-any.whl" },
     ]
 
     [[package]]
-    name = "iniconfig"
+    name = "branch-url"
     version = "1.1.1"
-    source = { registry = "https://pypi.org/simple" }
+    source = { registry = "http://[LOCALHOST]/simple/" }
     resolution-markers = [
         "python_full_version < '3.12'",
     ]
-    sdist = { url = "https://files.pythonhosted.org/packages/23/a2/97899f6bd0e873fed3a7e67ae8d3a08b21799430fb4da15cfedf10d6e2c2/iniconfig-1.1.1.tar.gz", hash = "sha256:bc3af051d7d14b2ee5ef9969666def0cd1a000e121eaea580d4a313df4b37f32", size = 8104, upload-time = "2020-10-14T10:20:18.572Z" }
+    sdist = { url = "http://[LOCALHOST]/files/branch_url-1.1.1.tar.gz", hash = "sha256:0beac3f2ad3ee94ec48aab67e9b43f48047961e1481c29940aaf6165c5b9f80b", upload-time = "2024-03-24T00:00:00Z" }
     wheels = [
-        { url = "https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl", hash = "sha256:011e24c64b7f47f6ebd835bb12a743f2fbe9a26d4cecaa7f53bc4f35ee9da8b3", size = 4990, upload-time = "2020-10-16T17:37:23.05Z" },
+        { url = "http://[LOCALHOST]/files/branch_url-1.1.1-py3-none-any.whl", hash = "sha256:859128ee0d6d0248a1170ee4030d342d23d20f5d8840b9568fb5802f9f0912dd", upload-time = "2024-03-24T00:00:00Z" },
     ]
 
     [[package]]
-    name = "iniconfig"
+    name = "branch-url"
     version = "2.0.0"
-    source = { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl" }
+    source = { url = "http://[LOCALHOST]/files/branch_url-2.0.0-py3-none-any.whl" }
     resolution-markers = [
         "python_full_version >= '3.12'",
     ]
     wheels = [
-        { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374" },
+        { url = "http://[LOCALHOST]/files/branch_url-2.0.0-py3-none-any.whl", hash = "sha256:a6ec1b64c087a48cbd93ff6424a689588a48c35239c918ed85f67d299e7ea79d" },
     ]
     "#);
 
@@ -614,18 +631,22 @@ fn branching_between_registry_and_direct_url() -> Result<()> {
 /// ]
 /// ```
 #[test]
-#[cfg(all(feature = "test-git", feature = "test-pypi"))]
+#[cfg(feature = "test-git")]
 fn branching_urls_of_different_sources_disjoint() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let server = uv_test::packse::PackseServer::new("packages/branching-urls.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
+    let git_url = git_package_url(&context)?;
 
-    let deps = indoc! {r#"
+    let deps = formatdoc! {r#"
         dependencies = [
             # Valid, disjoint split
-            "iniconfig @ https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl ; python_version < '3.12'",
-            "iniconfig @ git+https://github.com/pytest-dev/iniconfig@93f5930e668c0d1ddf4597e38dd0dea4e2665e7a ; python_version >= '3.12'",
+            "git-branch @ {git_branch_url} ; python_version < '3.12'",
+            "git-branch @ git+{git_url} ; python_version >= '3.12'",
         ]
-    "# };
-    make_project(context.temp_dir.path(), "a", deps)?;
+    "#,
+        git_branch_url = server.file_url("git_branch-1.1.1-py3-none-any.whl"),
+    };
+    make_project(context.temp_dir.path(), "a", &deps)?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
@@ -635,7 +656,9 @@ fn branching_urls_of_different_sources_disjoint() -> Result<()> {
     );
 
     // We have source dist and wheel for the registry, but only the wheel for the direct URL.
-    assert_snapshot!(context.read("uv.lock"), @r#"
+    let mut filters = context.filters();
+    filters.push((r"#[0-9a-f]{40}", "#[COMMIT]"));
+    assert_snapshot!(apply_filters(context.read("uv.lock"), filters), @r#"
     version = 1
     revision = 3
     requires-python = ">=3.11, <3.13"
@@ -652,31 +675,31 @@ fn branching_urls_of_different_sources_disjoint() -> Result<()> {
     version = "0.1.0"
     source = { editable = "." }
     dependencies = [
-        { name = "iniconfig", version = "1.1.1", source = { url = "https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl" }, marker = "python_full_version < '3.12'" },
-        { name = "iniconfig", version = "2.0.0", source = { git = "https://github.com/pytest-dev/iniconfig?rev=93f5930e668c0d1ddf4597e38dd0dea4e2665e7a#93f5930e668c0d1ddf4597e38dd0dea4e2665e7a" }, marker = "python_full_version >= '3.12'" },
+        { name = "git-branch", version = "1.1.1", source = { url = "http://[LOCALHOST]/files/git_branch-1.1.1-py3-none-any.whl" }, marker = "python_full_version < '3.12'" },
+        { name = "git-branch", version = "2.0.0", source = { git = "file://[TEMP_DIR]/git-branch/#[COMMIT]" }, marker = "python_full_version >= '3.12'" },
     ]
 
     [package.metadata]
     requires-dist = [
-        { name = "iniconfig", marker = "python_full_version < '3.12'", url = "https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl" },
-        { name = "iniconfig", marker = "python_full_version >= '3.12'", git = "https://github.com/pytest-dev/iniconfig?rev=93f5930e668c0d1ddf4597e38dd0dea4e2665e7a" },
+        { name = "git-branch", marker = "python_full_version < '3.12'", url = "http://[LOCALHOST]/files/git_branch-1.1.1-py3-none-any.whl" },
+        { name = "git-branch", marker = "python_full_version >= '3.12'", git = "file://[TEMP_DIR]/git-branch/" },
     ]
 
     [[package]]
-    name = "iniconfig"
+    name = "git-branch"
     version = "1.1.1"
-    source = { url = "https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl" }
+    source = { url = "http://[LOCALHOST]/files/git_branch-1.1.1-py3-none-any.whl" }
     resolution-markers = [
         "python_full_version < '3.12'",
     ]
     wheels = [
-        { url = "https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl", hash = "sha256:011e24c64b7f47f6ebd835bb12a743f2fbe9a26d4cecaa7f53bc4f35ee9da8b3" },
+        { url = "http://[LOCALHOST]/files/git_branch-1.1.1-py3-none-any.whl", hash = "sha256:41c1289c9f0e044c4bdc4868671dd08e79f4aa0ccff9941e42ab09c6fb6a3044" },
     ]
 
     [[package]]
-    name = "iniconfig"
+    name = "git-branch"
     version = "2.0.0"
-    source = { git = "https://github.com/pytest-dev/iniconfig?rev=93f5930e668c0d1ddf4597e38dd0dea4e2665e7a#93f5930e668c0d1ddf4597e38dd0dea4e2665e7a" }
+    source = { git = "file://[TEMP_DIR]/git-branch/#[COMMIT]" }
     resolution-markers = [
         "python_full_version >= '3.12'",
     ]
@@ -695,26 +718,30 @@ fn branching_urls_of_different_sources_disjoint() -> Result<()> {
 /// ]
 /// ```
 #[test]
-#[cfg(all(feature = "test-git", feature = "test-pypi"))]
+#[cfg(feature = "test-git")]
 fn branching_urls_of_different_sources_conflict() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let server = uv_test::packse::PackseServer::new("packages/branching-urls.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
+    let git_url = git_package_url(&context)?;
 
-    let deps = indoc! {r#"
+    let deps = formatdoc! {r#"
         dependencies = [
             # Conflicting split
-            "iniconfig @ https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl ; python_version < '3.12'",
-            "iniconfig @ git+https://github.com/pytest-dev/iniconfig@93f5930e668c0d1ddf4597e38dd0dea4e2665e7a ; python_version >= '3.11'",
+            "git-branch @ {git_branch_url} ; python_version < '3.12'",
+            "git-branch @ git+{git_url} ; python_version >= '3.11'",
         ]
-    "# };
-    make_project(context.temp_dir.path(), "a", deps)?;
+    "#,
+        git_branch_url = server.file_url("git_branch-1.1.1-py3-none-any.whl"),
+    };
+    make_project(context.temp_dir.path(), "a", &deps)?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to resolve dependencies for package `a==0.1.0`
-      cause: Requirements contain conflicting URLs for package `iniconfig` in split `python_full_version == '3.11.*'`:
-             - git+https://github.com/pytest-dev/iniconfig@93f5930e668c0d1ddf4597e38dd0dea4e2665e7a
-             - https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl
+      cause: Requirements contain conflicting URLs for package `git-branch` in split `python_full_version == '3.11.*'`:
+             - git+file://[TEMP_DIR]/git-branch/
+             - http://[LOCALHOST]/files/git_branch-1.1.1-py3-none-any.whl
     "
     );
 

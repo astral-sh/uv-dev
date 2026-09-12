@@ -434,7 +434,7 @@ fn run_pep723_script() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving script dependencies
-      cause: Because there are no versions of add and you require add, we can conclude that your requirements are unsatisfiable.
+      cause: Because add was not found in the package registry and you require add, we can conclude that your requirements are unsatisfiable.
     ");
 
     // If the script can't be resolved, we should reference the script.
@@ -453,7 +453,7 @@ fn run_pep723_script() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving script dependencies
-      cause: Because there are no versions of add and you require add, we can conclude that your requirements are unsatisfiable.
+      cause: Because add was not found in the package registry and you require add, we can conclude that your requirements are unsatisfiable.
     ");
 
     // If the script contains an unclosed PEP 723 tag, we should error.
@@ -779,9 +779,10 @@ fn run_pep723_script_metadata() -> Result<()> {
 #[test]
 fn run_pep723_script_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let index = PackseServer::new("packages/run.toml");
 
     let test_script = context.temp_dir.child("main.py");
-    test_script.write_str(indoc! { r#"
+    test_script.write_str(&indoc::formatdoc! { r#"
         # /// script
         # requires-python = ">=3.11"
         # dependencies = [
@@ -790,15 +791,16 @@ fn run_pep723_script_index() -> Result<()> {
         #
         # [[tool.uv.index]]
         # name = "test"
-        # url = "https://test.pypi.org/simple"
+        # url = "{}"
         # explicit = true
         #
         # [tool.uv.sources]
-        # idna = { index = "test" }
+        # idna = {{ index = "test" }}
         # ///
 
         import idna
-       "#
+       "#,
+        index.index_url(),
     })?;
 
     uv_snapshot!(context.filters(), context.run().arg("main.py"), @"
@@ -807,7 +809,7 @@ fn run_pep723_script_index() -> Result<()> {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + idna==2.7
+     + idna==3.6
     ");
 
     Ok(())
@@ -985,7 +987,7 @@ fn run_pep723_script_overrides() -> Result<()> {
     Prepared 3 packages in [TIME]
     Installed 3 packages in [TIME]
      + anyio==4.3.0
-     + idna==2.0
+     + idna==1.0
      + sniffio==1.3.1
     ");
 
@@ -1147,10 +1149,10 @@ fn run_pep723_script_lock() -> Result<()> {
         [[package]]
         name = "iniconfig"
         version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz", hash = "sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
+            { url = "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c", upload-time = "2024-03-24T00:00:00Z" },
         ]
         "#
         );
@@ -1251,32 +1253,32 @@ fn run_pep723_script_lock() -> Result<()> {
         [[package]]
         name = "anyio"
         version = "4.3.0"
-        source = { registry = "https://pypi.org/simple" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
         dependencies = [
             { name = "idna" },
             { name = "sniffio" },
         ]
-        sdist = { url = "https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz", hash = "sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6", size = 159642, upload-time = "2024-02-19T08:36:28.641Z" }
+        sdist = { url = "http://[LOCALHOST]/files/anyio-4.3.0.tar.gz", hash = "sha256:13a6d97fa30ec110d85e3949a30c92306f0178135048329f54a335c3dade753a", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl", hash = "sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8", size = 85584, upload-time = "2024-02-19T08:36:26.842Z" },
+            { url = "http://[LOCALHOST]/files/anyio-4.3.0-py3-none-any.whl", hash = "sha256:c4f443e7e5a2c003b1534688207e85dbd11960efb66d4d6a4e7693fdfc6f5b33", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
         name = "idna"
         version = "3.6"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426, upload-time = "2023-11-25T15:40:54.902Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/idna-3.6.tar.gz", hash = "sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567, upload-time = "2023-11-25T15:40:52.604Z" },
+            { url = "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl", hash = "sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
         name = "sniffio"
         version = "1.3.1"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/sniffio-1.3.1.tar.gz", hash = "sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
+            { url = "http://[LOCALHOST]/files/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05", upload-time = "2024-03-24T00:00:00Z" },
         ]
         "#
         );
@@ -1441,7 +1443,7 @@ fn run_with() -> Result<()> {
     uv_snapshot!(context.filters(), context.run().arg("--with").arg("sniffio<1.3.0").arg("main.py"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    1.2.0
+    1.1.0
 
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -1449,7 +1451,7 @@ fn run_with() -> Result<()> {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + sniffio==1.2.0
+     + sniffio==1.1.0
     ");
 
     // If we request a dependency that isn't in the base environment, we should still respect any
@@ -1493,7 +1495,7 @@ fn run_with() -> Result<()> {
     Resolved 2 packages in [TIME]
     Checked 2 packages in [TIME]
     error: No solution found when resolving `--with` dependencies
-      cause: Because there are no versions of add and you require add, we can conclude that your requirements are unsatisfiable.
+      cause: Because add was not found in the package registry and you require add, we can conclude that your requirements are unsatisfiable.
     ");
 
     Ok(())
@@ -2567,23 +2569,23 @@ fn run_locked() -> Result<()> {
         [[package]]
         name = "anyio"
         version = "3.7.0"
-        source = { registry = "https://pypi.org/simple" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
         dependencies = [
             { name = "idna" },
             { name = "sniffio" },
         ]
-        sdist = { url = "https://files.pythonhosted.org/packages/c6/b3/fefbf7e78ab3b805dec67d698dc18dd505af7a18a8dd08868c9b4fa736b5/anyio-3.7.0.tar.gz", hash = "sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce", size = 142737, upload-time = "2023-05-27T11:12:46.688Z" }
+        sdist = { url = "http://[LOCALHOST]/files/anyio-3.7.0.tar.gz", hash = "sha256:c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/68/fe/7ce1926952c8a403b35029e194555558514b365ad77d75125f521a2bec62/anyio-3.7.0-py3-none-any.whl", hash = "sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0", size = 80873, upload-time = "2023-05-27T11:12:44.474Z" },
+            { url = "http://[LOCALHOST]/files/anyio-3.7.0-py3-none-any.whl", hash = "sha256:ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
         name = "idna"
         version = "3.6"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426, upload-time = "2023-11-25T15:40:54.902Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/idna-3.6.tar.gz", hash = "sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567, upload-time = "2023-11-25T15:40:52.604Z" },
+            { url = "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl", hash = "sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
@@ -2600,10 +2602,10 @@ fn run_locked() -> Result<()> {
         [[package]]
         name = "sniffio"
         version = "1.3.1"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/sniffio-1.3.1.tar.gz", hash = "sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
+            { url = "http://[LOCALHOST]/files/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05", upload-time = "2024-03-24T00:00:00Z" },
         ]
         "#);
         }
@@ -4145,8 +4147,8 @@ fn run_script_module_conflict() -> Result<()> {
         foo = "foo:app"
 
         [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
         "#
     })?;
 
@@ -4399,6 +4401,7 @@ fn run_linked_environment_path() -> Result<()> {
     use anyhow::Ok;
 
     let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/run.toml")
         .with_filtered_virtualenv_bin()
         .with_filtered_python_names();
 
@@ -4421,7 +4424,7 @@ fn run_linked_environment_path() -> Result<()> {
         .env(EnvVars::UV_PROJECT_ENVIRONMENT, "target"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 8 packages in [TIME]
+    Resolved 7 packages in [TIME]
     Prepared 6 packages in [TIME]
     Installed 6 packages in [TIME]
      + black==24.3.0
@@ -4443,7 +4446,7 @@ fn run_linked_environment_path() -> Result<()> {
     [TEMP_DIR]/target/[BIN]/[PYTHON]
 
     ----- stderr -----
-    Resolved 8 packages in [TIME]
+    Resolved 7 packages in [TIME]
     Checked 6 packages in [TIME]
     ");
 
@@ -4741,28 +4744,43 @@ fn run_gui_script_explicit_stdin_unix() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn run_remote_pep723_script() {
+#[tokio::test]
+async fn run_remote_pep723_script() {
     let context = uv_test::test_context!("3.12")
         .with_filtered_python_names()
         .with_filter((
             r"(?m)^Downloaded remote script to:.*\.py$",
             "Downloaded remote script to: [TEMP_PATH].py",
         ));
-    uv_snapshot!(context.filters(), context.run().arg("https://raw.githubusercontent.com/astral-sh/uv/df45b9ac2584824309ff29a6a09421055ad730f6/scripts/uv-run-remote-script-test.py").arg(EnvVars::CI), @"
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/uv-run-remote-script-test.py"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(indoc! {r#"
+            # /// script
+            # requires-python = ">=3.12"
+            # dependencies = ["iniconfig"]
+            # ///
+
+            import sys
+            import iniconfig
+
+            print(f"Hello {sys.argv[1]}, from uv!")
+        "#}))
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.run().arg(format!("{}/uv-run-remote-script-test.py", server.uri())).arg(EnvVars::CI), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     Hello CI, from uv!
 
     ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + markdown-it-py==3.0.0
-     + mdurl==0.1.2
-     + pygments==2.17.2
-     + rich==13.7.1
-    ");
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    "#);
 }
 
 #[test]
@@ -6142,10 +6160,10 @@ fn run_pep723_script_with_constraints_lock() -> Result<()> {
         [[package]]
         name = "iniconfig"
         version = "1.1.1"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/23/a2/97899f6bd0e873fed3a7e67ae8d3a08b21799430fb4da15cfedf10d6e2c2/iniconfig-1.1.1.tar.gz", hash = "sha256:bc3af051d7d14b2ee5ef9969666def0cd1a000e121eaea580d4a313df4b37f32", size = 8104, upload-time = "2020-10-14T10:20:18.572Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/iniconfig-1.1.1.tar.gz", hash = "sha256:4f511134392ee75a8077a69be0d19cd4e5abb3a99ca54c7ab4a8e09ba0bc6991", upload-time = "2020-10-14T10:20:18.572Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl", hash = "sha256:011e24c64b7f47f6ebd835bb12a743f2fbe9a26d4cecaa7f53bc4f35ee9da8b3", size = 4990, upload-time = "2020-10-16T17:37:23.05Z" },
+            { url = "http://[LOCALHOST]/files/iniconfig-1.1.1-py3-none-any.whl", hash = "sha256:7832a237a8357e11d0a6e6a909bff9806c6f378393862998cd328fcf9d54d509", upload-time = "2020-10-14T10:20:18.572Z" },
         ]
         "#
         );
@@ -6924,7 +6942,7 @@ fn run_target_workspace_discovery_workspace_project_groups() -> Result<()> {
     Resolved 8 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + six==1.16.0
+     + six==1.17.0
     ");
 
     uv_snapshot!(context.filters(), context.run()
@@ -6942,7 +6960,7 @@ fn run_target_workspace_discovery_workspace_project_groups() -> Result<()> {
     Prepared 1 package in [TIME]
     Installed 2 packages in [TIME]
      + idna==3.6
-     + six==1.16.0
+     + six==1.17.0
     ");
 
     uv_snapshot!(context.filters(), context.run()
@@ -6957,7 +6975,7 @@ fn run_target_workspace_discovery_workspace_project_groups() -> Result<()> {
     Resolved 8 packages in [TIME]
     Installed 4 packages in [TIME]
      + packaging==24.0
-     + six==1.16.0
+     + six==1.17.0
      + sniffio==1.3.1
      + typing-extensions==4.10.0
     ");
@@ -7172,7 +7190,7 @@ fn run_target_workspace_discovery_virtual_workspace_groups() -> Result<()> {
     Resolved 6 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + six==1.16.0
+     + six==1.17.0
     ");
 
     uv_snapshot!(context.filters(), context.run()
@@ -7188,7 +7206,7 @@ fn run_target_workspace_discovery_virtual_workspace_groups() -> Result<()> {
     Prepared 1 package in [TIME]
     Installed 4 packages in [TIME]
      + packaging==24.0
-     + six==1.16.0
+     + six==1.17.0
      + sniffio==1.3.1
      + typing-extensions==4.10.0
     ");
@@ -7243,7 +7261,7 @@ fn run_target_workspace_discovery_virtual_workspace_groups() -> Result<()> {
     ----- stderr -----
     Resolved 6 packages in [TIME]
     Installed 1 package in [TIME]
-     + six==1.16.0
+     + six==1.17.0
     ");
 
     uv_snapshot!(context.filters(), context.run()
@@ -7261,7 +7279,7 @@ fn run_target_workspace_discovery_virtual_workspace_groups() -> Result<()> {
     Prepared 1 package in [TIME]
     Installed 2 packages in [TIME]
      + idna==3.6
-     + six==1.16.0
+     + six==1.17.0
     ");
 
     Ok(())
@@ -7338,7 +7356,7 @@ fn run_target_workspace_discovery_workspace_project_group_commands() -> Result<(
     Prepared 1 package in [TIME]
     Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
-     + six==1.16.0
+     + six==1.17.0
      - sniffio==1.3.1
     ");
 
@@ -7378,7 +7396,7 @@ fn run_target_workspace_discovery_workspace_project_group_commands() -> Result<(
         .arg("shared"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    six==1.16.0
+    six==1.17.0
 
     ----- stderr -----
     Resolved 8 packages in [TIME]
@@ -7392,7 +7410,7 @@ fn run_target_workspace_discovery_workspace_project_group_commands() -> Result<(
     exit_code: 0 (success)
     ----- stdout -----
     packaging==24.0
-    six==1.16.0
+    six==1.17.0
     sniffio==1.3.1
     typing-extensions==4.10.0
 
@@ -7468,7 +7486,7 @@ fn run_target_workspace_discovery_virtual_workspace_group_commands() -> Result<(
     Prepared 1 package in [TIME]
     Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
-     + six==1.16.0
+     + six==1.17.0
      - sniffio==1.3.1
     ");
 
@@ -7494,7 +7512,7 @@ fn run_target_workspace_discovery_virtual_workspace_group_commands() -> Result<(
         .arg("shared"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    six==1.16.0
+    six==1.17.0
 
     ----- stderr -----
     Resolved 6 packages in [TIME]
@@ -7711,21 +7729,20 @@ fn run_project_file_no_ancestor_project() -> Result<()> {
 
 /// Ensure that `uv run` aborts when malware is detected in a dependency.
 #[tokio::test]
-async fn run_malware_detected() {
+async fn run_malware_detected() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml
-        .write_str(indoc! {r#"
+    pyproject_toml.write_str(indoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = ["iniconfig==2.0.0"]
-    "#})
-        .unwrap();
+    "#})?;
 
     context.lock().assert().success();
+    context.rewrite_lock_registry_sources("https://pypi.org/simple")?;
 
     let server = MockServer::start().await;
 
@@ -7748,6 +7765,7 @@ async fn run_malware_detected() {
 
     uv_snapshot!(context.filters(), context
         .run()
+        .arg("--frozen")
         .arg("--preview-features").arg("malware-check")
         .arg("python")
         .arg("--version")
@@ -7755,11 +7773,12 @@ async fn run_malware_detected() {
         .env(EnvVars::UV_MALWARE_CHECK_URL, server.uri()), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Resolved 2 packages in [TIME]
     warning: Malware detected in locked dependencies:
       - `iniconfig==2.0.0`: MAL-2026-1234 (https://osv.dev/vulnerability/MAL-2026-1234)
     error: Malware detected in one or more dependencies that would be installed; aborting sync. Set `UV_MALWARE_CHECK=0` to bypass this check.
     ");
+
+    Ok(())
 }
 
 #[test]

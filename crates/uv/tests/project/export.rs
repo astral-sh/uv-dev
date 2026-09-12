@@ -94,16 +94,16 @@ fn requirements_txt_dependency() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR]
     -e .
     anyio==3.7.0 \
-        --hash=sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce \
-        --hash=sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0
+        --hash=sha256:c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a \
+        --hash=sha256:ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556
         # via project
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
 
     ----- stderr -----
@@ -140,16 +140,16 @@ fn requirements_txt_export_no_header() -> Result<()> {
     ----- stdout -----
     -e .
     anyio==3.7.0 \
-        --hash=sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce \
-        --hash=sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0
+        --hash=sha256:c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a \
+        --hash=sha256:ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556
         # via project
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
 
     ----- stderr -----
@@ -188,51 +188,42 @@ fn requirements_txt_dependency_extra() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR]
     -e .
     blinker==1.7.0 \
-        --hash=sha256:c3f865d4d54db7abc53758a01601cf343fe55b84c1de4e3fa910e420b438d5b9 \
-        --hash=sha256:e6820ff6fa4e4d1d8e2747c2283749c3f547e4fee112b98555cdcdae32996182
+        --hash=sha256:16e8a78355abef21712be56c16a83f305703536b963d34074c17bd38bc622a0e \
+        --hash=sha256:2a6bdf71c63b391215e295644f9fc049a5d69c61571558e1c619530a6af6c077
         # via flask
     click==8.1.7 \
-        --hash=sha256:ae74fb96c20a0277a1d615f1e4d73c8414f5a98db8b799a7931d1582f3390c28 \
-        --hash=sha256:ca9853ad459e787e2192211578cc907e7594e294c7ccc834310722b41b9ca6de
+        --hash=sha256:2213ef47fd0669b0ccbc39c91de8171af360b8828b41728d284e4536b04d6d8c \
+        --hash=sha256:422780ea5d1bd95078e86f8918392addb06a1c600a81a253662ff41854503653
         # via flask
     colorama==0.4.6 ; sys_platform == 'win32' \
-        --hash=sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44 \
-        --hash=sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6
+        --hash=sha256:3c2dfb3bc263e7ae015f1b07d0cadb8b17840adeb20c9860987bb024668f3383 \
+        --hash=sha256:6da60c49d854e9d90dc18904dd600e3e5c641cdefba215dee55de55707091524
         # via click
     flask==3.0.2 \
-        --hash=sha256:3232e0e9c850d781933cf0207523d1ece087eb8d87b23777ae38456e2fbe7c6e \
-        --hash=sha256:822c03f4b799204250a7ee84b1eddc40665395333973dfb9deebfe425fefcb7d
+        --hash=sha256:07a68e7fb77caa921de64c68d1cf61b2138a58fda95b3eaa1fab7d51066202da \
+        --hash=sha256:54e8c9f50964bd9cd7bbf65672880f03093c5937bbd85866d36b13d63c164cf3
         # via project
     itsdangerous==2.1.2 \
-        --hash=sha256:2c2349112351b88699d8d4b6b075022c0808887cb7ad10069318a8b0bc88db44 \
-        --hash=sha256:5dbbc68b317e5e42f327f9021763545dc3fc3bfe22e6deb96aaf1fc38874156a
+        --hash=sha256:8245f57a409b3f6cac2c3f2b700a3209ef6314b4b1aafc1f70e80108feabc29a \
+        --hash=sha256:ae92ba1fab87435c727c7fad27b6ebbfe772dbf8c44387250de4731749ecbf49
         # via flask
     jinja2==3.1.3 \
-        --hash=sha256:7d6d50dd97d52cbc355597bd845fabfbac3f551e1f99619e39a35ce8c370b5fa \
-        --hash=sha256:ac8bd6544d4bb2c9792bf3a159e80bba8fda7f07e81bc3aed565432d5925ba90
+        --hash=sha256:046923c85a8464827b55a7cf5541e7f08077b19245732698df3d2d6d653d6001 \
+        --hash=sha256:84ee4127f133eb82e1b98c1fdcf7abbdfbe4efe8d15a1b4954c0f5655103cd71
         # via flask
     markupsafe==2.1.5 \
-        --hash=sha256:3c6b973f22eb18a789b1460b4b91bf04ae3f0c4234a0a6aa6b0a92f6f7b951d4 \
-        --hash=sha256:58c98fee265677f63a4385256a6d7683ab1832f3ddd1e66fe948d5880c21a169 \
-        --hash=sha256:823b65d8706e32ad2df51ed89496147a42a2a6e01c13cfb6ffb8b1e92bc910bb \
-        --hash=sha256:8590b4ae07a35970728874632fed7bd57b26b0102df2d2b233b6d9d82f6c62ad \
-        --hash=sha256:8dec4936e9c3100156f8a2dc89c4b88d5c435175ff03413b443469c7c8c5f4d1 \
-        --hash=sha256:ac07bad82163452a6884fe8fa0963fb98c2346ba78d779ec06bd7a6262132aee \
-        --hash=sha256:bec0a414d016ac1a18862a519e54b2fd0fc8bbfd6890376898a6c0891dd82e9f \
-        --hash=sha256:d050b3361367a06d752db6ead6e7edeb0009be66bc3bae0ee9d97fb326badc2a \
-        --hash=sha256:d283d37a890ba4c1ae73ffadf8046435c76e7bc2247bbb63c00bd1a709c6544b \
-        --hash=sha256:ea3d8a3d18833cf4304cd2fc9cbb1efe188ca9b5efef2bdac7adc20594a0e46b \
-        --hash=sha256:f5dfb42c4604dddc8e4305050aa6deb084540643ed5804d7455b5df8fe16f5e5
+        --hash=sha256:d0fe66b2745bbd943b48f3229667cf4506d88136363578b94e63d384e61d4984 \
+        --hash=sha256:e38237d66e6760fe86fe38e4b6c70ff4eed7da50b15e8c0f2589f05850207f13
         # via
         #   jinja2
         #   werkzeug
     python-dotenv==1.0.1 \
-        --hash=sha256:e324ee90a023d808f1959c46bcbc04446a10ced277783dc6ee09987c37ec10ca \
-        --hash=sha256:f7b63ef50f1b690dddf550d03497b66d609393b40b564ed0d674909a68ebf16a
+        --hash=sha256:89b930a1922dd95774346479fc120ce17a229a6b9b54d5c6b4ea93ef7d66737e \
+        --hash=sha256:a998d557094bbf72a614a03c49920317f307e957d0fe67613ed2dc0687af73fe
         # via flask
     werkzeug==3.0.1 \
-        --hash=sha256:507e811ecea72b18a404947aded4b3390e1db8f826b494d76550ef45bb3b1dcc \
-        --hash=sha256:90a285dc0e42ad56b34e696398b8122ee4c681833fb35b8334a095d82c56da10
+        --hash=sha256:188ff0c0fe1902487688940f4274ba029a6c939cd8c3d90b936b4dfdbba3c480 \
+        --hash=sha256:f7b626ae2c6e0af38cdee0ed8ebe1c54725c3ecb426f48a375d09bd503269a4e
         # via flask
 
     ----- stderr -----
@@ -248,7 +239,8 @@ fn requirements_txt_dependency_extra() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_conditional_transitive_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2026-05-12T00:00:00Z");
+    let server = PackseServer::new("packages/export-markers.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -257,10 +249,10 @@ fn requirements_txt_conditional_transitive_extra() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.10"
-        dependencies = ["urllib3==2.7.0"]
+        dependencies = ["optional-parent==2.7.0"]
 
         [project.optional-dependencies]
-        zstd = ["urllib3[zstd]==2.7.0 ; python_full_version < '3.14'"]
+        backport = ["optional-parent[backport]==2.7.0 ; python_full_version < '3.14'"]
         "#,
     )?;
 
@@ -271,9 +263,9 @@ fn requirements_txt_conditional_transitive_extra() -> Result<()> {
     ----- stdout -----
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR] --all-extras --no-hashes
-    backports-zstd==1.5.0 ; python_full_version < '3.14'
-        # via urllib3
-    urllib3==2.7.0
+    optional-backport==1.5.0 ; python_full_version < '3.14'
+        # via optional-parent
+    optional-parent==2.7.0
         # via project
 
     ----- stderr -----
@@ -316,8 +308,8 @@ fn requirements_txt_project_extra() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR]
     -e .
     typing-extensions==4.10.0 \
-        --hash=sha256:69b1a937c3a517342112fb4c6df7e72fc39a38e7891a5730ed4985b5214b5475 \
-        --hash=sha256:b0abd7c89e8fb96f98db18d86106ff1d90ab692004eb746cf6eda2682f91b3cb
+        --hash=sha256:0626263fe1dcda7bc3ee7b2872064b534d4831718055d22d4f32f9e474a867a4 \
+        --hash=sha256:adefbbc2f75a47edb1f4491a2e99a45438ec3dd0c2670276b321cad2ca522246
         # via project
 
     ----- stderr -----
@@ -331,20 +323,20 @@ fn requirements_txt_project_extra() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR] --extra pytest --extra async --no-extra pytest
     -e .
     anyio==3.7.0 \
-        --hash=sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce \
-        --hash=sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0
+        --hash=sha256:c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a \
+        --hash=sha256:ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556
         # via project
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
     typing-extensions==4.10.0 \
-        --hash=sha256:69b1a937c3a517342112fb4c6df7e72fc39a38e7891a5730ed4985b5214b5475 \
-        --hash=sha256:b0abd7c89e8fb96f98db18d86106ff1d90ab692004eb746cf6eda2682f91b3cb
+        --hash=sha256:0626263fe1dcda7bc3ee7b2872064b534d4831718055d22d4f32f9e474a867a4 \
+        --hash=sha256:adefbbc2f75a47edb1f4491a2e99a45438ec3dd0c2670276b321cad2ca522246
         # via project
 
     ----- stderr -----
@@ -358,12 +350,12 @@ fn requirements_txt_project_extra() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR] --extra pytest
     -e .
     iniconfig==2.0.0 \
-        --hash=sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3 \
-        --hash=sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
+        --hash=sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3 \
+        --hash=sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c
         # via project
     typing-extensions==4.10.0 \
-        --hash=sha256:69b1a937c3a517342112fb4c6df7e72fc39a38e7891a5730ed4985b5214b5475 \
-        --hash=sha256:b0abd7c89e8fb96f98db18d86106ff1d90ab692004eb746cf6eda2682f91b3cb
+        --hash=sha256:0626263fe1dcda7bc3ee7b2872064b534d4831718055d22d4f32f9e474a867a4 \
+        --hash=sha256:adefbbc2f75a47edb1f4491a2e99a45438ec3dd0c2670276b321cad2ca522246
         # via project
 
     ----- stderr -----
@@ -377,24 +369,24 @@ fn requirements_txt_project_extra() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR] --all-extras
     -e .
     anyio==3.7.0 \
-        --hash=sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce \
-        --hash=sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0
+        --hash=sha256:c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a \
+        --hash=sha256:ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556
         # via project
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     iniconfig==2.0.0 \
-        --hash=sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3 \
-        --hash=sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
+        --hash=sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3 \
+        --hash=sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c
         # via project
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
     typing-extensions==4.10.0 \
-        --hash=sha256:69b1a937c3a517342112fb4c6df7e72fc39a38e7891a5730ed4985b5214b5475 \
-        --hash=sha256:b0abd7c89e8fb96f98db18d86106ff1d90ab692004eb746cf6eda2682f91b3cb
+        --hash=sha256:0626263fe1dcda7bc3ee7b2872064b534d4831718055d22d4f32f9e474a867a4 \
+        --hash=sha256:adefbbc2f75a47edb1f4491a2e99a45438ec3dd0c2670276b321cad2ca522246
         # via project
 
     ----- stderr -----
@@ -408,20 +400,20 @@ fn requirements_txt_project_extra() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR] --all-extras --no-extra pytest
     -e .
     anyio==3.7.0 \
-        --hash=sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce \
-        --hash=sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0
+        --hash=sha256:c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a \
+        --hash=sha256:ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556
         # via project
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
     typing-extensions==4.10.0 \
-        --hash=sha256:69b1a937c3a517342112fb4c6df7e72fc39a38e7891a5730ed4985b5214b5475 \
-        --hash=sha256:b0abd7c89e8fb96f98db18d86106ff1d90ab692004eb746cf6eda2682f91b3cb
+        --hash=sha256:0626263fe1dcda7bc3ee7b2872064b534d4831718055d22d4f32f9e474a867a4 \
+        --hash=sha256:adefbbc2f75a47edb1f4491a2e99a45438ec3dd0c2670276b321cad2ca522246
         # via project
 
     ----- stderr -----
@@ -554,7 +546,7 @@ fn requirements_txt_prune() -> Result<()> {
         # via jupyter-client
     pyzmq==25.1.2
         # via jupyter-client
-    six==1.16.0
+    six==1.17.0
         # via python-dateutil
     tornado==6.4
         # via jupyter-client
@@ -562,7 +554,7 @@ fn requirements_txt_prune() -> Result<()> {
         # via jupyter-client
 
     ----- stderr -----
-    Resolved 12 packages in [TIME]
+    Resolved 11 packages in [TIME]
     "
     );
 
@@ -598,20 +590,20 @@ fn requirements_txt_dependency_marker() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR]
     -e .
     anyio==4.3.0 ; sys_platform == 'darwin' \
-        --hash=sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8 \
-        --hash=sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6
+        --hash=sha256:13a6d97fa30ec110d85e3949a30c92306f0178135048329f54a335c3dade753a \
+        --hash=sha256:c4f443e7e5a2c003b1534688207e85dbd11960efb66d4d6a4e7693fdfc6f5b33
         # via project
     idna==3.6 ; sys_platform == 'darwin' \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     iniconfig==2.0.0 \
-        --hash=sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3 \
-        --hash=sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
+        --hash=sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3 \
+        --hash=sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c
         # via project
     sniffio==1.3.1 ; sys_platform == 'darwin' \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
 
     ----- stderr -----
@@ -654,51 +646,42 @@ fn requirements_txt_dependency_multiple_markers() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR]
     -e .
     attrs==23.2.0 ; python_full_version >= '3.12' or sys_platform == 'win32' \
-        --hash=sha256:935dc3b529c262f6cf76e50877d35a4bd3c1de194fd41f47a2b7ae8f19971f30 \
-        --hash=sha256:99b87a485a5820b23b879f04c2305b44b951b502fd64be915879d77a7e8fc6f1
+        --hash=sha256:29ff4f72a5845ff34bd4b153a63ce5eb759d633c0419cd2d9dde3b9c5ec6fd55 \
+        --hash=sha256:7f1f5ac16a13e10c8fe479b582a60f10fd1f4376492d5a4e9457991c540600ab
         # via
         #   outcome
         #   trio
     cffi==1.16.0 ; (python_full_version >= '3.12' and implementation_name != 'pypy' and os_name == 'nt') or (implementation_name != 'pypy' and os_name == 'nt' and sys_platform == 'win32') \
-        --hash=sha256:2c56b361916f390cd758a57f2e16233eb4f64bcbeee88a4881ea90fca14dc6ab \
-        --hash=sha256:68678abf380b42ce21a5f2abde8efee05c114c2fdb2e9eef2efdb0257fba1235 \
-        --hash=sha256:9f90389693731ff1f659e55c7d1640e2ec43ff725cc61b04b2f9c6d8d017df6a \
-        --hash=sha256:b2ca4e77f9f47c55c194982e10f058db063937845bb2b7a86c84a6cfe0aefa8b \
-        --hash=sha256:bcb3ef43e58665bbda2fb198698fcae6776483e0c4a631aa5647806c25e02cc0 \
-        --hash=sha256:db8e577c19c0fda0beb7e0d4e09e0ba74b1e4c092e0e40bfa12fe05b6f6d75ba \
-        --hash=sha256:e6024675e67af929088fda399b2094574609396b1decb609c55fa58b028a32a1
-        # via trio
-    exceptiongroup==1.2.0 ; python_full_version < '3.11' and sys_platform == 'win32' \
-        --hash=sha256:4bfd3996ac73b41e9b9628b04e079f193850720ea5945fc96a08633c66912f14 \
-        --hash=sha256:91f5c769735f051a4290d52edd0858999b57e5876e9f85937691bd4c9fa3ed68
+        --hash=sha256:402e1b34f36bef7fa4fdda0fcf232701d1fd55e57b2b4b445f0089396f69b154 \
+        --hash=sha256:62f13be9671996149f3d895d688032c6cb4c2987eb5282ba79f248865d92880f
         # via trio
     idna==3.6 ; python_full_version >= '3.12' or sys_platform == 'win32' \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via trio
     outcome==1.3.0.post0 ; python_full_version >= '3.12' or sys_platform == 'win32' \
-        --hash=sha256:9dcf02e65f2971b80047b377468e72a268e15c0af3cf1238e6ff14f7f91143b8 \
-        --hash=sha256:e771c5ce06d1415e356078d3bdd68523f284b4ce5419828922b6871e65eda82b
+        --hash=sha256:83dd156a6af99abc7b0b6e63f361e72e57d8b252b4c416e2aca4350e8457508b \
+        --hash=sha256:e20f65ce87445c7e969a74919ec722b1cc143413dee31a913fc63d7ad5561ea1
         # via trio
     pycparser==2.21 ; (python_full_version >= '3.12' and implementation_name != 'pypy' and os_name == 'nt') or (implementation_name != 'pypy' and os_name == 'nt' and sys_platform == 'win32') \
-        --hash=sha256:8ee45429555515e1f6b185e78100aea234072576aa43ab53aefcae078162fca9 \
-        --hash=sha256:e644fdec12f7872f86c58ff790da456218b10f863970249516d60a5eaca77206
+        --hash=sha256:d16564f780e6be8a332728566313a6706e8682ba243294c7348bc7cd45d0ba25 \
+        --hash=sha256:d9421a3852f615db7dbcd61a13d3da73e5f2b924256110bddaa3d6f1648f2968
         # via cffi
     sniffio==1.3.1 ; python_full_version >= '3.12' or sys_platform == 'win32' \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via trio
     sortedcontainers==2.4.0 ; python_full_version >= '3.12' or sys_platform == 'win32' \
-        --hash=sha256:25caa5a06cc30b6b83d11423433f65d1f9d76c4c6a0c90e3379eaa43b9bfdb88 \
-        --hash=sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0
+        --hash=sha256:e90c0f20bb5c630bbf840e4ccc94441cd55ae8048cf55fc42df715d28b67cb80 \
+        --hash=sha256:fb6015d312cfaf15c65e0aeadac28191546cc25e48d41b126ecc322d5b116be2
         # via trio
     trio==0.25.0 ; python_full_version >= '3.12' or sys_platform == 'win32' \
-        --hash=sha256:9b41f5993ad2c0e5f62d0acca320ec657fdb6b2a2c22b8c7aed6caf154475c4e \
-        --hash=sha256:e6458efe29cc543e557a91e614e2b51710eba2961669329ce9c862d50c6e8e81
+        --hash=sha256:9453627496cdf8765bebb884da6529de2c07bdb15d59675ddafcab183e646cc8 \
+        --hash=sha256:d8ab6277905ab7211fcd41c0d00cfc964c650fcef4a2bc69cdf6e0bc0316138f
         # via project
 
     ----- stderr -----
-    Resolved 10 packages in [TIME]
+    Resolved 9 packages in [TIME]
     ");
 
     Ok(())
@@ -757,53 +740,52 @@ fn requirements_txt_dependency_conflicting_markers() -> Result<()> {
             [[package]]
             name = "async-generator"
             version = "1.10"
-            source = { registry = "https://pypi.org/simple" }
-            sdist = { url = "https://files.pythonhosted.org/packages/ce/b6/6fa6b3b598a03cba5e80f829e0dadbb49d7645f523d209b2fb7ea0bbb02a/async_generator-1.10.tar.gz", hash = "sha256:6ebb3d106c12920aaae42ccb6f787ef5eefdcdd166ea3d628fa8476abe712144", size = 29870, upload-time = "2018-08-01T03:36:21.69Z" }
+            source = { registry = "http://[LOCALHOST]/simple/" }
+            sdist = { url = "http://[LOCALHOST]/files/async_generator-1.10.tar.gz", hash = "sha256:775b7747ea4331082b2636ecf4e27f7785bdcb19f55e807cba7819ee5409322d", upload-time = "2024-03-24T00:00:00Z" }
             wheels = [
-                { url = "https://files.pythonhosted.org/packages/71/52/39d20e03abd0ac9159c162ec24b93fbcaa111e8400308f2465432495ca2b/async_generator-1.10-py3-none-any.whl", hash = "sha256:01c7bf666359b4967d2cda0000cc2e4af16a0ae098cbffcb8472fb9e8ad6585b", size = 18857, upload-time = "2018-08-01T03:36:20.029Z" },
+                { url = "http://[LOCALHOST]/files/async_generator-1.10-py3-none-any.whl", hash = "sha256:3a50a91bab9a951b225c7f408ef3c20050ce458c42ffd7ffbf44160a7bf53e74", upload-time = "2024-03-24T00:00:00Z" },
             ]
 
             [[package]]
             name = "attrs"
             version = "23.2.0"
-            source = { registry = "https://pypi.org/simple" }
-            sdist = { url = "https://files.pythonhosted.org/packages/e3/fc/f800d51204003fa8ae392c4e8278f256206e7a919b708eef054f5f4b650d/attrs-23.2.0.tar.gz", hash = "sha256:935dc3b529c262f6cf76e50877d35a4bd3c1de194fd41f47a2b7ae8f19971f30", size = 780820, upload-time = "2023-12-31T06:30:32.926Z" }
+            source = { registry = "http://[LOCALHOST]/simple/" }
+            sdist = { url = "http://[LOCALHOST]/files/attrs-23.2.0.tar.gz", hash = "sha256:7f1f5ac16a13e10c8fe479b582a60f10fd1f4376492d5a4e9457991c540600ab", upload-time = "2024-03-24T00:00:00Z" }
             wheels = [
-                { url = "https://files.pythonhosted.org/packages/e0/44/827b2a91a5816512fcaf3cc4ebc465ccd5d598c45cefa6703fcf4a79018f/attrs-23.2.0-py3-none-any.whl", hash = "sha256:99b87a485a5820b23b879f04c2305b44b951b502fd64be915879d77a7e8fc6f1", size = 60752, upload-time = "2023-12-31T06:30:30.772Z" },
+                { url = "http://[LOCALHOST]/files/attrs-23.2.0-py3-none-any.whl", hash = "sha256:29ff4f72a5845ff34bd4b153a63ce5eb759d633c0419cd2d9dde3b9c5ec6fd55", upload-time = "2024-03-24T00:00:00Z" },
             ]
 
             [[package]]
             name = "cffi"
             version = "1.16.0"
-            source = { registry = "https://pypi.org/simple" }
+            source = { registry = "http://[LOCALHOST]/simple/" }
             dependencies = [
                 { name = "pycparser" },
             ]
-            sdist = { url = "https://files.pythonhosted.org/packages/68/ce/95b0bae7968c65473e1298efb042e10cafc7bafc14d9e4f154008241c91d/cffi-1.16.0.tar.gz", hash = "sha256:bcb3ef43e58665bbda2fb198698fcae6776483e0c4a631aa5647806c25e02cc0", size = 512873, upload-time = "2023-09-28T18:02:04.656Z" }
+            sdist = { url = "http://[LOCALHOST]/files/cffi-1.16.0.tar.gz", hash = "sha256:62f13be9671996149f3d895d688032c6cb4c2987eb5282ba79f248865d92880f", upload-time = "2024-03-24T00:00:00Z" }
             wheels = [
-                { url = "https://files.pythonhosted.org/packages/c9/6e/751437067affe7ac0944b1ad4856ec11650da77f0dd8f305fae1117ef7bb/cffi-1.16.0-cp312-cp312-win32.whl", hash = "sha256:b2ca4e77f9f47c55c194982e10f058db063937845bb2b7a86c84a6cfe0aefa8b", size = 173564, upload-time = "2023-09-28T18:01:23.527Z" },
-                { url = "https://files.pythonhosted.org/packages/e9/63/e285470a4880a4f36edabe4810057bd4b562c6ddcc165eacf9c3c7210b40/cffi-1.16.0-cp312-cp312-win_amd64.whl", hash = "sha256:68678abf380b42ce21a5f2abde8efee05c114c2fdb2e9eef2efdb0257fba1235", size = 181956, upload-time = "2023-09-28T18:01:24.971Z" },
+                { url = "http://[LOCALHOST]/files/cffi-1.16.0-cp312-cp312-win_amd64.whl", hash = "sha256:402e1b34f36bef7fa4fdda0fcf232701d1fd55e57b2b4b445f0089396f69b154", upload-time = "2024-03-24T00:00:00Z" },
             ]
 
             [[package]]
             name = "idna"
             version = "3.6"
-            source = { registry = "https://pypi.org/simple" }
-            sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426, upload-time = "2023-11-25T15:40:54.902Z" }
+            source = { registry = "http://[LOCALHOST]/simple/" }
+            sdist = { url = "http://[LOCALHOST]/files/idna-3.6.tar.gz", hash = "sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f", upload-time = "2024-03-24T00:00:00Z" }
             wheels = [
-                { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567, upload-time = "2023-11-25T15:40:52.604Z" },
+                { url = "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl", hash = "sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0", upload-time = "2024-03-24T00:00:00Z" },
             ]
 
             [[package]]
             name = "outcome"
             version = "1.3.0.post0"
-            source = { registry = "https://pypi.org/simple" }
+            source = { registry = "http://[LOCALHOST]/simple/" }
             dependencies = [
                 { name = "attrs" },
             ]
-            sdist = { url = "https://files.pythonhosted.org/packages/98/df/77698abfac98571e65ffeb0c1fba8ffd692ab8458d617a0eed7d9a8d38f2/outcome-1.3.0.post0.tar.gz", hash = "sha256:9dcf02e65f2971b80047b377468e72a268e15c0af3cf1238e6ff14f7f91143b8", size = 21060, upload-time = "2023-10-26T04:26:04.361Z" }
+            sdist = { url = "http://[LOCALHOST]/files/outcome-1.3.0.post0.tar.gz", hash = "sha256:e20f65ce87445c7e969a74919ec722b1cc143413dee31a913fc63d7ad5561ea1", upload-time = "2024-03-24T00:00:00Z" }
             wheels = [
-                { url = "https://files.pythonhosted.org/packages/55/8b/5ab7257531a5d830fc8000c476e63c935488d74609b50f9384a643ec0a62/outcome-1.3.0.post0-py2.py3-none-any.whl", hash = "sha256:e771c5ce06d1415e356078d3bdd68523f284b4ce5419828922b6871e65eda82b", size = 10692, upload-time = "2023-10-26T04:26:02.532Z" },
+                { url = "http://[LOCALHOST]/files/outcome-1.3.0.post0-py3-none-any.whl", hash = "sha256:83dd156a6af99abc7b0b6e63f361e72e57d8b252b4c416e2aca4350e8457508b", upload-time = "2024-03-24T00:00:00Z" },
             ]
 
             [[package]]
@@ -811,8 +793,8 @@ fn requirements_txt_dependency_conflicting_markers() -> Result<()> {
             version = "0.1.0"
             source = { editable = "." }
             dependencies = [
-                { name = "trio", version = "0.10.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'win32'" },
-                { name = "trio", version = "0.25.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
+                { name = "trio", version = "0.10.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "sys_platform == 'win32'" },
+                { name = "trio", version = "0.25.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "sys_platform == 'darwin'" },
             ]
 
             [package.metadata]
@@ -824,34 +806,34 @@ fn requirements_txt_dependency_conflicting_markers() -> Result<()> {
             [[package]]
             name = "pycparser"
             version = "2.21"
-            source = { registry = "https://pypi.org/simple" }
-            sdist = { url = "https://files.pythonhosted.org/packages/5e/0b/95d387f5f4433cb0f53ff7ad859bd2c6051051cebbb564f139a999ab46de/pycparser-2.21.tar.gz", hash = "sha256:e644fdec12f7872f86c58ff790da456218b10f863970249516d60a5eaca77206", size = 170877, upload-time = "2021-11-06T12:48:46.095Z" }
+            source = { registry = "http://[LOCALHOST]/simple/" }
+            sdist = { url = "http://[LOCALHOST]/files/pycparser-2.21.tar.gz", hash = "sha256:d9421a3852f615db7dbcd61a13d3da73e5f2b924256110bddaa3d6f1648f2968", upload-time = "2024-03-24T00:00:00Z" }
             wheels = [
-                { url = "https://files.pythonhosted.org/packages/62/d5/5f610ebe421e85889f2e55e33b7f9a6795bd982198517d912eb1c76e1a53/pycparser-2.21-py2.py3-none-any.whl", hash = "sha256:8ee45429555515e1f6b185e78100aea234072576aa43ab53aefcae078162fca9", size = 118697, upload-time = "2021-11-06T12:50:13.61Z" },
+                { url = "http://[LOCALHOST]/files/pycparser-2.21-py3-none-any.whl", hash = "sha256:d16564f780e6be8a332728566313a6706e8682ba243294c7348bc7cd45d0ba25", upload-time = "2024-03-24T00:00:00Z" },
             ]
 
             [[package]]
             name = "sniffio"
             version = "1.3.1"
-            source = { registry = "https://pypi.org/simple" }
-            sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
+            source = { registry = "http://[LOCALHOST]/simple/" }
+            sdist = { url = "http://[LOCALHOST]/files/sniffio-1.3.1.tar.gz", hash = "sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a", upload-time = "2024-03-24T00:00:00Z" }
             wheels = [
-                { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
+                { url = "http://[LOCALHOST]/files/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05", upload-time = "2024-03-24T00:00:00Z" },
             ]
 
             [[package]]
             name = "sortedcontainers"
             version = "2.4.0"
-            source = { registry = "https://pypi.org/simple" }
-            sdist = { url = "https://files.pythonhosted.org/packages/e8/c4/ba2f8066cceb6f23394729afe52f3bf7adec04bf9ed2c820b39e19299111/sortedcontainers-2.4.0.tar.gz", hash = "sha256:25caa5a06cc30b6b83d11423433f65d1f9d76c4c6a0c90e3379eaa43b9bfdb88", size = 30594, upload-time = "2021-05-16T22:03:42.897Z" }
+            source = { registry = "http://[LOCALHOST]/simple/" }
+            sdist = { url = "http://[LOCALHOST]/files/sortedcontainers-2.4.0.tar.gz", hash = "sha256:fb6015d312cfaf15c65e0aeadac28191546cc25e48d41b126ecc322d5b116be2", upload-time = "2024-03-24T00:00:00Z" }
             wheels = [
-                { url = "https://files.pythonhosted.org/packages/32/46/9cb0e58b2deb7f82b84065f37f3bffeb12413f947f9388e4cac22c4621ce/sortedcontainers-2.4.0-py2.py3-none-any.whl", hash = "sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0", size = 29575, upload-time = "2021-05-16T22:03:41.177Z" },
+                { url = "http://[LOCALHOST]/files/sortedcontainers-2.4.0-py3-none-any.whl", hash = "sha256:e90c0f20bb5c630bbf840e4ccc94441cd55ae8048cf55fc42df715d28b67cb80", upload-time = "2024-03-24T00:00:00Z" },
             ]
 
             [[package]]
             name = "trio"
             version = "0.10.0"
-            source = { registry = "https://pypi.org/simple" }
+            source = { registry = "http://[LOCALHOST]/simple/" }
             resolution-markers = [
                 "sys_platform == 'win32'",
             ]
@@ -864,12 +846,15 @@ fn requirements_txt_dependency_conflicting_markers() -> Result<()> {
                 { name = "sniffio" },
                 { name = "sortedcontainers" },
             ]
-            sdist = { url = "https://files.pythonhosted.org/packages/e6/20/37be7b5f47db6a9fbf905b5de5386e5b7193c45d07becb750db6f03cd117/trio-0.10.0.tar.gz", hash = "sha256:d323cc15f6406d15954af91e5e34af2001cc24163fdde29e3f88a227a1b53ab0", size = 402511, upload-time = "2019-01-08T09:59:04.649Z" }
+            sdist = { url = "http://[LOCALHOST]/files/trio-0.10.0.tar.gz", hash = "sha256:8072a8ad279caaad06f51fbd8bb60717ed06d9655734c3114b1fdf5b11f5e354", upload-time = "2024-03-24T00:00:00Z" }
+            wheels = [
+                { url = "http://[LOCALHOST]/files/trio-0.10.0-py3-none-any.whl", hash = "sha256:47227807697a06a992e434d0ca71af56feb9d5fd72514fe51c239d2ab78b5c79", upload-time = "2024-03-24T00:00:00Z" },
+            ]
 
             [[package]]
             name = "trio"
             version = "0.25.0"
-            source = { registry = "https://pypi.org/simple" }
+            source = { registry = "http://[LOCALHOST]/simple/" }
             resolution-markers = [
                 "sys_platform == 'darwin'",
             ]
@@ -880,9 +865,9 @@ fn requirements_txt_dependency_conflicting_markers() -> Result<()> {
                 { name = "sniffio" },
                 { name = "sortedcontainers" },
             ]
-            sdist = { url = "https://files.pythonhosted.org/packages/b4/51/4f5ae37ec58768b9c30e5bc5b89431a7baf3fa9d0dda98983af6ef55eb47/trio-0.25.0.tar.gz", hash = "sha256:9b41f5993ad2c0e5f62d0acca320ec657fdb6b2a2c22b8c7aed6caf154475c4e", size = 551863, upload-time = "2024-03-17T02:53:47.736Z" }
+            sdist = { url = "http://[LOCALHOST]/files/trio-0.25.0.tar.gz", hash = "sha256:9453627496cdf8765bebb884da6529de2c07bdb15d59675ddafcab183e646cc8", upload-time = "2024-03-24T00:00:00Z" }
             wheels = [
-                { url = "https://files.pythonhosted.org/packages/17/c9/f86f89f14d52f9f2f652ce24cb2f60141a51d087db1563f3fba94ba07346/trio-0.25.0-py3-none-any.whl", hash = "sha256:e6458efe29cc543e557a91e614e2b51710eba2961669329ce9c862d50c6e8e81", size = 467161, upload-time = "2024-03-17T02:53:45.462Z" },
+                { url = "http://[LOCALHOST]/files/trio-0.25.0-py3-none-any.whl", hash = "sha256:d8ab6277905ab7211fcd41c0d00cfc964c650fcef4a2bc69cdf6e0bc0316138f", upload-time = "2024-03-24T00:00:00Z" },
             ]
             "#
             );
@@ -896,46 +881,46 @@ fn requirements_txt_dependency_conflicting_markers() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR]
     -e .
     async-generator==1.10 ; sys_platform == 'win32' \
-        --hash=sha256:01c7bf666359b4967d2cda0000cc2e4af16a0ae098cbffcb8472fb9e8ad6585b \
-        --hash=sha256:6ebb3d106c12920aaae42ccb6f787ef5eefdcdd166ea3d628fa8476abe712144
+        --hash=sha256:3a50a91bab9a951b225c7f408ef3c20050ce458c42ffd7ffbf44160a7bf53e74 \
+        --hash=sha256:775b7747ea4331082b2636ecf4e27f7785bdcb19f55e807cba7819ee5409322d
         # via trio
     attrs==23.2.0 ; sys_platform == 'darwin' or sys_platform == 'win32' \
-        --hash=sha256:935dc3b529c262f6cf76e50877d35a4bd3c1de194fd41f47a2b7ae8f19971f30 \
-        --hash=sha256:99b87a485a5820b23b879f04c2305b44b951b502fd64be915879d77a7e8fc6f1
+        --hash=sha256:29ff4f72a5845ff34bd4b153a63ce5eb759d633c0419cd2d9dde3b9c5ec6fd55 \
+        --hash=sha256:7f1f5ac16a13e10c8fe479b582a60f10fd1f4376492d5a4e9457991c540600ab
         # via
         #   outcome
         #   trio
     cffi==1.16.0 ; os_name == 'nt' and sys_platform == 'win32' \
-        --hash=sha256:68678abf380b42ce21a5f2abde8efee05c114c2fdb2e9eef2efdb0257fba1235 \
-        --hash=sha256:b2ca4e77f9f47c55c194982e10f058db063937845bb2b7a86c84a6cfe0aefa8b \
-        --hash=sha256:bcb3ef43e58665bbda2fb198698fcae6776483e0c4a631aa5647806c25e02cc0
+        --hash=sha256:402e1b34f36bef7fa4fdda0fcf232701d1fd55e57b2b4b445f0089396f69b154 \
+        --hash=sha256:62f13be9671996149f3d895d688032c6cb4c2987eb5282ba79f248865d92880f
         # via trio
     idna==3.6 ; sys_platform == 'darwin' or sys_platform == 'win32' \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via trio
     outcome==1.3.0.post0 ; sys_platform == 'darwin' or sys_platform == 'win32' \
-        --hash=sha256:9dcf02e65f2971b80047b377468e72a268e15c0af3cf1238e6ff14f7f91143b8 \
-        --hash=sha256:e771c5ce06d1415e356078d3bdd68523f284b4ce5419828922b6871e65eda82b
+        --hash=sha256:83dd156a6af99abc7b0b6e63f361e72e57d8b252b4c416e2aca4350e8457508b \
+        --hash=sha256:e20f65ce87445c7e969a74919ec722b1cc143413dee31a913fc63d7ad5561ea1
         # via trio
     pycparser==2.21 ; os_name == 'nt' and sys_platform == 'win32' \
-        --hash=sha256:8ee45429555515e1f6b185e78100aea234072576aa43ab53aefcae078162fca9 \
-        --hash=sha256:e644fdec12f7872f86c58ff790da456218b10f863970249516d60a5eaca77206
+        --hash=sha256:d16564f780e6be8a332728566313a6706e8682ba243294c7348bc7cd45d0ba25 \
+        --hash=sha256:d9421a3852f615db7dbcd61a13d3da73e5f2b924256110bddaa3d6f1648f2968
         # via cffi
     sniffio==1.3.1 ; sys_platform == 'darwin' or sys_platform == 'win32' \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via trio
     sortedcontainers==2.4.0 ; sys_platform == 'darwin' or sys_platform == 'win32' \
-        --hash=sha256:25caa5a06cc30b6b83d11423433f65d1f9d76c4c6a0c90e3379eaa43b9bfdb88 \
-        --hash=sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0
+        --hash=sha256:e90c0f20bb5c630bbf840e4ccc94441cd55ae8048cf55fc42df715d28b67cb80 \
+        --hash=sha256:fb6015d312cfaf15c65e0aeadac28191546cc25e48d41b126ecc322d5b116be2
         # via trio
     trio==0.10.0 ; sys_platform == 'win32' \
-        --hash=sha256:d323cc15f6406d15954af91e5e34af2001cc24163fdde29e3f88a227a1b53ab0
+        --hash=sha256:47227807697a06a992e434d0ca71af56feb9d5fd72514fe51c239d2ab78b5c79 \
+        --hash=sha256:8072a8ad279caaad06f51fbd8bb60717ed06d9655734c3114b1fdf5b11f5e354
         # via project
     trio==0.25.0 ; sys_platform == 'darwin' \
-        --hash=sha256:9b41f5993ad2c0e5f62d0acca320ec657fdb6b2a2c22b8c7aed6caf154475c4e \
-        --hash=sha256:e6458efe29cc543e557a91e614e2b51710eba2961669329ce9c862d50c6e8e81
+        --hash=sha256:9453627496cdf8765bebb884da6529de2c07bdb15d59675ddafcab183e646cc8 \
+        --hash=sha256:d8ab6277905ab7211fcd41c0d00cfc964c650fcef4a2bc69cdf6e0bc0316138f
         # via project
 
     ----- stderr -----
@@ -995,8 +980,8 @@ fn requirements_txt_non_root() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR] --package child
     -e ./child
     iniconfig==2.0.0 \
-        --hash=sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3 \
-        --hash=sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
+        --hash=sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3 \
+        --hash=sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c
         # via child
 
     ----- stderr -----
@@ -1217,20 +1202,20 @@ fn allrequirements_txt_() -> Result<()> {
     -e ./child
         # via project
     anyio==3.7.0 \
-        --hash=sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce \
-        --hash=sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0
+        --hash=sha256:c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a \
+        --hash=sha256:ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556
         # via project
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     iniconfig==2.0.0 \
-        --hash=sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3 \
-        --hash=sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
+        --hash=sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3 \
+        --hash=sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c
         # via child
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
 
     ----- stderr -----
@@ -1303,20 +1288,20 @@ fn requirements_txt_frozen() -> Result<()> {
     -e ./child
         # via project
     anyio==3.7.0 \
-        --hash=sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce \
-        --hash=sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0
+        --hash=sha256:c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a \
+        --hash=sha256:ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556
         # via project
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     iniconfig==2.0.0 \
-        --hash=sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3 \
-        --hash=sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
+        --hash=sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3 \
+        --hash=sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c
         # via child
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
     ");
 
@@ -1354,16 +1339,16 @@ fn requirements_txt_create_missing_dir() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR] --output-file requirements/requirements.txt
     -e .
     anyio==3.7.0 \
-        --hash=sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce \
-        --hash=sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0
+        --hash=sha256:c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a \
+        --hash=sha256:ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556
         # via project
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
 
     ----- stderr -----
@@ -1386,16 +1371,16 @@ fn requirements_txt_create_missing_dir() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR] --output-file requirements/requirements.txt
     -e .
     anyio==3.7.0 \
-        --hash=sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce \
-        --hash=sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0
+        --hash=sha256:c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a \
+        --hash=sha256:ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556
         # via project
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
     ");
     Ok(())
@@ -1436,15 +1421,15 @@ fn requirements_txt_non_project() -> Result<()> {
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR] --group async
     anyio==4.3.0 \
-        --hash=sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8 \
-        --hash=sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6
+        --hash=sha256:13a6d97fa30ec110d85e3949a30c92306f0178135048329f54a335c3dade753a \
+        --hash=sha256:c4f443e7e5a2c003b1534688207e85dbd11960efb66d4d6a4e7693fdfc6f5b33
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
 
     ----- stderr -----
@@ -1503,8 +1488,8 @@ fn virtual_dependency_group() -> Result<()> {
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR]
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
 
     ----- stderr -----
     warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
@@ -1519,11 +1504,11 @@ fn virtual_dependency_group() -> Result<()> {
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR] --group bar
     iniconfig==2.0.0 \
-        --hash=sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3 \
-        --hash=sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
+        --hash=sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3 \
+        --hash=sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
 
     ----- stderr -----
     warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
@@ -1538,8 +1523,8 @@ fn virtual_dependency_group() -> Result<()> {
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR] --only-group foo
     sortedcontainers==2.4.0 \
-        --hash=sha256:25caa5a06cc30b6b83d11423433f65d1f9d76c4c6a0c90e3379eaa43b9bfdb88 \
-        --hash=sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0
+        --hash=sha256:e90c0f20bb5c630bbf840e4ccc94441cd55ae8048cf55fc42df715d28b67cb80 \
+        --hash=sha256:fb6015d312cfaf15c65e0aeadac28191546cc25e48d41b126ecc322d5b116be2
 
     ----- stderr -----
     warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
@@ -1768,15 +1753,15 @@ fn requirements_txt_non_project_marker() -> Result<()> {
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR] --group async
     anyio==4.3.0 ; sys_platform == 'darwin' \
-        --hash=sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8 \
-        --hash=sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6
+        --hash=sha256:13a6d97fa30ec110d85e3949a30c92306f0178135048329f54a335c3dade753a \
+        --hash=sha256:c4f443e7e5a2c003b1534688207e85dbd11960efb66d4d6a4e7693fdfc6f5b33
     idna==3.6 ; sys_platform == 'darwin' \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     sniffio==1.3.1 ; sys_platform == 'darwin' \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
 
     ----- stderr -----
@@ -1827,8 +1812,8 @@ fn requirements_txt_non_project_workspace() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR]
     -e ./child
     iniconfig==2.0.0 \
-        --hash=sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3 \
-        --hash=sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
+        --hash=sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3 \
+        --hash=sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c
         # via child
 
     ----- stderr -----
@@ -1842,19 +1827,19 @@ fn requirements_txt_non_project_workspace() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR] --group async
     -e ./child
     anyio==4.3.0 ; sys_platform == 'darwin' \
-        --hash=sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8 \
-        --hash=sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6
+        --hash=sha256:13a6d97fa30ec110d85e3949a30c92306f0178135048329f54a335c3dade753a \
+        --hash=sha256:c4f443e7e5a2c003b1534688207e85dbd11960efb66d4d6a4e7693fdfc6f5b33
     idna==3.6 ; sys_platform == 'darwin' \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     iniconfig==2.0.0 \
-        --hash=sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3 \
-        --hash=sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
+        --hash=sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3 \
+        --hash=sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c
         # via child
     sniffio==1.3.1 ; sys_platform == 'darwin' \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
 
     ----- stderr -----
@@ -1929,7 +1914,7 @@ fn requirements_txt_non_project_fork() -> Result<()> {
             [[package]]
             name = "anyio"
             version = "2.0.0"
-            source = { registry = "https://pypi.org/simple" }
+            source = { registry = "http://[LOCALHOST]/simple/" }
             resolution-markers = [
                 "sys_platform == 'win32'",
             ]
@@ -1937,15 +1922,15 @@ fn requirements_txt_non_project_fork() -> Result<()> {
                 { name = "idna" },
                 { name = "sniffio" },
             ]
-            sdist = { url = "https://files.pythonhosted.org/packages/fe/dc/daeadb9b34093d3968afcc93946ee567cd6d2b402a96c608cb160f74d737/anyio-2.0.0.tar.gz", hash = "sha256:ceca4669ffa3f02bf20ef3d6c2a0c323b16cdc71d1ce0b0bc03c6f1f36054826", size = 91291, upload-time = "2020-09-11T09:22:49.334Z" }
+            sdist = { url = "http://[LOCALHOST]/files/anyio-2.0.0.tar.gz", hash = "sha256:af395fdbe444e8024f00a1039400091fa8bfb1b1828f63edbbdcc6f498f88e0e", upload-time = "2020-11-11T00:00:00Z" }
             wheels = [
-                { url = "https://files.pythonhosted.org/packages/8a/19/10fe682e962efd1610aa41376399fc3f3e002425449b02d0fb04749bb712/anyio-2.0.0-py3-none-any.whl", hash = "sha256:0b8375c8fc665236cb4d143ea13e849eb9e074d727b1b5c27d88aba44ca8c547", size = 62675, upload-time = "2020-09-11T09:22:48.119Z" },
+                { url = "http://[LOCALHOST]/files/anyio-2.0.0-py3-none-any.whl", hash = "sha256:4fdf5b774eb9630cd7b52cecc5855e900ca2af9599bc0bc535f64a2f82d3eb11", upload-time = "2020-11-11T00:00:00Z" },
             ]
 
             [[package]]
             name = "anyio"
             version = "3.0.0"
-            source = { registry = "https://pypi.org/simple" }
+            source = { registry = "http://[LOCALHOST]/simple/" }
             resolution-markers = [
                 "sys_platform == 'linux'",
                 "sys_platform != 'linux' and sys_platform != 'win32'",
@@ -1954,9 +1939,9 @@ fn requirements_txt_non_project_fork() -> Result<()> {
                 { name = "idna" },
                 { name = "sniffio" },
             ]
-            sdist = { url = "https://files.pythonhosted.org/packages/99/0d/65165f99e5f4f3b4c43a5ed9db0fb7aa655f5a58f290727a30528a87eb45/anyio-3.0.0.tar.gz", hash = "sha256:b553598332c050af19f7d41f73a7790142f5bc3d5eb8bd82f5e515ec22019bd9", size = 116952, upload-time = "2021-04-20T14:02:14.75Z" }
+            sdist = { url = "http://[LOCALHOST]/files/anyio-3.0.0.tar.gz", hash = "sha256:62fb42b0d181821ab3c819567d140c927006c2fbf64f4785b1259ed9bd7da21e", upload-time = "2024-03-24T00:00:00Z" }
             wheels = [
-                { url = "https://files.pythonhosted.org/packages/3b/49/ebee263b69fe243bd1fd0a88bc6bb0f7732bf1794ba3273cb446351f9482/anyio-3.0.0-py3-none-any.whl", hash = "sha256:e71c3d9d72291d12056c0265d07c6bbedf92332f78573e278aeb116f24f30395", size = 72182, upload-time = "2021-04-20T14:02:13.663Z" },
+                { url = "http://[LOCALHOST]/files/anyio-3.0.0-py3-none-any.whl", hash = "sha256:d2b073c2957df967f830ad0b7ddac8fc687bb90c47b329beb0e2acc253f896cb", upload-time = "2024-03-24T00:00:00Z" },
             ]
 
             [[package]]
@@ -1964,8 +1949,8 @@ fn requirements_txt_non_project_fork() -> Result<()> {
             version = "0.1.0"
             source = { editable = "child" }
             dependencies = [
-                { name = "anyio", version = "2.0.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'win32'" },
-                { name = "anyio", version = "3.0.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
+                { name = "anyio", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "sys_platform == 'win32'" },
+                { name = "anyio", version = "3.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "sys_platform == 'linux'" },
             ]
 
             [package.metadata]
@@ -1977,19 +1962,19 @@ fn requirements_txt_non_project_fork() -> Result<()> {
             [[package]]
             name = "idna"
             version = "3.6"
-            source = { registry = "https://pypi.org/simple" }
-            sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426, upload-time = "2023-11-25T15:40:54.902Z" }
+            source = { registry = "http://[LOCALHOST]/simple/" }
+            sdist = { url = "http://[LOCALHOST]/files/idna-3.6.tar.gz", hash = "sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f", upload-time = "2024-03-24T00:00:00Z" }
             wheels = [
-                { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567, upload-time = "2023-11-25T15:40:52.604Z" },
+                { url = "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl", hash = "sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0", upload-time = "2024-03-24T00:00:00Z" },
             ]
 
             [[package]]
             name = "sniffio"
             version = "1.3.1"
-            source = { registry = "https://pypi.org/simple" }
-            sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
+            source = { registry = "http://[LOCALHOST]/simple/" }
+            sdist = { url = "http://[LOCALHOST]/files/sniffio-1.3.1.tar.gz", hash = "sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a", upload-time = "2024-03-24T00:00:00Z" }
             wheels = [
-                { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
+                { url = "http://[LOCALHOST]/files/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05", upload-time = "2024-03-24T00:00:00Z" },
             ]
             "#
             );
@@ -2003,20 +1988,20 @@ fn requirements_txt_non_project_fork() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR]
     -e ./child
     anyio==2.0.0 ; sys_platform == 'win32' \
-        --hash=sha256:0b8375c8fc665236cb4d143ea13e849eb9e074d727b1b5c27d88aba44ca8c547 \
-        --hash=sha256:ceca4669ffa3f02bf20ef3d6c2a0c323b16cdc71d1ce0b0bc03c6f1f36054826
+        --hash=sha256:4fdf5b774eb9630cd7b52cecc5855e900ca2af9599bc0bc535f64a2f82d3eb11 \
+        --hash=sha256:af395fdbe444e8024f00a1039400091fa8bfb1b1828f63edbbdcc6f498f88e0e
         # via child
     anyio==3.0.0 ; sys_platform == 'linux' \
-        --hash=sha256:b553598332c050af19f7d41f73a7790142f5bc3d5eb8bd82f5e515ec22019bd9 \
-        --hash=sha256:e71c3d9d72291d12056c0265d07c6bbedf92332f78573e278aeb116f24f30395
+        --hash=sha256:62fb42b0d181821ab3c819567d140c927006c2fbf64f4785b1259ed9bd7da21e \
+        --hash=sha256:d2b073c2957df967f830ad0b7ddac8fc687bb90c47b329beb0e2acc253f896cb
         # via child
     idna==3.6 ; sys_platform == 'linux' or sys_platform == 'win32' \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     sniffio==1.3.1 ; sys_platform == 'linux' or sys_platform == 'win32' \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
 
     ----- stderr -----
@@ -2030,20 +2015,20 @@ fn requirements_txt_non_project_fork() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR] --group async
     -e ./child
     anyio==2.0.0 ; sys_platform == 'win32' \
-        --hash=sha256:0b8375c8fc665236cb4d143ea13e849eb9e074d727b1b5c27d88aba44ca8c547 \
-        --hash=sha256:ceca4669ffa3f02bf20ef3d6c2a0c323b16cdc71d1ce0b0bc03c6f1f36054826
+        --hash=sha256:4fdf5b774eb9630cd7b52cecc5855e900ca2af9599bc0bc535f64a2f82d3eb11 \
+        --hash=sha256:af395fdbe444e8024f00a1039400091fa8bfb1b1828f63edbbdcc6f498f88e0e
         # via child
     anyio==3.0.0 ; sys_platform != 'win32' \
-        --hash=sha256:b553598332c050af19f7d41f73a7790142f5bc3d5eb8bd82f5e515ec22019bd9 \
-        --hash=sha256:e71c3d9d72291d12056c0265d07c6bbedf92332f78573e278aeb116f24f30395
+        --hash=sha256:62fb42b0d181821ab3c819567d140c927006c2fbf64f4785b1259ed9bd7da21e \
+        --hash=sha256:d2b073c2957df967f830ad0b7ddac8fc687bb90c47b329beb0e2acc253f896cb
         # via child
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
 
     ----- stderr -----
@@ -2056,18 +2041,18 @@ fn requirements_txt_non_project_fork() -> Result<()> {
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR] --group async --prune child
     anyio==2.0.0 ; sys_platform == 'win32' \
-        --hash=sha256:0b8375c8fc665236cb4d143ea13e849eb9e074d727b1b5c27d88aba44ca8c547 \
-        --hash=sha256:ceca4669ffa3f02bf20ef3d6c2a0c323b16cdc71d1ce0b0bc03c6f1f36054826
+        --hash=sha256:4fdf5b774eb9630cd7b52cecc5855e900ca2af9599bc0bc535f64a2f82d3eb11 \
+        --hash=sha256:af395fdbe444e8024f00a1039400091fa8bfb1b1828f63edbbdcc6f498f88e0e
     anyio==3.0.0 ; sys_platform != 'win32' \
-        --hash=sha256:b553598332c050af19f7d41f73a7790142f5bc3d5eb8bd82f5e515ec22019bd9 \
-        --hash=sha256:e71c3d9d72291d12056c0265d07c6bbedf92332f78573e278aeb116f24f30395
+        --hash=sha256:62fb42b0d181821ab3c819567d140c927006c2fbf64f4785b1259ed9bd7da21e \
+        --hash=sha256:d2b073c2957df967f830ad0b7ddac8fc687bb90c47b329beb0e2acc253f896cb
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
 
     ----- stderr -----
@@ -2158,8 +2143,8 @@ fn requirements_txt_relative_path() -> Result<()> {
     ../dependency
         # via project
     iniconfig==2.0.0 \
-        --hash=sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3 \
-        --hash=sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
+        --hash=sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3 \
+        --hash=sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c
         # via dependency
     ");
 
@@ -2211,19 +2196,19 @@ fn devrequirements_txt_() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR]
     -e .
     anyio==4.3.0 \
-        --hash=sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8 \
-        --hash=sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6
+        --hash=sha256:13a6d97fa30ec110d85e3949a30c92306f0178135048329f54a335c3dade753a \
+        --hash=sha256:c4f443e7e5a2c003b1534688207e85dbd11960efb66d4d6a4e7693fdfc6f5b33
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
     typing-extensions==4.10.0 \
-        --hash=sha256:69b1a937c3a517342112fb4c6df7e72fc39a38e7891a5730ed4985b5214b5475 \
-        --hash=sha256:b0abd7c89e8fb96f98db18d86106ff1d90ab692004eb746cf6eda2682f91b3cb
+        --hash=sha256:0626263fe1dcda7bc3ee7b2872064b534d4831718055d22d4f32f9e474a867a4 \
+        --hash=sha256:adefbbc2f75a47edb1f4491a2e99a45438ec3dd0c2670276b321cad2ca522246
         # via project
 
     ----- stderr -----
@@ -2238,8 +2223,8 @@ fn devrequirements_txt_() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR] --no-dev
     -e .
     typing-extensions==4.10.0 \
-        --hash=sha256:69b1a937c3a517342112fb4c6df7e72fc39a38e7891a5730ed4985b5214b5475 \
-        --hash=sha256:b0abd7c89e8fb96f98db18d86106ff1d90ab692004eb746cf6eda2682f91b3cb
+        --hash=sha256:0626263fe1dcda7bc3ee7b2872064b534d4831718055d22d4f32f9e474a867a4 \
+        --hash=sha256:adefbbc2f75a47edb1f4491a2e99a45438ec3dd0c2670276b321cad2ca522246
         # via project
 
     ----- stderr -----
@@ -2253,15 +2238,15 @@ fn devrequirements_txt_() -> Result<()> {
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR] --only-dev
     anyio==4.3.0 \
-        --hash=sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8 \
-        --hash=sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6
+        --hash=sha256:13a6d97fa30ec110d85e3949a30c92306f0178135048329f54a335c3dade753a \
+        --hash=sha256:c4f443e7e5a2c003b1534688207e85dbd11960efb66d4d6a4e7693fdfc6f5b33
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
 
     ----- stderr -----
@@ -2343,16 +2328,16 @@ fn requirements_txt_output_file() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR] --output-file requirements.txt
     -e .
     anyio==3.7.0 \
-        --hash=sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce \
-        --hash=sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0
+        --hash=sha256:c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a \
+        --hash=sha256:ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556
         # via project
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
 
     ----- stderr -----
@@ -2365,16 +2350,16 @@ fn requirements_txt_output_file() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR] --output-file requirements.txt
     -e .
     anyio==3.7.0 \
-        --hash=sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce \
-        --hash=sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0
+        --hash=sha256:c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a \
+        --hash=sha256:ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556
         # via project
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
     ");
 
@@ -2434,16 +2419,16 @@ fn requirements_txt_no_emit() -> Result<()> {
     -e ./child
         # via project
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     iniconfig==2.0.0 \
-        --hash=sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3 \
-        --hash=sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
+        --hash=sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3 \
+        --hash=sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c
         # via child
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
 
     ----- stderr -----
@@ -2460,12 +2445,12 @@ fn requirements_txt_no_emit() -> Result<()> {
     -e ./child
         # via project
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     iniconfig==2.0.0 \
-        --hash=sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3 \
-        --hash=sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
+        --hash=sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3 \
+        --hash=sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c
         # via child
 
     ----- stderr -----
@@ -2481,20 +2466,20 @@ fn requirements_txt_no_emit() -> Result<()> {
     -e ./child
         # via project
     anyio==3.7.0 \
-        --hash=sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce \
-        --hash=sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0
+        --hash=sha256:c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a \
+        --hash=sha256:ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556
         # via project
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     iniconfig==2.0.0 \
-        --hash=sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3 \
-        --hash=sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
+        --hash=sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3 \
+        --hash=sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c
         # via child
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
 
     ----- stderr -----
@@ -2508,8 +2493,8 @@ fn requirements_txt_no_emit() -> Result<()> {
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR] --no-emit-project --package child
     iniconfig==2.0.0 \
-        --hash=sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3 \
-        --hash=sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
+        --hash=sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3 \
+        --hash=sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c
         # via child
 
     ----- stderr -----
@@ -2523,20 +2508,20 @@ fn requirements_txt_no_emit() -> Result<()> {
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR] --no-emit-workspace
     anyio==3.7.0 \
-        --hash=sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce \
-        --hash=sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0
+        --hash=sha256:c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a \
+        --hash=sha256:ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556
         # via project
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     iniconfig==2.0.0 \
-        --hash=sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3 \
-        --hash=sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
+        --hash=sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3 \
+        --hash=sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c
         # via child
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
 
     ----- stderr -----
@@ -2566,16 +2551,16 @@ fn requirements_txt_no_emit() -> Result<()> {
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR] --no-emit-workspace
     anyio==3.7.0 \
-        --hash=sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce \
-        --hash=sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0
+        --hash=sha256:c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a \
+        --hash=sha256:ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556
         # via project
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
 
     ----- stderr -----
@@ -2616,16 +2601,16 @@ fn requirements_txt_no_emit_workspace_all_packages() -> Result<()> {
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR] --no-emit-workspace --all-packages
     anyio==3.7.0 \
-        --hash=sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce \
-        --hash=sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0
+        --hash=sha256:c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a \
+        --hash=sha256:ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556
         # via project
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
 
     ----- stderr -----
@@ -2708,8 +2693,8 @@ fn requirements_txt_only_emit() -> Result<()> {
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR] --only-emit-package anyio
     anyio==3.7.0 \
-        --hash=sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce \
-        --hash=sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0
+        --hash=sha256:c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a \
+        --hash=sha256:ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556
         # via project
 
     ----- stderr -----
@@ -2771,20 +2756,20 @@ fn requirements_txt_no_editable() -> Result<()> {
     ./child
         # via project
     anyio==3.7.0 \
-        --hash=sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce \
-        --hash=sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0
+        --hash=sha256:c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a \
+        --hash=sha256:ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556
         # via project
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     iniconfig==2.0.0 \
-        --hash=sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3 \
-        --hash=sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
+        --hash=sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3 \
+        --hash=sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c
         # via child
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
 
     ----- stderr -----
@@ -2800,20 +2785,20 @@ fn requirements_txt_no_editable() -> Result<()> {
     ./child
         # via project
     anyio==3.7.0 \
-        --hash=sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce \
-        --hash=sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0
+        --hash=sha256:c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a \
+        --hash=sha256:ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556
         # via project
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     iniconfig==2.0.0 \
-        --hash=sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3 \
-        --hash=sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
+        --hash=sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3 \
+        --hash=sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c
         # via child
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
 
     ----- stderr -----
@@ -2852,11 +2837,11 @@ fn requirements_txt_export_group() -> Result<()> {
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR]
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
     typing-extensions==4.10.0 \
-        --hash=sha256:69b1a937c3a517342112fb4c6df7e72fc39a38e7891a5730ed4985b5214b5475 \
-        --hash=sha256:b0abd7c89e8fb96f98db18d86106ff1d90ab692004eb746cf6eda2682f91b3cb
+        --hash=sha256:0626263fe1dcda7bc3ee7b2872064b534d4831718055d22d4f32f9e474a867a4 \
+        --hash=sha256:adefbbc2f75a47edb1f4491a2e99a45438ec3dd0c2670276b321cad2ca522246
         # via project
 
     ----- stderr -----
@@ -2869,8 +2854,8 @@ fn requirements_txt_export_group() -> Result<()> {
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR] --only-group bar
     iniconfig==2.0.0 \
-        --hash=sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3 \
-        --hash=sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
+        --hash=sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3 \
+        --hash=sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c
 
     ----- stderr -----
     Resolved 6 packages in [TIME]
@@ -2882,19 +2867,19 @@ fn requirements_txt_export_group() -> Result<()> {
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR] --group foo
     anyio==4.3.0 ; sys_platform == 'darwin' \
-        --hash=sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8 \
-        --hash=sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6
+        --hash=sha256:13a6d97fa30ec110d85e3949a30c92306f0178135048329f54a335c3dade753a \
+        --hash=sha256:c4f443e7e5a2c003b1534688207e85dbd11960efb66d4d6a4e7693fdfc6f5b33
     idna==3.6 ; sys_platform == 'darwin' \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
     typing-extensions==4.10.0 \
-        --hash=sha256:69b1a937c3a517342112fb4c6df7e72fc39a38e7891a5730ed4985b5214b5475 \
-        --hash=sha256:b0abd7c89e8fb96f98db18d86106ff1d90ab692004eb746cf6eda2682f91b3cb
+        --hash=sha256:0626263fe1dcda7bc3ee7b2872064b534d4831718055d22d4f32f9e474a867a4 \
+        --hash=sha256:adefbbc2f75a47edb1f4491a2e99a45438ec3dd0c2670276b321cad2ca522246
         # via project
 
     ----- stderr -----
@@ -2907,22 +2892,22 @@ fn requirements_txt_export_group() -> Result<()> {
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR] --group foo --group bar
     anyio==4.3.0 ; sys_platform == 'darwin' \
-        --hash=sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8 \
-        --hash=sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6
+        --hash=sha256:13a6d97fa30ec110d85e3949a30c92306f0178135048329f54a335c3dade753a \
+        --hash=sha256:c4f443e7e5a2c003b1534688207e85dbd11960efb66d4d6a4e7693fdfc6f5b33
     idna==3.6 ; sys_platform == 'darwin' \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     iniconfig==2.0.0 \
-        --hash=sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3 \
-        --hash=sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
+        --hash=sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3 \
+        --hash=sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
     typing-extensions==4.10.0 \
-        --hash=sha256:69b1a937c3a517342112fb4c6df7e72fc39a38e7891a5730ed4985b5214b5475 \
-        --hash=sha256:b0abd7c89e8fb96f98db18d86106ff1d90ab692004eb746cf6eda2682f91b3cb
+        --hash=sha256:0626263fe1dcda7bc3ee7b2872064b534d4831718055d22d4f32f9e474a867a4 \
+        --hash=sha256:adefbbc2f75a47edb1f4491a2e99a45438ec3dd0c2670276b321cad2ca522246
         # via project
 
     ----- stderr -----
@@ -2935,22 +2920,22 @@ fn requirements_txt_export_group() -> Result<()> {
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR] --all-groups
     anyio==4.3.0 ; sys_platform == 'darwin' \
-        --hash=sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8 \
-        --hash=sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6
+        --hash=sha256:13a6d97fa30ec110d85e3949a30c92306f0178135048329f54a335c3dade753a \
+        --hash=sha256:c4f443e7e5a2c003b1534688207e85dbd11960efb66d4d6a4e7693fdfc6f5b33
     idna==3.6 ; sys_platform == 'darwin' \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     iniconfig==2.0.0 \
-        --hash=sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3 \
-        --hash=sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
+        --hash=sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3 \
+        --hash=sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
     typing-extensions==4.10.0 \
-        --hash=sha256:69b1a937c3a517342112fb4c6df7e72fc39a38e7891a5730ed4985b5214b5475 \
-        --hash=sha256:b0abd7c89e8fb96f98db18d86106ff1d90ab692004eb746cf6eda2682f91b3cb
+        --hash=sha256:0626263fe1dcda7bc3ee7b2872064b534d4831718055d22d4f32f9e474a867a4 \
+        --hash=sha256:adefbbc2f75a47edb1f4491a2e99a45438ec3dd0c2670276b321cad2ca522246
         # via project
 
     ----- stderr -----
@@ -2963,19 +2948,19 @@ fn requirements_txt_export_group() -> Result<()> {
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR] --all-groups --no-group bar
     anyio==4.3.0 ; sys_platform == 'darwin' \
-        --hash=sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8 \
-        --hash=sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6
+        --hash=sha256:13a6d97fa30ec110d85e3949a30c92306f0178135048329f54a335c3dade753a \
+        --hash=sha256:c4f443e7e5a2c003b1534688207e85dbd11960efb66d4d6a4e7693fdfc6f5b33
     idna==3.6 ; sys_platform == 'darwin' \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
     typing-extensions==4.10.0 \
-        --hash=sha256:69b1a937c3a517342112fb4c6df7e72fc39a38e7891a5730ed4985b5214b5475 \
-        --hash=sha256:b0abd7c89e8fb96f98db18d86106ff1d90ab692004eb746cf6eda2682f91b3cb
+        --hash=sha256:0626263fe1dcda7bc3ee7b2872064b534d4831718055d22d4f32f9e474a867a4 \
+        --hash=sha256:adefbbc2f75a47edb1f4491a2e99a45438ec3dd0c2670276b321cad2ca522246
         # via project
 
     ----- stderr -----
@@ -3045,18 +3030,18 @@ fn requirements_txt_script() -> Result<()> {
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR] --script [TEMP_DIR]/script.py
     anyio==2.0.0 ; sys_platform == 'win32' \
-        --hash=sha256:0b8375c8fc665236cb4d143ea13e849eb9e074d727b1b5c27d88aba44ca8c547 \
-        --hash=sha256:ceca4669ffa3f02bf20ef3d6c2a0c323b16cdc71d1ce0b0bc03c6f1f36054826
+        --hash=sha256:4fdf5b774eb9630cd7b52cecc5855e900ca2af9599bc0bc535f64a2f82d3eb11 \
+        --hash=sha256:af395fdbe444e8024f00a1039400091fa8bfb1b1828f63edbbdcc6f498f88e0e
     anyio==3.0.0 ; sys_platform == 'linux' \
-        --hash=sha256:b553598332c050af19f7d41f73a7790142f5bc3d5eb8bd82f5e515ec22019bd9 \
-        --hash=sha256:e71c3d9d72291d12056c0265d07c6bbedf92332f78573e278aeb116f24f30395
+        --hash=sha256:62fb42b0d181821ab3c819567d140c927006c2fbf64f4785b1259ed9bd7da21e \
+        --hash=sha256:d2b073c2957df967f830ad0b7ddac8fc687bb90c47b329beb0e2acc253f896cb
     idna==3.6 ; sys_platform == 'linux' or sys_platform == 'win32' \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     sniffio==1.3.1 ; sys_platform == 'linux' or sys_platform == 'win32' \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
 
     ----- stderr -----
@@ -3101,7 +3086,7 @@ fn requirements_txt_script() -> Result<()> {
         [[package]]
         name = "anyio"
         version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
         resolution-markers = [
             "sys_platform == 'win32'",
         ]
@@ -3109,15 +3094,15 @@ fn requirements_txt_script() -> Result<()> {
             { name = "idna" },
             { name = "sniffio" },
         ]
-        sdist = { url = "https://files.pythonhosted.org/packages/fe/dc/daeadb9b34093d3968afcc93946ee567cd6d2b402a96c608cb160f74d737/anyio-2.0.0.tar.gz", hash = "sha256:ceca4669ffa3f02bf20ef3d6c2a0c323b16cdc71d1ce0b0bc03c6f1f36054826", size = 91291, upload-time = "2020-09-11T09:22:49.334Z" }
+        sdist = { url = "http://[LOCALHOST]/files/anyio-2.0.0.tar.gz", hash = "sha256:af395fdbe444e8024f00a1039400091fa8bfb1b1828f63edbbdcc6f498f88e0e", upload-time = "2020-11-11T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/8a/19/10fe682e962efd1610aa41376399fc3f3e002425449b02d0fb04749bb712/anyio-2.0.0-py3-none-any.whl", hash = "sha256:0b8375c8fc665236cb4d143ea13e849eb9e074d727b1b5c27d88aba44ca8c547", size = 62675, upload-time = "2020-09-11T09:22:48.119Z" },
+            { url = "http://[LOCALHOST]/files/anyio-2.0.0-py3-none-any.whl", hash = "sha256:4fdf5b774eb9630cd7b52cecc5855e900ca2af9599bc0bc535f64a2f82d3eb11", upload-time = "2020-11-11T00:00:00Z" },
         ]
 
         [[package]]
         name = "anyio"
         version = "3.0.0"
-        source = { registry = "https://pypi.org/simple" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
         resolution-markers = [
             "sys_platform == 'linux'",
         ]
@@ -3125,27 +3110,27 @@ fn requirements_txt_script() -> Result<()> {
             { name = "idna" },
             { name = "sniffio" },
         ]
-        sdist = { url = "https://files.pythonhosted.org/packages/99/0d/65165f99e5f4f3b4c43a5ed9db0fb7aa655f5a58f290727a30528a87eb45/anyio-3.0.0.tar.gz", hash = "sha256:b553598332c050af19f7d41f73a7790142f5bc3d5eb8bd82f5e515ec22019bd9", size = 116952, upload-time = "2021-04-20T14:02:14.75Z" }
+        sdist = { url = "http://[LOCALHOST]/files/anyio-3.0.0.tar.gz", hash = "sha256:62fb42b0d181821ab3c819567d140c927006c2fbf64f4785b1259ed9bd7da21e", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/3b/49/ebee263b69fe243bd1fd0a88bc6bb0f7732bf1794ba3273cb446351f9482/anyio-3.0.0-py3-none-any.whl", hash = "sha256:e71c3d9d72291d12056c0265d07c6bbedf92332f78573e278aeb116f24f30395", size = 72182, upload-time = "2021-04-20T14:02:13.663Z" },
+            { url = "http://[LOCALHOST]/files/anyio-3.0.0-py3-none-any.whl", hash = "sha256:d2b073c2957df967f830ad0b7ddac8fc687bb90c47b329beb0e2acc253f896cb", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
         name = "idna"
         version = "3.6"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426, upload-time = "2023-11-25T15:40:54.902Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/idna-3.6.tar.gz", hash = "sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567, upload-time = "2023-11-25T15:40:52.604Z" },
+            { url = "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl", hash = "sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
         name = "sniffio"
         version = "1.3.1"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/sniffio-1.3.1.tar.gz", hash = "sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
+            { url = "http://[LOCALHOST]/files/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05", upload-time = "2024-03-24T00:00:00Z" },
         ]
         "#
         );
@@ -3170,21 +3155,21 @@ fn requirements_txt_script() -> Result<()> {
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR] --script [TEMP_DIR]/script.py
     anyio==2.0.0 ; sys_platform == 'win32' \
-        --hash=sha256:0b8375c8fc665236cb4d143ea13e849eb9e074d727b1b5c27d88aba44ca8c547 \
-        --hash=sha256:ceca4669ffa3f02bf20ef3d6c2a0c323b16cdc71d1ce0b0bc03c6f1f36054826
+        --hash=sha256:4fdf5b774eb9630cd7b52cecc5855e900ca2af9599bc0bc535f64a2f82d3eb11 \
+        --hash=sha256:af395fdbe444e8024f00a1039400091fa8bfb1b1828f63edbbdcc6f498f88e0e
     anyio==3.0.0 ; sys_platform == 'linux' \
-        --hash=sha256:b553598332c050af19f7d41f73a7790142f5bc3d5eb8bd82f5e515ec22019bd9 \
-        --hash=sha256:e71c3d9d72291d12056c0265d07c6bbedf92332f78573e278aeb116f24f30395
+        --hash=sha256:62fb42b0d181821ab3c819567d140c927006c2fbf64f4785b1259ed9bd7da21e \
+        --hash=sha256:d2b073c2957df967f830ad0b7ddac8fc687bb90c47b329beb0e2acc253f896cb
     idna==3.6 ; sys_platform == 'linux' or sys_platform == 'win32' \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     iniconfig==2.0.0 \
-        --hash=sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3 \
-        --hash=sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
+        --hash=sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3 \
+        --hash=sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c
     sniffio==1.3.1 ; sys_platform == 'linux' or sys_platform == 'win32' \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
 
     ----- stderr -----
@@ -3220,7 +3205,7 @@ fn requirements_txt_script() -> Result<()> {
         [[package]]
         name = "anyio"
         version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
         resolution-markers = [
             "sys_platform == 'win32'",
         ]
@@ -3228,15 +3213,15 @@ fn requirements_txt_script() -> Result<()> {
             { name = "idna" },
             { name = "sniffio" },
         ]
-        sdist = { url = "https://files.pythonhosted.org/packages/fe/dc/daeadb9b34093d3968afcc93946ee567cd6d2b402a96c608cb160f74d737/anyio-2.0.0.tar.gz", hash = "sha256:ceca4669ffa3f02bf20ef3d6c2a0c323b16cdc71d1ce0b0bc03c6f1f36054826", size = 91291, upload-time = "2020-09-11T09:22:49.334Z" }
+        sdist = { url = "http://[LOCALHOST]/files/anyio-2.0.0.tar.gz", hash = "sha256:af395fdbe444e8024f00a1039400091fa8bfb1b1828f63edbbdcc6f498f88e0e", upload-time = "2020-11-11T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/8a/19/10fe682e962efd1610aa41376399fc3f3e002425449b02d0fb04749bb712/anyio-2.0.0-py3-none-any.whl", hash = "sha256:0b8375c8fc665236cb4d143ea13e849eb9e074d727b1b5c27d88aba44ca8c547", size = 62675, upload-time = "2020-09-11T09:22:48.119Z" },
+            { url = "http://[LOCALHOST]/files/anyio-2.0.0-py3-none-any.whl", hash = "sha256:4fdf5b774eb9630cd7b52cecc5855e900ca2af9599bc0bc535f64a2f82d3eb11", upload-time = "2020-11-11T00:00:00Z" },
         ]
 
         [[package]]
         name = "anyio"
         version = "3.0.0"
-        source = { registry = "https://pypi.org/simple" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
         resolution-markers = [
             "sys_platform == 'linux'",
         ]
@@ -3244,36 +3229,36 @@ fn requirements_txt_script() -> Result<()> {
             { name = "idna" },
             { name = "sniffio" },
         ]
-        sdist = { url = "https://files.pythonhosted.org/packages/99/0d/65165f99e5f4f3b4c43a5ed9db0fb7aa655f5a58f290727a30528a87eb45/anyio-3.0.0.tar.gz", hash = "sha256:b553598332c050af19f7d41f73a7790142f5bc3d5eb8bd82f5e515ec22019bd9", size = 116952, upload-time = "2021-04-20T14:02:14.75Z" }
+        sdist = { url = "http://[LOCALHOST]/files/anyio-3.0.0.tar.gz", hash = "sha256:62fb42b0d181821ab3c819567d140c927006c2fbf64f4785b1259ed9bd7da21e", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/3b/49/ebee263b69fe243bd1fd0a88bc6bb0f7732bf1794ba3273cb446351f9482/anyio-3.0.0-py3-none-any.whl", hash = "sha256:e71c3d9d72291d12056c0265d07c6bbedf92332f78573e278aeb116f24f30395", size = 72182, upload-time = "2021-04-20T14:02:13.663Z" },
+            { url = "http://[LOCALHOST]/files/anyio-3.0.0-py3-none-any.whl", hash = "sha256:d2b073c2957df967f830ad0b7ddac8fc687bb90c47b329beb0e2acc253f896cb", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
         name = "idna"
         version = "3.6"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426, upload-time = "2023-11-25T15:40:54.902Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/idna-3.6.tar.gz", hash = "sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567, upload-time = "2023-11-25T15:40:52.604Z" },
+            { url = "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl", hash = "sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
         name = "iniconfig"
         version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz", hash = "sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
+            { url = "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
         name = "sniffio"
         version = "1.3.1"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/sniffio-1.3.1.tar.gz", hash = "sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
+            { url = "http://[LOCALHOST]/files/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05", upload-time = "2024-03-24T00:00:00Z" },
         ]
         "#
         );
@@ -3323,8 +3308,8 @@ fn requirements_txt_conflicts() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR]
     -e .
     iniconfig==1.1.1 \
-        --hash=sha256:011e24c64b7f47f6ebd835bb12a743f2fbe9a26d4cecaa7f53bc4f35ee9da8b3 \
-        --hash=sha256:bc3af051d7d14b2ee5ef9969666def0cd1a000e121eaea580d4a313df4b37f32
+        --hash=sha256:4f511134392ee75a8077a69be0d19cd4e5abb3a99ca54c7ab4a8e09ba0bc6991 \
+        --hash=sha256:7832a237a8357e11d0a6e6a909bff9806c6f378393862998cd328fcf9d54d509
         # via project
 
     ----- stderr -----
@@ -3338,12 +3323,12 @@ fn requirements_txt_conflicts() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR] --extra extra1
     -e .
     iniconfig==1.1.1 \
-        --hash=sha256:011e24c64b7f47f6ebd835bb12a743f2fbe9a26d4cecaa7f53bc4f35ee9da8b3 \
-        --hash=sha256:bc3af051d7d14b2ee5ef9969666def0cd1a000e121eaea580d4a313df4b37f32
+        --hash=sha256:4f511134392ee75a8077a69be0d19cd4e5abb3a99ca54c7ab4a8e09ba0bc6991 \
+        --hash=sha256:7832a237a8357e11d0a6e6a909bff9806c6f378393862998cd328fcf9d54d509
         # via project
     sortedcontainers==2.3.0 \
-        --hash=sha256:37257a32add0a3ee490bb170b599e93095eed89a55da91fa9f48753ea12fd73f \
-        --hash=sha256:59cc937650cf60d677c16775597c89a960658a09cf7c1a668f86e1e4464b10a1
+        --hash=sha256:3228c480e84b2b7a504f28bd68f73b8cfde1d1fddf8a47783b19a0dbcc93ffcf \
+        --hash=sha256:c7bfd220eb6dcc29774e2e05298edc2c5d62fa1086cc6409c800c7f413afe2a6
         # via project
 
     ----- stderr -----
@@ -3357,12 +3342,12 @@ fn requirements_txt_conflicts() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR] --extra extra2
     -e .
     iniconfig==1.1.1 \
-        --hash=sha256:011e24c64b7f47f6ebd835bb12a743f2fbe9a26d4cecaa7f53bc4f35ee9da8b3 \
-        --hash=sha256:bc3af051d7d14b2ee5ef9969666def0cd1a000e121eaea580d4a313df4b37f32
+        --hash=sha256:4f511134392ee75a8077a69be0d19cd4e5abb3a99ca54c7ab4a8e09ba0bc6991 \
+        --hash=sha256:7832a237a8357e11d0a6e6a909bff9806c6f378393862998cd328fcf9d54d509
         # via project
     sortedcontainers==2.4.0 \
-        --hash=sha256:25caa5a06cc30b6b83d11423433f65d1f9d76c4c6a0c90e3379eaa43b9bfdb88 \
-        --hash=sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0
+        --hash=sha256:e90c0f20bb5c630bbf840e4ccc94441cd55ae8048cf55fc42df715d28b67cb80 \
+        --hash=sha256:fb6015d312cfaf15c65e0aeadac28191546cc25e48d41b126ecc322d5b116be2
         # via project
 
     ----- stderr -----
@@ -3418,21 +3403,21 @@ fn requirements_txt_simple_conflict_markers() -> Result<()> {
     ----- stdout -----
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR]
-    anyio==1.3.1 \
-        --hash=sha256:a46bb2b7743455434afd9adea848a3c4e0b7321aee3e9d08844b11d348d3b5a0 \
-        --hash=sha256:f21b4fafeec1b7db81e09a907e44e374a1e39718d782a488fdfcdcf949c8950c
+    anyio==4.3.0 \
+        --hash=sha256:13a6d97fa30ec110d85e3949a30c92306f0178135048329f54a335c3dade753a \
+        --hash=sha256:c4f443e7e5a2c003b1534688207e85dbd11960efb66d4d6a4e7693fdfc6f5b33
         # via project
-    async-generator==1.10 \
-        --hash=sha256:01c7bf666359b4967d2cda0000cc2e4af16a0ae098cbffcb8472fb9e8ad6585b \
-        --hash=sha256:6ebb3d106c12920aaae42ccb6f787ef5eefdcdd166ea3d628fa8476abe712144
+    idna==1.0 \
+        --hash=sha256:95d1880ba71f9445fa6d30403930bd0974c52aef325d9f7c3b283ec82c339399 \
+        --hash=sha256:edfc5b99d65f48a08ad306cff2b5e88c9fd858f2a47e6348a3284f5ff0a69572
         # via anyio
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
 
     ----- stderr -----
-    Resolved 6 packages in [TIME]
+    Resolved 4 packages in [TIME]
     ");
 
     uv_snapshot!(context.filters(), context.export().arg("--extra").arg("cpu"), @r"
@@ -3440,24 +3425,23 @@ fn requirements_txt_simple_conflict_markers() -> Result<()> {
     ----- stdout -----
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR] --extra cpu
-    anyio==1.3.1 \
-        --hash=sha256:a46bb2b7743455434afd9adea848a3c4e0b7321aee3e9d08844b11d348d3b5a0 \
-        --hash=sha256:f21b4fafeec1b7db81e09a907e44e374a1e39718d782a488fdfcdcf949c8950c
+    anyio==4.3.0 \
+        --hash=sha256:13a6d97fa30ec110d85e3949a30c92306f0178135048329f54a335c3dade753a \
+        --hash=sha256:c4f443e7e5a2c003b1534688207e85dbd11960efb66d4d6a4e7693fdfc6f5b33
         # via project
-    async-generator==1.10 \
-        --hash=sha256:01c7bf666359b4967d2cda0000cc2e4af16a0ae098cbffcb8472fb9e8ad6585b \
-        --hash=sha256:6ebb3d106c12920aaae42ccb6f787ef5eefdcdd166ea3d628fa8476abe712144
-        # via anyio
     idna==1.0 \
-        --hash=sha256:c31140a69ecae014d65e936e9a45d8a66e2ee29f5abbc656f69c705ad2f1507d
-        # via project
+        --hash=sha256:95d1880ba71f9445fa6d30403930bd0974c52aef325d9f7c3b283ec82c339399 \
+        --hash=sha256:edfc5b99d65f48a08ad306cff2b5e88c9fd858f2a47e6348a3284f5ff0a69572
+        # via
+        #   anyio
+        #   project
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
 
     ----- stderr -----
-    Resolved 6 packages in [TIME]
+    Resolved 4 packages in [TIME]
     ");
 
     Ok(())
@@ -3466,57 +3450,54 @@ fn requirements_txt_simple_conflict_markers() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_complex_conflict_markers() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
+    let cpu_index = uv_test::packse::PackseServer::new("packages/export-conflict-markers.toml");
+    let cu124_index = uv_test::packse::PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12.0"
-        dependencies = ["torch"]
+        dependencies = ["jinja2"]
 
         [project.optional-dependencies]
         cpu = [
-          "torch>=2.6.0",
-          "torchvision>=0.21.0",
+          "jinja2==3.1.2",
         ]
         cu124 = [
-          "torch>=2.6.0",
-          "torchvision>=0.21.0",
+          "jinja2==3.1.3",
         ]
 
         [tool.uv]
         conflicts = [
           [
-            { extra = "cpu" },
-            { extra = "cu124" },
+            {{ extra = "cpu" }},
+            {{ extra = "cu124" }},
           ],
         ]
 
         [tool.uv.sources]
-        torch = [
-          { index = "pytorch-cpu", extra = "cpu" },
-          { index = "pytorch-cu124", extra = "cu124" },
-        ]
-        torchvision = [
-          { index = "pytorch-cpu", extra = "cpu" },
-          { index = "pytorch-cu124", extra = "cu124" },
+        jinja2 = [
+          {{ index = "cpu", extra = "cpu" }},
+          {{ index = "cu124", extra = "cu124" }},
         ]
 
         [[tool.uv.index]]
-        name = "pytorch-cpu"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cpu"
+        name = "cpu"
+        url = "{cpu_index}"
         explicit = true
 
         [[tool.uv.index]]
-        name = "pytorch-cu124"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cu124"
+        name = "cu124"
+        url = "{cu124_index}"
         explicit = true
 
         "#,
-    )?;
+        cpu_index = cpu_index.index_url(),
+        cu124_index = cu124_index.index_url(),
+    })?;
 
     context.lock().assert().success();
 
@@ -3525,159 +3506,17 @@ fn requirements_txt_complex_conflict_markers() -> Result<()> {
     ----- stdout -----
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR]
-    filelock==3.17.0 \
-        --hash=sha256:533dc2f7ba78dc2f0f531fc6c4940addf7b70a481e269a5a3b93be94ffbe8338 \
-        --hash=sha256:ee4e77401ef576ebb38cd7f13b9b28893194acc20a8e68e18730ba9c0e54660e
-        # via torch
-    fsspec==2024.12.0 \
-        --hash=sha256:670700c977ed2fb51e0d9f9253177ed20cbde4a3e5c0283cc5385b5870c8533f \
-        --hash=sha256:b520aed47ad9804237ff878b504267a3b0b441e97508bd6d2d8774e3db85cee2
-        # via torch
-    jinja2==3.1.5 \
-        --hash=sha256:8fefff8dc3034e27bb80d67c671eb8a9bc424c0ef4c0826edbff304cceff43bb \
-        --hash=sha256:aba0f4dc9ed8013c424088f68a5c226f7d6097ed89b246d7749c2ec4175c6adb
-        # via torch
-    markupsafe==3.0.2 \
-        --hash=sha256:0f4ca02bea9a23221c0182836703cbf8930c5e9454bacce27e767509fa286a30 \
-        --hash=sha256:131a3c7689c85f5ad20f9f6fb1b866f402c445b220c19fe4308c0b147ccd2ad9 \
-        --hash=sha256:15ab75ef81add55874e7ab7055e9c397312385bd9ced94920f2802310c930396 \
-        --hash=sha256:1c99d261bd2d5f6b59325c92c73df481e05e57f19837bdca8413b9eac4bd8028 \
-        --hash=sha256:2181e67807fc2fa785d0592dc2d6206c019b9502410671cc905d132a92866557 \
-        --hash=sha256:3d79d162e7be8f996986c064d1c7c817f6df3a77fe3d6859f6f9e7be4b8c213a \
-        --hash=sha256:444dcda765c8a838eaae23112db52f1efaf750daddb2d9ca300bcae1039adc5c \
-        --hash=sha256:4aa4e5faecf353ed117801a068ebab7b7e09ffb6e1d5e412dc852e0da018126c \
-        --hash=sha256:52305740fe773d09cffb16f8ed0427942901f00adedac82ec8b67752f58a1b22 \
-        --hash=sha256:569511d3b58c8791ab4c2e1285575265991e6d8f8700c7be0e88f86cb0672094 \
-        --hash=sha256:6381026f158fdb7c72a168278597a5e3a5222e83ea18f543112b2662a9b699c5 \
-        --hash=sha256:846ade7b71e3536c4e56b386c2a47adf5741d2d8b94ec9dc3e92e5e1ee1e2225 \
-        --hash=sha256:88416bd1e65dcea10bc7569faacb2c20ce071dd1f87539ca2ab364bf6231393c \
-        --hash=sha256:8e06879fc22a25ca47312fbe7c8264eb0b662f6db27cb2d3bbbc74b1df4b9b87 \
-        --hash=sha256:9778bd8ab0a994ebf6f84c2b949e65736d5575320a17ae8984a77fab08db94cf \
-        --hash=sha256:a904af0a6162c73e3edcb969eeeb53a63ceeb5d8cf642fade7d39e7963a22ddb \
-        --hash=sha256:ad10d3ded218f1039f11a75f8091880239651b52e9bb592ca27de44eed242a48 \
-        --hash=sha256:b5a6b3ada725cea8a5e634536b1b01c30bcdcd7f9c6fff4151548d5bf6b3a36c \
-        --hash=sha256:ba8062ed2cf21c07a9e295d5b8a2a5ce678b913b45fdf68c32d95d6c1291e0b6 \
-        --hash=sha256:ba9527cdd4c926ed0760bc301f6728ef34d841f405abf9d4f959c478421e4efd \
-        --hash=sha256:bcf3e58998965654fdaff38e58584d8937aa3096ab5354d493c77d1fdd66d7a1 \
-        --hash=sha256:c0ef13eaeee5b615fb07c9a7dadb38eac06a0608b41570d8ade51c56539e509d \
-        --hash=sha256:cabc348d87e913db6ab4aa100f01b08f481097838bdddf7c7a84b7575b7309ca \
-        --hash=sha256:cdb82a876c47801bb54a690c5ae105a46b392ac6099881cdfb9f6e95e4014c6a \
-        --hash=sha256:d16a81a06776313e817c951135cf7340a3e91e8c1ff2fac444cfd75fffa04afe \
-        --hash=sha256:e17c96c14e19278594aa4841ec148115f9c7615a47382ecb6b82bd8fea3ab0c8 \
-        --hash=sha256:e444a31f8db13eb18ada366ab3cf45fd4b31e4db1236a4448f68778c1d1a5a2f \
-        --hash=sha256:e6a2a455bd412959b57a172ce6328d2dd1f01cb2135efda2e4576e8a23fa3b0f \
-        --hash=sha256:ee55d3edf80167e48ea11a923c7386f4669df67d7994554387f84e7d8b0a2bf0 \
-        --hash=sha256:f3818cb119498c0678015754eba762e0d61e5b52d34c8b13d770f0719f7b1d79 \
-        --hash=sha256:f8b3d067f2e40fe93e1ccdd6b2e1d16c43140e76f02fb1319a05cf2b79d99430
-        # via jinja2
-    mpmath==1.3.0 \
-        --hash=sha256:7a28eb2a9774d00c7bc92411c19a89209d5da7c4c9a9e227be8330a23a25b91f \
-        --hash=sha256:a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c
-        # via sympy
-    networkx==3.4.2 \
-        --hash=sha256:307c3669428c5362aab27c8a1260aa8f47c4e91d3891f48be0141738d8d053e1 \
-        --hash=sha256:df5d4365b724cf81b8c6a7312509d0c22386097011ad1abe274afd5e9d3bbc5f
-        # via torch
-    nvidia-cublas-cu12==12.4.5.8 ; platform_machine == 'x86_64' and sys_platform == 'linux' \
-        --hash=sha256:0f8aa1706812e00b9f19dfe0cdb3999b092ccb8ca168c0db5b8ea712456fd9b3 \
-        --hash=sha256:2fc8da60df463fdefa81e323eef2e36489e1c94335b5358bcb38360adf75ac9b \
-        --hash=sha256:5a796786da89203a0657eda402bcdcec6180254a8ac22d72213abc42069522dc
-        # via
-        #   nvidia-cudnn-cu12
-        #   nvidia-cusolver-cu12
-        #   torch
-    nvidia-cuda-cupti-cu12==12.4.127 ; platform_machine == 'x86_64' and sys_platform == 'linux' \
-        --hash=sha256:5688d203301ab051449a2b1cb6690fbe90d2b372f411521c86018b950f3d7922 \
-        --hash=sha256:79279b35cf6f91da114182a5ce1864997fd52294a87a16179ce275773799458a \
-        --hash=sha256:9dec60f5ac126f7bb551c055072b69d85392b13311fcc1bcda2202d172df30fb
-        # via torch
-    nvidia-cuda-nvrtc-cu12==12.4.127 ; platform_machine == 'x86_64' and sys_platform == 'linux' \
-        --hash=sha256:0eedf14185e04b76aa05b1fea04133e59f465b6f960c0cbf4e37c3cb6b0ea198 \
-        --hash=sha256:a178759ebb095827bd30ef56598ec182b85547f1508941a3d560eb7ea1fbf338 \
-        --hash=sha256:a961b2f1d5f17b14867c619ceb99ef6fcec12e46612711bcec78eb05068a60ec
-        # via torch
-    nvidia-cuda-runtime-cu12==12.4.127 ; platform_machine == 'x86_64' and sys_platform == 'linux' \
-        --hash=sha256:09c2e35f48359752dfa822c09918211844a3d93c100a715d79b59591130c5e1e \
-        --hash=sha256:64403288fa2136ee8e467cdc9c9427e0434110899d07c779f25b5c068934faa5 \
-        --hash=sha256:961fe0e2e716a2a1d967aab7caee97512f71767f852f67432d572e36cb3a11f3
-        # via torch
-    nvidia-cudnn-cu12==9.1.0.70 ; platform_machine == 'x86_64' and sys_platform == 'linux' \
-        --hash=sha256:165764f44ef8c61fcdfdfdbe769d687e06374059fbb388b6c89ecb0e28793a6f \
-        --hash=sha256:6278562929433d68365a07a4a1546c237ba2849852c0d4b2262a486e805b977a
-        # via torch
-    nvidia-cufft-cu12==11.2.1.3 ; platform_machine == 'x86_64' and sys_platform == 'linux' \
-        --hash=sha256:5dad8008fc7f92f5ddfa2101430917ce2ffacd86824914c82e28990ad7f00399 \
-        --hash=sha256:d802f4954291101186078ccbe22fc285a902136f974d369540fd4a5333d1440b \
-        --hash=sha256:f083fc24912aa410be21fa16d157fed2055dab1cc4b6934a0e03cba69eb242b9
-        # via torch
-    nvidia-curand-cu12==10.3.5.147 ; platform_machine == 'x86_64' and sys_platform == 'linux' \
-        --hash=sha256:1f173f09e3e3c76ab084aba0de819c49e56614feae5c12f69883f4ae9bb5fad9 \
-        --hash=sha256:a88f583d4e0bb643c49743469964103aa59f7f708d862c3ddb0fc07f851e3b8b \
-        --hash=sha256:f307cc191f96efe9e8f05a87096abc20d08845a841889ef78cb06924437f6771
-        # via torch
-    nvidia-cusolver-cu12==11.6.1.9 ; platform_machine == 'x86_64' and sys_platform == 'linux' \
-        --hash=sha256:19e33fa442bcfd085b3086c4ebf7e8debc07cfe01e11513cc6d332fd918ac260 \
-        --hash=sha256:d338f155f174f90724bbde3758b7ac375a70ce8e706d70b018dd3375545fc84e \
-        --hash=sha256:e77314c9d7b694fcebc84f58989f3aa4fb4cb442f12ca1a9bde50f5e8f6d1b9c
-        # via torch
-    nvidia-cusparse-cu12==12.3.1.170 ; platform_machine == 'x86_64' and sys_platform == 'linux' \
-        --hash=sha256:9bc90fb087bc7b4c15641521f31c0371e9a612fc2ba12c338d3ae032e6b6797f \
-        --hash=sha256:9d32f62896231ebe0480efd8a7f702e143c98cfaa0e8a76df3386c1ba2b54df3 \
-        --hash=sha256:ea4f11a2904e2a8dc4b1833cc1b5181cde564edd0d5cd33e3c168eff2d1863f1
-        # via
-        #   nvidia-cusolver-cu12
-        #   torch
-    nvidia-cusparselt-cu12==0.6.2 ; platform_machine == 'x86_64' and sys_platform == 'linux' \
-        --hash=sha256:0057c91d230703924c0422feabe4ce768841f9b4b44d28586b6f6d2eb86fbe70 \
-        --hash=sha256:067a7f6d03ea0d4841c85f0c6f1991c5dda98211f6302cb83a4ab234ee95bef8 \
-        --hash=sha256:df2c24502fd76ebafe7457dbc4716b2fec071aabaed4fb7691a201cde03704d9
-        # via torch
-    nvidia-nccl-cu12==2.21.5 ; platform_machine == 'x86_64' and sys_platform == 'linux' \
-        --hash=sha256:8579076d30a8c24988834445f8d633c697d42397e92ffc3f63fa26766d25e0a0
-        # via torch
-    nvidia-nvjitlink-cu12==12.4.127 ; platform_machine == 'x86_64' and sys_platform == 'linux' \
-        --hash=sha256:06b3b9b25bf3f8af351d664978ca26a16d2c5127dbd53c0497e28d1fb9611d57 \
-        --hash=sha256:4abe7fef64914ccfa909bc2ba39739670ecc9e820c83ccc7a6ed414122599b83 \
-        --hash=sha256:fd9020c501d27d135f983c6d3e244b197a7ccad769e34df53a42e276b0e25fa1
-        # via
-        #   nvidia-cufft-cu12
-        #   nvidia-cusolver-cu12
-        #   nvidia-cusparse-cu12
-        #   torch
-    nvidia-nvtx-cu12==12.4.127 ; platform_machine == 'x86_64' and sys_platform == 'linux' \
-        --hash=sha256:641dccaaa1139f3ffb0d3164b4b84f9d253397e38246a4f2f36728b48566d485 \
-        --hash=sha256:781e950d9b9f60d8241ccea575b32f5105a5baf4c2351cab5256a24869f12a1a \
-        --hash=sha256:7959ad635db13edf4fc65c06a6e9f9e55fc2f92596db928d169c0bb031e88ef3
-        # via torch
-    setuptools==75.8.0 \
-        --hash=sha256:c5afc8f407c626b8313a86e10311dd3f661c6cd9c09d4bf8c15c0e11f9f2b0e6 \
-        --hash=sha256:e3982f444617239225d675215d51f6ba05f845d4eec313da4418fdbb56fb27e3
-        # via torch
-    sympy==1.13.1 \
-        --hash=sha256:9cebf7e04ff162015ce31c9c6c9144daa34a93bd082f54fd8f12deca4f47515f \
-        --hash=sha256:db36cdc64bf61b9b24578b6f7bab1ecdd2452cf008f34faa33776680c26d66f8
-        # via torch
-    torch==2.6.0 \
-        --hash=sha256:2bb8987f3bb1ef2675897034402373ddfc8f5ef0e156e2d8cfc47cacafdda4a9 \
-        --hash=sha256:4874a73507a300a5d089ceaff616a569e7bb7c613c56f37f63ec3ffac65259cf \
-        --hash=sha256:510c73251bee9ba02ae1cb6c9d4ee0907b3ce6020e62784e2d7598e0cfa4d6cc \
-        --hash=sha256:7e1448426d0ba3620408218b50aa6ada88aeae34f7a239ba5431f6c8774b1239 \
-        --hash=sha256:9a610afe216a85a8b9bc9f8365ed561535c93e804c2a317ef7fabcc5deda0989 \
-        --hash=sha256:a0d5e1b9874c1a6c25556840ab8920569a7a4137afa8a63a32cee0bc7d89bd4b \
-        --hash=sha256:b789069020c5588c70d5c2158ac0aa23fd24a028f34a8b4fcb8fcb4d7efcf5fb \
-        --hash=sha256:ff96f4038f8af9f7ec4231710ed4549da1bdebad95923953a25045dcf6fd87e2
+    jinja2==3.1.3 \
+        --hash=sha256:046923c85a8464827b55a7cf5541e7f08077b19245732698df3d2d6d653d6001 \
+        --hash=sha256:84ee4127f133eb82e1b98c1fdcf7abbdfbe4efe8d15a1b4954c0f5655103cd71
         # via project
-    triton==3.2.0 ; platform_machine == 'x86_64' and sys_platform == 'linux' \
-        --hash=sha256:8d9b215efc1c26fa7eefb9a157915c92d52e000d2bf83e5f69704047e63f125c \
-        --hash=sha256:e5dfa23ba84541d7c0a531dfce76d8bcd19159d50a4a8b14ad01e91734a5c1b0
-        # via torch
-    typing-extensions==4.12.2 \
-        --hash=sha256:04e5ca0351e0f3f85c6853954072df659d0d13fac324d0072316b67d7794700d \
-        --hash=sha256:1a7ead55c7e559dd4dee8856e3a88b41225abfe1ce8df57b7c13915fe121ffb8
-        # via torch
+    markupsafe==2.1.5 \
+        --hash=sha256:d0fe66b2745bbd943b48f3229667cf4506d88136363578b94e63d384e61d4984 \
+        --hash=sha256:e38237d66e6760fe86fe38e4b6c70ff4eed7da50b15e8c0f2589f05850207f13
+        # via jinja2
 
     ----- stderr -----
-    Resolved 33 packages in [TIME]
+    Resolved 6 packages in [TIME]
     ");
 
     uv_snapshot!(context.filters(), context.export().arg("--extra").arg("cpu"), @r"
@@ -3685,152 +3524,21 @@ fn requirements_txt_complex_conflict_markers() -> Result<()> {
     ----- stdout -----
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR] --extra cpu
-    filelock==3.17.0 \
-        --hash=sha256:533dc2f7ba78dc2f0f531fc6c4940addf7b70a481e269a5a3b93be94ffbe8338 \
-        --hash=sha256:ee4e77401ef576ebb38cd7f13b9b28893194acc20a8e68e18730ba9c0e54660e
-        # via torch
-    fsspec==2024.12.0 \
-        --hash=sha256:670700c977ed2fb51e0d9f9253177ed20cbde4a3e5c0283cc5385b5870c8533f \
-        --hash=sha256:b520aed47ad9804237ff878b504267a3b0b441e97508bd6d2d8774e3db85cee2
-        # via torch
-    jinja2==3.1.5 \
-        --hash=sha256:8fefff8dc3034e27bb80d67c671eb8a9bc424c0ef4c0826edbff304cceff43bb \
-        --hash=sha256:aba0f4dc9ed8013c424088f68a5c226f7d6097ed89b246d7749c2ec4175c6adb
-        # via torch
-    markupsafe==3.0.2 \
-        --hash=sha256:0f4ca02bea9a23221c0182836703cbf8930c5e9454bacce27e767509fa286a30 \
-        --hash=sha256:131a3c7689c85f5ad20f9f6fb1b866f402c445b220c19fe4308c0b147ccd2ad9 \
-        --hash=sha256:15ab75ef81add55874e7ab7055e9c397312385bd9ced94920f2802310c930396 \
-        --hash=sha256:1c99d261bd2d5f6b59325c92c73df481e05e57f19837bdca8413b9eac4bd8028 \
-        --hash=sha256:2181e67807fc2fa785d0592dc2d6206c019b9502410671cc905d132a92866557 \
-        --hash=sha256:3d79d162e7be8f996986c064d1c7c817f6df3a77fe3d6859f6f9e7be4b8c213a \
-        --hash=sha256:444dcda765c8a838eaae23112db52f1efaf750daddb2d9ca300bcae1039adc5c \
-        --hash=sha256:4aa4e5faecf353ed117801a068ebab7b7e09ffb6e1d5e412dc852e0da018126c \
-        --hash=sha256:52305740fe773d09cffb16f8ed0427942901f00adedac82ec8b67752f58a1b22 \
-        --hash=sha256:569511d3b58c8791ab4c2e1285575265991e6d8f8700c7be0e88f86cb0672094 \
-        --hash=sha256:6381026f158fdb7c72a168278597a5e3a5222e83ea18f543112b2662a9b699c5 \
-        --hash=sha256:846ade7b71e3536c4e56b386c2a47adf5741d2d8b94ec9dc3e92e5e1ee1e2225 \
-        --hash=sha256:88416bd1e65dcea10bc7569faacb2c20ce071dd1f87539ca2ab364bf6231393c \
-        --hash=sha256:8e06879fc22a25ca47312fbe7c8264eb0b662f6db27cb2d3bbbc74b1df4b9b87 \
-        --hash=sha256:9778bd8ab0a994ebf6f84c2b949e65736d5575320a17ae8984a77fab08db94cf \
-        --hash=sha256:a904af0a6162c73e3edcb969eeeb53a63ceeb5d8cf642fade7d39e7963a22ddb \
-        --hash=sha256:ad10d3ded218f1039f11a75f8091880239651b52e9bb592ca27de44eed242a48 \
-        --hash=sha256:b5a6b3ada725cea8a5e634536b1b01c30bcdcd7f9c6fff4151548d5bf6b3a36c \
-        --hash=sha256:ba8062ed2cf21c07a9e295d5b8a2a5ce678b913b45fdf68c32d95d6c1291e0b6 \
-        --hash=sha256:ba9527cdd4c926ed0760bc301f6728ef34d841f405abf9d4f959c478421e4efd \
-        --hash=sha256:bcf3e58998965654fdaff38e58584d8937aa3096ab5354d493c77d1fdd66d7a1 \
-        --hash=sha256:c0ef13eaeee5b615fb07c9a7dadb38eac06a0608b41570d8ade51c56539e509d \
-        --hash=sha256:cabc348d87e913db6ab4aa100f01b08f481097838bdddf7c7a84b7575b7309ca \
-        --hash=sha256:cdb82a876c47801bb54a690c5ae105a46b392ac6099881cdfb9f6e95e4014c6a \
-        --hash=sha256:d16a81a06776313e817c951135cf7340a3e91e8c1ff2fac444cfd75fffa04afe \
-        --hash=sha256:e17c96c14e19278594aa4841ec148115f9c7615a47382ecb6b82bd8fea3ab0c8 \
-        --hash=sha256:e444a31f8db13eb18ada366ab3cf45fd4b31e4db1236a4448f68778c1d1a5a2f \
-        --hash=sha256:e6a2a455bd412959b57a172ce6328d2dd1f01cb2135efda2e4576e8a23fa3b0f \
-        --hash=sha256:ee55d3edf80167e48ea11a923c7386f4669df67d7994554387f84e7d8b0a2bf0 \
-        --hash=sha256:f3818cb119498c0678015754eba762e0d61e5b52d34c8b13d770f0719f7b1d79 \
-        --hash=sha256:f8b3d067f2e40fe93e1ccdd6b2e1d16c43140e76f02fb1319a05cf2b79d99430
+    jinja2==3.1.2 ; sys_platform == 'darwin' \
+        --hash=sha256:d5a6cec4949c84677507af2f3796ed5607bca205837b43b63f938b4c2c868b5e
+        # via project
+    jinja2==3.1.2+cpu ; sys_platform != 'darwin' \
+        --hash=sha256:95b0cb6db426aa227d36f5d637316bf406da2935b350f68112b79fea1b0d583d \
+        --hash=sha256:a1afbf0239177f44c2e3204a9d8eb70a4e4ea1c3a507a3e5759d070b97c33bd8 \
+        --hash=sha256:ac71ca09d6d509bbc3348fc062d6b394622b15774e5c8ca9df90e50504ff1f68
+        # via project
+    markupsafe==2.1.5 \
+        --hash=sha256:d0fe66b2745bbd943b48f3229667cf4506d88136363578b94e63d384e61d4984 \
+        --hash=sha256:e38237d66e6760fe86fe38e4b6c70ff4eed7da50b15e8c0f2589f05850207f13
         # via jinja2
-    mpmath==1.3.0 \
-        --hash=sha256:7a28eb2a9774d00c7bc92411c19a89209d5da7c4c9a9e227be8330a23a25b91f \
-        --hash=sha256:a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c
-        # via sympy
-    networkx==3.4.2 \
-        --hash=sha256:307c3669428c5362aab27c8a1260aa8f47c4e91d3891f48be0141738d8d053e1 \
-        --hash=sha256:df5d4365b724cf81b8c6a7312509d0c22386097011ad1abe274afd5e9d3bbc5f
-        # via torch
-    numpy==2.2.2 \
-        --hash=sha256:0349b025e15ea9d05c3d63f9657707a4e1d471128a3b1d876c095f328f8ff7f0 \
-        --hash=sha256:0bc61b307655d1a7f9f4b043628b9f2b721e80839914ede634e3d485913e1fb2 \
-        --hash=sha256:0eec19f8af947a61e968d5429f0bd92fec46d92b0008d0a6685b40d6adf8a4f4 \
-        --hash=sha256:106397dbbb1896f99e044efc90360d098b3335060375c26aa89c0d8a97c5f648 \
-        --hash=sha256:128c41c085cab8a85dc29e66ed88c05613dccf6bc28b3866cd16050a2f5448be \
-        --hash=sha256:149d1113ac15005652e8d0d3f6fd599360e1a708a4f98e43c9c77834a28238cb \
-        --hash=sha256:22ea3bb552ade325530e72a0c557cdf2dea8914d3a5e1fecf58fa5dbcc6f43cd \
-        --hash=sha256:23ae9f0c2d889b7b2d88a3791f6c09e2ef827c2446f1c4a3e3e76328ee4afd9a \
-        --hash=sha256:250c16b277e3b809ac20d1f590716597481061b514223c7badb7a0f9993c7f84 \
-        --hash=sha256:2ffbb1acd69fdf8e89dd60ef6182ca90a743620957afb7066385a7bbe88dc748 \
-        --hash=sha256:3074634ea4d6df66be04f6728ee1d173cfded75d002c75fac79503a880bf3825 \
-        --hash=sha256:41184c416143defa34cc8eb9d070b0a5ba4f13a0fa96a709e20584638254b317 \
-        --hash=sha256:4525b88c11906d5ab1b0ec1f290996c0020dd318af8b49acaa46f198b1ffc283 \
-        --hash=sha256:463247edcee4a5537841d5350bc87fe8e92d7dd0e8c71c995d2c6eecb8208278 \
-        --hash=sha256:4dbd80e453bd34bd003b16bd802fac70ad76bd463f81f0c518d1245b1c55e3d9 \
-        --hash=sha256:57b4012e04cc12b78590a334907e01b3a85efb2107df2b8733ff1ed05fce71de \
-        --hash=sha256:5a8c863ceacae696aff37d1fd636121f1a512117652e5dfb86031c8d84836369 \
-        --hash=sha256:5acea83b801e98541619af398cc0109ff48016955cc0818f478ee9ef1c5c3dcb \
-        --hash=sha256:7dca87ca328f5ea7dafc907c5ec100d187911f94825f8700caac0b3f4c384b49 \
-        --hash=sha256:8ec0636d3f7d68520afc6ac2dc4b8341ddb725039de042faf0e311599f54eb37 \
-        --hash=sha256:9491100aba630910489c1d0158034e1c9a6546f0b1340f716d522dc103788e39 \
-        --hash=sha256:97b974d3ba0fb4612b77ed35d7627490e8e3dff56ab41454d9e8b23448940576 \
-        --hash=sha256:9dd47ff0cb2a656ad69c38da850df3454da88ee9a6fde0ba79acceee0e79daba \
-        --hash=sha256:9fad446ad0bc886855ddf5909cbf8cb5d0faa637aaa6277fb4b19ade134ab3c7 \
-        --hash=sha256:ac9bea18d6d58a995fac1b2cb4488e17eceeac413af014b1dd26170b766d8467 \
-        --hash=sha256:b208cfd4f5fe34e1535c08983a1a6803fdbc7a1e86cf13dd0c61de0b51a0aadc \
-        --hash=sha256:b3482cb7b3325faa5f6bc179649406058253d91ceda359c104dac0ad320e1391 \
-        --hash=sha256:b6fb9c32a91ec32a689ec6410def76443e3c750e7cfc3fb2206b985ffb2b85f0 \
-        --hash=sha256:d0bbe7dd86dca64854f4b6ce2ea5c60b51e36dfd597300057cf473d3615f2369 \
-        --hash=sha256:e0c8854b09bc4de7b041148d8550d3bd712b5c21ff6a8ed308085f190235d7ff \
-        --hash=sha256:ed6906f61834d687738d25988ae117683705636936cc605be0bb208b23df4d8f
-        # via torchvision
-    pillow==11.1.0 \
-        --hash=sha256:11633d58b6ee5733bde153a8dafd25e505ea3d32e261accd388827ee987baf65 \
-        --hash=sha256:2062ffb1d36544d42fcaa277b069c88b01bb7298f4efa06731a7fd6cc290b81a \
-        --hash=sha256:31eba6bbdd27dde97b0174ddf0297d7a9c3a507a8a1480e1e60ef914fe23d352 \
-        --hash=sha256:368da70808b36d73b4b390a8ffac11069f8a5c85f29eff1f1b01bcf3ef5b2a20 \
-        --hash=sha256:36ba10b9cb413e7c7dfa3e189aba252deee0602c86c309799da5a74009ac7a1c \
-        --hash=sha256:3764d53e09cdedd91bee65c2527815d315c6b90d7b8b79759cc48d7bf5d4f114 \
-        --hash=sha256:3cdcdb0b896e981678eee140d882b70092dac83ac1cdf6b3a60e2216a73f2b91 \
-        --hash=sha256:4dd43a78897793f60766563969442020e90eb7847463eca901e41ba186a7d4a5 \
-        --hash=sha256:593c5fd6be85da83656b93ffcccc2312d2d149d251e98588b14fbc288fd8909c \
-        --hash=sha256:67cd427c68926108778a9005f2a04adbd5e67c442ed21d95389fe1d595458756 \
-        --hash=sha256:70ca5ef3b3b1c4a0812b5c63c57c23b63e53bc38e758b37a951e5bc466449861 \
-        --hash=sha256:758e9d4ef15d3560214cddbc97b8ef3ef86ce04d62ddac17ad39ba87e89bd3b1 \
-        --hash=sha256:7fdadc077553621911f27ce206ffcbec7d3f8d7b50e0da39f10997e8e2bb7f6a \
-        --hash=sha256:8000376f139d4d38d6851eb149b321a52bb8893a88dae8ee7d95840431977081 \
-        --hash=sha256:9044b5e4f7083f209c4e35aa5dd54b1dd5b112b108648f5c902ad586d4f945c5 \
-        --hash=sha256:93a18841d09bcdd774dcdc308e4537e1f867b3dec059c131fde0327899734aa1 \
-        --hash=sha256:9409c080586d1f683df3f184f20e36fb647f2e0bc3988094d4fd8c9f4eb1b3b3 \
-        --hash=sha256:9aa9aeddeed452b2f616ff5507459e7bab436916ccb10961c4a382cd3e03f47f \
-        --hash=sha256:9ee85f0696a17dd28fbcfceb59f9510aa71934b483d1f5601d1030c3c8304f3c \
-        --hash=sha256:a697cd8ba0383bba3d2d3ada02b34ed268cb548b369943cd349007730c92bddf \
-        --hash=sha256:a85b653980faad27e88b141348707ceeef8a1186f75ecc600c395dcac19f385b \
-        --hash=sha256:ad5db5781c774ab9a9b2c4302bbf0c1014960a0a7be63278d13ae6fdf88126fe \
-        --hash=sha256:ae98e14432d458fc3de11a77ccb3ae65ddce70f730e7c76140653048c71bfcbc \
-        --hash=sha256:b523466b1a31d0dcef7c5be1f20b942919b62fd6e9a9be199d035509cbefc0ec \
-        --hash=sha256:b5d658fbd9f0d6eea113aea286b21d3cd4d3fd978157cbf2447a6035916506d3 \
-        --hash=sha256:cc1331b6d5a6e144aeb5e626f4375f5b7ae9934ba620c0ac6b3e43d5e683a0f0 \
-        --hash=sha256:cfd5cd998c2e36a862d0e27b2df63237e67273f2fc78f47445b14e73a810e7e6 \
-        --hash=sha256:dd0e081319328928531df7a0e63621caf67652c8464303fd102141b785ef9547 \
-        --hash=sha256:dda60aa465b861324e65a78c9f5cf0f4bc713e4309f83bc387be158b077963d9 \
-        --hash=sha256:e63e4e5081de46517099dc30abe418122f54531a6ae2ebc8680bcd7096860eab \
-        --hash=sha256:f86d3a7a9af5d826744fabf4afd15b9dfef44fe69a98541f666f66fbb8d3fef9
-        # via torchvision
-    setuptools==75.8.0 \
-        --hash=sha256:c5afc8f407c626b8313a86e10311dd3f661c6cd9c09d4bf8c15c0e11f9f2b0e6 \
-        --hash=sha256:e3982f444617239225d675215d51f6ba05f845d4eec313da4418fdbb56fb27e3
-        # via torch
-    sympy==1.13.1 \
-        --hash=sha256:9cebf7e04ff162015ce31c9c6c9144daa34a93bd082f54fd8f12deca4f47515f \
-        --hash=sha256:db36cdc64bf61b9b24578b6f7bab1ecdd2452cf008f34faa33776680c26d66f8
-        # via torch
-    torch==2.6.0 ; sys_platform == 'darwin'
-        # via
-        #   project
-        #   torchvision
-    torch==2.6.0+cpu ; sys_platform != 'darwin'
-        # via
-        #   project
-        #   torchvision
-    torchvision==0.21.0 ; (python_full_version < '3.14' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or sys_platform == 'darwin'
-        # via project
-    torchvision==0.21.0+cpu ; (python_full_version >= '3.14' and sys_platform == 'linux') or (platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')
-        # via project
-    typing-extensions==4.12.2 \
-        --hash=sha256:04e5ca0351e0f3f85c6853954072df659d0d13fac324d0072316b67d7794700d \
-        --hash=sha256:1a7ead55c7e559dd4dee8856e3a88b41225abfe1ce8df57b7c13915fe121ffb8
-        # via torch
 
     ----- stderr -----
-    Resolved 33 packages in [TIME]
+    Resolved 6 packages in [TIME]
     ");
 
     Ok(())
@@ -3864,55 +3572,55 @@ fn requirements_txt_cyclic_dependencies() -> Result<()> {
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR]
     argparse==1.4.0 \
-        --hash=sha256:62b089a55be1d8949cd2bc7e0df0bddb9e028faefc8c32038cc84862aefdd6e4 \
-        --hash=sha256:c31647edb69fd3d465a847ea3157d37bed1f95f19760b11a47aa91c04b666314
+        --hash=sha256:0f6eda59fa6a7389f03ffaf3dfd7f2a5d7a19a8f2b3f399e152514d0f7be0c9d \
+        --hash=sha256:8aa58b3b5a99661e6e9c1eeeab69ece979bef71127c9dc5a8ccad1aa159d1a85
         # via unittest2
     extras==1.0.0 \
-        --hash=sha256:132e36de10b9c91d5d4cc620160a476e0468a88f16c9431817a6729611a81b4e \
-        --hash=sha256:f689f08df47e2decf76aa6208c081306e7bd472630eb1ec8a875c67de2366e87
+        --hash=sha256:09322ffcc591ee550e81998cfce14f11cb7d6e79a90e0ed99a0d4d799aa273c7 \
+        --hash=sha256:1f607ce802b610e488f916b7ac25b1f649d895382c1fca172d96a946553b968e
         # via testtools
     fixtures==3.0.0 \
-        --hash=sha256:2a551b0421101de112d9497fb5f6fd25e5019391c0fbec9bad591ecae981420d \
-        --hash=sha256:fcf0d60234f1544da717a9738325812de1f42c2fa085e2d9252d8fff5712b2ef
+        --hash=sha256:21f275bcef2ab86b7649d1983cacf38dddba44fdf623eb1ef2593306cf094f4f \
+        --hash=sha256:8c578ac8e3d5792492c6f243c04042c7682703102609b1076fcf80752d559095
         # via
         #   project
         #   testtools
     linecache2==1.0.0 \
-        --hash=sha256:4b26ff4e7110db76eeb6f5a7b64a82623839d595c2038eeda662f2a2db78e97c \
-        --hash=sha256:e78be9c0a0dfcbac712fe04fbf92b96cddae80b1b842f24248214c8496f006ef
+        --hash=sha256:64b46526dc88719bd750067a23730fbe9f5d2bd9fa82ed84123ead576cdf9c23 \
+        --hash=sha256:b7906e9c79ee2863f4d0eb7fa54f51d4eb91d19e97a1b83bc61c70eab8c21248
         # via traceback2
     pbr==6.0.0 \
-        --hash=sha256:4a7317d5e3b17a3dccb6a8cfe67dab65b20551404c52c8ed41279fa4f0cb4cda \
-        --hash=sha256:d1377122a5a00e2f940ee482999518efe16d745d423a670c27773dfbc3c9a7d9
+        --hash=sha256:74cea8585a471ffd6f72c70059228b60eabed84b5a277c669345af8888d369e2 \
+        --hash=sha256:ce451a8105b069397c637150d9ba0331eb98f238a0a047e067ed840aa0fbeabf
         # via
         #   fixtures
         #   testtools
     python-mimeparse==1.6.0 \
-        --hash=sha256:76e4b03d700a641fd7761d3cd4fdbbdcd787eade1ebfac43f877016328334f78 \
-        --hash=sha256:a295f03ff20341491bfe4717a39cd0a8cc9afad619ba44b77e86b0ab8a2b8282
+        --hash=sha256:34f8e5f561783b23eb0bae62c6b07ca5265de59882f8403b524e18d77d71d240 \
+        --hash=sha256:5a193da15dddc9bb7550b95b8dc26d0d000b9ed1a04fe3387c3f7fff88f47870
         # via testtools
-    six==1.16.0 \
-        --hash=sha256:1e61c37477a1626458e36f7b1d82aa5c9b094fa4802892072e49de9c60c4c926 \
-        --hash=sha256:8abb2f1d86890a2dfb989f9a77cfcfd3e47c2a354b01111771326f8aa26e0254
+    six==1.17.0 \
+        --hash=sha256:2d4a0e87315356b6faa7b5ac289a75c6f77675311e4200f4709661e113b830fe \
+        --hash=sha256:f862da43225047e86e2726667de4651067f7a3cddd0f9250f4bb33b07e4d7b0f
         # via
         #   fixtures
         #   testtools
         #   unittest2
     testtools==2.3.0 \
-        --hash=sha256:5827ec6cf8233e0f29f51025addd713ca010061204fdea77484a2934690a0559 \
-        --hash=sha256:a2be448869171b6e0f26d9544088b8b98439ec180ce272040236d570a40bcbed
+        --hash=sha256:9cc30384cd2fb314592cbe7bed63fe7a8d5eff209e81c8458c28a7cf3db0c2c4 \
+        --hash=sha256:eb428d3f0a0f95cb4aacdf4d9990b275c5c62c68c69ee06b9d5ea37b574ef85e
         # via
         #   fixtures
         #   project
     traceback2==1.4.0 \
-        --hash=sha256:05acc67a09980c2ecfedd3423f7ae0104839eccb55fc645773e1caa0951c3030 \
-        --hash=sha256:8253cebec4b19094d67cc5ed5af99bf1dba1285292226e98a31929f87a5d6b23
+        --hash=sha256:d0a51be713a345d32cac9a48387aaf95da0e3aeb244a07a9cd73e5fd3e5495c0 \
+        --hash=sha256:ffa9679b35e6471a10f7310f54d6c75fd16765a06ee74f67d5f118efa2e7ce90
         # via
         #   testtools
         #   unittest2
     unittest2==1.1.0 \
-        --hash=sha256:13f77d0875db6d9b435e1d4f41e74ad4cc2eb6e1d5c824996092b3430f088bb8 \
-        --hash=sha256:22882a0e418c284e1f718a822b3b022944d53d2d908e1690b319a9d3eb2c0579
+        --hash=sha256:2913704f09f1cda8b23bbee755817b060c422f339b67b0564823b017a95483d2 \
+        --hash=sha256:ac757970b0a588a00d348bb576b6a72ca45fa9e0ec882e62c430465f7d2a1353
         # via testtools
 
     ----- stderr -----
@@ -3925,7 +3633,8 @@ fn requirements_txt_cyclic_dependencies() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn pylock_workspace_member_conflict_markers() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
+    let server = PackseServer::new("packages/export-markers.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3960,10 +3669,10 @@ fn pylock_workspace_member_conflict_markers() -> Result<()> {
 
         [project.optional-dependencies]
         a = [
-          "anyio==4.2.0 ; sys_platform == 'darwin'",
-          "anyio==4.3.0 ; sys_platform != 'darwin'",
+          "forked-package==4.2.0 ; sys_platform == 'darwin'",
+          "forked-package==4.3.0 ; sys_platform != 'darwin'",
         ]
-        b = ["anyio==4.4.0"]
+        b = ["forked-package==4.4.0"]
 
         [tool.uv]
         conflicts = [
@@ -3987,41 +3696,27 @@ fn pylock_workspace_member_conflict_markers() -> Result<()> {
     requires-python = ">=3.12.[X]"
 
     [[packages]]
-    name = "anyio"
+    name = "forked-package"
     version = "4.2.0"
     marker = "sys_platform == 'darwin'"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/2d/b8/7333d87d5f03247215d86a86362fd3e324111788c6cdd8d2e6196a6ba833/anyio-4.2.0.tar.gz", upload-time = 2023-12-16T17:06:57Z, size = 158770, hashes = { sha256 = "e1875bb4b4e2de1669f4bc7869b6d3f54231cdced71605e6e64c9be77e3be50f" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/bf/cd/d6d9bb1dadf73e7af02d18225cbd2c93f8552e13130484f1c8dcfece292b/anyio-4.2.0-py3-none-any.whl", upload-time = 2023-12-16T17:06:55Z, size = 85481, hashes = { sha256 = "745843b39e829e108e518c489b31dc757de7d2131d53fac32bd8df268227bfee" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/forked_package-4.2.0.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "8c40ff287dfd62242646944029379e5161c8c446705d4c3e7ac468a1e60f11b1" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/forked_package-4.2.0-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "88f590ed96f2d9bcdcc042550457c0cdda41f3305d54d1a4c53fe9a2a3adf5fb" } }]
 
     [[packages]]
-    name = "anyio"
+    name = "forked-package"
     version = "4.3.0"
     marker = "sys_platform != 'darwin'"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz", upload-time = 2024-02-19T08:36:28Z, size = 159642, hashes = { sha256 = "f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl", upload-time = 2024-02-19T08:36:26Z, size = 85584, hashes = { sha256 = "048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8" } }]
-
-    [[packages]]
-    name = "idna"
-    version = "3.10"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/f1/70/7703c29685631f5a7590aa73f1f1d3fa9a380e654b86af429e0934a32f7d/idna-3.10.tar.gz", upload-time = 2024-09-15T18:07:39Z, size = 190490, hashes = { sha256 = "12f65c9b470abda6dc35cf8e63cc574b1c52b11df2c86030af0ac09b01b13ea9" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/76/c6/c88e154df9c4e1a2a66ccf0005a88dfb2650c1dffb6f5ce603dfbd452ce3/idna-3.10-py3-none-any.whl", upload-time = 2024-09-15T18:07:37Z, size = 70442, hashes = { sha256 = "946d195a0d259cbba61165e88e65941f16e9b36ea6ddb97f00452bae8b1287d3" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/forked_package-4.3.0.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "2fa434e0edefd3ade0bd2c6045e7a6e5d7d4ef9e4b15398f5993f07459af96fe" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/forked_package-4.3.0-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "30a7cffa994133794c7c76a4cba044d2e418fe7f043bff57bb2251e09e32fec4" } }]
 
     [[packages]]
     name = "member"
     directory = { path = "packages/member", editable = true }
 
-    [[packages]]
-    name = "sniffio"
-    version = "1.3.1"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", upload-time = 2024-02-25T23:20:04Z, size = 20372, hashes = { sha256 = "f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-02-25T23:20:01Z, size = 10235, hashes = { sha256 = "2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2" } }]
-
     ----- stderr -----
-    Resolved 7 packages in [TIME]
+    Resolved 5 packages in [TIME]
     "#);
 
     Ok(())
@@ -4069,55 +3764,55 @@ fn requirements_txt_cyclic_dependencies_conflict() -> Result<()> {
     # This file was autogenerated by uv via the following command:
     #    uv export --cache-dir [CACHE_DIR]
     argparse==1.4.0 \
-        --hash=sha256:62b089a55be1d8949cd2bc7e0df0bddb9e028faefc8c32038cc84862aefdd6e4 \
-        --hash=sha256:c31647edb69fd3d465a847ea3157d37bed1f95f19760b11a47aa91c04b666314
+        --hash=sha256:0f6eda59fa6a7389f03ffaf3dfd7f2a5d7a19a8f2b3f399e152514d0f7be0c9d \
+        --hash=sha256:8aa58b3b5a99661e6e9c1eeeab69ece979bef71127c9dc5a8ccad1aa159d1a85
         # via unittest2
     extras==1.0.0 \
-        --hash=sha256:132e36de10b9c91d5d4cc620160a476e0468a88f16c9431817a6729611a81b4e \
-        --hash=sha256:f689f08df47e2decf76aa6208c081306e7bd472630eb1ec8a875c67de2366e87
+        --hash=sha256:09322ffcc591ee550e81998cfce14f11cb7d6e79a90e0ed99a0d4d799aa273c7 \
+        --hash=sha256:1f607ce802b610e488f916b7ac25b1f649d895382c1fca172d96a946553b968e
         # via testtools
     fixtures==3.0.0 \
-        --hash=sha256:2a551b0421101de112d9497fb5f6fd25e5019391c0fbec9bad591ecae981420d \
-        --hash=sha256:fcf0d60234f1544da717a9738325812de1f42c2fa085e2d9252d8fff5712b2ef
+        --hash=sha256:21f275bcef2ab86b7649d1983cacf38dddba44fdf623eb1ef2593306cf094f4f \
+        --hash=sha256:8c578ac8e3d5792492c6f243c04042c7682703102609b1076fcf80752d559095
         # via
         #   project
         #   testtools
     linecache2==1.0.0 \
-        --hash=sha256:4b26ff4e7110db76eeb6f5a7b64a82623839d595c2038eeda662f2a2db78e97c \
-        --hash=sha256:e78be9c0a0dfcbac712fe04fbf92b96cddae80b1b842f24248214c8496f006ef
+        --hash=sha256:64b46526dc88719bd750067a23730fbe9f5d2bd9fa82ed84123ead576cdf9c23 \
+        --hash=sha256:b7906e9c79ee2863f4d0eb7fa54f51d4eb91d19e97a1b83bc61c70eab8c21248
         # via traceback2
     pbr==6.0.0 \
-        --hash=sha256:4a7317d5e3b17a3dccb6a8cfe67dab65b20551404c52c8ed41279fa4f0cb4cda \
-        --hash=sha256:d1377122a5a00e2f940ee482999518efe16d745d423a670c27773dfbc3c9a7d9
+        --hash=sha256:74cea8585a471ffd6f72c70059228b60eabed84b5a277c669345af8888d369e2 \
+        --hash=sha256:ce451a8105b069397c637150d9ba0331eb98f238a0a047e067ed840aa0fbeabf
         # via
         #   fixtures
         #   testtools
     python-mimeparse==1.6.0 \
-        --hash=sha256:76e4b03d700a641fd7761d3cd4fdbbdcd787eade1ebfac43f877016328334f78 \
-        --hash=sha256:a295f03ff20341491bfe4717a39cd0a8cc9afad619ba44b77e86b0ab8a2b8282
+        --hash=sha256:34f8e5f561783b23eb0bae62c6b07ca5265de59882f8403b524e18d77d71d240 \
+        --hash=sha256:5a193da15dddc9bb7550b95b8dc26d0d000b9ed1a04fe3387c3f7fff88f47870
         # via testtools
-    six==1.16.0 \
-        --hash=sha256:1e61c37477a1626458e36f7b1d82aa5c9b094fa4802892072e49de9c60c4c926 \
-        --hash=sha256:8abb2f1d86890a2dfb989f9a77cfcfd3e47c2a354b01111771326f8aa26e0254
+    six==1.17.0 \
+        --hash=sha256:2d4a0e87315356b6faa7b5ac289a75c6f77675311e4200f4709661e113b830fe \
+        --hash=sha256:f862da43225047e86e2726667de4651067f7a3cddd0f9250f4bb33b07e4d7b0f
         # via
         #   fixtures
         #   testtools
         #   unittest2
     testtools==2.3.0 \
-        --hash=sha256:5827ec6cf8233e0f29f51025addd713ca010061204fdea77484a2934690a0559 \
-        --hash=sha256:a2be448869171b6e0f26d9544088b8b98439ec180ce272040236d570a40bcbed
+        --hash=sha256:9cc30384cd2fb314592cbe7bed63fe7a8d5eff209e81c8458c28a7cf3db0c2c4 \
+        --hash=sha256:eb428d3f0a0f95cb4aacdf4d9990b275c5c62c68c69ee06b9d5ea37b574ef85e
         # via
         #   fixtures
         #   project
     traceback2==1.4.0 \
-        --hash=sha256:05acc67a09980c2ecfedd3423f7ae0104839eccb55fc645773e1caa0951c3030 \
-        --hash=sha256:8253cebec4b19094d67cc5ed5af99bf1dba1285292226e98a31929f87a5d6b23
+        --hash=sha256:d0a51be713a345d32cac9a48387aaf95da0e3aeb244a07a9cd73e5fd3e5495c0 \
+        --hash=sha256:ffa9679b35e6471a10f7310f54d6c75fd16765a06ee74f67d5f118efa2e7ce90
         # via
         #   testtools
         #   unittest2
     unittest2==1.1.0 \
-        --hash=sha256:13f77d0875db6d9b435e1d4f41e74ad4cc2eb6e1d5c824996092b3430f088bb8 \
-        --hash=sha256:22882a0e418c284e1f718a822b3b022944d53d2d908e1690b319a9d3eb2c0579
+        --hash=sha256:2913704f09f1cda8b23bbee755817b060c422f339b67b0564823b017a95483d2 \
+        --hash=sha256:ac757970b0a588a00d348bb576b6a72ca45fa9e0ec882e62c430465f7d2a1353
         # via testtools
 
     ----- stderr -----
@@ -4161,16 +3856,16 @@ fn pep_751_dependency() -> Result<()> {
     [[packages]]
     name = "anyio"
     version = "3.7.0"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/c6/b3/fefbf7e78ab3b805dec67d698dc18dd505af7a18a8dd08868c9b4fa736b5/anyio-3.7.0.tar.gz", upload-time = 2023-05-27T11:12:46Z, size = 142737, hashes = { sha256 = "275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/68/fe/7ce1926952c8a403b35029e194555558514b365ad77d75125f521a2bec62/anyio-3.7.0-py3-none-any.whl", upload-time = 2023-05-27T11:12:44Z, size = 80873, hashes = { sha256 = "eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/anyio-3.7.0.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/anyio-3.7.0-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556" } }]
 
     [[packages]]
     name = "idna"
     version = "3.6"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", upload-time = 2023-11-25T15:40:54Z, size = 175426, hashes = { sha256 = "9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", upload-time = 2023-11-25T15:40:52Z, size = 61567, hashes = { sha256 = "c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/idna-3.6.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0" } }]
 
     [[packages]]
     name = "project"
@@ -4179,9 +3874,9 @@ fn pep_751_dependency() -> Result<()> {
     [[packages]]
     name = "sniffio"
     version = "1.3.1"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", upload-time = 2024-02-25T23:20:04Z, size = 20372, hashes = { sha256 = "f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-02-25T23:20:01Z, size = 10235, hashes = { sha256 = "2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/sniffio-1.3.1.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05" } }]
 
     ----- stderr -----
     Resolved 4 packages in [TIME]
@@ -4377,16 +4072,16 @@ fn pep_751_export_no_header() -> Result<()> {
     [[packages]]
     name = "anyio"
     version = "3.7.0"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/c6/b3/fefbf7e78ab3b805dec67d698dc18dd505af7a18a8dd08868c9b4fa736b5/anyio-3.7.0.tar.gz", upload-time = 2023-05-27T11:12:46Z, size = 142737, hashes = { sha256 = "275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/68/fe/7ce1926952c8a403b35029e194555558514b365ad77d75125f521a2bec62/anyio-3.7.0-py3-none-any.whl", upload-time = 2023-05-27T11:12:44Z, size = 80873, hashes = { sha256 = "eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/anyio-3.7.0.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/anyio-3.7.0-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556" } }]
 
     [[packages]]
     name = "idna"
     version = "3.6"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", upload-time = 2023-11-25T15:40:54Z, size = 175426, hashes = { sha256 = "9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", upload-time = 2023-11-25T15:40:52Z, size = 61567, hashes = { sha256 = "c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/idna-3.6.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0" } }]
 
     [[packages]]
     name = "project"
@@ -4395,9 +4090,9 @@ fn pep_751_export_no_header() -> Result<()> {
     [[packages]]
     name = "sniffio"
     version = "1.3.1"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", upload-time = 2024-02-25T23:20:04Z, size = 20372, hashes = { sha256 = "f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-02-25T23:20:01Z, size = 10235, hashes = { sha256 = "2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/sniffio-1.3.1.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05" } }]
 
     ----- stderr -----
     Resolved 4 packages in [TIME]
@@ -4440,16 +4135,16 @@ fn pep_751_export_no_editable() -> Result<()> {
     [[packages]]
     name = "anyio"
     version = "3.7.0"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/c6/b3/fefbf7e78ab3b805dec67d698dc18dd505af7a18a8dd08868c9b4fa736b5/anyio-3.7.0.tar.gz", upload-time = 2023-05-27T11:12:46Z, size = 142737, hashes = { sha256 = "275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/68/fe/7ce1926952c8a403b35029e194555558514b365ad77d75125f521a2bec62/anyio-3.7.0-py3-none-any.whl", upload-time = 2023-05-27T11:12:44Z, size = 80873, hashes = { sha256 = "eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/anyio-3.7.0.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/anyio-3.7.0-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556" } }]
 
     [[packages]]
     name = "idna"
     version = "3.6"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", upload-time = 2023-11-25T15:40:54Z, size = 175426, hashes = { sha256 = "9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", upload-time = 2023-11-25T15:40:52Z, size = 61567, hashes = { sha256 = "c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/idna-3.6.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0" } }]
 
     [[packages]]
     name = "project"
@@ -4458,9 +4153,9 @@ fn pep_751_export_no_editable() -> Result<()> {
     [[packages]]
     name = "sniffio"
     version = "1.3.1"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", upload-time = 2024-02-25T23:20:04Z, size = 20372, hashes = { sha256 = "f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-02-25T23:20:01Z, size = 10235, hashes = { sha256 = "2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/sniffio-1.3.1.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05" } }]
 
     ----- stderr -----
     Resolved 4 packages in [TIME]
@@ -4503,63 +4198,52 @@ fn pep_751_dependency_extra() -> Result<()> {
     [[packages]]
     name = "blinker"
     version = "1.7.0"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/a1/13/6df5fc090ff4e5d246baf1f45fe9e5623aa8565757dfa5bd243f6a545f9e/blinker-1.7.0.tar.gz", upload-time = 2023-11-01T22:06:01Z, size = 28134, hashes = { sha256 = "e6820ff6fa4e4d1d8e2747c2283749c3f547e4fee112b98555cdcdae32996182" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/fa/2a/7f3714cbc6356a0efec525ce7a0613d581072ed6eb53eb7b9754f33db807/blinker-1.7.0-py3-none-any.whl", upload-time = 2023-11-01T22:06:00Z, size = 13068, hashes = { sha256 = "c3f865d4d54db7abc53758a01601cf343fe55b84c1de4e3fa910e420b438d5b9" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/blinker-1.7.0.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "2a6bdf71c63b391215e295644f9fc049a5d69c61571558e1c619530a6af6c077" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/blinker-1.7.0-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "16e8a78355abef21712be56c16a83f305703536b963d34074c17bd38bc622a0e" } }]
 
     [[packages]]
     name = "click"
     version = "8.1.7"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/96/d3/f04c7bfcf5c1862a2a5b845c6b2b360488cf47af55dfa79c98f6a6bf98b5/click-8.1.7.tar.gz", upload-time = 2023-08-17T17:29:11Z, size = 336121, hashes = { sha256 = "ca9853ad459e787e2192211578cc907e7594e294c7ccc834310722b41b9ca6de" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/00/2e/d53fa4befbf2cfa713304affc7ca780ce4fc1fd8710527771b58311a3229/click-8.1.7-py3-none-any.whl", upload-time = 2023-08-17T17:29:10Z, size = 97941, hashes = { sha256 = "ae74fb96c20a0277a1d615f1e4d73c8414f5a98db8b799a7931d1582f3390c28" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/click-8.1.7.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "2213ef47fd0669b0ccbc39c91de8171af360b8828b41728d284e4536b04d6d8c" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/click-8.1.7-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "422780ea5d1bd95078e86f8918392addb06a1c600a81a253662ff41854503653" } }]
 
     [[packages]]
     name = "colorama"
     version = "0.4.6"
     marker = "sys_platform == 'win32'"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/d8/53/6f443c9a4a8358a93a6792e2acffb9d9d5cb0a5cfd8802644b7b1c9a02e4/colorama-0.4.6.tar.gz", upload-time = 2022-10-25T02:36:22Z, size = 27697, hashes = { sha256 = "08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/d1/d6/3965ed04c63042e047cb6a3e6ed1a63a35087b6a609aa3a15ed8ac56c221/colorama-0.4.6-py2.py3-none-any.whl", upload-time = 2022-10-25T02:36:20Z, size = 25335, hashes = { sha256 = "4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/colorama-0.4.6.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "6da60c49d854e9d90dc18904dd600e3e5c641cdefba215dee55de55707091524" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/colorama-0.4.6-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "3c2dfb3bc263e7ae015f1b07d0cadb8b17840adeb20c9860987bb024668f3383" } }]
 
     [[packages]]
     name = "flask"
     version = "3.0.2"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/3f/e0/a89e8120faea1edbfca1a9b171cff7f2bf62ec860bbafcb2c2387c0317be/flask-3.0.2.tar.gz", upload-time = 2024-02-03T21:11:44Z, size = 675248, hashes = { sha256 = "822c03f4b799204250a7ee84b1eddc40665395333973dfb9deebfe425fefcb7d" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/93/a6/aa98bfe0eb9b8b15d36cdfd03c8ca86a03968a87f27ce224fb4f766acb23/flask-3.0.2-py3-none-any.whl", upload-time = 2024-02-03T21:11:42Z, size = 101300, hashes = { sha256 = "3232e0e9c850d781933cf0207523d1ece087eb8d87b23777ae38456e2fbe7c6e" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/flask-3.0.2.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "54e8c9f50964bd9cd7bbf65672880f03093c5937bbd85866d36b13d63c164cf3" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/flask-3.0.2-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "07a68e7fb77caa921de64c68d1cf61b2138a58fda95b3eaa1fab7d51066202da" } }]
 
     [[packages]]
     name = "itsdangerous"
     version = "2.1.2"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/7f/a1/d3fb83e7a61fa0c0d3d08ad0a94ddbeff3731c05212617dff3a94e097f08/itsdangerous-2.1.2.tar.gz", upload-time = 2022-03-24T15:12:15Z, size = 56143, hashes = { sha256 = "5dbbc68b317e5e42f327f9021763545dc3fc3bfe22e6deb96aaf1fc38874156a" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/68/5f/447e04e828f47465eeab35b5d408b7ebaaaee207f48b7136c5a7267a30ae/itsdangerous-2.1.2-py3-none-any.whl", upload-time = 2022-03-24T15:12:13Z, size = 15749, hashes = { sha256 = "2c2349112351b88699d8d4b6b075022c0808887cb7ad10069318a8b0bc88db44" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/itsdangerous-2.1.2.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "ae92ba1fab87435c727c7fad27b6ebbfe772dbf8c44387250de4731749ecbf49" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/itsdangerous-2.1.2-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "8245f57a409b3f6cac2c3f2b700a3209ef6314b4b1aafc1f70e80108feabc29a" } }]
 
     [[packages]]
     name = "jinja2"
     version = "3.1.3"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/b2/5e/3a21abf3cd467d7876045335e681d276ac32492febe6d98ad89562d1a7e1/Jinja2-3.1.3.tar.gz", upload-time = 2024-01-10T23:12:21Z, size = 268261, hashes = { sha256 = "ac8bd6544d4bb2c9792bf3a159e80bba8fda7f07e81bc3aed565432d5925ba90" } }
-    wheels = [{ name = "jinja2-3.1.3-py3-none-any.whl", url = "https://files.pythonhosted.org/packages/30/6d/6de6be2d02603ab56e72997708809e8a5b0fbfee080735109b40a3564843/Jinja2-3.1.3-py3-none-any.whl", upload-time = 2024-01-10T23:12:19Z, size = 133236, hashes = { sha256 = "7d6d50dd97d52cbc355597bd845fabfbac3f551e1f99619e39a35ce8c370b5fa" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/jinja2-3.1.3.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "046923c85a8464827b55a7cf5541e7f08077b19245732698df3d2d6d653d6001" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/jinja2-3.1.3-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "84ee4127f133eb82e1b98c1fdcf7abbdfbe4efe8d15a1b4954c0f5655103cd71" } }]
 
     [[packages]]
     name = "markupsafe"
     version = "2.1.5"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/87/5b/aae44c6655f3801e81aa3eef09dbbf012431987ba564d7231722f68df02d/MarkupSafe-2.1.5.tar.gz", upload-time = 2024-02-02T16:31:22Z, size = 19384, hashes = { sha256 = "d283d37a890ba4c1ae73ffadf8046435c76e7bc2247bbb63c00bd1a709c6544b" } }
-    wheels = [
-        { name = "markupsafe-2.1.5-cp312-cp312-macosx_10_9_universal2.whl", url = "https://files.pythonhosted.org/packages/53/bd/583bf3e4c8d6a321938c13f49d44024dbe5ed63e0a7ba127e454a66da974/MarkupSafe-2.1.5-cp312-cp312-macosx_10_9_universal2.whl", upload-time = 2024-02-02T16:30:33Z, size = 18215, hashes = { sha256 = "8dec4936e9c3100156f8a2dc89c4b88d5c435175ff03413b443469c7c8c5f4d1" } },
-        { name = "markupsafe-2.1.5-cp312-cp312-macosx_10_9_x86_64.whl", url = "https://files.pythonhosted.org/packages/48/d6/e7cd795fc710292c3af3a06d80868ce4b02bfbbf370b7cee11d282815a2a/MarkupSafe-2.1.5-cp312-cp312-macosx_10_9_x86_64.whl", upload-time = 2024-02-02T16:30:34Z, size = 14069, hashes = { sha256 = "3c6b973f22eb18a789b1460b4b91bf04ae3f0c4234a0a6aa6b0a92f6f7b951d4" } },
-        { name = "markupsafe-2.1.5-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", url = "https://files.pythonhosted.org/packages/51/b5/5d8ec796e2a08fc814a2c7d2584b55f889a55cf17dd1a90f2beb70744e5c/MarkupSafe-2.1.5-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", upload-time = 2024-02-02T16:30:35Z, size = 29452, hashes = { sha256 = "ac07bad82163452a6884fe8fa0963fb98c2346ba78d779ec06bd7a6262132aee" } },
-        { name = "markupsafe-2.1.5-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", url = "https://files.pythonhosted.org/packages/0a/0d/2454f072fae3b5a137c119abf15465d1771319dfe9e4acbb31722a0fff91/MarkupSafe-2.1.5-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", upload-time = 2024-02-02T16:30:36Z, size = 28462, hashes = { sha256 = "f5dfb42c4604dddc8e4305050aa6deb084540643ed5804d7455b5df8fe16f5e5" } },
-        { name = "markupsafe-2.1.5-cp312-cp312-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", url = "https://files.pythonhosted.org/packages/2d/75/fd6cb2e68780f72d47e6671840ca517bda5ef663d30ada7616b0462ad1e3/MarkupSafe-2.1.5-cp312-cp312-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", upload-time = 2024-02-02T16:30:37Z, size = 27869, hashes = { sha256 = "ea3d8a3d18833cf4304cd2fc9cbb1efe188ca9b5efef2bdac7adc20594a0e46b" } },
-        { name = "markupsafe-2.1.5-cp312-cp312-musllinux_1_1_aarch64.whl", url = "https://files.pythonhosted.org/packages/b0/81/147c477391c2750e8fc7705829f7351cf1cd3be64406edcf900dc633feb2/MarkupSafe-2.1.5-cp312-cp312-musllinux_1_1_aarch64.whl", upload-time = 2024-02-02T16:30:39Z, size = 33906, hashes = { sha256 = "d050b3361367a06d752db6ead6e7edeb0009be66bc3bae0ee9d97fb326badc2a" } },
-        { name = "markupsafe-2.1.5-cp312-cp312-musllinux_1_1_i686.whl", url = "https://files.pythonhosted.org/packages/8b/ff/9a52b71839d7a256b563e85d11050e307121000dcebc97df120176b3ad93/MarkupSafe-2.1.5-cp312-cp312-musllinux_1_1_i686.whl", upload-time = 2024-02-02T16:30:40Z, size = 32296, hashes = { sha256 = "bec0a414d016ac1a18862a519e54b2fd0fc8bbfd6890376898a6c0891dd82e9f" } },
-        { name = "markupsafe-2.1.5-cp312-cp312-musllinux_1_1_x86_64.whl", url = "https://files.pythonhosted.org/packages/88/07/2dc76aa51b481eb96a4c3198894f38b480490e834479611a4053fbf08623/MarkupSafe-2.1.5-cp312-cp312-musllinux_1_1_x86_64.whl", upload-time = 2024-02-02T16:30:42Z, size = 33038, hashes = { sha256 = "58c98fee265677f63a4385256a6d7683ab1832f3ddd1e66fe948d5880c21a169" } },
-        { name = "markupsafe-2.1.5-cp312-cp312-win32.whl", url = "https://files.pythonhosted.org/packages/96/0c/620c1fb3661858c0e37eb3cbffd8c6f732a67cd97296f725789679801b31/MarkupSafe-2.1.5-cp312-cp312-win32.whl", upload-time = 2024-02-02T16:30:43Z, size = 16572, hashes = { sha256 = "8590b4ae07a35970728874632fed7bd57b26b0102df2d2b233b6d9d82f6c62ad" } },
-        { name = "markupsafe-2.1.5-cp312-cp312-win_amd64.whl", url = "https://files.pythonhosted.org/packages/3f/14/c3554d512d5f9100a95e737502f4a2323a1959f6d0d01e0d0997b35f7b10/MarkupSafe-2.1.5-cp312-cp312-win_amd64.whl", upload-time = 2024-02-02T16:30:44Z, size = 17127, hashes = { sha256 = "823b65d8706e32ad2df51ed89496147a42a2a6e01c13cfb6ffb8b1e92bc910bb" } },
-    ]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/markupsafe-2.1.5.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "e38237d66e6760fe86fe38e4b6c70ff4eed7da50b15e8c0f2589f05850207f13" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/markupsafe-2.1.5-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "d0fe66b2745bbd943b48f3229667cf4506d88136363578b94e63d384e61d4984" } }]
 
     [[packages]]
     name = "project"
@@ -4568,16 +4252,16 @@ fn pep_751_dependency_extra() -> Result<()> {
     [[packages]]
     name = "python-dotenv"
     version = "1.0.1"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/bc/57/e84d88dfe0aec03b7a2d4327012c1627ab5f03652216c63d49846d7a6c58/python-dotenv-1.0.1.tar.gz", upload-time = 2024-01-23T06:33:00Z, size = 39115, hashes = { sha256 = "e324ee90a023d808f1959c46bcbc04446a10ced277783dc6ee09987c37ec10ca" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/6a/3e/b68c118422ec867fa7ab88444e1274aa40681c606d59ac27de5a5588f082/python_dotenv-1.0.1-py3-none-any.whl", upload-time = 2024-01-23T06:32:58Z, size = 19863, hashes = { sha256 = "f7b63ef50f1b690dddf550d03497b66d609393b40b564ed0d674909a68ebf16a" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/python_dotenv-1.0.1.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "89b930a1922dd95774346479fc120ce17a229a6b9b54d5c6b4ea93ef7d66737e" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/python_dotenv-1.0.1-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "a998d557094bbf72a614a03c49920317f307e957d0fe67613ed2dc0687af73fe" } }]
 
     [[packages]]
     name = "werkzeug"
     version = "3.0.1"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/0d/cc/ff1904eb5eb4b455e442834dabf9427331ac0fa02853bf83db817a7dd53d/werkzeug-3.0.1.tar.gz", upload-time = 2023-10-24T20:57:50Z, size = 801436, hashes = { sha256 = "507e811ecea72b18a404947aded4b3390e1db8f826b494d76550ef45bb3b1dcc" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/c3/fc/254c3e9b5feb89ff5b9076a23218dafbc99c96ac5941e900b71206e6313b/werkzeug-3.0.1-py3-none-any.whl", upload-time = 2023-10-24T20:57:47Z, size = 226669, hashes = { sha256 = "90a285dc0e42ad56b34e696398b8122ee4c681833fb35b8334a095d82c56da10" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/werkzeug-3.0.1.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "188ff0c0fe1902487688940f4274ba029a6c939cd8c3d90b936b4dfdbba3c480" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/werkzeug-3.0.1-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "f7b626ae2c6e0af38cdee0ed8ebe1c54725c3ecb426f48a375d09bd503269a4e" } }]
 
     ----- stderr -----
     Resolved 10 packages in [TIME]
@@ -4628,9 +4312,9 @@ fn pep_751_project_extra() -> Result<()> {
     [[packages]]
     name = "typing-extensions"
     version = "4.10.0"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/16/3a/0d26ce356c7465a19c9ea8814b960f8a36c3b0d07c323176620b7b483e44/typing_extensions-4.10.0.tar.gz", upload-time = 2024-02-25T22:12:49Z, size = 77558, hashes = { sha256 = "b0abd7c89e8fb96f98db18d86106ff1d90ab692004eb746cf6eda2682f91b3cb" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/f9/de/dc04a3ea60b22624b51c703a84bbe0184abcd1d0b9bc8074b5d6b7ab90bb/typing_extensions-4.10.0-py3-none-any.whl", upload-time = 2024-02-25T22:12:47Z, size = 33926, hashes = { sha256 = "69b1a937c3a517342112fb4c6df7e72fc39a38e7891a5730ed4985b5214b5475" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/typing_extensions-4.10.0.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "adefbbc2f75a47edb1f4491a2e99a45438ec3dd0c2670276b321cad2ca522246" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/typing_extensions-4.10.0-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "0626263fe1dcda7bc3ee7b2872064b534d4831718055d22d4f32f9e474a867a4" } }]
 
     ----- stderr -----
     Resolved 6 packages in [TIME]
@@ -4648,16 +4332,16 @@ fn pep_751_project_extra() -> Result<()> {
     [[packages]]
     name = "anyio"
     version = "3.7.0"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/c6/b3/fefbf7e78ab3b805dec67d698dc18dd505af7a18a8dd08868c9b4fa736b5/anyio-3.7.0.tar.gz", upload-time = 2023-05-27T11:12:46Z, size = 142737, hashes = { sha256 = "275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/68/fe/7ce1926952c8a403b35029e194555558514b365ad77d75125f521a2bec62/anyio-3.7.0-py3-none-any.whl", upload-time = 2023-05-27T11:12:44Z, size = 80873, hashes = { sha256 = "eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/anyio-3.7.0.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/anyio-3.7.0-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556" } }]
 
     [[packages]]
     name = "idna"
     version = "3.6"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", upload-time = 2023-11-25T15:40:54Z, size = 175426, hashes = { sha256 = "9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", upload-time = 2023-11-25T15:40:52Z, size = 61567, hashes = { sha256 = "c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/idna-3.6.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0" } }]
 
     [[packages]]
     name = "project"
@@ -4666,16 +4350,16 @@ fn pep_751_project_extra() -> Result<()> {
     [[packages]]
     name = "sniffio"
     version = "1.3.1"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", upload-time = 2024-02-25T23:20:04Z, size = 20372, hashes = { sha256 = "f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-02-25T23:20:01Z, size = 10235, hashes = { sha256 = "2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/sniffio-1.3.1.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05" } }]
 
     [[packages]]
     name = "typing-extensions"
     version = "4.10.0"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/16/3a/0d26ce356c7465a19c9ea8814b960f8a36c3b0d07c323176620b7b483e44/typing_extensions-4.10.0.tar.gz", upload-time = 2024-02-25T22:12:49Z, size = 77558, hashes = { sha256 = "b0abd7c89e8fb96f98db18d86106ff1d90ab692004eb746cf6eda2682f91b3cb" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/f9/de/dc04a3ea60b22624b51c703a84bbe0184abcd1d0b9bc8074b5d6b7ab90bb/typing_extensions-4.10.0-py3-none-any.whl", upload-time = 2024-02-25T22:12:47Z, size = 33926, hashes = { sha256 = "69b1a937c3a517342112fb4c6df7e72fc39a38e7891a5730ed4985b5214b5475" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/typing_extensions-4.10.0.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "adefbbc2f75a47edb1f4491a2e99a45438ec3dd0c2670276b321cad2ca522246" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/typing_extensions-4.10.0-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "0626263fe1dcda7bc3ee7b2872064b534d4831718055d22d4f32f9e474a867a4" } }]
 
     ----- stderr -----
     Resolved 6 packages in [TIME]
@@ -4693,9 +4377,9 @@ fn pep_751_project_extra() -> Result<()> {
     [[packages]]
     name = "iniconfig"
     version = "2.0.0"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", upload-time = 2023-01-07T11:08:11Z, size = 4646, hashes = { sha256 = "2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", upload-time = 2023-01-07T11:08:09Z, size = 5892, hashes = { sha256 = "b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c" } }]
 
     [[packages]]
     name = "project"
@@ -4704,9 +4388,9 @@ fn pep_751_project_extra() -> Result<()> {
     [[packages]]
     name = "typing-extensions"
     version = "4.10.0"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/16/3a/0d26ce356c7465a19c9ea8814b960f8a36c3b0d07c323176620b7b483e44/typing_extensions-4.10.0.tar.gz", upload-time = 2024-02-25T22:12:49Z, size = 77558, hashes = { sha256 = "b0abd7c89e8fb96f98db18d86106ff1d90ab692004eb746cf6eda2682f91b3cb" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/f9/de/dc04a3ea60b22624b51c703a84bbe0184abcd1d0b9bc8074b5d6b7ab90bb/typing_extensions-4.10.0-py3-none-any.whl", upload-time = 2024-02-25T22:12:47Z, size = 33926, hashes = { sha256 = "69b1a937c3a517342112fb4c6df7e72fc39a38e7891a5730ed4985b5214b5475" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/typing_extensions-4.10.0.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "adefbbc2f75a47edb1f4491a2e99a45438ec3dd0c2670276b321cad2ca522246" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/typing_extensions-4.10.0-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "0626263fe1dcda7bc3ee7b2872064b534d4831718055d22d4f32f9e474a867a4" } }]
 
     ----- stderr -----
     Resolved 6 packages in [TIME]
@@ -4724,23 +4408,23 @@ fn pep_751_project_extra() -> Result<()> {
     [[packages]]
     name = "anyio"
     version = "3.7.0"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/c6/b3/fefbf7e78ab3b805dec67d698dc18dd505af7a18a8dd08868c9b4fa736b5/anyio-3.7.0.tar.gz", upload-time = 2023-05-27T11:12:46Z, size = 142737, hashes = { sha256 = "275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/68/fe/7ce1926952c8a403b35029e194555558514b365ad77d75125f521a2bec62/anyio-3.7.0-py3-none-any.whl", upload-time = 2023-05-27T11:12:44Z, size = 80873, hashes = { sha256 = "eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/anyio-3.7.0.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/anyio-3.7.0-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556" } }]
 
     [[packages]]
     name = "idna"
     version = "3.6"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", upload-time = 2023-11-25T15:40:54Z, size = 175426, hashes = { sha256 = "9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", upload-time = 2023-11-25T15:40:52Z, size = 61567, hashes = { sha256 = "c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/idna-3.6.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0" } }]
 
     [[packages]]
     name = "iniconfig"
     version = "2.0.0"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", upload-time = 2023-01-07T11:08:11Z, size = 4646, hashes = { sha256 = "2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", upload-time = 2023-01-07T11:08:09Z, size = 5892, hashes = { sha256 = "b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c" } }]
 
     [[packages]]
     name = "project"
@@ -4749,16 +4433,16 @@ fn pep_751_project_extra() -> Result<()> {
     [[packages]]
     name = "sniffio"
     version = "1.3.1"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", upload-time = 2024-02-25T23:20:04Z, size = 20372, hashes = { sha256 = "f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-02-25T23:20:01Z, size = 10235, hashes = { sha256 = "2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/sniffio-1.3.1.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05" } }]
 
     [[packages]]
     name = "typing-extensions"
     version = "4.10.0"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/16/3a/0d26ce356c7465a19c9ea8814b960f8a36c3b0d07c323176620b7b483e44/typing_extensions-4.10.0.tar.gz", upload-time = 2024-02-25T22:12:49Z, size = 77558, hashes = { sha256 = "b0abd7c89e8fb96f98db18d86106ff1d90ab692004eb746cf6eda2682f91b3cb" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/f9/de/dc04a3ea60b22624b51c703a84bbe0184abcd1d0b9bc8074b5d6b7ab90bb/typing_extensions-4.10.0-py3-none-any.whl", upload-time = 2024-02-25T22:12:47Z, size = 33926, hashes = { sha256 = "69b1a937c3a517342112fb4c6df7e72fc39a38e7891a5730ed4985b5214b5475" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/typing_extensions-4.10.0.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "adefbbc2f75a47edb1f4491a2e99a45438ec3dd0c2670276b321cad2ca522246" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/typing_extensions-4.10.0-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "0626263fe1dcda7bc3ee7b2872064b534d4831718055d22d4f32f9e474a867a4" } }]
 
     ----- stderr -----
     Resolved 6 packages in [TIME]
@@ -4776,16 +4460,16 @@ fn pep_751_project_extra() -> Result<()> {
     [[packages]]
     name = "anyio"
     version = "3.7.0"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/c6/b3/fefbf7e78ab3b805dec67d698dc18dd505af7a18a8dd08868c9b4fa736b5/anyio-3.7.0.tar.gz", upload-time = 2023-05-27T11:12:46Z, size = 142737, hashes = { sha256 = "275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/68/fe/7ce1926952c8a403b35029e194555558514b365ad77d75125f521a2bec62/anyio-3.7.0-py3-none-any.whl", upload-time = 2023-05-27T11:12:44Z, size = 80873, hashes = { sha256 = "eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/anyio-3.7.0.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/anyio-3.7.0-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556" } }]
 
     [[packages]]
     name = "idna"
     version = "3.6"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", upload-time = 2023-11-25T15:40:54Z, size = 175426, hashes = { sha256 = "9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", upload-time = 2023-11-25T15:40:52Z, size = 61567, hashes = { sha256 = "c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/idna-3.6.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0" } }]
 
     [[packages]]
     name = "project"
@@ -4794,16 +4478,16 @@ fn pep_751_project_extra() -> Result<()> {
     [[packages]]
     name = "sniffio"
     version = "1.3.1"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", upload-time = 2024-02-25T23:20:04Z, size = 20372, hashes = { sha256 = "f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-02-25T23:20:01Z, size = 10235, hashes = { sha256 = "2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/sniffio-1.3.1.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05" } }]
 
     [[packages]]
     name = "typing-extensions"
     version = "4.10.0"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/16/3a/0d26ce356c7465a19c9ea8814b960f8a36c3b0d07c323176620b7b483e44/typing_extensions-4.10.0.tar.gz", upload-time = 2024-02-25T22:12:49Z, size = 77558, hashes = { sha256 = "b0abd7c89e8fb96f98db18d86106ff1d90ab692004eb746cf6eda2682f91b3cb" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/f9/de/dc04a3ea60b22624b51c703a84bbe0184abcd1d0b9bc8074b5d6b7ab90bb/typing_extensions-4.10.0-py3-none-any.whl", upload-time = 2024-02-25T22:12:47Z, size = 33926, hashes = { sha256 = "69b1a937c3a517342112fb4c6df7e72fc39a38e7891a5730ed4985b5214b5475" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/typing_extensions-4.10.0.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "adefbbc2f75a47edb1f4491a2e99a45438ec3dd0c2670276b321cad2ca522246" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/typing_extensions-4.10.0-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "0626263fe1dcda7bc3ee7b2872064b534d4831718055d22d4f32f9e474a867a4" } }]
 
     ----- stderr -----
     Resolved 6 packages in [TIME]
@@ -4857,18 +4541,21 @@ fn pep_751_git_dependency() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn pep_751_wheel_url() -> Result<()> {
+    let direct_artifacts =
+        uv_test::packse::PackseServer::new("packages/lock-direct-artifacts.toml");
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
+    pyproject_toml.write_str(&format!(
         r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["anyio @ https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl"]
+        dependencies = ["anyio @ {}"]
         "#,
-    )?;
+        direct_artifacts.file_url("anyio-4.3.0-py3-none-any.whl")
+    ))?;
 
     context.lock().assert().success();
 
@@ -4884,21 +4571,21 @@ fn pep_751_wheel_url() -> Result<()> {
     [[packages]]
     name = "anyio"
     version = "4.3.0"
-    archive = { url = "https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl", hashes = { sha256 = "048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8" } }
+    archive = { url = "http://[LOCALHOST]/files/anyio-4.3.0-py3-none-any.whl", hashes = { sha256 = "d45ad6f8b7c5dc28dcd823aaaa10a05700dfbd6be65d664cf77d1fe5173df133" } }
 
     [[packages]]
     name = "idna"
     version = "3.6"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", upload-time = 2023-11-25T15:40:54Z, size = 175426, hashes = { sha256 = "9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", upload-time = 2023-11-25T15:40:52Z, size = 61567, hashes = { sha256 = "c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/idna-3.6.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0" } }]
 
     [[packages]]
     name = "sniffio"
     version = "1.3.1"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", upload-time = 2024-02-25T23:20:04Z, size = 20372, hashes = { sha256 = "f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-02-25T23:20:01Z, size = 10235, hashes = { sha256 = "2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/sniffio-1.3.1.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05" } }]
 
     ----- stderr -----
     Resolved 4 packages in [TIME]
@@ -4910,18 +4597,21 @@ fn pep_751_wheel_url() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn pep_751_sdist_url() -> Result<()> {
+    let direct_artifacts =
+        uv_test::packse::PackseServer::new("packages/lock-direct-artifacts.toml");
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
+    pyproject_toml.write_str(&format!(
         r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["anyio @ https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz"]
+        dependencies = ["anyio @ {}"]
         "#,
-    )?;
+        direct_artifacts.file_url("anyio-4.3.0.tar.gz")
+    ))?;
 
     context.lock().assert().success();
 
@@ -4937,21 +4627,21 @@ fn pep_751_sdist_url() -> Result<()> {
     [[packages]]
     name = "anyio"
     version = "4.3.0"
-    archive = { url = "https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz", hashes = { sha256 = "f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6" } }
+    archive = { url = "http://[LOCALHOST]/files/anyio-4.3.0.tar.gz", hashes = { sha256 = "82d6b014ddc10530bb4346d4845795541a8972ef57d148e7018c65b64bf1f9f6" } }
 
     [[packages]]
     name = "idna"
     version = "3.6"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", upload-time = 2023-11-25T15:40:54Z, size = 175426, hashes = { sha256 = "9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", upload-time = 2023-11-25T15:40:52Z, size = 61567, hashes = { sha256 = "c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/idna-3.6.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0" } }]
 
     [[packages]]
     name = "sniffio"
     version = "1.3.1"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", upload-time = 2024-02-25T23:20:04Z, size = 20372, hashes = { sha256 = "f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-02-25T23:20:01Z, size = 10235, hashes = { sha256 = "2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/sniffio-1.3.1.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05" } }]
 
     ----- stderr -----
     Resolved 4 packages in [TIME]
@@ -4963,11 +4653,12 @@ fn pep_751_sdist_url() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn pep_751_sdist_url_subdirectory() -> Result<()> {
+    let direct_artifacts =
+        uv_test::packse::PackseServer::new("packages/lock-direct-artifacts.toml");
+    let root_url = direct_artifacts.file_url("root-0.0.1.tar.gz");
     let context = uv_test::test_context!("3.12");
 
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    let pyproject = r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -4975,9 +4666,11 @@ fn pep_751_sdist_url_subdirectory() -> Result<()> {
         dependencies = ["root"]
 
         [tool.uv.sources]
-        root = { url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz", subdirectory = "packages/root" }
-        "#,
-    )?;
+        root = { url = "[ROOT_URL]", subdirectory = "packages/root" }
+        "#
+    .replace("[ROOT_URL]", &root_url);
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(&pyproject)?;
 
     context.lock().assert().success();
 
@@ -4993,28 +4686,28 @@ fn pep_751_sdist_url_subdirectory() -> Result<()> {
     [[packages]]
     name = "anyio"
     version = "4.3.0"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz", upload-time = 2024-02-19T08:36:28Z, size = 159642, hashes = { sha256 = "f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl", upload-time = 2024-02-19T08:36:26Z, size = 85584, hashes = { sha256 = "048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/anyio-4.3.0.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "13a6d97fa30ec110d85e3949a30c92306f0178135048329f54a335c3dade753a" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/anyio-4.3.0-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "c4f443e7e5a2c003b1534688207e85dbd11960efb66d4d6a4e7693fdfc6f5b33" } }]
 
     [[packages]]
     name = "idna"
     version = "3.6"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", upload-time = 2023-11-25T15:40:54Z, size = 175426, hashes = { sha256 = "9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", upload-time = 2023-11-25T15:40:52Z, size = 61567, hashes = { sha256 = "c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/idna-3.6.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0" } }]
 
     [[packages]]
     name = "root"
     version = "0.0.1"
-    archive = { url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root", subdirectory = "packages/root", hashes = { sha256 = "24b55efee28d08ad3cdc58903e359e820601baa6a4a4b3424311541ebcfb09d3" } }
+    archive = { url = "http://[LOCALHOST]/files/root-0.0.1.tar.gz#subdirectory=packages/root", subdirectory = "packages/root", hashes = { sha256 = "33240cb91b02e5410728c950f15b43103b3c15fb129edbec6bcc818b34cb72b2" } }
 
     [[packages]]
     name = "sniffio"
     version = "1.3.1"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", upload-time = 2024-02-25T23:20:04Z, size = 20372, hashes = { sha256 = "f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-02-25T23:20:01Z, size = 10235, hashes = { sha256 = "2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/sniffio-1.3.1.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05" } }]
 
     ----- stderr -----
     Resolved 5 packages in [TIME]
@@ -5052,16 +4745,16 @@ fn pep_751_infer_output_format() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR] -o requirements.txt
     -e .
     anyio==3.7.0 \
-        --hash=sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce \
-        --hash=sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0
+        --hash=sha256:c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a \
+        --hash=sha256:ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556
         # via project
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
 
     ----- stderr -----
@@ -5080,16 +4773,16 @@ fn pep_751_infer_output_format() -> Result<()> {
     [[packages]]
     name = "anyio"
     version = "3.7.0"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/c6/b3/fefbf7e78ab3b805dec67d698dc18dd505af7a18a8dd08868c9b4fa736b5/anyio-3.7.0.tar.gz", upload-time = 2023-05-27T11:12:46Z, size = 142737, hashes = { sha256 = "275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/68/fe/7ce1926952c8a403b35029e194555558514b365ad77d75125f521a2bec62/anyio-3.7.0-py3-none-any.whl", upload-time = 2023-05-27T11:12:44Z, size = 80873, hashes = { sha256 = "eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/anyio-3.7.0.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/anyio-3.7.0-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556" } }]
 
     [[packages]]
     name = "idna"
     version = "3.6"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", upload-time = 2023-11-25T15:40:54Z, size = 175426, hashes = { sha256 = "9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", upload-time = 2023-11-25T15:40:52Z, size = 61567, hashes = { sha256 = "c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/idna-3.6.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0" } }]
 
     [[packages]]
     name = "project"
@@ -5098,9 +4791,9 @@ fn pep_751_infer_output_format() -> Result<()> {
     [[packages]]
     name = "sniffio"
     version = "1.3.1"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", upload-time = 2024-02-25T23:20:04Z, size = 20372, hashes = { sha256 = "f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-02-25T23:20:01Z, size = 10235, hashes = { sha256 = "2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/sniffio-1.3.1.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05" } }]
 
     ----- stderr -----
     Resolved 4 packages in [TIME]
@@ -5118,16 +4811,16 @@ fn pep_751_infer_output_format() -> Result<()> {
     [[packages]]
     name = "anyio"
     version = "3.7.0"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/c6/b3/fefbf7e78ab3b805dec67d698dc18dd505af7a18a8dd08868c9b4fa736b5/anyio-3.7.0.tar.gz", upload-time = 2023-05-27T11:12:46Z, size = 142737, hashes = { sha256 = "275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/68/fe/7ce1926952c8a403b35029e194555558514b365ad77d75125f521a2bec62/anyio-3.7.0-py3-none-any.whl", upload-time = 2023-05-27T11:12:44Z, size = 80873, hashes = { sha256 = "eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/anyio-3.7.0.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/anyio-3.7.0-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556" } }]
 
     [[packages]]
     name = "idna"
     version = "3.6"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", upload-time = 2023-11-25T15:40:54Z, size = 175426, hashes = { sha256 = "9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", upload-time = 2023-11-25T15:40:52Z, size = 61567, hashes = { sha256 = "c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/idna-3.6.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0" } }]
 
     [[packages]]
     name = "project"
@@ -5136,9 +4829,9 @@ fn pep_751_infer_output_format() -> Result<()> {
     [[packages]]
     name = "sniffio"
     version = "1.3.1"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", upload-time = 2024-02-25T23:20:04Z, size = 20372, hashes = { sha256 = "f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-02-25T23:20:01Z, size = 10235, hashes = { sha256 = "2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/sniffio-1.3.1.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05" } }]
 
     ----- stderr -----
     Resolved 4 packages in [TIME]
@@ -5592,20 +5285,20 @@ fn multiple_packages() -> Result<()> {
     -e ./packages/bar
     -e ./packages/foo
     anyio==4.3.0 \
-        --hash=sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8 \
-        --hash=sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6
+        --hash=sha256:13a6d97fa30ec110d85e3949a30c92306f0178135048329f54a335c3dade753a \
+        --hash=sha256:c4f443e7e5a2c003b1534688207e85dbd11960efb66d4d6a4e7693fdfc6f5b33
         # via foo
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
     typing-extensions==4.10.0 \
-        --hash=sha256:69b1a937c3a517342112fb4c6df7e72fc39a38e7891a5730ed4985b5214b5475 \
-        --hash=sha256:b0abd7c89e8fb96f98db18d86106ff1d90ab692004eb746cf6eda2682f91b3cb
+        --hash=sha256:0626263fe1dcda7bc3ee7b2872064b534d4831718055d22d4f32f9e474a867a4 \
+        --hash=sha256:adefbbc2f75a47edb1f4491a2e99a45438ec3dd0c2670276b321cad2ca522246
         # via bar
 
     ----- stderr -----
@@ -5625,24 +5318,24 @@ fn multiple_packages() -> Result<()> {
     -e ./packages/baz
     -e ./packages/foo
     anyio==4.3.0 \
-        --hash=sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8 \
-        --hash=sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6
+        --hash=sha256:13a6d97fa30ec110d85e3949a30c92306f0178135048329f54a335c3dade753a \
+        --hash=sha256:c4f443e7e5a2c003b1534688207e85dbd11960efb66d4d6a4e7693fdfc6f5b33
         # via foo
     idna==3.6 \
-        --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-        --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+        --hash=sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f \
+        --hash=sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
         # via anyio
     iniconfig==2.0.0 \
-        --hash=sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3 \
-        --hash=sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
+        --hash=sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3 \
+        --hash=sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c
         # via baz
     sniffio==1.3.1 \
-        --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-        --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+        --hash=sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05 \
+        --hash=sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a
         # via anyio
     typing-extensions==4.10.0 \
-        --hash=sha256:69b1a937c3a517342112fb4c6df7e72fc39a38e7891a5730ed4985b5214b5475 \
-        --hash=sha256:b0abd7c89e8fb96f98db18d86106ff1d90ab692004eb746cf6eda2682f91b3cb
+        --hash=sha256:0626263fe1dcda7bc3ee7b2872064b534d4831718055d22d4f32f9e474a867a4 \
+        --hash=sha256:adefbbc2f75a47edb1f4491a2e99a45438ec3dd0c2670276b321cad2ca522246
         # via bar
 
     ----- stderr -----
@@ -5709,25 +5402,25 @@ fn cyclonedx_export_basic() -> Result<()> {
           "bom-ref": "urllib3-2@2.2.0",
           "name": "urllib3",
           "version": "2.2.0",
-          "purl": "pkg:pypi/urllib3@2.2.0",
+          "purl": "pkg:pypi/urllib3@2.2.0?repository_url=http://[LOCALHOST]/simple/",
           "externalReferences": [
             {
               "type": "distribution",
-              "url": "https://files.pythonhosted.org/packages/e2/cc/abf6746cc90bc52df4ba730f301b89b3b844d6dc133cb89a01cfe2511eb9/urllib3-2.2.0.tar.gz",
+              "url": "http://[LOCALHOST]/files/urllib3-2.2.0.tar.gz",
               "hashes": [
                 {
                   "alg": "SHA-256",
-                  "content": "051d961ad0c62a94e50ecf1af379c3aba230c66c710493493560c0c223c49f20"
+                  "content": "e722aa47dc41a6899d57ec798da2ab49d6e85ff733c92f1682ffb794b6e2a0e3"
                 }
               ]
             },
             {
               "type": "distribution",
-              "url": "https://files.pythonhosted.org/packages/88/75/311454fd3317aefe18415f04568edc20218453b709c63c58b9292c71be17/urllib3-2.2.0-py3-none-any.whl",
+              "url": "http://[LOCALHOST]/files/urllib3-2.2.0-py3-none-any.whl",
               "hashes": [
                 {
                   "alg": "SHA-256",
-                  "content": "ce3711610ddce217e6d113a2732fafad960a03fd0318c91faa79481e35c11224"
+                  "content": "2e14384aa6bba7d9b3f631bd7b1d2e21dd6be7c936eb0dbbb18e495d06bbb6c0"
                 }
               ]
             }
@@ -5787,25 +5480,25 @@ fn cyclonedx_export_basic() -> Result<()> {
           "bom-ref": "urllib3-2@2.2.0",
           "name": "urllib3",
           "version": "2.2.0",
-          "purl": "pkg:pypi/urllib3@2.2.0",
+          "purl": "pkg:pypi/urllib3@2.2.0?repository_url=http://[LOCALHOST]/simple/",
           "externalReferences": [
             {
               "type": "distribution",
-              "url": "https://files.pythonhosted.org/packages/e2/cc/abf6746cc90bc52df4ba730f301b89b3b844d6dc133cb89a01cfe2511eb9/urllib3-2.2.0.tar.gz",
+              "url": "http://[LOCALHOST]/files/urllib3-2.2.0.tar.gz",
               "hashes": [
                 {
                   "alg": "SHA-256",
-                  "content": "051d961ad0c62a94e50ecf1af379c3aba230c66c710493493560c0c223c49f20"
+                  "content": "e722aa47dc41a6899d57ec798da2ab49d6e85ff733c92f1682ffb794b6e2a0e3"
                 }
               ]
             },
             {
               "type": "distribution",
-              "url": "https://files.pythonhosted.org/packages/88/75/311454fd3317aefe18415f04568edc20218453b709c63c58b9292c71be17/urllib3-2.2.0-py3-none-any.whl",
+              "url": "http://[LOCALHOST]/files/urllib3-2.2.0-py3-none-any.whl",
               "hashes": [
                 {
                   "alg": "SHA-256",
-                  "content": "ce3711610ddce217e6d113a2732fafad960a03fd0318c91faa79481e35c11224"
+                  "content": "2e14384aa6bba7d9b3f631bd7b1d2e21dd6be7c936eb0dbbb18e495d06bbb6c0"
                 }
               ]
             }
@@ -5865,7 +5558,7 @@ fn cyclonedx_export_basic() -> Result<()> {
           "bom-ref": "urllib3-2@2.2.0",
           "name": "urllib3",
           "version": "2.2.0",
-          "purl": "pkg:pypi/urllib3@2.2.0"
+          "purl": "pkg:pypi/urllib3@2.2.0?repository_url=http://[LOCALHOST]/simple/"
         }
       ],
       "dependencies": [
@@ -5891,22 +5584,24 @@ fn cyclonedx_export_basic() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_direct_url() -> Result<()> {
+    let direct_artifacts = uv_test::packse::PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
+    pyproject_toml.write_str(&format!(
         r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["idna @ https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl"]
+        dependencies = ["idna @ {}"]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
         "#,
-    )?;
+        direct_artifacts.file_url("idna-3.6-py3-none-any.whl")
+    ))?;
 
     context.lock().assert().success();
 
@@ -5946,7 +5641,7 @@ fn cyclonedx_export_direct_url() -> Result<()> {
           "bom-ref": "idna-2@3.6",
           "name": "idna",
           "version": "3.6",
-          "purl": "pkg:pypi/idna@3.6?download_url=https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl"
+          "purl": "pkg:pypi/idna@3.6?download_url=http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl"
         }
       ],
       "dependencies": [
@@ -6120,26 +5815,28 @@ fn cyclonedx_export_no_dependencies() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn cyclonedx_export_mixed_source_types() -> Result<()> {
+    let direct_artifacts = uv_test::packse::PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
+    pyproject_toml.write_str(&format!(
         r#"
         [project]
         name = "mixed-project"
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = [
-            "iniconfig==2.0.0",  # PyPI registry package
+            "iniconfig==2.0.0",  # Registry package
             "urllib3 @ git+https://github.com/urllib3/urllib3.git@2.2.0",  # Git package
-            "idna @ https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl"  # Direct URL package
+            "idna @ {}"  # Direct URL package
         ]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
         "#,
-    )?;
+        direct_artifacts.file_url("idna-3.6-py3-none-any.whl")
+    ))?;
 
     context.lock().assert().success();
 
@@ -6179,14 +5876,14 @@ fn cyclonedx_export_mixed_source_types() -> Result<()> {
           "bom-ref": "idna-2@3.6",
           "name": "idna",
           "version": "3.6",
-          "purl": "pkg:pypi/idna@3.6?download_url=https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl"
+          "purl": "pkg:pypi/idna@3.6?download_url=http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl"
         },
         {
           "type": "library",
           "bom-ref": "iniconfig-3@2.0.0",
           "name": "iniconfig",
           "version": "2.0.0",
-          "purl": "pkg:pypi/iniconfig@2.0.0"
+          "purl": "pkg:pypi/iniconfig@2.0.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
@@ -6286,7 +5983,7 @@ fn cyclonedx_export_project_extra() -> Result<()> {
           "bom-ref": "typing-extensions-2@4.10.0",
           "name": "typing-extensions",
           "version": "4.10.0",
-          "purl": "pkg:pypi/typing-extensions@4.10.0"
+          "purl": "pkg:pypi/typing-extensions@4.10.0?repository_url=http://[LOCALHOST]/simple/"
         }
       ],
       "dependencies": [
@@ -6371,21 +6068,21 @@ fn cyclonedx_export_project_extra_with_optional_flag() -> Result<()> {
           "bom-ref": "iniconfig-2@2.0.0",
           "name": "iniconfig",
           "version": "2.0.0",
-          "purl": "pkg:pypi/iniconfig@2.0.0"
+          "purl": "pkg:pypi/iniconfig@2.0.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "typing-extensions-3@4.10.0",
           "name": "typing-extensions",
           "version": "4.10.0",
-          "purl": "pkg:pypi/typing-extensions@4.10.0"
+          "purl": "pkg:pypi/typing-extensions@4.10.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "urllib3-4@2.2.0",
           "name": "urllib3",
           "version": "2.2.0",
-          "purl": "pkg:pypi/urllib3@2.2.0"
+          "purl": "pkg:pypi/urllib3@2.2.0?repository_url=http://[LOCALHOST]/simple/"
         }
       ],
       "dependencies": [
@@ -6535,14 +6232,14 @@ fn cyclonedx_export_with_workspace_member() -> Result<()> {
           "bom-ref": "iniconfig-4@2.0.0",
           "name": "iniconfig",
           "version": "2.0.0",
-          "purl": "pkg:pypi/iniconfig@2.0.0"
+          "purl": "pkg:pypi/iniconfig@2.0.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "urllib3-5@2.2.0",
           "name": "urllib3",
           "version": "2.2.0",
-          "purl": "pkg:pypi/urllib3@2.2.0"
+          "purl": "pkg:pypi/urllib3@2.2.0?repository_url=http://[LOCALHOST]/simple/"
         }
       ],
       "dependencies": [
@@ -6658,7 +6355,7 @@ fn cyclonedx_export_workspace_non_root() -> Result<()> {
           "bom-ref": "iniconfig-2@2.0.0",
           "name": "iniconfig",
           "version": "2.0.0",
-          "purl": "pkg:pypi/iniconfig@2.0.0"
+          "purl": "pkg:pypi/iniconfig@2.0.0?repository_url=http://[LOCALHOST]/simple/"
         }
       ],
       "dependencies": [
@@ -6776,7 +6473,7 @@ fn cyclonedx_export_workspace_with_extras() -> Result<()> {
           "bom-ref": "typing-extensions-3@4.10.0",
           "name": "typing-extensions",
           "version": "4.10.0",
-          "purl": "pkg:pypi/typing-extensions@4.10.0"
+          "purl": "pkg:pypi/typing-extensions@4.10.0?repository_url=http://[LOCALHOST]/simple/"
         }
       ],
       "dependencies": [
@@ -6850,21 +6547,21 @@ fn cyclonedx_export_workspace_with_extras() -> Result<()> {
           "bom-ref": "iniconfig-3@2.0.0",
           "name": "iniconfig",
           "version": "2.0.0",
-          "purl": "pkg:pypi/iniconfig@2.0.0"
+          "purl": "pkg:pypi/iniconfig@2.0.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "typing-extensions-4@4.10.0",
           "name": "typing-extensions",
           "version": "4.10.0",
-          "purl": "pkg:pypi/typing-extensions@4.10.0"
+          "purl": "pkg:pypi/typing-extensions@4.10.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "urllib3-5@2.2.0",
           "name": "urllib3",
           "version": "2.2.0",
-          "purl": "pkg:pypi/urllib3@2.2.0"
+          "purl": "pkg:pypi/urllib3@2.2.0?repository_url=http://[LOCALHOST]/simple/"
         }
       ],
       "dependencies": [
@@ -7002,14 +6699,14 @@ fn cyclonedx_export_workspace_frozen() -> Result<()> {
           "bom-ref": "iniconfig-3@2.0.0",
           "name": "iniconfig",
           "version": "2.0.0",
-          "purl": "pkg:pypi/iniconfig@2.0.0"
+          "purl": "pkg:pypi/iniconfig@2.0.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "urllib3-4@2.2.0",
           "name": "urllib3",
           "version": "2.2.0",
-          "purl": "pkg:pypi/urllib3@2.2.0"
+          "purl": "pkg:pypi/urllib3@2.2.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
@@ -7174,21 +6871,21 @@ fn cyclonedx_export_workspace_all_packages() -> Result<()> {
           "bom-ref": "iniconfig-4@2.0.0",
           "name": "iniconfig",
           "version": "2.0.0",
-          "purl": "pkg:pypi/iniconfig@2.0.0"
+          "purl": "pkg:pypi/iniconfig@2.0.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "sniffio-5@1.3.1",
           "name": "sniffio",
           "version": "1.3.1",
-          "purl": "pkg:pypi/sniffio@1.3.1"
+          "purl": "pkg:pypi/sniffio@1.3.1?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "urllib3-6@2.2.0",
           "name": "urllib3",
           "version": "2.2.0",
-          "purl": "pkg:pypi/urllib3@2.2.0"
+          "purl": "pkg:pypi/urllib3@2.2.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
@@ -7306,25 +7003,25 @@ fn cyclonedx_export_all_packages_non_workspace_root_dependency() -> Result<()> {
           "bom-ref": "urllib3-2@2.2.0",
           "name": "urllib3",
           "version": "2.2.0",
-          "purl": "pkg:pypi/urllib3@2.2.0",
+          "purl": "pkg:pypi/urllib3@2.2.0?repository_url=http://[LOCALHOST]/simple/",
           "externalReferences": [
             {
               "type": "distribution",
-              "url": "https://files.pythonhosted.org/packages/e2/cc/abf6746cc90bc52df4ba730f301b89b3b844d6dc133cb89a01cfe2511eb9/urllib3-2.2.0.tar.gz",
+              "url": "http://[LOCALHOST]/files/urllib3-2.2.0.tar.gz",
               "hashes": [
                 {
                   "alg": "SHA-256",
-                  "content": "051d961ad0c62a94e50ecf1af379c3aba230c66c710493493560c0c223c49f20"
+                  "content": "e722aa47dc41a6899d57ec798da2ab49d6e85ff733c92f1682ffb794b6e2a0e3"
                 }
               ]
             },
             {
               "type": "distribution",
-              "url": "https://files.pythonhosted.org/packages/88/75/311454fd3317aefe18415f04568edc20218453b709c63c58b9292c71be17/urllib3-2.2.0-py3-none-any.whl",
+              "url": "http://[LOCALHOST]/files/urllib3-2.2.0-py3-none-any.whl",
               "hashes": [
                 {
                   "alg": "SHA-256",
-                  "content": "ce3711610ddce217e6d113a2732fafad960a03fd0318c91faa79481e35c11224"
+                  "content": "2e14384aa6bba7d9b3f631bd7b1d2e21dd6be7c936eb0dbbb18e495d06bbb6c0"
                 }
               ]
             }
@@ -7491,21 +7188,21 @@ fn cyclonedx_export_workspace_mixed_dependencies() -> Result<()> {
           "bom-ref": "iniconfig-4@2.0.0",
           "name": "iniconfig",
           "version": "2.0.0",
-          "purl": "pkg:pypi/iniconfig@2.0.0"
+          "purl": "pkg:pypi/iniconfig@2.0.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "sniffio-5@1.3.1",
           "name": "sniffio",
           "version": "1.3.1",
-          "purl": "pkg:pypi/sniffio@1.3.1"
+          "purl": "pkg:pypi/sniffio@1.3.1?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "urllib3-6@2.2.0",
           "name": "urllib3",
           "version": "2.2.0",
-          "purl": "pkg:pypi/urllib3@2.2.0"
+          "purl": "pkg:pypi/urllib3@2.2.0?repository_url=http://[LOCALHOST]/simple/"
         }
       ],
       "dependencies": [
@@ -7609,14 +7306,14 @@ fn cyclonedx_export_dependency_marker() -> Result<()> {
           "bom-ref": "iniconfig-2@2.0.0",
           "name": "iniconfig",
           "version": "2.0.0",
-          "purl": "pkg:pypi/iniconfig@2.0.0"
+          "purl": "pkg:pypi/iniconfig@2.0.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "urllib3-3@2.2.1",
           "name": "urllib3",
           "version": "2.2.1",
-          "purl": "pkg:pypi/urllib3@2.2.1",
+          "purl": "pkg:pypi/urllib3@2.2.1?repository_url=http://[LOCALHOST]/simple/",
           "properties": [
             {
               "name": "uv:package:marker",
@@ -7710,7 +7407,7 @@ fn cyclonedx_export_multiple_dependency_markers() -> Result<()> {
           "bom-ref": "cffi-2@1.16.0",
           "name": "cffi",
           "version": "1.16.0",
-          "purl": "pkg:pypi/cffi@1.16.0",
+          "purl": "pkg:pypi/cffi@1.16.0?repository_url=http://[LOCALHOST]/simple/",
           "properties": [
             {
               "name": "uv:package:marker",
@@ -7723,7 +7420,7 @@ fn cyclonedx_export_multiple_dependency_markers() -> Result<()> {
           "bom-ref": "cryptography-3@42.0.5",
           "name": "cryptography",
           "version": "42.0.5",
-          "purl": "pkg:pypi/cryptography@42.0.5",
+          "purl": "pkg:pypi/cryptography@42.0.5?repository_url=http://[LOCALHOST]/simple/",
           "properties": [
             {
               "name": "uv:package:marker",
@@ -7736,7 +7433,7 @@ fn cyclonedx_export_multiple_dependency_markers() -> Result<()> {
           "bom-ref": "pycparser-4@2.21",
           "name": "pycparser",
           "version": "2.21",
-          "purl": "pkg:pypi/pycparser@2.21",
+          "purl": "pkg:pypi/pycparser@2.21?repository_url=http://[LOCALHOST]/simple/",
           "properties": [
             {
               "name": "uv:package:marker",
@@ -7835,14 +7532,14 @@ fn cyclonedx_export_dependency_extra() -> Result<()> {
           "bom-ref": "bcrypt-2@4.1.2",
           "name": "bcrypt",
           "version": "4.1.2",
-          "purl": "pkg:pypi/bcrypt@4.1.2"
+          "purl": "pkg:pypi/bcrypt@4.1.2?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "cffi-3@1.16.0",
           "name": "cffi",
           "version": "1.16.0",
-          "purl": "pkg:pypi/cffi@1.16.0",
+          "purl": "pkg:pypi/cffi@1.16.0?repository_url=http://[LOCALHOST]/simple/",
           "properties": [
             {
               "name": "uv:package:marker",
@@ -7855,14 +7552,14 @@ fn cyclonedx_export_dependency_extra() -> Result<()> {
           "bom-ref": "cryptography-4@42.0.5",
           "name": "cryptography",
           "version": "42.0.5",
-          "purl": "pkg:pypi/cryptography@42.0.5"
+          "purl": "pkg:pypi/cryptography@42.0.5?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "pycparser-5@2.21",
           "name": "pycparser",
           "version": "2.21",
-          "purl": "pkg:pypi/pycparser@2.21",
+          "purl": "pkg:pypi/pycparser@2.21?repository_url=http://[LOCALHOST]/simple/",
           "properties": [
             {
               "name": "uv:package:marker",
@@ -7971,7 +7668,7 @@ fn cyclonedx_export_prune() -> Result<()> {
           "bom-ref": "cffi-2@1.16.0",
           "name": "cffi",
           "version": "1.16.0",
-          "purl": "pkg:pypi/cffi@1.16.0",
+          "purl": "pkg:pypi/cffi@1.16.0?repository_url=http://[LOCALHOST]/simple/",
           "properties": [
             {
               "name": "uv:package:marker",
@@ -7984,14 +7681,14 @@ fn cyclonedx_export_prune() -> Result<()> {
           "bom-ref": "jupyter-client-3@8.6.1",
           "name": "jupyter-client",
           "version": "8.6.1",
-          "purl": "pkg:pypi/jupyter-client@8.6.1"
+          "purl": "pkg:pypi/jupyter-client@8.6.1?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "pycparser-4@2.21",
           "name": "pycparser",
           "version": "2.21",
-          "purl": "pkg:pypi/pycparser@2.21",
+          "purl": "pkg:pypi/pycparser@2.21?repository_url=http://[LOCALHOST]/simple/",
           "properties": [
             {
               "name": "uv:package:marker",
@@ -8004,35 +7701,35 @@ fn cyclonedx_export_prune() -> Result<()> {
           "bom-ref": "python-dateutil-5@2.9.0.post0",
           "name": "python-dateutil",
           "version": "2.9.0.post0",
-          "purl": "pkg:pypi/python-dateutil@2.9.0.post0"
+          "purl": "pkg:pypi/python-dateutil@2.9.0.post0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "pyzmq-6@25.1.2",
           "name": "pyzmq",
           "version": "25.1.2",
-          "purl": "pkg:pypi/pyzmq@25.1.2"
+          "purl": "pkg:pypi/pyzmq@25.1.2?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
-          "bom-ref": "six-7@1.16.0",
+          "bom-ref": "six-7@1.17.0",
           "name": "six",
-          "version": "1.16.0",
-          "purl": "pkg:pypi/six@1.16.0"
+          "version": "1.17.0",
+          "purl": "pkg:pypi/six@1.17.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "tornado-8@6.4",
           "name": "tornado",
           "version": "6.4",
-          "purl": "pkg:pypi/tornado@6.4"
+          "purl": "pkg:pypi/tornado@6.4?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "traitlets-9@5.14.2",
           "name": "traitlets",
           "version": "5.14.2",
-          "purl": "pkg:pypi/traitlets@5.14.2"
+          "purl": "pkg:pypi/traitlets@5.14.2?repository_url=http://[LOCALHOST]/simple/"
         }
       ],
       "dependencies": [
@@ -8063,7 +7760,7 @@ fn cyclonedx_export_prune() -> Result<()> {
         {
           "ref": "python-dateutil-5@2.9.0.post0",
           "dependsOn": [
-            "six-7@1.16.0"
+            "six-7@1.17.0"
           ]
         },
         {
@@ -8073,7 +7770,7 @@ fn cyclonedx_export_prune() -> Result<()> {
           ]
         },
         {
-          "ref": "six-7@1.16.0"
+          "ref": "six-7@1.17.0"
         },
         {
           "ref": "tornado-8@6.4"
@@ -8084,7 +7781,7 @@ fn cyclonedx_export_prune() -> Result<()> {
       ]
     }
     ----- stderr -----
-    Resolved 12 packages in [TIME]
+    Resolved 11 packages in [TIME]
     warning: `uv export --format=cyclonedx1.5` is experimental and may change without warning. Pass `--preview-features sbom-export` to disable this warning.
     "#
     );
@@ -8152,14 +7849,14 @@ fn cyclonedx_export_group() -> Result<()> {
           "bom-ref": "sniffio-2@1.3.1",
           "name": "sniffio",
           "version": "1.3.1",
-          "purl": "pkg:pypi/sniffio@1.3.1"
+          "purl": "pkg:pypi/sniffio@1.3.1?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "typing-extensions-3@4.10.0",
           "name": "typing-extensions",
           "version": "4.10.0",
-          "purl": "pkg:pypi/typing-extensions@4.10.0"
+          "purl": "pkg:pypi/typing-extensions@4.10.0?repository_url=http://[LOCALHOST]/simple/"
         }
       ],
       "dependencies": [
@@ -8220,7 +7917,7 @@ fn cyclonedx_export_group() -> Result<()> {
           "bom-ref": "iniconfig-2@2.0.0",
           "name": "iniconfig",
           "version": "2.0.0",
-          "purl": "pkg:pypi/iniconfig@2.0.0"
+          "purl": "pkg:pypi/iniconfig@2.0.0?repository_url=http://[LOCALHOST]/simple/"
         }
       ],
       "dependencies": [
@@ -8271,21 +7968,21 @@ fn cyclonedx_export_group() -> Result<()> {
           "bom-ref": "sniffio-2@1.3.1",
           "name": "sniffio",
           "version": "1.3.1",
-          "purl": "pkg:pypi/sniffio@1.3.1"
+          "purl": "pkg:pypi/sniffio@1.3.1?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "typing-extensions-3@4.10.0",
           "name": "typing-extensions",
           "version": "4.10.0",
-          "purl": "pkg:pypi/typing-extensions@4.10.0"
+          "purl": "pkg:pypi/typing-extensions@4.10.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "urllib3-4@2.2.1",
           "name": "urllib3",
           "version": "2.2.1",
-          "purl": "pkg:pypi/urllib3@2.2.1",
+          "purl": "pkg:pypi/urllib3@2.2.1?repository_url=http://[LOCALHOST]/simple/",
           "properties": [
             {
               "name": "uv:package:marker",
@@ -8419,7 +8116,7 @@ fn cyclonedx_export_non_project() -> Result<()> {
           "bom-ref": "urllib3-1@2.2.1",
           "name": "urllib3",
           "version": "2.2.1",
-          "purl": "pkg:pypi/urllib3@2.2.1"
+          "purl": "pkg:pypi/urllib3@2.2.1?repository_url=http://[LOCALHOST]/simple/"
         }
       ],
       "dependencies": [
@@ -8532,7 +8229,7 @@ fn cyclonedx_export_no_emit() -> Result<()> {
           "bom-ref": "iniconfig-3@2.0.0",
           "name": "iniconfig",
           "version": "2.0.0",
-          "purl": "pkg:pypi/iniconfig@2.0.0"
+          "purl": "pkg:pypi/iniconfig@2.0.0?repository_url=http://[LOCALHOST]/simple/"
         }
       ],
       "dependencies": [
@@ -8607,14 +8304,14 @@ fn cyclonedx_export_no_emit() -> Result<()> {
           "bom-ref": "iniconfig-3@2.0.0",
           "name": "iniconfig",
           "version": "2.0.0",
-          "purl": "pkg:pypi/iniconfig@2.0.0"
+          "purl": "pkg:pypi/iniconfig@2.0.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "urllib3-4@2.2.0",
           "name": "urllib3",
           "version": "2.2.0",
-          "purl": "pkg:pypi/urllib3@2.2.0"
+          "purl": "pkg:pypi/urllib3@2.2.0?repository_url=http://[LOCALHOST]/simple/"
         }
       ],
       "dependencies": [
@@ -8722,7 +8419,7 @@ fn cyclonedx_export_relative_path() -> Result<()> {
           "bom-ref": "iniconfig-3@2.0.0",
           "name": "iniconfig",
           "version": "2.0.0",
-          "purl": "pkg:pypi/iniconfig@2.0.0"
+          "purl": "pkg:pypi/iniconfig@2.0.0?repository_url=http://[LOCALHOST]/simple/"
         }
       ],
       "dependencies": [
@@ -8809,70 +8506,70 @@ fn cyclonedx_export_cyclic_dependencies() -> Result<()> {
           "bom-ref": "argparse-2@1.4.0",
           "name": "argparse",
           "version": "1.4.0",
-          "purl": "pkg:pypi/argparse@1.4.0"
+          "purl": "pkg:pypi/argparse@1.4.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "extras-3@1.0.0",
           "name": "extras",
           "version": "1.0.0",
-          "purl": "pkg:pypi/extras@1.0.0"
+          "purl": "pkg:pypi/extras@1.0.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "fixtures-4@3.0.0",
           "name": "fixtures",
           "version": "3.0.0",
-          "purl": "pkg:pypi/fixtures@3.0.0"
+          "purl": "pkg:pypi/fixtures@3.0.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "linecache2-5@1.0.0",
           "name": "linecache2",
           "version": "1.0.0",
-          "purl": "pkg:pypi/linecache2@1.0.0"
+          "purl": "pkg:pypi/linecache2@1.0.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "pbr-6@6.0.0",
           "name": "pbr",
           "version": "6.0.0",
-          "purl": "pkg:pypi/pbr@6.0.0"
+          "purl": "pkg:pypi/pbr@6.0.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "python-mimeparse-7@1.6.0",
           "name": "python-mimeparse",
           "version": "1.6.0",
-          "purl": "pkg:pypi/python-mimeparse@1.6.0"
+          "purl": "pkg:pypi/python-mimeparse@1.6.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
-          "bom-ref": "six-8@1.16.0",
+          "bom-ref": "six-8@1.17.0",
           "name": "six",
-          "version": "1.16.0",
-          "purl": "pkg:pypi/six@1.16.0"
+          "version": "1.17.0",
+          "purl": "pkg:pypi/six@1.17.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "testtools-9@2.3.0",
           "name": "testtools",
           "version": "2.3.0",
-          "purl": "pkg:pypi/testtools@2.3.0"
+          "purl": "pkg:pypi/testtools@2.3.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "traceback2-10@1.4.0",
           "name": "traceback2",
           "version": "1.4.0",
-          "purl": "pkg:pypi/traceback2@1.4.0"
+          "purl": "pkg:pypi/traceback2@1.4.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "unittest2-11@1.1.0",
           "name": "unittest2",
           "version": "1.1.0",
-          "purl": "pkg:pypi/unittest2@1.1.0"
+          "purl": "pkg:pypi/unittest2@1.1.0?repository_url=http://[LOCALHOST]/simple/"
         }
       ],
       "dependencies": [
@@ -8886,7 +8583,7 @@ fn cyclonedx_export_cyclic_dependencies() -> Result<()> {
           "ref": "fixtures-4@3.0.0",
           "dependsOn": [
             "pbr-6@6.0.0",
-            "six-8@1.16.0",
+            "six-8@1.17.0",
             "testtools-9@2.3.0"
           ]
         },
@@ -8907,7 +8604,7 @@ fn cyclonedx_export_cyclic_dependencies() -> Result<()> {
           "ref": "python-mimeparse-7@1.6.0"
         },
         {
-          "ref": "six-8@1.16.0"
+          "ref": "six-8@1.17.0"
         },
         {
           "ref": "testtools-9@2.3.0",
@@ -8916,7 +8613,7 @@ fn cyclonedx_export_cyclic_dependencies() -> Result<()> {
             "fixtures-4@3.0.0",
             "pbr-6@6.0.0",
             "python-mimeparse-7@1.6.0",
-            "six-8@1.16.0",
+            "six-8@1.17.0",
             "traceback2-10@1.4.0",
             "unittest2-11@1.1.0"
           ]
@@ -8931,7 +8628,7 @@ fn cyclonedx_export_cyclic_dependencies() -> Result<()> {
           "ref": "unittest2-11@1.1.0",
           "dependsOn": [
             "argparse-2@1.4.0",
-            "six-8@1.16.0",
+            "six-8@1.17.0",
             "traceback2-10@1.4.0"
           ]
         }
@@ -9007,14 +8704,14 @@ fn cyclonedx_export_dev_dependencies() -> Result<()> {
           "bom-ref": "typing-extensions-2@4.10.0",
           "name": "typing-extensions",
           "version": "4.10.0",
-          "purl": "pkg:pypi/typing-extensions@4.10.0"
+          "purl": "pkg:pypi/typing-extensions@4.10.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "urllib3-3@2.2.1",
           "name": "urllib3",
           "version": "2.2.1",
-          "purl": "pkg:pypi/urllib3@2.2.1"
+          "purl": "pkg:pypi/urllib3@2.2.1?repository_url=http://[LOCALHOST]/simple/"
         }
       ],
       "dependencies": [
@@ -9076,7 +8773,7 @@ fn cyclonedx_export_dev_dependencies() -> Result<()> {
           "bom-ref": "typing-extensions-2@4.10.0",
           "name": "typing-extensions",
           "version": "4.10.0",
-          "purl": "pkg:pypi/typing-extensions@4.10.0"
+          "purl": "pkg:pypi/typing-extensions@4.10.0?repository_url=http://[LOCALHOST]/simple/"
         }
       ],
       "dependencies": [
@@ -9134,7 +8831,7 @@ fn cyclonedx_export_dev_dependencies() -> Result<()> {
           "bom-ref": "urllib3-2@2.2.1",
           "name": "urllib3",
           "version": "2.2.1",
-          "purl": "pkg:pypi/urllib3@2.2.1"
+          "purl": "pkg:pypi/urllib3@2.2.1?repository_url=http://[LOCALHOST]/simple/"
         }
       ],
       "dependencies": [
@@ -9248,14 +8945,14 @@ fn cyclonedx_export_all_packages_conflicting_workspace_members() -> Result<()> {
           "bom-ref": "sortedcontainers-3@2.3.0",
           "name": "sortedcontainers",
           "version": "2.3.0",
-          "purl": "pkg:pypi/sortedcontainers@2.3.0"
+          "purl": "pkg:pypi/sortedcontainers@2.3.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "sortedcontainers-4@2.4.0",
           "name": "sortedcontainers",
           "version": "2.4.0",
-          "purl": "pkg:pypi/sortedcontainers@2.4.0"
+          "purl": "pkg:pypi/sortedcontainers@2.4.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
@@ -9380,8 +9077,8 @@ fn export_package_conflicting_workspace_members() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR] --package project
     -e .
     sortedcontainers==2.3.0 \
-        --hash=sha256:37257a32add0a3ee490bb170b599e93095eed89a55da91fa9f48753ea12fd73f \
-        --hash=sha256:59cc937650cf60d677c16775597c89a960658a09cf7c1a668f86e1e4464b10a1
+        --hash=sha256:3228c480e84b2b7a504f28bd68f73b8cfde1d1fddf8a47783b19a0dbcc93ffcf \
+        --hash=sha256:c7bfd220eb6dcc29774e2e05298edc2c5d62fa1086cc6409c800c7f413afe2a6
         # via project
 
     ----- stderr -----
@@ -9405,9 +9102,9 @@ fn export_package_conflicting_workspace_members() -> Result<()> {
     [[packages]]
     name = "sortedcontainers"
     version = "2.3.0"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/14/10/6a9481890bae97da9edd6e737c9c3dec6aea3fc2fa53b0934037b35c89ea/sortedcontainers-2.3.0.tar.gz", upload-time = 2020-11-09T00:03:52Z, size = 30509, hashes = { sha256 = "59cc937650cf60d677c16775597c89a960658a09cf7c1a668f86e1e4464b10a1" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/20/4d/a7046ae1a1a4cc4e9bbed194c387086f06b25038be596543d026946330c9/sortedcontainers-2.3.0-py2.py3-none-any.whl", upload-time = 2020-11-09T00:03:50Z, size = 29479, hashes = { sha256 = "37257a32add0a3ee490bb170b599e93095eed89a55da91fa9f48753ea12fd73f" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/sortedcontainers-2.3.0.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "c7bfd220eb6dcc29774e2e05298edc2c5d62fa1086cc6409c800c7f413afe2a6" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/sortedcontainers-2.3.0-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "3228c480e84b2b7a504f28bd68f73b8cfde1d1fddf8a47783b19a0dbcc93ffcf" } }]
 
     ----- stderr -----
     warning: Declaring conflicts for packages (`package = ...`) is experimental and may change without warning. Pass `--preview-features package-conflicts` to disable this warning.
@@ -9422,8 +9119,8 @@ fn export_package_conflicting_workspace_members() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR] --package child
     -e ./child
     sortedcontainers==2.4.0 \
-        --hash=sha256:25caa5a06cc30b6b83d11423433f65d1f9d76c4c6a0c90e3379eaa43b9bfdb88 \
-        --hash=sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0
+        --hash=sha256:e90c0f20bb5c630bbf840e4ccc94441cd55ae8048cf55fc42df715d28b67cb80 \
+        --hash=sha256:fb6015d312cfaf15c65e0aeadac28191546cc25e48d41b126ecc322d5b116be2
         # via child
 
     ----- stderr -----
@@ -9447,9 +9144,9 @@ fn export_package_conflicting_workspace_members() -> Result<()> {
     [[packages]]
     name = "sortedcontainers"
     version = "2.4.0"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/e8/c4/ba2f8066cceb6f23394729afe52f3bf7adec04bf9ed2c820b39e19299111/sortedcontainers-2.4.0.tar.gz", upload-time = 2021-05-16T22:03:42Z, size = 30594, hashes = { sha256 = "25caa5a06cc30b6b83d11423433f65d1f9d76c4c6a0c90e3379eaa43b9bfdb88" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/32/46/9cb0e58b2deb7f82b84065f37f3bffeb12413f947f9388e4cac22c4621ce/sortedcontainers-2.4.0-py2.py3-none-any.whl", upload-time = 2021-05-16T22:03:41Z, size = 29575, hashes = { sha256 = "a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/sortedcontainers-2.4.0.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "fb6015d312cfaf15c65e0aeadac28191546cc25e48d41b126ecc322d5b116be2" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/sortedcontainers-2.4.0-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "e90c0f20bb5c630bbf840e4ccc94441cd55ae8048cf55fc42df715d28b67cb80" } }]
 
     ----- stderr -----
     warning: Declaring conflicts for packages (`package = ...`) is experimental and may change without warning. Pass `--preview-features package-conflicts` to disable this warning.
@@ -9538,8 +9235,8 @@ fn requirements_txt_conflicting_workspace_member_package() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR] --package child-a
     -e ./child-a
     sortedcontainers==2.3.0 \
-        --hash=sha256:37257a32add0a3ee490bb170b599e93095eed89a55da91fa9f48753ea12fd73f \
-        --hash=sha256:59cc937650cf60d677c16775597c89a960658a09cf7c1a668f86e1e4464b10a1
+        --hash=sha256:3228c480e84b2b7a504f28bd68f73b8cfde1d1fddf8a47783b19a0dbcc93ffcf \
+        --hash=sha256:c7bfd220eb6dcc29774e2e05298edc2c5d62fa1086cc6409c800c7f413afe2a6
         # via child-a
 
     ----- stderr -----
@@ -9555,8 +9252,8 @@ fn requirements_txt_conflicting_workspace_member_package() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR] --package child-b
     -e ./child-b
     sortedcontainers==2.4.0 \
-        --hash=sha256:25caa5a06cc30b6b83d11423433f65d1f9d76c4c6a0c90e3379eaa43b9bfdb88 \
-        --hash=sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0
+        --hash=sha256:e90c0f20bb5c630bbf840e4ccc94441cd55ae8048cf55fc42df715d28b67cb80 \
+        --hash=sha256:fb6015d312cfaf15c65e0aeadac28191546cc25e48d41b126ecc322d5b116be2
         # via child-b
 
     ----- stderr -----
@@ -9581,9 +9278,9 @@ fn requirements_txt_conflicting_workspace_member_package() -> Result<()> {
     [[packages]]
     name = "sortedcontainers"
     version = "2.3.0"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/14/10/6a9481890bae97da9edd6e737c9c3dec6aea3fc2fa53b0934037b35c89ea/sortedcontainers-2.3.0.tar.gz", upload-time = 2020-11-09T00:03:52Z, size = 30509, hashes = { sha256 = "59cc937650cf60d677c16775597c89a960658a09cf7c1a668f86e1e4464b10a1" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/20/4d/a7046ae1a1a4cc4e9bbed194c387086f06b25038be596543d026946330c9/sortedcontainers-2.3.0-py2.py3-none-any.whl", upload-time = 2020-11-09T00:03:50Z, size = 29479, hashes = { sha256 = "37257a32add0a3ee490bb170b599e93095eed89a55da91fa9f48753ea12fd73f" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/sortedcontainers-2.3.0.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "c7bfd220eb6dcc29774e2e05298edc2c5d62fa1086cc6409c800c7f413afe2a6" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/sortedcontainers-2.3.0-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "3228c480e84b2b7a504f28bd68f73b8cfde1d1fddf8a47783b19a0dbcc93ffcf" } }]
 
     ----- stderr -----
     warning: Declaring conflicts for packages (`package = ...`) is experimental and may change without warning. Pass `--preview-features package-conflicts` to disable this warning.
@@ -9607,9 +9304,9 @@ fn requirements_txt_conflicting_workspace_member_package() -> Result<()> {
     [[packages]]
     name = "sortedcontainers"
     version = "2.4.0"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/e8/c4/ba2f8066cceb6f23394729afe52f3bf7adec04bf9ed2c820b39e19299111/sortedcontainers-2.4.0.tar.gz", upload-time = 2021-05-16T22:03:42Z, size = 30594, hashes = { sha256 = "25caa5a06cc30b6b83d11423433f65d1f9d76c4c6a0c90e3379eaa43b9bfdb88" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/32/46/9cb0e58b2deb7f82b84065f37f3bffeb12413f947f9388e4cac22c4621ce/sortedcontainers-2.4.0-py2.py3-none-any.whl", upload-time = 2021-05-16T22:03:41Z, size = 29575, hashes = { sha256 = "a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/sortedcontainers-2.4.0.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "fb6015d312cfaf15c65e0aeadac28191546cc25e48d41b126ecc322d5b116be2" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/sortedcontainers-2.4.0-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "e90c0f20bb5c630bbf840e4ccc94441cd55ae8048cf55fc42df715d28b67cb80" } }]
 
     ----- stderr -----
     warning: Declaring conflicts for packages (`package = ...`) is experimental and may change without warning. Pass `--preview-features package-conflicts` to disable this warning.
@@ -9685,8 +9382,8 @@ fn requirements_txt_conflicting_workspace_root_package() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR] --package project
     -e .
     sortedcontainers==2.3.0 \
-        --hash=sha256:37257a32add0a3ee490bb170b599e93095eed89a55da91fa9f48753ea12fd73f \
-        --hash=sha256:59cc937650cf60d677c16775597c89a960658a09cf7c1a668f86e1e4464b10a1
+        --hash=sha256:3228c480e84b2b7a504f28bd68f73b8cfde1d1fddf8a47783b19a0dbcc93ffcf \
+        --hash=sha256:c7bfd220eb6dcc29774e2e05298edc2c5d62fa1086cc6409c800c7f413afe2a6
         # via project
 
     ----- stderr -----
@@ -9710,9 +9407,9 @@ fn requirements_txt_conflicting_workspace_root_package() -> Result<()> {
     [[packages]]
     name = "sortedcontainers"
     version = "2.3.0"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/14/10/6a9481890bae97da9edd6e737c9c3dec6aea3fc2fa53b0934037b35c89ea/sortedcontainers-2.3.0.tar.gz", upload-time = 2020-11-09T00:03:52Z, size = 30509, hashes = { sha256 = "59cc937650cf60d677c16775597c89a960658a09cf7c1a668f86e1e4464b10a1" } }
-    wheels = [{ url = "https://files.pythonhosted.org/packages/20/4d/a7046ae1a1a4cc4e9bbed194c387086f06b25038be596543d026946330c9/sortedcontainers-2.3.0-py2.py3-none-any.whl", upload-time = 2020-11-09T00:03:50Z, size = 29479, hashes = { sha256 = "37257a32add0a3ee490bb170b599e93095eed89a55da91fa9f48753ea12fd73f" } }]
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/sortedcontainers-2.3.0.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "c7bfd220eb6dcc29774e2e05298edc2c5d62fa1086cc6409c800c7f413afe2a6" } }
+    wheels = [{ url = "http://[LOCALHOST]/files/sortedcontainers-2.3.0-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "3228c480e84b2b7a504f28bd68f73b8cfde1d1fddf8a47783b19a0dbcc93ffcf" } }]
 
     ----- stderr -----
     warning: Declaring conflicts for packages (`package = ...`) is experimental and may change without warning. Pass `--preview-features package-conflicts` to disable this warning.
@@ -9725,29 +9422,31 @@ fn requirements_txt_conflicting_workspace_root_package() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_alternative_registry() -> Result<()> {
+    let index = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
     let context = uv_test::test_context!("3.12")
         .with_cyclonedx_filters()
+        .with_default_index(&index.index_url())
         .with_exclude_newer("2025-01-30T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["torch==2.6.0"]
+        dependencies = ["simple-package==2.1.3"]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
 
         [[tool.uv.index]]
-        name = "pytorch-cpu"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cpu"
+        name = "alternative"
+        url = "{}"
         default = true
         "#,
-    )?;
+        index.index_url()
+    })?;
 
     context.lock().assert().success();
 
@@ -9784,163 +9483,26 @@ fn cyclonedx_export_alternative_registry() -> Result<()> {
       "components": [
         {
           "type": "library",
-          "bom-ref": "filelock-2@3.13.1",
-          "name": "filelock",
-          "version": "3.13.1",
-          "purl": "pkg:pypi/filelock@3.13.1?repository_url=https://astral-sh.github.io/pytorch-mirror/whl/cpu"
-        },
-        {
-          "type": "library",
-          "bom-ref": "fsspec-3@2024.6.1",
-          "name": "fsspec",
-          "version": "2024.6.1",
-          "purl": "pkg:pypi/fsspec@2024.6.1?repository_url=https://astral-sh.github.io/pytorch-mirror/whl/cpu"
-        },
-        {
-          "type": "library",
-          "bom-ref": "jinja2-4@3.1.4",
-          "name": "jinja2",
-          "version": "3.1.4",
-          "purl": "pkg:pypi/jinja2@3.1.4?repository_url=https://astral-sh.github.io/pytorch-mirror/whl/cpu"
-        },
-        {
-          "type": "library",
-          "bom-ref": "markupsafe-5@3.0.2",
-          "name": "markupsafe",
-          "version": "3.0.2",
-          "purl": "pkg:pypi/markupsafe@3.0.2?repository_url=https://astral-sh.github.io/pytorch-mirror/whl/cpu"
-        },
-        {
-          "type": "library",
-          "bom-ref": "mpmath-6@1.3.0",
-          "name": "mpmath",
-          "version": "1.3.0",
-          "purl": "pkg:pypi/mpmath@1.3.0?repository_url=https://astral-sh.github.io/pytorch-mirror/whl/cpu"
-        },
-        {
-          "type": "library",
-          "bom-ref": "networkx-7@3.3",
-          "name": "networkx",
-          "version": "3.3",
-          "purl": "pkg:pypi/networkx@3.3?repository_url=https://astral-sh.github.io/pytorch-mirror/whl/cpu"
-        },
-        {
-          "type": "library",
-          "bom-ref": "setuptools-8@70.2.0",
-          "name": "setuptools",
-          "version": "70.2.0",
-          "purl": "pkg:pypi/setuptools@70.2.0?repository_url=https://astral-sh.github.io/pytorch-mirror/whl/cpu"
-        },
-        {
-          "type": "library",
-          "bom-ref": "sympy-9@1.13.1",
-          "name": "sympy",
-          "version": "1.13.1",
-          "purl": "pkg:pypi/sympy@1.13.1?repository_url=https://astral-sh.github.io/pytorch-mirror/whl/cpu"
-        },
-        {
-          "type": "library",
-          "bom-ref": "torch-10@2.6.0",
-          "name": "torch",
-          "version": "2.6.0",
-          "purl": "pkg:pypi/torch@2.6.0?repository_url=https://astral-sh.github.io/pytorch-mirror/whl/cpu",
-          "properties": [
-            {
-              "name": "uv:package:marker",
-              "value": "sys_platform == 'darwin'"
-            }
-          ]
-        },
-        {
-          "type": "library",
-          "bom-ref": "torch-11@2.6.0+cpu",
-          "name": "torch",
-          "version": "2.6.0+cpu",
-          "purl": "pkg:pypi/torch@2.6.0%2Bcpu?repository_url=https://astral-sh.github.io/pytorch-mirror/whl/cpu",
-          "properties": [
-            {
-              "name": "uv:package:marker",
-              "value": "sys_platform != 'darwin'"
-            }
-          ]
-        },
-        {
-          "type": "library",
-          "bom-ref": "typing-extensions-12@4.12.2",
-          "name": "typing-extensions",
-          "version": "4.12.2",
-          "purl": "pkg:pypi/typing-extensions@4.12.2?repository_url=https://astral-sh.github.io/pytorch-mirror/whl/cpu"
+          "bom-ref": "simple-package-2@2.1.3",
+          "name": "simple-package",
+          "version": "2.1.3",
+          "purl": "pkg:pypi/simple-package@2.1.3?repository_url=http://[LOCALHOST]/simple/"
         }
       ],
       "dependencies": [
         {
-          "ref": "filelock-2@3.13.1"
-        },
-        {
-          "ref": "fsspec-3@2024.6.1"
-        },
-        {
-          "ref": "jinja2-4@3.1.4",
-          "dependsOn": [
-            "markupsafe-5@3.0.2"
-          ]
-        },
-        {
-          "ref": "markupsafe-5@3.0.2"
-        },
-        {
-          "ref": "mpmath-6@1.3.0"
-        },
-        {
-          "ref": "networkx-7@3.3"
-        },
-        {
           "ref": "project-1@0.1.0",
           "dependsOn": [
-            "torch-10@2.6.0",
-            "torch-11@2.6.0+cpu"
+            "simple-package-2@2.1.3"
           ]
         },
         {
-          "ref": "setuptools-8@70.2.0"
-        },
-        {
-          "ref": "sympy-9@1.13.1",
-          "dependsOn": [
-            "mpmath-6@1.3.0"
-          ]
-        },
-        {
-          "ref": "torch-10@2.6.0",
-          "dependsOn": [
-            "filelock-2@3.13.1",
-            "fsspec-3@2024.6.1",
-            "jinja2-4@3.1.4",
-            "networkx-7@3.3",
-            "setuptools-8@70.2.0",
-            "sympy-9@1.13.1",
-            "typing-extensions-12@4.12.2"
-          ]
-        },
-        {
-          "ref": "torch-11@2.6.0+cpu",
-          "dependsOn": [
-            "filelock-2@3.13.1",
-            "fsspec-3@2024.6.1",
-            "jinja2-4@3.1.4",
-            "networkx-7@3.3",
-            "setuptools-8@70.2.0",
-            "sympy-9@1.13.1",
-            "typing-extensions-12@4.12.2"
-          ]
-        },
-        {
-          "ref": "typing-extensions-12@4.12.2"
+          "ref": "simple-package-2@2.1.3"
         }
       ]
     }
     ----- stderr -----
-    Resolved 12 packages in [TIME]
+    Resolved 2 packages in [TIME]
     warning: `uv export --format=cyclonedx1.5` is experimental and may change without warning. Pass `--preview-features sbom-export` to disable this warning.
     "#);
 
@@ -10012,7 +9574,7 @@ fn cyclonedx_export_virtual_workspace_fixture() -> Result<()> {
           "bom-ref": "anyio-2@4.3.0",
           "name": "anyio",
           "version": "4.3.0",
-          "purl": "pkg:pypi/anyio@4.3.0"
+          "purl": "pkg:pypi/anyio@4.3.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
@@ -10031,14 +9593,14 @@ fn cyclonedx_export_virtual_workspace_fixture() -> Result<()> {
           "bom-ref": "idna-4@3.6",
           "name": "idna",
           "version": "3.6",
-          "purl": "pkg:pypi/idna@3.6"
+          "purl": "pkg:pypi/idna@3.6?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
           "bom-ref": "iniconfig-5@2.0.0",
           "name": "iniconfig",
           "version": "2.0.0",
-          "purl": "pkg:pypi/iniconfig@2.0.0"
+          "purl": "pkg:pypi/iniconfig@2.0.0?repository_url=http://[LOCALHOST]/simple/"
         },
         {
           "type": "library",
@@ -10057,7 +9619,7 @@ fn cyclonedx_export_virtual_workspace_fixture() -> Result<()> {
           "bom-ref": "sniffio-7@1.3.1",
           "name": "sniffio",
           "version": "1.3.1",
-          "purl": "pkg:pypi/sniffio@1.3.1"
+          "purl": "pkg:pypi/sniffio@1.3.1?repository_url=http://[LOCALHOST]/simple/"
         }
       ],
       "dependencies": [
@@ -10150,17 +9712,17 @@ fn pylock_toml_filter_by_requires_python() -> Result<()> {
     [[packages]]
     name = "numpy"
     version = "1.26.4"
-    index = "https://pypi.org/simple"
-    sdist = { url = "https://files.pythonhosted.org/packages/65/6e/09db70a523a96d25e115e71cc56a6f9031e7b8cd166c1ac8438307c14058/numpy-1.26.4.tar.gz", upload-time = 2024-02-06T00:26:44Z, size = 15786129, hashes = { sha256 = "2a02aba9ed12e4ac4eb3ea9421c420301a0c6460d9830d74a9df87efa4912010" } }
+    index = "http://[LOCALHOST]/simple/"
+    sdist = { url = "http://[LOCALHOST]/files/numpy-1.26.4.tar.gz", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "39384ad8e5d13812dc71d700a3f127b4ebf2a12df048d612ef41740e2128747b" } }
     wheels = [
-        { url = "https://files.pythonhosted.org/packages/95/12/8f2020a8e8b8383ac0177dc9570aad031a3beb12e38847f7129bacd96228/numpy-1.26.4-cp312-cp312-macosx_10_9_x86_64.whl", upload-time = 2024-02-05T23:55:32Z, size = 20335901, hashes = { sha256 = "b3ce300f3644fb06443ee2222c2201dd3a89ea6040541412b8fa189341847218" } },
-        { url = "https://files.pythonhosted.org/packages/75/5b/ca6c8bd14007e5ca171c7c03102d17b4f4e0ceb53957e8c44343a9546dcc/numpy-1.26.4-cp312-cp312-macosx_11_0_arm64.whl", upload-time = 2024-02-05T23:55:56Z, size = 13685868, hashes = { sha256 = "03a8c78d01d9781b28a6989f6fa1bb2c4f2d51201cf99d3dd875df6fbd96b23b" } },
-        { url = "https://files.pythonhosted.org/packages/79/f8/97f10e6755e2a7d027ca783f63044d5b1bc1ae7acb12afe6a9b4286eac17/numpy-1.26.4-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", upload-time = 2024-02-05T23:56:20Z, size = 13925109, hashes = { sha256 = "9fad7dcb1aac3c7f0584a5a8133e3a43eeb2fe127f47e3632d43d677c66c102b" } },
-        { url = "https://files.pythonhosted.org/packages/0f/50/de23fde84e45f5c4fda2488c759b69990fd4512387a8632860f3ac9cd225/numpy-1.26.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", upload-time = 2024-02-05T23:56:56Z, size = 17950613, hashes = { sha256 = "675d61ffbfa78604709862923189bad94014bef562cc35cf61d3a07bba02a7ed" } },
-        { url = "https://files.pythonhosted.org/packages/4c/0c/9c603826b6465e82591e05ca230dfc13376da512b25ccd0894709b054ed0/numpy-1.26.4-cp312-cp312-musllinux_1_1_aarch64.whl", upload-time = 2024-02-05T23:57:21Z, size = 13572172, hashes = { sha256 = "ab47dbe5cc8210f55aa58e4805fe224dac469cde56b9f731a4c098b91917159a" } },
-        { url = "https://files.pythonhosted.org/packages/76/8c/2ba3902e1a0fc1c74962ea9bb33a534bb05984ad7ff9515bf8d07527cadd/numpy-1.26.4-cp312-cp312-musllinux_1_1_x86_64.whl", upload-time = 2024-02-05T23:57:56Z, size = 17786643, hashes = { sha256 = "1dda2e7b4ec9dd512f84935c5f126c8bd8b9f2fc001e9f54af255e8c5f16b0e0" } },
-        { url = "https://files.pythonhosted.org/packages/28/4a/46d9e65106879492374999e76eb85f87b15328e06bd1550668f79f7b18c6/numpy-1.26.4-cp312-cp312-win32.whl", upload-time = 2024-02-05T23:58:08Z, size = 5677803, hashes = { sha256 = "50193e430acfc1346175fcbdaa28ffec49947a06918b7b92130744e81e640110" } },
-        { url = "https://files.pythonhosted.org/packages/16/2e/86f24451c2d530c88daf997cb8d6ac622c1d40d19f5a031ed68a4b73a374/numpy-1.26.4-cp312-cp312-win_amd64.whl", upload-time = 2024-02-05T23:58:36Z, size = 15517754, hashes = { sha256 = "08beddf13648eb95f8d867350f6a018a4be2e5ad54c8d8caed89ebca558b2818" } },
+        { url = "http://[LOCALHOST]/files/numpy-1.26.4-cp312-cp312-macosx_10_9_x86_64.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "354ec624f96d12c6714f5fb41496f184d5967a1c722bd67fdcc8a66fda626d48" } },
+        { url = "http://[LOCALHOST]/files/numpy-1.26.4-cp312-cp312-macosx_11_0_arm64.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "aaefa8078b3fa3d120aaf6c0631161c8a2680be1239ca457904f06db114e7cbd" } },
+        { url = "http://[LOCALHOST]/files/numpy-1.26.4-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "948aeec04df0f4acbfe7e8a6b47c1807795527bd5cb430917cabcb445e547058" } },
+        { url = "http://[LOCALHOST]/files/numpy-1.26.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "676a50d59fa63955328bff4fba6fb6748a0b3c721508eb03b84ea11cf2098443" } },
+        { url = "http://[LOCALHOST]/files/numpy-1.26.4-cp312-cp312-musllinux_1_1_aarch64.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "65f366cde42d0d0a3369e386fba888dcdaed8b5f1af37ed5d36379115b4dca3e" } },
+        { url = "http://[LOCALHOST]/files/numpy-1.26.4-cp312-cp312-musllinux_1_1_x86_64.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "20aedee1c77c6cf963108800b2153a38abd5ee29fe502e270aa102271a1945ec" } },
+        { url = "http://[LOCALHOST]/files/numpy-1.26.4-cp312-cp312-win32.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "d1c869815b12a747d3e709d4c055958c641b7a8bfed5a3c831ffdb81a04a8826" } },
+        { url = "http://[LOCALHOST]/files/numpy-1.26.4-cp312-cp312-win_amd64.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "013ebfeb5326bb113d2290d910a95a4b8263380ce5d01ca3e4ad96aa54ebff67" } },
     ]
 
     [[packages]]
@@ -10239,10 +9801,10 @@ fn requirements_txt_emit_indexes() -> Result<()> {
         .arg("--index")
         .arg("https://example.com/simple")
         .arg("--find-links")
-        .arg("https://example.com/packages"), @r"
+        .arg("https://example.com/packages"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    --index-url https://pypi.org/simple
+    --index-url http://[LOCALHOST]/simple/
     --extra-index-url https://example.com/simple
     --extra-index-url https://test.pypi.org/simple
     --find-links https://example.com/packages

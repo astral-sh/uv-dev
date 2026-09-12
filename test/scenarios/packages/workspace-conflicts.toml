@@ -1,0 +1,26 @@
+name = "workspace-conflicts"
+description = "Representative registry packages for workspace conflict tests."
+
+[root]
+requires = ["workspace-shared"]
+
+[expected]
+satisfiable = true
+
+[expected.packages]
+workspace-shared = "4.3.0"
+
+[packages.workspace-http.versions."0.27.0"]
+sdist_backend = "in-tree"
+
+[packages.workspace-shared.versions."4.1.0"]
+sdist_backend = "in-tree"
+
+[packages.workspace-shared.versions."4.2.0"]
+sdist_backend = "in-tree"
+
+[packages.workspace-shared.versions."4.3.0"]
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true

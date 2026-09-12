@@ -1345,7 +1345,8 @@ fn init_dot_args() -> Result<()> {
 
 #[test]
 fn init_workspace() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/init.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {
@@ -1354,7 +1355,7 @@ fn init_workspace() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["anyio==3.7.0"]
+        dependencies = ["init-dependency==1.0.0"]
         "#,
     })?;
 
@@ -1414,7 +1415,7 @@ fn init_workspace() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["anyio==3.7.0"]
+        dependencies = ["init-dependency==1.0.0"]
 
         [tool.uv.workspace]
         members = [
@@ -1428,7 +1429,7 @@ fn init_workspace() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 5 packages in [TIME]
+    Resolved 3 packages in [TIME]
     ");
 
     // Add another member (`bar`).
@@ -1452,7 +1453,7 @@ fn init_workspace() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["anyio==3.7.0"]
+        dependencies = ["init-dependency==1.0.0"]
 
         [tool.uv.workspace]
         members = [
@@ -1471,7 +1472,7 @@ fn init_workspace() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["anyio==3.7.0"]
+        dependencies = ["init-dependency==1.0.0"]
 
         [tool.uv.workspace]
         members = [
@@ -1502,7 +1503,7 @@ fn init_workspace() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["anyio==3.7.0"]
+        dependencies = ["init-dependency==1.0.0"]
 
         [tool.uv.workspace]
         members = [
@@ -1519,7 +1520,8 @@ fn init_workspace() -> Result<()> {
 
 #[test]
 fn init_workspace_relative_sub_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/init.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {
@@ -1528,7 +1530,7 @@ fn init_workspace_relative_sub_package() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["anyio==3.7.0"]
+        dependencies = ["init-dependency==1.0.0"]
         "#,
     })?;
 
@@ -1587,7 +1589,7 @@ fn init_workspace_relative_sub_package() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["anyio==3.7.0"]
+        dependencies = ["init-dependency==1.0.0"]
 
         [tool.uv.workspace]
         members = [
@@ -1601,7 +1603,7 @@ fn init_workspace_relative_sub_package() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 5 packages in [TIME]
+    Resolved 3 packages in [TIME]
     ");
 
     Ok(())
@@ -1609,7 +1611,8 @@ fn init_workspace_relative_sub_package() -> Result<()> {
 
 #[test]
 fn init_workspace_outside() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/init.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {
@@ -1618,7 +1621,7 @@ fn init_workspace_outside() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["anyio==3.7.0"]
+        dependencies = ["init-dependency==1.0.0"]
         "#,
     })?;
 
@@ -1678,7 +1681,7 @@ fn init_workspace_outside() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["anyio==3.7.0"]
+        dependencies = ["init-dependency==1.0.0"]
 
         [tool.uv.workspace]
         members = [
@@ -1692,7 +1695,7 @@ fn init_workspace_outside() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 5 packages in [TIME]
+    Resolved 3 packages in [TIME]
     ");
 
     Ok(())
@@ -3072,7 +3075,8 @@ fn init_with_author() {
 /// Run `uv init --app --package --build-backend flit` to create a packaged application project
 #[test]
 fn init_application_package_flit() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::empty();
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let child = context.temp_dir.child("foo");
     child.create_dir_all()?;
@@ -3142,7 +3146,8 @@ fn init_application_package_flit() -> Result<()> {
 /// Run `uv init --lib --build-backend flit` to create an library project
 #[test]
 fn init_library_flit() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::empty();
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let child = context.temp_dir.child("foo");
     child.create_dir_all()?;
@@ -3822,7 +3827,8 @@ fn init_lib_build_backend_scikit() -> Result<()> {
 /// Run `uv init --app --package --build-backend hatchling` to create a packaged application project
 #[test]
 fn init_application_package_hatchling() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::empty();
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let child = context.temp_dir.child("foo");
     child.create_dir_all()?;

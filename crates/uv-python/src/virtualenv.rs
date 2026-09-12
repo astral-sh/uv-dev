@@ -154,8 +154,12 @@ pub(crate) fn conda_environment_from_env(kind: CondaEnvironmentKind) -> Option<P
 /// the containing virtual environment is returned.
 pub(crate) fn virtualenv_from_working_dir() -> Result<Option<PathBuf>, Error> {
     let current_dir = crate::current_dir()?;
+    let ceiling = env::var_os(EnvVars::UV_INTERNAL__TEST_PYTHON_CEILING).map(PathBuf::from);
 
     for dir in current_dir.ancestors() {
+        if ceiling.as_deref() == Some(dir) {
+            break;
+        }
         // If we're _within_ a virtualenv, return it.
         if uv_fs::is_virtualenv_base(dir) {
             return Ok(Some(dir.to_path_buf()));

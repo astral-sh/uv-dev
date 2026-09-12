@@ -1947,8 +1947,7 @@ fn resolve_system_configuration_can_be_disabled() -> anyhow::Result<()> {
         add_shared_args(context.pip_compile())
         .arg("--show-settings")
         .arg("requirements.in")
-        .env(EnvVars::XDG_CONFIG_DIRS, xdg.path())
-        .env(EnvVars::UV_NO_SYSTEM_CONFIG, "1"),
+        .env(EnvVars::XDG_CONFIG_DIRS, xdg.path()),
         @""
     );
 

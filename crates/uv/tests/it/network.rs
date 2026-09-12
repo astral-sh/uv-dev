@@ -20,10 +20,11 @@ use insta::{allow_duplicates, assert_snapshot};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tokio_stream::wrappers::ReceiverStream;
-use wiremock::matchers::{any, method};
+use wiremock::matchers::{any, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 use uv_static::EnvVars;
+use uv_test::packse::PackseServer;
 use uv_test::{TestContext, uv_snapshot};
 
 /// Creates a CONNECT tunnel proxy that forwards connections to the target.
@@ -104,20 +105,30 @@ fn start_connect_tunnel_proxy() -> std::net::SocketAddr {
 
 /// Creates a mock that serves a Simple API index page for iniconfig.
 async fn mock_simple_api(server: &MockServer) {
-    // Simple API response for iniconfig pointing to the real PyPI wheel.
-    // Uses upload-time before EXCLUDE_NEWER (2024-03-25) so the package is available.
+    let artifacts = PackseServer::new("packages/pip-install.toml");
+    let filename = "iniconfig-2.0.0-py3-none-any.whl";
+    let wheel = artifacts
+        .file_bytes(filename)
+        .expect("scenario distribution should exist");
+    let wheel_path = format!("/files/{filename}");
     let body = json!({
         "name": "iniconfig",
         "files": [{
-            "filename": "iniconfig-2.0.0-py3-none-any.whl",
-            "url": "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl",
+            "filename": filename,
+            "url": format!("{}{wheel_path}", server.uri()),
             "hashes": {
-                "sha256": "2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3"
+                "sha256": artifacts.file_hash(filename).expect("scenario distribution should exist")
             },
             "requires-python": ">=3.8",
             "upload-time": "2024-01-01T00:00:00Z"
         }]
     });
+
+    Mock::given(path(wheel_path))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel.to_vec()))
+        .with_priority(1)
+        .mount(server)
+        .await;
 
     // Serve the simple index for iniconfig - use any() matcher since HTTP proxy
     // requests may have the full URL in the path
@@ -805,7 +816,6 @@ async fn proxy_invalid_url_not_a_url_in_uv_toml() {
 }
 
 /// Test that valid proxy URL in uv.toml routes requests through the proxy.
-#[cfg(feature = "test-pypi")]
 #[tokio::test]
 async fn proxy_valid_url_in_uv_toml() {
     let context = uv_test::test_context!("3.12");
@@ -861,7 +871,6 @@ async fn proxy_valid_url_in_uv_toml() {
 }
 
 /// Test that https-proxy in uv.toml routes HTTPS requests through a CONNECT tunnel proxy.
-#[cfg(feature = "test-pypi")]
 #[test]
 fn proxy_https_proxy_in_uv_toml() {
     let context = uv_test::test_context!("3.12");
@@ -895,7 +904,6 @@ fn proxy_https_proxy_in_uv_toml() {
 }
 
 /// Test that no-proxy in uv.toml bypasses the proxy for specified hosts.
-#[cfg(feature = "test-pypi")]
 #[tokio::test]
 async fn proxy_no_proxy_in_uv_toml() {
     let context = uv_test::test_context!("3.12");
@@ -960,7 +968,6 @@ no-proxy = ["{target_host}"]
 }
 
 /// Test that proxy URLs without a scheme in uv.toml default to http://.
-#[cfg(feature = "test-pypi")]
 #[tokio::test]
 async fn proxy_schemeless_url_in_uv_toml() {
     let context = uv_test::test_context!("3.12");

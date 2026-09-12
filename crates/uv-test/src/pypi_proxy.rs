@@ -9,21 +9,25 @@
 //! |-------------------------------------|----------------|--------------------------------------------------------|
 //! | `/simple/{pkg}/`                    | No             | Simple API JSON, file URLs → `/files/…`                |
 //! | `/relative/simple/{pkg}/`           | No             | Simple API JSON, file URLs are relative (`../../../files/…`) |
-//! | `/files/…`                          | No             | 302 redirect → `files.pythonhosted.org`                |
+//! | `/files/…`                          | No             | Pinned local package file                              |
 //! | `/basic-auth/simple/{pkg}/`         | `public:heron` | Simple API JSON, file URLs → `/basic-auth/files/…`     |
 //! | `/basic-auth/relative/simple/{pkg}/`| `public:heron` | Simple API JSON, file URLs are relative                |
-//! | `/basic-auth/files/…`              | `public:heron` | 302 redirect → `files.pythonhosted.org`                |
+//! | `/basic-auth/files/…`              | `public:heron` | Redirect to local package file                         |
 //! | `/basic-auth-heron/simple/{pkg}/`   | `public:heron` | Same as basic-auth but separate location               |
-//! | `/basic-auth-heron/files/…`        | `public:heron` | 302 redirect → `files.pythonhosted.org`                |
+//! | `/basic-auth-heron/files/…`        | `public:heron` | Redirect to local package file                         |
 //! | `/basic-auth-eagle/simple/{pkg}/`   | `public:eagle` | Same, different password                               |
-//! | `/basic-auth-eagle/files/…`        | `public:eagle` | 302 redirect → `files.pythonhosted.org`                |
+//! | `/basic-auth-eagle/files/…`        | `public:eagle` | Redirect to local package file                         |
 //! | `/no-upload-time/simple/{pkg}/`     | No             | Simple API JSON without `upload-time`                  |
 
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::path::Path;
 
 use serde_json::json;
+use sha2::{Digest, Sha256};
+
+use crate::packse::distribution_file_response;
 
 /// Package metadata needed to build Simple API responses.
 struct PackageEntry {
@@ -361,10 +365,10 @@ impl PypiProxy {
 /// - `/relative/simple/{pkg}/` — unauthenticated Simple API with relative file links
 /// - `/basic-auth/relative/simple/{pkg}/` — authenticated Simple API with relative file links
 /// - `/no-upload-time/simple/{pkg}/` — unauthenticated Simple API without `upload-time`
-/// - `/files/…` — unauthenticated file redirect to `files.pythonhosted.org`
-/// - `/basic-auth/files/…` — authenticated file redirect (public:heron)
-/// - `/basic-auth-heron/files/…` — authenticated file redirect (public:heron)
-/// - `/basic-auth-eagle/files/…` — authenticated file redirect (public:eagle)
+/// - `/files/…` — unauthenticated pinned package files
+/// - `/basic-auth/files/…` — authenticated redirect to a local file (public:heron)
+/// - `/basic-auth-heron/files/…` — authenticated redirect to a local file (public:heron)
+/// - `/basic-auth-eagle/files/…` — authenticated redirect to a local file (public:eagle)
 pub async fn start() -> PypiProxy {
     use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
@@ -390,8 +394,7 @@ pub async fn start() -> PypiProxy {
                     .as_ref()
                     .is_some_and(|(u, p)| u == "public" && p == "heron")
                 {
-                    let target = format!("https://files.pythonhosted.org/{rest}");
-                    return ResponseTemplate::new(302).insert_header("Location", target);
+                    return vendored_file_redirect(&server_uri, rest);
                 }
                 return unauthorized_response();
             }
@@ -402,8 +405,7 @@ pub async fn start() -> PypiProxy {
                     .as_ref()
                     .is_some_and(|(u, p)| u == "public" && p == "heron")
                 {
-                    let target = format!("https://files.pythonhosted.org/{rest}");
-                    return ResponseTemplate::new(302).insert_header("Location", target);
+                    return vendored_file_redirect(&server_uri, rest);
                 }
                 return unauthorized_response();
             }
@@ -414,16 +416,14 @@ pub async fn start() -> PypiProxy {
                     .as_ref()
                     .is_some_and(|(u, p)| u == "public" && p == "eagle")
                 {
-                    let target = format!("https://files.pythonhosted.org/{rest}");
-                    return ResponseTemplate::new(302).insert_header("Location", target);
+                    return vendored_file_redirect(&server_uri, rest);
                 }
                 return unauthorized_response();
             }
 
             // Route: /files/...  (unauthenticated)
             if let Some(rest) = path.strip_prefix("/files/") {
-                let target = format!("https://files.pythonhosted.org/{rest}");
-                return ResponseTemplate::new(302).insert_header("Location", target);
+                return vendored_file_response(req, rest, &db);
             }
 
             // Route: /basic-auth/relative/simple/{pkg}/
@@ -501,21 +501,19 @@ pub async fn start() -> PypiProxy {
             // Route: /no-upload-time/simple/{pkg}/  (unauthenticated)
             if let Some(pkg) = extract_package_name(path, "/no-upload-time/simple/") {
                 if let Some(entries) = db.get(pkg) {
-                    let file_prefix = "https://files.pythonhosted.org";
+                    let file_prefix = format!("{server_uri}/files");
                     let body =
-                        build_simple_api_response_without_upload_time(pkg, entries, file_prefix);
+                        build_simple_api_response_without_upload_time(pkg, entries, &file_prefix);
                     return simple_api_response(&body);
                 }
                 return ResponseTemplate::new(404);
             }
 
             // Route: /simple/{pkg}/  (unauthenticated)
-            // Unlike authenticated routes, file URLs point directly to files.pythonhosted.org
-            // (matching the behavior of the original fly.dev proxy).
             if let Some(pkg) = extract_package_name(path, "/simple/") {
                 if let Some(entries) = db.get(pkg) {
-                    let file_prefix = "https://files.pythonhosted.org";
-                    let body = build_simple_api_response(pkg, entries, file_prefix);
+                    let file_prefix = format!("{server_uri}/files");
+                    let body = build_simple_api_response(pkg, entries, &file_prefix);
                     return simple_api_response(&body);
                 }
                 return ResponseTemplate::new(404);
@@ -550,8 +548,7 @@ pub async fn start() -> PypiProxy {
                         return ResponseTemplate::new(404);
                     }
                     StatusRouteKind::Files => {
-                        let target = format!("https://files.pythonhosted.org/{suffix}");
-                        return ResponseTemplate::new(302).insert_header("Location", target);
+                        return vendored_file_response(req, suffix, &db);
                     }
                 }
             }
@@ -603,6 +600,37 @@ fn status_route_prefix(status: &str, reason: Option<&str>) -> String {
     }
 }
 
+fn vendored_file_response(
+    request: &wiremock::Request,
+    suffix: &str,
+    database: &HashMap<&str, Vec<PackageEntry>>,
+) -> wiremock::ResponseTemplate {
+    let Some(entry) = database
+        .values()
+        .flatten()
+        .find(|entry| entry.url.strip_prefix("https://files.pythonhosted.org/") == Some(suffix))
+    else {
+        return wiremock::ResponseTemplate::new(404);
+    };
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test/vendor/pypi-proxy")
+        .join(entry.filename);
+    let Ok(bytes) = fs_err::read(path) else {
+        return wiremock::ResponseTemplate::new(404);
+    };
+    if bytes.len() as u64 != entry.size || hex::encode(Sha256::digest(&bytes)) != entry.sha256 {
+        return wiremock::ResponseTemplate::new(500)
+            .set_body_string(format!("Invalid pinned artifact: {}", entry.filename));
+    }
+    distribution_file_response(request, entry.filename, &bytes)
+        .insert_header("Cache-Control", "max-age=365000000, immutable, public")
+}
+
+fn vendored_file_redirect(server_uri: &str, suffix: &str) -> wiremock::ResponseTemplate {
+    wiremock::ResponseTemplate::new(302)
+        .insert_header("Location", format!("{server_uri}/files/{suffix}"))
+}
+
 /// Extract the package name from a path like `/prefix/{package}/`.
 fn extract_package_name<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
     let rest = path.strip_prefix(prefix)?;
@@ -647,4 +675,34 @@ fn simple_api_response(body: &serde_json::Value) -> wiremock::ResponseTemplate {
         .insert_header("Cache-Control", "max-age=600, public")
         .insert_header("ETag", etag)
         .set_body_raw(body_str, "application/vnd.pypi.simple.v1+json")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{package_database, start};
+    use sha2::{Digest, Sha256};
+
+    #[tokio::test]
+    async fn package_files_stay_local_and_match_the_advertised_hashes() -> anyhow::Result<()> {
+        let proxy = start().await;
+        let client = reqwest::Client::new();
+        for entries in package_database().values() {
+            for entry in entries {
+                let suffix = entry
+                    .url
+                    .strip_prefix("https://files.pythonhosted.org/")
+                    .expect("fixture URL should use the PyPI artifact host");
+                let response = client
+                    .get(proxy.url(&format!("/files/{suffix}")))
+                    .send()
+                    .await?
+                    .error_for_status()?;
+                assert_eq!(response.url().host_str(), Some("127.0.0.1"));
+                let bytes = response.bytes().await?;
+                assert_eq!(bytes.len() as u64, entry.size, "{}", entry.filename);
+                assert_eq!(hex::encode(Sha256::digest(&bytes)), entry.sha256);
+            }
+        }
+        Ok(())
+    }
 }

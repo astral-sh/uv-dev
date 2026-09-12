@@ -8,7 +8,9 @@ use std::env::current_dir;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use uv_static::EnvVars;
-use uv_test::{uv_snapshot, venv_bin_path};
+use uv_test::uv_snapshot;
+#[cfg(feature = "test-pypi")]
+use uv_test::venv_bin_path;
 use wiremock::matchers::{basic_auth, body_json, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
@@ -72,8 +74,11 @@ async fn mock_trusted_publishing(server: &MockServer, runs: u64) {
 }
 
 #[test]
+#[cfg(feature = "test-pypi")]
 fn username_password_no_longer_supported() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context!("3.12")
+        .with_pypi_access()
+        .with_filtered_sizes();
 
     uv_snapshot!(context.filters(), context.publish()
         .arg("-u")
@@ -95,8 +100,11 @@ fn username_password_no_longer_supported() {
 }
 
 #[test]
+#[cfg(feature = "test-pypi")]
 fn invalid_token() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context!("3.12")
+        .with_pypi_access()
+        .with_filtered_sizes();
 
     uv_snapshot!(context.filters(), context.publish()
         .arg("-u")
@@ -143,13 +151,20 @@ fn mixed_credentials() {
 }
 
 /// Emulate a missing `permission` `id-token: write` situation.
-#[test]
-fn missing_trusted_publishing_permission() {
+#[tokio::test]
+async fn missing_trusted_publishing_permission() {
     let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/_/oidc/audience"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "audience": "pypi" })))
+        .expect(1)
+        .mount(&server)
+        .await;
 
     uv_snapshot!(context.filters(), context.publish()
         .arg("--publish-url")
-        .arg("https://test.pypi.org/legacy/")
+        .arg(format!("{}/legacy/", server.uri()))
         .arg("--trusted-publishing")
         .arg("always")
         .arg(dummy_wheel())
@@ -157,7 +172,7 @@ fn missing_trusted_publishing_permission() {
         .env(EnvVars::GITHUB_ACTIONS, "true"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Publishing 1 file to https://test.pypi.org/legacy/
+    Publishing 1 file to http://[LOCALHOST]/legacy/
     error: Failed to obtain token for trusted publishing
       cause: Failed to obtain OIDC token: is the `id-token: write` permission missing?
       cause: GitHub Actions detection error
@@ -168,19 +183,26 @@ fn missing_trusted_publishing_permission() {
 
 /// Check the error when there are no credentials provided on GitHub Actions. Is it an incorrect
 /// trusted publishing configuration?
-#[test]
-fn no_credentials() {
+#[tokio::test]
+async fn no_credentials() {
     let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/_/oidc/audience"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "audience": "pypi" })))
+        .expect(1)
+        .mount(&server)
+        .await;
 
     uv_snapshot!(context.filters(), context.publish()
         .arg("--publish-url")
-        .arg("https://test.pypi.org/legacy/")
+        .arg(format!("{}/legacy/", server.uri()))
         .arg(dummy_wheel())
         // Emulate CI
         .env(EnvVars::GITHUB_ACTIONS, "true"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Publishing 1 file to https://test.pypi.org/legacy/
+    Publishing 1 file to http://[LOCALHOST]/legacy/
     Note: Neither credentials nor keyring are configured, and there was an error fetching the trusted publishing token. If you don't want to use trusted publishing, you can ignore this error, but you need to provide credentials.
     error: Trusted publishing failed
       cause: Failed to obtain OIDC token: is the `id-token: write` permission missing?
@@ -188,9 +210,9 @@ fn no_credentials() {
       cause: insufficient permissions: missing ACTIONS_ID_TOKEN_REQUEST_URL
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
     Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to https://test.pypi.org/legacy/
+    error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to http://[LOCALHOST]/legacy/
       cause: Failed to send POST request
-      cause: Missing credentials for https://test.pypi.org/legacy/
+      cause: Missing credentials for http://[LOCALHOST]/legacy/
     "
     );
 }
@@ -283,8 +305,11 @@ async fn publish_wheels_before_sdist_in_filename_order() {
 
 /// Check that we (don't) use the keyring and warn for missing keyring behaviors correctly.
 #[test]
+#[cfg(feature = "test-pypi")]
 fn check_keyring_behaviours() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context!("3.12")
+        .with_pypi_access()
+        .with_filtered_sizes();
 
     // Install our keyring plugin
     context

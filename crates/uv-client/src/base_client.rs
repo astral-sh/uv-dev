@@ -38,7 +38,7 @@ use uv_version::version;
 use uv_warnings::warn_user_once_with_chain;
 
 use crate::linehaul::LineHaul;
-use crate::middleware::{AzureStorageMiddleware, OfflineMiddleware};
+use crate::middleware::{AzureStorageMiddleware, DenyPypiMiddleware, OfflineMiddleware};
 use crate::tls::{Certificates, read_identity};
 use crate::{Connectivity, MetadataRangeRequest, RetriableError, RetryState, UvRetryableStrategy};
 
@@ -71,6 +71,8 @@ pub enum ClientBuildError {
     Credentials(#[from] CredentialsFromUrlError),
     #[error(transparent)]
     IndexCredentials(#[from] IndexCredentialsError),
+    #[error("a custom HTTP client cannot enforce the test-only PyPI access restriction")]
+    TestPypiCustomClient,
 }
 
 impl ClientBuildError {
@@ -78,7 +80,7 @@ impl ClientBuildError {
     pub fn is_user_failure(&self) -> bool {
         match self {
             Self::Credentials(_) | Self::IndexCredentials(_) => true,
-            Self::Reqwest(_) => false,
+            Self::Reqwest(_) | Self::TestPypiCustomClient => false,
         }
     }
 }
@@ -133,6 +135,8 @@ pub struct BaseClientBuilder<'a> {
     client_name: Option<&'static str>,
     /// Whether to disable retry delays (for testing).
     no_retry_delay: bool,
+    /// Whether to reject public-index access from local-scenario tests.
+    deny_pypi: bool,
     /// A shared, dedicated blocking pool for short-lived cache reads.
     cache_read_runtime: Arc<CacheReadRuntime>,
 }
@@ -237,6 +241,8 @@ impl Default for BaseClientBuilder<'_> {
             subcommand: None,
             client_name: None,
             no_retry_delay: env::var_os(EnvVars::UV_TEST_NO_HTTP_RETRY_DELAY).is_some(),
+            deny_pypi: env::var_os(EnvVars::UV_INTERNAL__TEST_DENY_PYPI)
+                .is_some_and(|value| value != "0"),
             cache_read_runtime: Arc::new(CacheReadRuntime::new(Concurrency::DEFAULT_CACHE_READS)),
         }
     }
@@ -302,6 +308,14 @@ impl<'a> BaseClientBuilder<'a> {
     #[must_use]
     pub fn no_retry_delay(mut self, no_retry_delay: bool) -> Self {
         self.no_retry_delay = no_retry_delay;
+        self
+    }
+
+    /// Reject live PyPI requests, including automatic redirects, in test helpers.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn deny_pypi_for_tests(mut self, deny: bool) -> Self {
+        self.deny_pypi = deny;
         self
     }
 
@@ -477,6 +491,7 @@ impl<'a> BaseClientBuilder<'a> {
 
         // Use the custom client if provided, otherwise create a new one
         let (raw_client, raw_dangerous_client, certificate_source) = match &self.custom_client {
+            Some(_) if self.deny_pypi => return Err(ClientBuildError::TestPypiCustomClient),
             Some(client) => (client.clone(), client.clone(), CertificateSource::Unknown),
             None => {
                 self.create_secure_and_insecure_clients(self.read_timeout, self.connect_timeout)?
@@ -500,6 +515,7 @@ impl<'a> BaseClientBuilder<'a> {
             allow_insecure_host: self.allow_insecure_host.clone(),
             retries: self.retries,
             no_retry_delay: self.no_retry_delay,
+            deny_pypi: self.deny_pypi,
             client,
             raw_client,
             dangerous_client,
@@ -513,7 +529,14 @@ impl<'a> BaseClientBuilder<'a> {
     }
 
     /// Share the underlying client between two different middleware configurations.
-    pub(crate) fn wrap_existing(&self, existing: &BaseClient) -> BaseClient {
+    pub(crate) fn wrap_existing(
+        &self,
+        existing: &BaseClient,
+    ) -> Result<BaseClient, ClientBuildError> {
+        // A reqwest client's redirect policy cannot be changed after construction.
+        if self.deny_pypi != existing.deny_pypi {
+            return self.build();
+        }
         // Wrap in any relevant middleware and handle connectivity.
         let client = RedirectClientWithMiddleware {
             client: self.apply_middleware(existing.raw_client.clone()),
@@ -526,11 +549,12 @@ impl<'a> BaseClientBuilder<'a> {
             cross_origin_credentials_policy: self.cross_origin_credential_policy,
         };
 
-        BaseClient {
+        Ok(BaseClient {
             connectivity: self.connectivity,
             allow_insecure_host: self.allow_insecure_host.clone(),
             retries: self.retries,
             no_retry_delay: self.no_retry_delay,
+            deny_pypi: self.deny_pypi,
             client,
             dangerous_client,
             raw_client: existing.raw_client.clone(),
@@ -540,7 +564,7 @@ impl<'a> BaseClientBuilder<'a> {
             credentials_cache: existing.credentials_cache.clone(),
             certificate_source: existing.certificate_source,
             cache_read_runtime: self.cache_read_runtime.clone(),
-        }
+        })
     }
 
     fn create_secure_and_insecure_clients(
@@ -601,6 +625,18 @@ impl<'a> BaseClientBuilder<'a> {
         security: Security,
         redirect_policy: RedirectPolicy,
     ) -> Result<Client, ClientBuildError> {
+        let policy = redirect_policy.reqwest_policy();
+        let policy = if self.deny_pypi {
+            reqwest::redirect::Policy::custom(move |attempt| {
+                if let Err(error) = DenyPypiMiddleware::check(attempt.url()) {
+                    attempt.error(error)
+                } else {
+                    policy.redirect(attempt)
+                }
+            })
+        } else {
+            policy
+        };
         // Configure the builder.
         let client_builder = ClientBuilder::new()
             .http1_title_case_headers()
@@ -608,7 +644,7 @@ impl<'a> BaseClientBuilder<'a> {
             .pool_max_idle_per_host(20)
             .read_timeout(read_timeout)
             .connect_timeout(connect_timeout)
-            .redirect(redirect_policy.reqwest_policy());
+            .redirect(policy);
 
         // If necessary, accept invalid certificates.
         let client_builder = match security {
@@ -723,6 +759,10 @@ impl<'a> BaseClientBuilder<'a> {
                     }
                 }
 
+                if self.deny_pypi {
+                    client = client.with(DenyPypiMiddleware);
+                }
+
                 client.build()
             }
             Connectivity::Offline => reqwest_middleware::ClientBuilder::new(client)
@@ -755,6 +795,8 @@ pub struct BaseClient {
     retries: u32,
     /// Whether to disable retry delays (for testing).
     no_retry_delay: bool,
+    /// Whether the underlying HTTP clients reject live PyPI access.
+    deny_pypi: bool,
     /// Global authentication cache for a uv invocation to share credentials across uv clients.
     credentials_cache: Arc<CredentialsCache>,
     /// The certificate roots used by the underlying HTTP client.
@@ -1244,6 +1286,94 @@ mod tests {
     use reqwest::{Client, Method};
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn test_pypi_guard_matches_only_public_index_hosts() -> Result<()> {
+        for host in [
+            "pypi.org",
+            "test.pypi.org",
+            "PYPI.ORG.",
+            "files.pythonhosted.org",
+            "pypi.python.org",
+            "pypi-proxy.fly.dev",
+        ] {
+            assert!(DenyPypiMiddleware::check(&Url::parse(&format!("https://{host}/"))?).is_err());
+        }
+        for host in [
+            "127.0.0.1",
+            "notpypi.org",
+            "pypi.org.example.com",
+            "python.org",
+        ] {
+            assert!(DenyPypiMiddleware::check(&Url::parse(&format!("https://{host}/"))?).is_ok());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_pypi_guard_blocks_requests_and_redirects() -> Result<()> {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(302).insert_header("location", "https://pypi.org/simple/"),
+            )
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        for redirect in [
+            RedirectPolicy::BypassMiddleware,
+            RedirectPolicy::RetriggerMiddleware,
+        ] {
+            let client = BaseClientBuilder::default()
+                .deny_pypi_for_tests(true)
+                .retries(0)
+                .redirect(redirect)
+                .build()?;
+            for url in [
+                "https://files.pythonhosted.org/example.whl".to_owned(),
+                server.uri(),
+            ] {
+                let request = Client::new().get(url).build()?;
+                let error = client
+                    .execute(request)
+                    .await
+                    .expect_err("PyPI request must be rejected");
+                assert!(
+                    format!("{:#}", anyhow::Error::from(error))
+                        .contains("Live PyPI access is disabled")
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_pypi_guard_rebuilds_reused_clients() -> Result<()> {
+        let unrestricted = BaseClientBuilder::default()
+            .deny_pypi_for_tests(false)
+            .build()?;
+        let restricted = BaseClientBuilder::default()
+            .deny_pypi_for_tests(true)
+            .retries(0)
+            .wrap_existing(&unrestricted)?;
+        let request = Client::new().get("https://pypi.org/simple/").build()?;
+        let error = restricted
+            .execute(request)
+            .await
+            .expect_err("reused client must enforce the restriction");
+        assert!(
+            format!("{:#}", anyhow::Error::from(error)).contains("Live PyPI access is disabled")
+        );
+        assert!(matches!(
+            BaseClientBuilder::default()
+                .deny_pypi_for_tests(true)
+                .custom_client(Client::new())
+                .build(),
+            Err(ClientBuildError::TestPypiCustomClient)
+        ));
+        Ok(())
+    }
 
     #[tokio::test]
     async fn cache_read_runtime_can_be_dropped_from_an_async_context() {
