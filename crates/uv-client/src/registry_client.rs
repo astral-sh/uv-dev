@@ -488,12 +488,9 @@ impl RegistryClient {
         package_name: &PackageName,
         index: &IndexUrl,
     ) -> Result<Vec<FlatIndexEntry>, Error> {
-        // Each flat index gets its own slot, so lookups for the same index share a fetch while
-        // unrelated indexes can proceed concurrently.
-        let flat_index_slot = {
-            let mut cache = self.flat_indexes.lock().await;
-            cache.get_or_insert(index.clone())
-        };
+        // Hold the shared cache lock while filling an index entry.
+        let mut cache = self.flat_indexes.lock().await;
+        let flat_index_slot = cache.get_or_insert(index.clone());
         let mut flat_index = flat_index_slot.lock().await;
 
         if let Some(entries) = flat_index.as_ref() {
@@ -525,6 +522,7 @@ impl RegistryClient {
 
         // Write to the cache.
         *flat_index = Some(entries_by_package);
+        drop(cache);
 
         Ok(package_entries)
     }
