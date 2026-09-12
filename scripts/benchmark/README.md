@@ -30,6 +30,11 @@ saved in `python-discovery-probes.json` beside the Criterion measurements. Set `
 an absolute uv binary path to compare revisions against the same prepared interpreters; measured
 commands do not enable tracing.
 
+The `path_venv` cases create a fresh virtual environment through the same search paths. Project
+directory setup and removal are outside the timed command, while interpreter selection and virtual
+environment creation are measured together. Cold and warm refer to the interpreter-query cache, not
+the operating-system file cache.
+
 ## Getting Started
 
 From the `scripts/benchmark` directory:
