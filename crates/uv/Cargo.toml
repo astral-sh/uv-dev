@@ -129,7 +129,7 @@ embed-manifest = { workspace = true }
 
 [dev-dependencies]
 uv-publish = { workspace = true, features = ["test"] }
-uv-test = { workspace = true }
+uv-test = { workspace = true, features = ["jsonschema"] }
 
 assert_cmd = { workspace = true }
 assert_fs = { workspace = true }
@@ -144,7 +144,6 @@ hyper = { workspace = true }
 hyper-util = { workspace = true }
 indoc = { workspace = true }
 insta = { workspace = true }
-jsonschema = { workspace = true }
 predicates = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"], default-features = false }

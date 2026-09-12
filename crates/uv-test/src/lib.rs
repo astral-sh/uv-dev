@@ -4,6 +4,8 @@
 pub mod archive;
 pub mod find_links;
 mod http_server;
+#[cfg(feature = "jsonschema")]
+pub mod json_schema;
 pub mod packse;
 pub mod pypi_proxy;
 mod vendor;
