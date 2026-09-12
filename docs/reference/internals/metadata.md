@@ -8,6 +8,13 @@ guarantee anything about. Pass `--script path/to/script.py` to request metadata 
 Pass `--sync` to install the selected packages before collecting module ownership information.
 Synchronization preserves unrelated installed packages by default; add `--exact` to remove them.
 
+When an environment is available, `environment.packages` reports the distributions currently
+installed there, including packages that are absent from the lockfile. Its keys are opaque
+identifiers for installed metadata locations. An installed distribution is an observation of the
+environment, not an additional node in the locked `resolution` graph. In particular, installed
+versions may differ from the locked versions, and more than one installed distribution can have the
+same name.
+
 The primary structure is the "resolution" field which contains the dependency graph with exact
 package versions that a `uv.lock` encodes.
 
@@ -183,6 +190,15 @@ Here is a human-readable annotated example:
       "version": "3.12.12",
       // The Python implementation name
       "implementation": "cpython"
+    },
+    // The installed distributions, keyed by opaque installed-package identifiers
+    "packages": {
+      "installed+/workspace/.venv/lib/python3.12/site-packages/idna-3.10.dist-info": {
+        "name": "idna",
+        "version": "3.10",
+        "path": "/workspace/.venv/lib/python3.12/site-packages/idna-3.10.dist-info",
+        "editable": false
+      }
     }
   },
   // Information about the script target, only present with `--script`.
