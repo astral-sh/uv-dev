@@ -14569,7 +14569,85 @@ async fn lock_multiple_indexes_same_realm_different_credentials_trailing_slash()
 #[tokio::test]
 async fn lock_relative_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let proxy = crate::pypi_proxy::start().await;
+    let server = MockServer::start().await;
+    let metadata = "Metadata-Version: 2.3\nName: relative-index-test\nVersion: 1.0.0\n";
+    let wheel_filename = "relative_index_test-1.0.0-py3-none-any.whl";
+    let sdist_filename = "relative_index_test-1.0.0.tar.gz";
+    let mut writer = ZipFileWriter::new(Vec::new());
+    for (name, contents) in [
+        ("relative_index_test-1.0.0.dist-info/METADATA", metadata),
+        (
+            "relative_index_test-1.0.0.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nGenerator: uv-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        ),
+        (
+            "relative_index_test-1.0.0.dist-info/RECORD",
+            "relative_index_test-1.0.0.dist-info/METADATA,,\nrelative_index_test-1.0.0.dist-info/WHEEL,,\nrelative_index_test-1.0.0.dist-info/RECORD,,\n",
+        ),
+    ] {
+        writer
+            .write_entry_whole(
+                ZipEntryBuilder::new(name.into(), Compression::Stored),
+                contents.as_bytes(),
+            )
+            .await?;
+    }
+    let wheel = writer.close().await?;
+    let wheel_size = wheel.len();
+    let wheel_digest = hex::encode(Sha256::digest(&wheel));
+    let mut sdist = Vec::new();
+    write_tar_gz(
+        &mut sdist,
+        &[("relative_index_test-1.0.0/PKG-INFO", metadata)],
+    )?;
+    let sdist_size = sdist.len();
+    let sdist_digest = hex::encode(Sha256::digest(&sdist));
+
+    let simple_index = json!({
+        "meta": { "api-version": "1.1" },
+        "name": "relative-index-test",
+        "files": [{
+            "filename": wheel_filename,
+            "url": format!("../../../files/{wheel_filename}"),
+            "hashes": { "sha256": wheel_digest },
+            "size": wheel_size,
+            "core-metadata": true,
+            "upload-time": "2024-01-01T00:00:00Z",
+        }, {
+            "filename": sdist_filename,
+            "url": format!("../../../files/{sdist_filename}"),
+            "hashes": { "sha256": sdist_digest },
+            "size": sdist_size,
+            "upload-time": "2024-01-01T00:00:00Z",
+        }],
+    });
+    Mock::given(method("GET"))
+        .and(path("/relative/simple/relative-index-test/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            simple_index.to_string(),
+            "application/vnd.pypi.simple.v1+json",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{wheel_filename}.metadata")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(metadata))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let wheel_download = Mock::given(method("GET"))
+        .and(path(format!("/files/{wheel_filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(1)
+        .mount_as_scoped(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{sdist_filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(sdist))
+        .expect(0)
+        .mount(&server)
+        .await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -14578,24 +14656,31 @@ async fn lock_relative_index() -> Result<()> {
         name = "foo"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
+        dependencies = ["relative-index-test"]
 
         [tool.uv]
-        index-url = "{proxy_uri}/relative/simple"
+        index-url = "{server_uri}/relative/simple"
         "#,
-        proxy_uri = proxy.uri()
+        server_uri = server.uri()
     ))?;
 
-    uv_snapshot!(context.filters(), context.lock(), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--no-build").arg("--no-python-downloads"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
 
     let lock = context.read("uv.lock");
+    let wheel_size_filter = format!("size = {wheel_size}");
+    let sdist_size_filter = format!("size = {sdist_size}");
+    let mut filters = context.filters();
+    filters.push((&wheel_digest, "[WHEEL_HASH]"));
+    filters.push((&sdist_digest, "[SDIST_HASH]"));
+    filters.push((&wheel_size_filter, "size = [WHEEL_SIZE]"));
+    filters.push((&sdist_size_filter, "size = [SDIST_SIZE]"));
 
     insta::with_settings!({
-        filters => context.filters(),
+        filters => filters,
     }, {
         assert_snapshot!(
             lock, @r#"
@@ -14611,39 +14696,49 @@ async fn lock_relative_index() -> Result<()> {
         version = "0.1.0"
         source = { virtual = "." }
         dependencies = [
-            { name = "iniconfig" },
+            { name = "relative-index-test" },
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "iniconfig" }]
+        requires-dist = [{ name = "relative-index-test" }]
 
         [[package]]
-        name = "iniconfig"
-        version = "2.0.0"
+        name = "relative-index-test"
+        version = "1.0.0"
         source = { registry = "http://[LOCALHOST]/relative/simple" }
-        sdist = { url = "http://[LOCALHOST]/files/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
+        sdist = { url = "http://[LOCALHOST]/files/relative_index_test-1.0.0.tar.gz", hash = "sha256:[SDIST_HASH]", size = [SDIST_SIZE], upload-time = "2024-01-01T00:00:00Z" }
         wheels = [
-            { url = "http://[LOCALHOST]/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
+            { url = "http://[LOCALHOST]/files/relative_index_test-1.0.0-py3-none-any.whl", hash = "sha256:[WHEEL_HASH]", size = [WHEEL_SIZE], upload-time = "2024-01-01T00:00:00Z" },
         ]
         "#
         );
     });
 
     // Re-run with `--locked`.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--no-build").arg("--no-python-downloads"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
+    assert!(wheel_download.received_requests().await.is_empty());
 
     // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--no-build").arg("--no-python-downloads"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + iniconfig==2.0.0
+     + relative-index-test==1.0.0
     ");
+    assert_eq!(wheel_download.received_requests().await.len(), 1);
+    assert_eq!(
+        fs_err::read_to_string(
+            context
+                .site_packages()
+                .join("relative_index_test-1.0.0.dist-info/METADATA")
+        )?,
+        metadata
+    );
 
     Ok(())
 }
