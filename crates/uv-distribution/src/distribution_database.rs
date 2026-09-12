@@ -1785,10 +1785,23 @@ pub struct PathArchivePointer {
 }
 
 impl PathArchivePointer {
-    /// Read an [`PathArchivePointer`] from the cache.
+    /// Read a [`PathArchivePointer`] from the cache.
+    ///
+    /// A missing or undecodable pointer is treated as a cache miss. Filesystem errors are returned
+    /// to the caller.
     pub fn read_from(path: impl AsRef<Path>) -> Result<Option<Self>, Error> {
+        let path = path.as_ref();
         match fs_err::read(path) {
-            Ok(cached) => Ok(Some(rmp_serde::from_slice::<Self>(&cached)?)),
+            Ok(cached) => match rmp_serde::from_slice::<Self>(&cached) {
+                Ok(pointer) => Ok(Some(pointer)),
+                Err(err) => {
+                    debug!(
+                        "Failed to deserialize cached path archive pointer at `{}` ({err})",
+                        path.display()
+                    );
+                    Ok(None)
+                }
+            },
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(err) => Err(Error::CacheRead(err)),
         }
@@ -1819,5 +1832,36 @@ impl PathArchivePointer {
     /// Return the [`BuildInfo`] from the pointer.
     pub fn to_build_info(&self) -> Option<BuildInfo> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Error, PathArchivePointer};
+
+    #[test]
+    fn path_archive_pointer_ignores_undecodable_metadata() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("wheel.rev");
+
+        assert!(PathArchivePointer::read_from(&path)?.is_none());
+        for contents in [&[][..], &[0xc1], &[0x91], &[0xc0]] {
+            fs_err::write(&path, contents)?;
+            assert!(PathArchivePointer::read_from(&path)?.is_none());
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn path_archive_pointer_preserves_read_errors() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+
+        assert!(matches!(
+            PathArchivePointer::read_from(directory.path()),
+            Err(Error::CacheRead(_))
+        ));
+
+        Ok(())
     }
 }
