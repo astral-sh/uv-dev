@@ -3417,10 +3417,10 @@ fn multiple_sources_index_disjoint_extras_with_marker() -> Result<()> {
         revision = 3
         requires-python = ">=3.12"
         resolution-markers = [
-            "extra != 'extra-7-project-cu118' and extra == 'extra-7-project-cu124'",
             "sys_platform == 'darwin' and extra == 'extra-7-project-cu118' and extra != 'extra-7-project-cu124'",
             "sys_platform != 'darwin' and extra == 'extra-7-project-cu118' and extra != 'extra-7-project-cu124'",
             "extra != 'extra-7-project-cu118' and extra != 'extra-7-project-cu124'",
+            "extra != 'extra-7-project-cu118' and extra == 'extra-7-project-cu124'",
         ]
         conflicts = [[
             { package = "project", extra = "cu118" },
@@ -5439,10 +5439,10 @@ fn jinja_no_conflict_markers2() -> Result<()> {
         revision = 3
         requires-python = ">=3.12"
         resolution-markers = [
-            "extra != 'extra-7-project-cu118' and extra == 'extra-7-project-cu124'",
             "sys_platform == 'darwin' and extra == 'extra-7-project-cu118' and extra != 'extra-7-project-cu124'",
             "sys_platform != 'darwin' and extra == 'extra-7-project-cu118' and extra != 'extra-7-project-cu124'",
             "extra != 'extra-7-project-cu118' and extra != 'extra-7-project-cu124'",
+            "extra != 'extra-7-project-cu118' and extra == 'extra-7-project-cu124'",
         ]
         conflicts = [[
             { package = "project", extra = "cu118" },
@@ -7844,10 +7844,10 @@ fn deduplicate_resolution_markers() -> Result<()> {
         revision = 3
         requires-python = ">=3.12"
         resolution-markers = [
-            "sys_platform != 'linux' and extra != 'extra-3-pkg-x1' and extra == 'extra-3-pkg-x2'",
             "sys_platform == 'linux' and extra != 'extra-3-pkg-x1' and extra == 'extra-3-pkg-x2'",
-            "sys_platform != 'linux' and extra == 'extra-3-pkg-x1' and extra != 'extra-3-pkg-x2'",
             "sys_platform == 'linux' and extra == 'extra-3-pkg-x1' and extra != 'extra-3-pkg-x2'",
+            "sys_platform != 'linux' and extra != 'extra-3-pkg-x1' and extra == 'extra-3-pkg-x2'",
+            "sys_platform != 'linux' and extra == 'extra-3-pkg-x1' and extra != 'extra-3-pkg-x2'",
             "extra != 'extra-3-pkg-x1' and extra != 'extra-3-pkg-x2'",
         ]
         conflicts = [[
@@ -8508,14 +8508,14 @@ fn overlapping_resolution_markers() -> Result<()> {
         revision = 3
         requires-python = "==3.10.*"
         resolution-markers = [
-            "sys_platform == 'linux' and extra != 'extra-14-ads-mega-model-cpu' and extra == 'extra-14-ads-mega-model-cu118'",
-            "sys_platform != 'linux' and extra != 'extra-14-ads-mega-model-cpu' and extra == 'extra-14-ads-mega-model-cu118'",
-            "(platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-14-ads-mega-model-cpu' and extra != 'extra-14-ads-mega-model-cu118') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-14-ads-mega-model-cpu' and extra != 'extra-14-ads-mega-model-cu118')",
-            "platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-14-ads-mega-model-cpu' and extra != 'extra-14-ads-mega-model-cu118'",
-            "sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-14-ads-mega-model-cpu' and extra != 'extra-14-ads-mega-model-cu118'",
             "sys_platform == 'darwin' and extra == 'extra-14-ads-mega-model-cpu' and extra != 'extra-14-ads-mega-model-cu118'",
+            "sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-14-ads-mega-model-cpu' and extra != 'extra-14-ads-mega-model-cu118'",
+            "platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-14-ads-mega-model-cpu' and extra != 'extra-14-ads-mega-model-cu118'",
+            "(platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-14-ads-mega-model-cpu' and extra != 'extra-14-ads-mega-model-cu118') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-14-ads-mega-model-cpu' and extra != 'extra-14-ads-mega-model-cu118')",
             "sys_platform == 'linux' and extra != 'extra-14-ads-mega-model-cpu' and extra != 'extra-14-ads-mega-model-cu118'",
+            "sys_platform == 'linux' and extra != 'extra-14-ads-mega-model-cpu' and extra == 'extra-14-ads-mega-model-cu118'",
             "sys_platform != 'linux' and extra != 'extra-14-ads-mega-model-cpu' and extra != 'extra-14-ads-mega-model-cu118'",
+            "sys_platform != 'linux' and extra != 'extra-14-ads-mega-model-cpu' and extra == 'extra-14-ads-mega-model-cu118'",
         ]
         conflicts = [[
             { package = "ads-mega-model", extra = "cpu" },
@@ -9005,9 +9005,9 @@ fn overlapping_resolution_markers() -> Result<()> {
         version = "2.2.2"
         source = { registry = "https://pypi.org/simple" }
         resolution-markers = [
+            "sys_platform == 'darwin' and extra == 'extra-14-ads-mega-model-cpu' and extra != 'extra-14-ads-mega-model-cu118'",
             "sys_platform == 'linux' and extra != 'extra-14-ads-mega-model-cpu' and extra == 'extra-14-ads-mega-model-cu118'",
             "sys_platform != 'linux' and extra != 'extra-14-ads-mega-model-cpu' and extra == 'extra-14-ads-mega-model-cu118'",
-            "sys_platform == 'darwin' and extra == 'extra-14-ads-mega-model-cpu' and extra != 'extra-14-ads-mega-model-cu118'",
         ]
         dependencies = [
             { name = "filelock", marker = "(sys_platform != 'darwin' and extra == 'extra-14-ads-mega-model-cu118') or (sys_platform == 'darwin' and extra == 'extra-14-ads-mega-model-cpu') or (extra != 'extra-14-ads-mega-model-cpu' and extra == 'extra-14-ads-mega-model-cu118')" },
@@ -9042,8 +9042,8 @@ fn overlapping_resolution_markers() -> Result<()> {
         version = "2.2.2+cpu"
         source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cpu" }
         resolution-markers = [
-            "(platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux')",
             "sys_platform != 'darwin' and sys_platform != 'linux'",
+            "(platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux')",
         ]
         dependencies = [
             { name = "filelock", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
@@ -9178,10 +9178,10 @@ fn conditional_sources_keep_default_platform_specific_transitive_dependencies() 
         revision = 3
         requires-python = "==3.12.*"
         resolution-markers = [
-            "extra != 'extra-10-test-torch-cpu' and extra == 'extra-10-test-torch-cu124'",
-            "sys_platform != 'darwin' and extra == 'extra-10-test-torch-cpu' and extra != 'extra-10-test-torch-cu124'",
             "sys_platform == 'darwin' and extra == 'extra-10-test-torch-cpu' and extra != 'extra-10-test-torch-cu124'",
+            "sys_platform != 'darwin' and extra == 'extra-10-test-torch-cpu' and extra != 'extra-10-test-torch-cu124'",
             "extra != 'extra-10-test-torch-cpu' and extra != 'extra-10-test-torch-cu124'",
+            "extra != 'extra-10-test-torch-cpu' and extra == 'extra-10-test-torch-cu124'",
         ]
         conflicts = [[
             { package = "test-torch", extra = "cpu" },
@@ -9639,10 +9639,10 @@ fn avoids_exponential_lock_file_growth() -> Result<()> {
         revision = 3
         requires-python = ">=3.12"
         resolution-markers = [
-            "extra != 'extra-27-resolution-markers-for-days-cpu' and extra == 'extra-27-resolution-markers-for-days-cu124'",
-            "sys_platform != 'darwin' and extra == 'extra-27-resolution-markers-for-days-cpu' and extra != 'extra-27-resolution-markers-for-days-cu124'",
             "sys_platform == 'darwin' and extra == 'extra-27-resolution-markers-for-days-cpu' and extra != 'extra-27-resolution-markers-for-days-cu124'",
+            "sys_platform != 'darwin' and extra == 'extra-27-resolution-markers-for-days-cpu' and extra != 'extra-27-resolution-markers-for-days-cu124'",
             "extra != 'extra-27-resolution-markers-for-days-cpu' and extra != 'extra-27-resolution-markers-for-days-cu124'",
+            "extra != 'extra-27-resolution-markers-for-days-cpu' and extra == 'extra-27-resolution-markers-for-days-cu124'",
         ]
         conflicts = [[
             { package = "resolution-markers-for-days", extra = "cpu" },
@@ -10051,10 +10051,10 @@ fn avoids_exponential_lock_file_growth() -> Result<()> {
         revision = 3
         requires-python = ">=3.12"
         resolution-markers = [
-            "extra != 'extra-27-resolution-markers-for-days-cpu' and extra == 'extra-27-resolution-markers-for-days-cu124'",
-            "sys_platform != 'darwin' and extra == 'extra-27-resolution-markers-for-days-cpu' and extra != 'extra-27-resolution-markers-for-days-cu124'",
             "sys_platform == 'darwin' and extra == 'extra-27-resolution-markers-for-days-cpu' and extra != 'extra-27-resolution-markers-for-days-cu124'",
+            "sys_platform != 'darwin' and extra == 'extra-27-resolution-markers-for-days-cpu' and extra != 'extra-27-resolution-markers-for-days-cu124'",
             "extra != 'extra-27-resolution-markers-for-days-cpu' and extra != 'extra-27-resolution-markers-for-days-cu124'",
+            "extra != 'extra-27-resolution-markers-for-days-cpu' and extra == 'extra-27-resolution-markers-for-days-cu124'",
         ]
         conflicts = [[
             { package = "resolution-markers-for-days", extra = "cpu" },
@@ -10497,10 +10497,10 @@ fn do_not_simplify_if_not_all_conflict_extras_satisfy_the_marker_by_themselves()
         revision = 3
         requires-python = "==3.12.*"
         resolution-markers = [
-            "platform_machine != 'inapplicable' and extra != 'extra-5-debug-a' and extra == 'extra-5-debug-b'",
             "platform_machine == 'inapplicable' and extra != 'extra-5-debug-a' and extra == 'extra-5-debug-b'",
-            "extra == 'extra-5-debug-a' and extra != 'extra-5-debug-b'",
+            "platform_machine != 'inapplicable' and extra != 'extra-5-debug-a' and extra == 'extra-5-debug-b'",
             "extra != 'extra-5-debug-a' and extra != 'extra-5-debug-b'",
+            "extra == 'extra-5-debug-a' and extra != 'extra-5-debug-b'",
         ]
         conflicts = [[
             { package = "debug", extra = "a" },

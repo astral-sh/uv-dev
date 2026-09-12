@@ -424,8 +424,8 @@ fn fork_allows_non_conflicting_non_overlapping_dependencies() -> Result<()> {
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform == 'darwin'",
-            "sys_platform == 'linux'",
             "sys_platform != 'darwin' and sys_platform != 'linux'",
+            "sys_platform == 'linux'",
         ]
 
         [[package]]
@@ -633,8 +633,8 @@ fn fork_basic() -> Result<()> {
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform == 'darwin'",
-            "sys_platform == 'linux'",
             "sys_platform != 'darwin' and sys_platform != 'linux'",
+            "sys_platform == 'linux'",
         ]
 
         [[package]]
@@ -907,9 +907,9 @@ fn fork_filter_sibling_dependencies() -> Result<()> {
         revision = 3
         requires-python = ">=3.12"
         resolution-markers = [
-            "sys_platform == 'linux'",
             "sys_platform == 'darwin'",
             "sys_platform != 'darwin' and sys_platform != 'linux'",
+            "sys_platform == 'linux'",
         ]
 
         [[package]]
@@ -1550,11 +1550,11 @@ fn fork_marker_inherit_combined_allowed() -> Result<()> {
         revision = 3
         requires-python = ">=3.12"
         resolution-markers = [
-            "implementation_name == 'pypy' and sys_platform == 'darwin'",
             "implementation_name == 'cpython' and sys_platform == 'darwin'",
             "implementation_name != 'cpython' and implementation_name != 'pypy' and sys_platform == 'darwin'",
-            "sys_platform == 'linux'",
+            "implementation_name == 'pypy' and sys_platform == 'darwin'",
             "sys_platform != 'darwin' and sys_platform != 'linux'",
+            "sys_platform == 'linux'",
         ]
 
         [[package]]
@@ -1562,9 +1562,9 @@ fn fork_marker_inherit_combined_allowed() -> Result<()> {
         version = "1.0.0"
         source = { registry = "http://[LOCALHOST]/simple/" }
         resolution-markers = [
-            "implementation_name == 'pypy' and sys_platform == 'darwin'",
             "implementation_name == 'cpython' and sys_platform == 'darwin'",
             "implementation_name != 'cpython' and implementation_name != 'pypy' and sys_platform == 'darwin'",
+            "implementation_name == 'pypy' and sys_platform == 'darwin'",
         ]
         dependencies = [
             { name = "b", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "implementation_name == 'pypy'" },
@@ -1728,11 +1728,11 @@ fn fork_marker_inherit_combined_disallowed() -> Result<()> {
         revision = 3
         requires-python = ">=3.12"
         resolution-markers = [
-            "implementation_name == 'pypy' and sys_platform == 'darwin'",
             "implementation_name == 'cpython' and sys_platform == 'darwin'",
             "implementation_name != 'cpython' and implementation_name != 'pypy' and sys_platform == 'darwin'",
-            "sys_platform == 'linux'",
+            "implementation_name == 'pypy' and sys_platform == 'darwin'",
             "sys_platform != 'darwin' and sys_platform != 'linux'",
+            "sys_platform == 'linux'",
         ]
 
         [[package]]
@@ -1740,9 +1740,9 @@ fn fork_marker_inherit_combined_disallowed() -> Result<()> {
         version = "1.0.0"
         source = { registry = "http://[LOCALHOST]/simple/" }
         resolution-markers = [
-            "implementation_name == 'pypy' and sys_platform == 'darwin'",
             "implementation_name == 'cpython' and sys_platform == 'darwin'",
             "implementation_name != 'cpython' and implementation_name != 'pypy' and sys_platform == 'darwin'",
+            "implementation_name == 'pypy' and sys_platform == 'darwin'",
         ]
         dependencies = [
             { name = "b", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "implementation_name == 'pypy'" },
@@ -1895,11 +1895,11 @@ fn fork_marker_inherit_combined() -> Result<()> {
         revision = 3
         requires-python = ">=3.12"
         resolution-markers = [
-            "implementation_name == 'pypy' and sys_platform == 'darwin'",
             "implementation_name == 'cpython' and sys_platform == 'darwin'",
             "implementation_name != 'cpython' and implementation_name != 'pypy' and sys_platform == 'darwin'",
-            "sys_platform == 'linux'",
+            "implementation_name == 'pypy' and sys_platform == 'darwin'",
             "sys_platform != 'darwin' and sys_platform != 'linux'",
+            "sys_platform == 'linux'",
         ]
 
         [[package]]
@@ -1907,9 +1907,9 @@ fn fork_marker_inherit_combined() -> Result<()> {
         version = "1.0.0"
         source = { registry = "http://[LOCALHOST]/simple/" }
         resolution-markers = [
-            "implementation_name == 'pypy' and sys_platform == 'darwin'",
             "implementation_name == 'cpython' and sys_platform == 'darwin'",
             "implementation_name != 'cpython' and implementation_name != 'pypy' and sys_platform == 'darwin'",
+            "implementation_name == 'pypy' and sys_platform == 'darwin'",
         ]
         dependencies = [
             { name = "b", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "implementation_name == 'pypy'" },
@@ -2056,8 +2056,8 @@ fn fork_marker_inherit_isolated() -> Result<()> {
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform == 'darwin'",
-            "sys_platform == 'linux'",
             "sys_platform != 'darwin' and sys_platform != 'linux'",
+            "sys_platform == 'linux'",
         ]
 
         [[package]]
@@ -2202,8 +2202,8 @@ fn fork_marker_inherit_transitive() -> Result<()> {
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform == 'darwin'",
-            "sys_platform == 'linux'",
             "sys_platform != 'darwin' and sys_platform != 'linux'",
+            "sys_platform == 'linux'",
         ]
 
         [[package]]
@@ -2356,8 +2356,8 @@ fn fork_marker_inherit() -> Result<()> {
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform == 'darwin'",
-            "sys_platform == 'linux'",
             "sys_platform != 'darwin' and sys_platform != 'linux'",
+            "sys_platform == 'linux'",
         ]
 
         [[package]]
@@ -2492,8 +2492,8 @@ fn fork_marker_limited_inherit() -> Result<()> {
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform == 'darwin'",
-            "sys_platform == 'linux'",
             "sys_platform != 'darwin' and sys_platform != 'linux'",
+            "sys_platform == 'linux'",
         ]
 
         [[package]]
@@ -2645,8 +2645,8 @@ fn fork_marker_selection() -> Result<()> {
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform == 'darwin'",
-            "sys_platform == 'linux'",
             "sys_platform != 'darwin' and sys_platform != 'linux'",
+            "sys_platform == 'linux'",
         ]
 
         [[package]]
@@ -2797,8 +2797,8 @@ fn fork_marker_track() -> Result<()> {
         requires-python = ">=3.12"
         resolution-markers = [
             "sys_platform == 'darwin'",
-            "sys_platform == 'linux'",
             "sys_platform != 'darwin' and sys_platform != 'linux'",
+            "sys_platform == 'linux'",
         ]
 
         [[package]]
@@ -4225,10 +4225,10 @@ fn fork_remaining_universe_partitioning() -> Result<()> {
         requires-python = ">=3.12"
         resolution-markers = [
             "os_name == 'darwin' and sys_platform == 'illumos'",
-            "os_name == 'linux' and sys_platform == 'illumos'",
             "os_name != 'darwin' and os_name != 'linux' and sys_platform == 'illumos'",
-            "sys_platform == 'windows'",
+            "os_name == 'linux' and sys_platform == 'illumos'",
             "sys_platform != 'illumos' and sys_platform != 'windows'",
+            "sys_platform == 'windows'",
         ]
 
         [[package]]
@@ -4237,8 +4237,8 @@ fn fork_remaining_universe_partitioning() -> Result<()> {
         source = { registry = "http://[LOCALHOST]/simple/" }
         resolution-markers = [
             "os_name == 'darwin' and sys_platform == 'illumos'",
-            "os_name == 'linux' and sys_platform == 'illumos'",
             "os_name != 'darwin' and os_name != 'linux' and sys_platform == 'illumos'",
+            "os_name == 'linux' and sys_platform == 'illumos'",
         ]
         dependencies = [
             { name = "b", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "os_name == 'darwin'" },
@@ -5157,8 +5157,8 @@ fn transitive_prerelease_forks() -> Result<()> {
         revision = 3
         requires-python = ">=3.12"
         resolution-markers = [
-            "sys_platform != 'linux'",
             "sys_platform == 'linux'",
+            "sys_platform != 'linux'",
         ]
 
         [[package]]
@@ -5596,8 +5596,8 @@ fn marker_variants_have_different_extras() -> Result<()> {
         revision = 3
         requires-python = ">=3.12"
         resolution-markers = [
-            "platform_python_implementation != 'PyPy'",
             "platform_python_implementation == 'PyPy'",
+            "platform_python_implementation != 'PyPy'",
         ]
 
         [[package]]
