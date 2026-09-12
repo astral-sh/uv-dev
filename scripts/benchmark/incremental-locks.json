@@ -1,0 +1,17 @@
+[
+  {
+    "name": "flask",
+    "requirement": "flask==3.1.1",
+    "size": "small"
+  },
+  {
+    "name": "jupyterlab",
+    "requirement": "jupyterlab==4.4.6",
+    "size": "medium"
+  },
+  {
+    "name": "airflow",
+    "requirement": "apache-airflow[amazon]==2.10.5",
+    "size": "large"
+  }
+]
