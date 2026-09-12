@@ -274,7 +274,7 @@ pub(crate) async fn tree(
                     };
                     Ok::<Option<_>, Error>(Some((package, filename.into_version())))
                 })
-                .buffer_unordered(concurrency.downloads);
+                .buffer_unordered(1);
 
             let mut map = PackageMap::default();
             while let Some(entry) = fetches.next().await.transpose()? {
