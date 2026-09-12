@@ -125,7 +125,7 @@ fn list_many_distributions_reports_first_error() -> Result<()> {
             ----- stderr -----
             WARN Failed to parse direct URL: relative URL without a base
             error: Failed to read metadata from: `[SITE_PACKAGES]/b_error-1.0.0.dist-info`
-              Caused by: expected value at line 1 column 1
+              cause: expected value at line 1 column 1
             ");
         }
     }
@@ -206,7 +206,7 @@ fn list_many_distributions_reports_sidecar_warnings_before_error() -> Result<()>
                 warning: Ignoring invalid installer metadata at `[SITE_PACKAGES]/error-1.0.0.dist-info/uv_cache.json`: invalid JSON data
                 warning: Ignoring invalid installer metadata at `[SITE_PACKAGES]/error-1.0.0.dist-info/uv_build.json`: invalid JSON data
                 error: Failed to read metadata from: `[SITE_PACKAGES]/error-1.0.0.dist-info`
-                  Caused by: expected value at line 1 column 1
+                  cause: expected value at line 1 column 1
                 ");
             }
         }
@@ -246,7 +246,7 @@ fn list_many_distributions_orders_optional_sidecar_read_errors() -> Result<()> {
                     exit_code: 2 (failure)
                     ----- stderr -----
                     error: Failed to read metadata from: `[SITE_PACKAGES]/filler0031-1.0.0.dist-info`
-                      Caused by: failed to read file `[SITE_PACKAGES]/filler0031-1.0.0.dist-info/uv_cache.json`: [IO_ERROR]
+                      cause: failed to read file `[SITE_PACKAGES]/filler0031-1.0.0.dist-info/uv_cache.json`: [IO_ERROR]
                     ");
                 }
             } else {
@@ -256,7 +256,7 @@ fn list_many_distributions_orders_optional_sidecar_read_errors() -> Result<()> {
                     ----- stderr -----
                     warning: Ignoring invalid installer metadata at `[SITE_PACKAGES]/filler0031-1.0.0.dist-info/uv_cache.json`: invalid JSON data
                     error: Failed to read metadata from: `[SITE_PACKAGES]/filler0031-1.0.0.dist-info`
-                      Caused by: failed to read file `[SITE_PACKAGES]/filler0031-1.0.0.dist-info/uv_build.json`: [IO_ERROR]
+                      cause: failed to read file `[SITE_PACKAGES]/filler0031-1.0.0.dist-info/uv_build.json`: [IO_ERROR]
                     ");
                 }
             }
