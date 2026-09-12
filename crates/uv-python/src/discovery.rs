@@ -2191,49 +2191,51 @@ impl PythonRequest {
             path1 == path2 || is_same_file(path1, path2).unwrap_or(false)
         }
 
+        /// Check the executable identity used by file-form Python requests.
+        fn matches_file_request(file: &Path, interpreter: &Interpreter, cache: &Cache) -> bool {
+            // The interpreter satisfies the request both if it is the venv...
+            if is_same_executable(interpreter.sys_executable(), file) {
+                return true;
+            }
+            // ...or if it is the base interpreter the venv was created from.
+            if interpreter
+                .sys_base_executable()
+                .is_some_and(|sys_base_executable| is_same_executable(sys_base_executable, file))
+            {
+                return true;
+            }
+            // ...or, on Windows, if both interpreters have the same base executable. On
+            // Windows, interpreters are copied rather than symlinked, so a virtual environment
+            // created from within a virtual environment will _not_ evaluate to the same
+            // `sys.executable`, but will have the same `sys._base_executable`.
+            if cfg!(windows) {
+                if let Ok(file_interpreter) = Interpreter::query(file, cache) {
+                    if let (Some(file_base), Some(interpreter_base)) = (
+                        file_interpreter.sys_base_executable(),
+                        interpreter.sys_base_executable(),
+                    ) {
+                        if is_same_executable(file_base, interpreter_base) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            false
+        }
+
         match self {
             Self::Default | Self::Any => true,
             Self::Version(version_request) => version_request.matches_interpreter(interpreter),
             Self::Directory(directory) => {
-                // `sys.prefix` points to the environment root or `sys.executable` is the same
+                // A directory can identify this environment or the interpreter used to create it.
                 is_same_executable(directory, interpreter.sys_prefix())
-                    || is_same_executable(
+                    || matches_file_request(
                         virtualenv_python_executable(directory).as_path(),
-                        interpreter.sys_executable(),
+                        interpreter,
+                        cache,
                     )
             }
-            Self::File(file) => {
-                // The interpreter satisfies the request both if it is the venv...
-                if is_same_executable(interpreter.sys_executable(), file) {
-                    return true;
-                }
-                // ...or if it is the base interpreter the venv was created from.
-                if interpreter
-                    .sys_base_executable()
-                    .is_some_and(|sys_base_executable| {
-                        is_same_executable(sys_base_executable, file)
-                    })
-                {
-                    return true;
-                }
-                // ...or, on Windows, if both interpreters have the same base executable. On
-                // Windows, interpreters are copied rather than symlinked, so a virtual environment
-                // created from within a virtual environment will _not_ evaluate to the same
-                // `sys.executable`, but will have the same `sys._base_executable`.
-                if cfg!(windows) {
-                    if let Ok(file_interpreter) = Interpreter::query(file, cache) {
-                        if let (Some(file_base), Some(interpreter_base)) = (
-                            file_interpreter.sys_base_executable(),
-                            interpreter.sys_base_executable(),
-                        ) {
-                            if is_same_executable(file_base, interpreter_base) {
-                                return true;
-                            }
-                        }
-                    }
-                }
-                false
-            }
+            Self::File(file) => matches_file_request(file, interpreter, cache),
             Self::ExecutableName(name) => {
                 // First, see if we have a match in the venv ...
                 if interpreter
