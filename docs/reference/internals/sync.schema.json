@@ -1,0 +1,344 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "uv sync (preview)",
+  "description": "The preview `uv sync` JSON report.",
+  "type": "object",
+  "properties": {
+    "dry_run": {
+      "description": "Whether this is a dry run.",
+      "type": "boolean"
+    },
+    "lock": {
+      "description": "The report for the lock operation, or null if no lock operation was performed.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/LockReport"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "project": {
+      "description": "Project details when `target` is `project`.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/ProjectReport"
+        }
+      ]
+    },
+    "schema": {
+      "description": "The schema of this report.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/SchemaReport"
+        }
+      ]
+    },
+    "script": {
+      "description": "Script details when `target` is `script`.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/ScriptReport"
+        }
+      ]
+    },
+    "sync": {
+      "description": "The report for the sync operation.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/SyncReport"
+        }
+      ]
+    },
+    "target": {
+      "description": "The target of the sync operation, either a project or a script.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/TargetName"
+        }
+      ]
+    }
+  },
+  "required": ["schema", "target", "sync", "lock", "dry_run"],
+  "definitions": {
+    "EnvironmentReport": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "The path to the environment.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          ]
+        },
+        "python": {
+          "description": "The Python interpreter for the environment.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PythonReport"
+            }
+          ]
+        }
+      },
+      "required": ["path", "python"]
+    },
+    "LockAction": {
+      "description": "Represents the action taken during a lock.",
+      "oneOf": [
+        {
+          "description": "The lockfile was used without checking.",
+          "type": "string",
+          "const": "use"
+        },
+        {
+          "description": "The lockfile was checked and required no updates.",
+          "type": "string",
+          "const": "check"
+        },
+        {
+          "description": "The lockfile was updated.",
+          "type": "string",
+          "const": "update"
+        },
+        {
+          "description": "A new lockfile was created.",
+          "type": "string",
+          "const": "create"
+        }
+      ]
+    },
+    "LockReport": {
+      "description": "The report for a lock operation.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "description": "Whether the lockfile was preserved, created, or updated.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/LockAction"
+            }
+          ]
+        },
+        "path": {
+          "description": "The path to the lockfile.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          ]
+        }
+      },
+      "required": ["path", "action"]
+    },
+    "PackageChangeAction": {
+      "description": "The action taken on an individual package during sync.",
+      "type": "string",
+      "enum": ["uninstalled", "installed", "reinstalled"]
+    },
+    "PackageChangeReport": {
+      "description": "A summary of a single package change performed during sync.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "description": "The action that was taken for the package.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PackageChangeAction"
+            }
+          ]
+        },
+        "name": {
+          "description": "The normalized package name.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PackageName"
+            }
+          ]
+        },
+        "version": {
+          "description": "The resolved version of the package.",
+          "type": "string"
+        }
+      },
+      "required": ["name", "action"]
+    },
+    "PackageChangesReport": {
+      "description": "A summary of all package changes performed during sync.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/PackageChangeReport"
+      }
+    },
+    "PackageName": {
+      "description": "The normalized name of a package.\n\nConverts the name to lowercase and collapses runs of `-`, `_`, and `.` down to a single `-`.\nFor example, `---`, `.`, and `__` are all converted to a single `-`.\n\nSee: <https://packaging.python.org/en/latest/specifications/name-normalization/>",
+      "type": "string"
+    },
+    "PortablePathBuf": {
+      "type": "string"
+    },
+    "ProjectReport": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "The selected project directory path.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          ]
+        },
+        "workspace": {
+          "description": "The workspace containing the project.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/WorkspaceReport"
+            }
+          ]
+        }
+      },
+      "required": ["path", "workspace"]
+    },
+    "PythonReport": {
+      "description": "Information about the Python interpreter in an existing environment.",
+      "type": "object",
+      "properties": {
+        "implementation": {
+          "description": "Python implementation name.",
+          "type": "string"
+        },
+        "key": {
+          "description": "Interpreter installation key, as used by `uv python list`.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Absolute path to the Python executable.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          ]
+        },
+        "version": {
+          "description": "Full Python version.",
+          "type": "string"
+        }
+      },
+      "required": ["path", "version", "implementation", "key"]
+    },
+    "SchemaReport": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "description": "The version of the schema.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SchemaVersion"
+            }
+          ]
+        }
+      },
+      "required": ["version"]
+    },
+    "SchemaVersion": {
+      "oneOf": [
+        {
+          "description": "An unstable, experimental schema.",
+          "type": "string",
+          "const": "preview"
+        }
+      ]
+    },
+    "ScriptReport": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "The path to the script.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          ]
+        }
+      },
+      "required": ["path"]
+    },
+    "SyncAction": {
+      "description": "Represents the action taken during a sync.",
+      "oneOf": [
+        {
+          "description": "The environment was checked and required no updates.",
+          "type": "string",
+          "const": "check"
+        },
+        {
+          "description": "The environment was updated.",
+          "type": "string",
+          "const": "update"
+        },
+        {
+          "description": "The environment was replaced.",
+          "type": "string",
+          "const": "replace"
+        },
+        {
+          "description": "A new environment was created.",
+          "type": "string",
+          "const": "create"
+        }
+      ]
+    },
+    "SyncReport": {
+      "description": "The report for a sync operation.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "description": "The action performed during the sync, e.g., what was done to the environment.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SyncAction"
+            }
+          ]
+        },
+        "changes": {
+          "description": "The packages that changed during the sync.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PackageChangesReport"
+            }
+          ],
+          "default": []
+        },
+        "environment": {
+          "description": "The environment.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/EnvironmentReport"
+            }
+          ]
+        }
+      },
+      "required": ["environment", "action", "changes"]
+    },
+    "TargetName": {
+      "description": "The kind of target",
+      "type": "string",
+      "enum": ["project", "script"]
+    },
+    "WorkspaceReport": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "The workspace directory path.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          ]
+        }
+      },
+      "required": ["path"]
+    }
+  }
+}

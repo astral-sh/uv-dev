@@ -87,6 +87,9 @@ pub(crate) mod tree;
 pub(crate) mod upgrade;
 pub(crate) mod version;
 
+#[cfg(feature = "schemars")]
+pub use report::json_schema as sync_json_schema;
+
 /// The source of a missing lockfile error.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum MissingLockfileSource {

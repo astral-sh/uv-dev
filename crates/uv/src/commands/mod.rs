@@ -41,6 +41,8 @@ pub(crate) use project::lock::lock;
 pub(crate) use project::remove::remove;
 pub(crate) use project::run::{ParsedRunCommand, RunCommand, run};
 pub(crate) use project::sync::sync;
+#[cfg(feature = "schemars")]
+pub use project::sync_json_schema;
 pub(crate) use project::tree::tree;
 pub(crate) use project::upgrade::upgrade;
 pub(crate) use project::version::{project_version, self_version};

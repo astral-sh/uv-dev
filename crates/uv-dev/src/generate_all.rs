@@ -32,6 +32,7 @@ pub(crate) async fn main(args: &Args) -> Result<()> {
         generate_json_schema::Target::Configuration,
         generate_json_schema::Target::WorkspaceMetadata,
         generate_json_schema::Target::ToolList,
+        generate_json_schema::Target::Sync,
     ] {
         generate_json_schema::main(&generate_json_schema::Args {
             mode: args.mode,
