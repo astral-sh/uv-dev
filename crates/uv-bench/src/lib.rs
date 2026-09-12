@@ -80,6 +80,33 @@ pub fn run_command(command: &mut Command) {
     );
 }
 
+/// Copy a relocatable cache while retaining its relative symlink layout.
+pub fn copy_cache(source: &Path, destination: &Path) -> std::io::Result<()> {
+    fs_err::create_dir_all(destination)?;
+    for entry in fs_err::read_dir(source)? {
+        let entry = entry?;
+        let target = destination.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            let link = fs_err::read_link(entry.path())?;
+            assert!(link.is_relative(), "Cache links must be relocatable");
+            #[cfg(unix)]
+            fs_err::os::unix::fs::symlink(link, target)?;
+            #[cfg(windows)]
+            if fs_err::metadata(entry.path())?.is_dir() {
+                fs_err::os::windows::fs::symlink_dir(link, target)?;
+            } else {
+                fs_err::os::windows::fs::symlink_file(link, target)?;
+            }
+        } else if file_type.is_dir() {
+            copy_cache(&entry.path(), &target)?;
+        } else {
+            fs_err::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
 /// A loopback server replaying the prepared package artifacts and index records.
 pub struct FixtureServer {
     process: Child,
@@ -239,16 +266,18 @@ pub struct ToolFixture {
     pub name: String,
     pub version: String,
     pub executable: String,
+    #[serde(default, rename = "cached-run")]
+    pub cached_run: bool,
 }
 
 impl ToolFixture {
     /// The exact top-level package requirement.
-    fn requirement(&self) -> String {
+    pub fn requirement(&self) -> String {
         format!("{}=={}", self.name, self.version)
     }
 
     /// The tool's cross-platform, hashed dependency constraints.
-    fn constraints(&self) -> PathBuf {
+    pub fn constraints(&self) -> PathBuf {
         std::path::absolute(
             Path::new("../../scripts/benchmark/tool-locks").join(format!("{}.txt", self.name)),
         )
