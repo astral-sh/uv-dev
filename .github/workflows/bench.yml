@@ -307,7 +307,7 @@ jobs:
       # CodSpeed's runner does not support Windows. Retain real Criterion samples instead.
       - name: "Run independent native measurements"
         run: >-
-          python scripts/benchmark/criterion-runs.py --output target/criterion-windows
+          python scripts/benchmark/criterion-runs.py --output "$env:RUNNER_TEMP/criterion-windows-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           --bench python_install --bench python_concurrent_install
 
       - name: "Upload native benchmark samples"
@@ -315,7 +315,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: benchmarks-walltime-windows
-          path: target/criterion-windows
+          path: ${{ runner.temp }}/criterion-windows-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: ignore
           retention-days: 30
 
