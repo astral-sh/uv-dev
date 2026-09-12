@@ -2297,6 +2297,47 @@ pub fn apply_filters<T: AsRef<str>>(mut snapshot: String, filters: impl AsRef<[(
     snapshot
 }
 
+/// Apply the heuristic Windows-only dependency filters to a snapshot.
+fn apply_windows_filters(mut snapshot: String, windows_filters: WindowsFilters) -> String {
+    // The optional leading +/-/~ is for install logs, the optional next line is for lockfiles
+    let windows_only_deps = [
+        regex!(r"( ?[-+~] ?)?colorama==\d+(\.\d+)+( [\\]\n\s+--hash=.*)?\n(\s+# via .*\n)?"),
+        regex!(r"( ?[-+~] ?)?colorama==\d+(\.\d+)+(\s+[-+~]?\s+# via .*)?\n"),
+        regex!(r"( ?[-+~] ?)?tzdata==\d+(\.\d+)+( [\\]\n\s+--hash=.*)?\n(\s+# via .*\n)?"),
+        regex!(r"( ?[-+~] ?)?tzdata==\d+(\.\d+)+(\s+[-+~]?\s+# via .*)?\n"),
+    ];
+    let mut removed_packages = 0;
+    for windows_only_dep in windows_only_deps {
+        if windows_only_dep.is_match(&snapshot) {
+            snapshot = windows_only_dep.replace(&snapshot, "").to_string();
+            removed_packages += 1;
+        }
+    }
+    if removed_packages > 0 {
+        for i in 1..20 {
+            for verb in match windows_filters {
+                WindowsFilters::Platform => [
+                    "Resolved",
+                    "Prepared",
+                    "Installed",
+                    "Checked",
+                    "Uninstalled",
+                ]
+                .iter(),
+                WindowsFilters::Universal => {
+                    ["Prepared", "Installed", "Checked", "Uninstalled"].iter()
+                }
+            } {
+                snapshot = snapshot.replace(
+                    &format!("{verb} {} packages", i + removed_packages),
+                    &format!("{verb} {} package{}", i, if i > 1 { "s" } else { "" }),
+                );
+            }
+        }
+    }
+    snapshot
+}
+
 /// Execute the command and format its output status, stdout and stderr into a snapshot string.
 ///
 /// This function is derived from `insta_cmd`s `spawn_with_info`.
@@ -2410,47 +2451,10 @@ pub fn run_and_format_silent<T: AsRef<str>>(
     // pass whether it's on Windows or Unix. In particular, there are some very
     // common Windows-only dependencies that, when removed from a resolution,
     // cause the set of dependencies to be the same across platforms.
-    if cfg!(windows) {
-        if let Some(windows_filters) = windows_filters {
-            // The optional leading +/-/~ is for install logs, the optional next line is for lockfiles
-            let windows_only_deps = [
-                (r"( ?[-+~] ?)?colorama==\d+(\.\d+)+( [\\]\n\s+--hash=.*)?\n(\s+# via .*\n)?"),
-                (r"( ?[-+~] ?)?colorama==\d+(\.\d+)+(\s+[-+~]?\s+# via .*)?\n"),
-                (r"( ?[-+~] ?)?tzdata==\d+(\.\d+)+( [\\]\n\s+--hash=.*)?\n(\s+# via .*\n)?"),
-                (r"( ?[-+~] ?)?tzdata==\d+(\.\d+)+(\s+[-+~]?\s+# via .*)?\n"),
-            ];
-            let mut removed_packages = 0;
-            for windows_only_dep in windows_only_deps {
-                // TODO(konstin): Cache regex compilation
-                let re = Regex::new(windows_only_dep).unwrap();
-                if re.is_match(&snapshot) {
-                    snapshot = re.replace(&snapshot, "").to_string();
-                    removed_packages += 1;
-                }
-            }
-            if removed_packages > 0 {
-                for i in 1..20 {
-                    for verb in match windows_filters {
-                        WindowsFilters::Platform => [
-                            "Resolved",
-                            "Prepared",
-                            "Installed",
-                            "Checked",
-                            "Uninstalled",
-                        ]
-                        .iter(),
-                        WindowsFilters::Universal => {
-                            ["Prepared", "Installed", "Checked", "Uninstalled"].iter()
-                        }
-                    } {
-                        snapshot = snapshot.replace(
-                            &format!("{verb} {} packages", i + removed_packages),
-                            &format!("{verb} {} package{}", i, if i > 1 { "s" } else { "" }),
-                        );
-                    }
-                }
-            }
-        }
+    if cfg!(windows)
+        && let Some(windows_filters) = windows_filters
+    {
+        snapshot = apply_windows_filters(snapshot, windows_filters);
     }
 
     (snapshot, output)
@@ -2673,6 +2677,119 @@ macro_rules! uv_snapshot {
         ::insta::assert_snapshot!(snapshot, @$snapshot);
         output
     }};
+}
+
+#[cfg(test)]
+mod windows_filter_tests {
+    use indoc::indoc;
+
+    use super::{WindowsFilters, apply_windows_filters};
+
+    const INSTALL_LOG: &str = indoc! {"
+        Resolved 3 packages
+        Prepared 3 packages
+        Installed 3 packages
+        Checked 3 packages
+        Uninstalled 3 packages
+         + colorama==0.4.6
+         - tzdata==2025.2
+         + anyio==4.0.0
+    "};
+
+    #[test]
+    fn platform_counts() {
+        insta::assert_snapshot!(apply_windows_filters(INSTALL_LOG.to_owned(), WindowsFilters::Platform), @"
+        Resolved 1 package
+        Prepared 1 package
+        Installed 1 package
+        Checked 1 package
+        Uninstalled 1 package
+         + anyio==4.0.0
+        ");
+    }
+
+    #[test]
+    fn universal_counts() {
+        insta::assert_snapshot!(apply_windows_filters(INSTALL_LOG.to_owned(), WindowsFilters::Universal), @"
+        Resolved 3 packages
+        Prepared 1 package
+        Installed 1 package
+        Checked 1 package
+        Uninstalled 1 package
+         + anyio==4.0.0
+        ");
+    }
+
+    #[test]
+    fn requirements_annotations() {
+        let snapshot = indoc! {r"
+            Resolved 7 packages
+            colorama==0.4.6 \
+                --hash=sha256:1234
+                # via click
+            colorama==0.4.5
+                + # via click
+            tzdata==2025.2 \
+                --hash=sha256:5678
+                # via pandas
+            tzdata==2024.2
+                - # via pandas
+            colorama==0.4.4 # via click
+            tzdata==2024.1 # via pandas
+            anyio==4.0.0
+        "};
+
+        insta::assert_snapshot!(apply_windows_filters(snapshot.to_owned(), WindowsFilters::Platform), @"
+        Resolved 3 packages
+        colorama==0.4.4 # via click
+        tzdata==2024.1 # via pandas
+        anyio==4.0.0
+        ");
+    }
+
+    #[test]
+    fn first_match_per_pattern() {
+        let snapshot = indoc! {"
+            Resolved 4 packages
+            colorama==0.4.4
+            colorama==0.4.5
+            colorama==0.4.6
+        "};
+
+        insta::assert_snapshot!(apply_windows_filters(snapshot.to_owned(), WindowsFilters::Platform), @"
+        Resolved 2 packages
+        colorama==0.4.6
+        ");
+    }
+
+    #[test]
+    fn package_count_bounds() {
+        let snapshot = indoc! {"
+            Resolved 2 packages
+            Resolved 20 packages
+            Resolved 21 packages
+            colorama==0.4.6
+        "};
+
+        insta::assert_snapshot!(apply_windows_filters(snapshot.to_owned(), WindowsFilters::Platform), @"
+        Resolved 1 package
+        Resolved 19 packages
+        Resolved 21 packages
+        ");
+    }
+
+    #[test]
+    fn no_matches() {
+        let snapshot = indoc! {"
+            Resolved 3 packages
+             + anyio==4.0.0
+        "};
+
+        insta::assert_snapshot!(apply_windows_filters(snapshot.to_owned(), WindowsFilters::Platform), @"
+        Resolved 3 packages
+         + anyio==4.0.0
+        ");
+    }
 }
 
 #[cfg(all(test, unix))]
