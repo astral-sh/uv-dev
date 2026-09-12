@@ -68,6 +68,8 @@ def main() -> None:
                 "--project",
                 str(project),
                 "lock",
+                "--default-index",
+                "https://pypi.org/simple",
                 "--managed-python",
                 "--python",
                 "3.11.13",
