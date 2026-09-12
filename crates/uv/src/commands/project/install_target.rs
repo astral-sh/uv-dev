@@ -596,6 +596,7 @@ impl<'lock> InstallTarget<'lock> {
         &self,
         extras: &ExtrasSpecification,
         groups: &DependencyGroupsWithDefaults,
+        marker_env: Option<&ResolverMarkerEnvironment>,
     ) -> BTreeSet<&PackageName> {
         match self {
             Self::Project { lock, .. } | Self::Projects { lock, .. } => {
@@ -652,6 +653,16 @@ impl<'lock> InstallTarget<'lock> {
                             continue;
                         }
                         for dependency in dependencies {
+                            if marker_env.is_some_and(|marker_env| {
+                                !root_package.dependency_applies_to_environment(
+                                    dependency,
+                                    marker_env,
+                                    None,
+                                    Some(group_name),
+                                )
+                            }) {
+                                continue;
+                            }
                             let dep_name = dependency.package_name();
                             if seen.insert((dep_name, None)) {
                                 queue.push_back((dep_name, None));
@@ -687,6 +698,13 @@ impl<'lock> InstallTarget<'lock> {
                     };
 
                     for dependency in dependencies {
+                        if marker_env.is_some_and(|marker_env| {
+                            !package.dependency_applies_to_environment(
+                                dependency, marker_env, extra, None,
+                            )
+                        }) {
+                            continue;
+                        }
                         let name = dependency.package_name();
                         if seen.insert((name, None)) {
                             queue.push_back((name, None));
