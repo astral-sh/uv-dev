@@ -1,5 +1,35 @@
 [
   {
+    "filename": "vllm-rubin-prerelease.txt",
+    "url": "https://raw.githubusercontent.com/vllm-project/vllm/8c87c333b84c85908b1d11f0044457692277c6f3/requirements/rubin-prerelease.txt",
+    "sha256": "1fae6e55cb8dee30be45bcb8c59e9d2bc5e4507dfdc269a81f3afdd8a130abf1"
+  },
+  {
+    "filename": "vllm-cuda.txt",
+    "url": "https://raw.githubusercontent.com/vllm-project/vllm/8c87c333b84c85908b1d11f0044457692277c6f3/requirements/cuda.txt",
+    "sha256": "dd0f01d0c1d1c69248938821fc19549190afb22826136099b3bb10d0fea44a00"
+  },
+  {
+    "filename": "vllm-common.txt",
+    "url": "https://raw.githubusercontent.com/vllm-project/vllm/8c87c333b84c85908b1d11f0044457692277c6f3/requirements/common.txt",
+    "sha256": "74a932cfe0469864247509838b68484bb6e6b978cb87df7ccebf75112e289e9d"
+  },
+  {
+    "filename": "vllm-dev.txt",
+    "url": "https://raw.githubusercontent.com/vllm-project/vllm/8c87c333b84c85908b1d11f0044457692277c6f3/requirements/dev.txt",
+    "sha256": "c42fdd9770caf758ecd76fddaad1df77e02d46d3f984ab1c68a4a889a7530647"
+  },
+  {
+    "filename": "vllm-lint.txt",
+    "url": "https://raw.githubusercontent.com/vllm-project/vllm/8c87c333b84c85908b1d11f0044457692277c6f3/requirements/lint.txt",
+    "sha256": "86866422f67715efa1f81a6aca12827de773f02b7f0a969f8a37b8ce5f95f75a"
+  },
+  {
+    "filename": "vllm-test-cuda.txt",
+    "url": "https://raw.githubusercontent.com/vllm-project/vllm/8c87c333b84c85908b1d11f0044457692277c6f3/requirements/test/cuda.txt",
+    "sha256": "5d4c4f341418b2c761e4b598544b8018679488c7b0c112bb5bc75b7ef9c54bad"
+  },
+  {
     "filename": "editables-0.5-py3-none-any.whl",
     "url": "https://files.pythonhosted.org/packages/6b/be/0f2f4a5e8adc114a02b63d92bf8edbfa24db6fc602fca83c885af2479e0e/editables-0.5-py3-none-any.whl",
     "sha256": "61e5ffa82629e0d8bfe09bc44a07db3c1ab8ed1ce78a6980732870f19b5e7d4c"
