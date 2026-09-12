@@ -24,10 +24,19 @@ def main() -> None:
     parser.add_argument(
         "--directory", type=Path, default=root / ".cache/bench-fixtures"
     )
+    parser.add_argument(
+        "--fixture", action="append", default=[], help="Prepare only this filename"
+    )
     args = parser.parse_args()
     args.directory.mkdir(parents=True, exist_ok=True)
 
     fixtures = json.loads(Path(__file__).with_name("fixtures.json").read_text())
+    if args.fixture:
+        selected = set(args.fixture)
+        missing = selected.difference(fixture["filename"] for fixture in fixtures)
+        if missing:
+            parser.error(f"Unknown fixtures: {', '.join(sorted(missing))}")
+        fixtures = [fixture for fixture in fixtures if fixture["filename"] in selected]
     for fixture in fixtures:
         filename = fixture["filename"]
         if Path(filename).name != filename:
