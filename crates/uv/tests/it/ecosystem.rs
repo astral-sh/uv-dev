@@ -220,7 +220,9 @@ fn lock_ecosystem_package_with_args(python_version: &str, name: &str, args: &[&s
     // Cache source distribution builds to speed up the tests.
     let cache_dir =
         std::path::absolute(Path::new("../../target/ecosystem-test-caches").join(name))?;
-    let context = uv_test::test_context!(python_version).with_cache_dir(cache_dir);
+    let context = uv_test::test_context!(python_version)
+        .with_pypi_access()
+        .with_cache_dir(cache_dir);
     context.copy_ecosystem_project(name);
 
     let mut command = context.lock();

@@ -42,6 +42,42 @@ use uv_test::{
     venv_bin_path,
 };
 
+fn write_tar_gz_with_symlink(
+    context: &TestContext,
+    archive: &Path,
+    entries: &[(&str, &str)],
+    symlink: (&str, &str),
+) -> Result<()> {
+    context
+        .python_command()
+        .arg("-c")
+        .arg(indoc! {r#"
+            import io
+            import json
+            import sys
+            import tarfile
+
+            entries, (link_name, link_target) = json.loads(sys.argv[2])
+            with tarfile.open(sys.argv[1], "w:gz") as archive:
+                for name, contents in entries:
+                    data = contents.encode()
+                    info = tarfile.TarInfo(name)
+                    info.size = len(data)
+                    info.mode = 0o644
+                    archive.addfile(info, io.BytesIO(data))
+                info = tarfile.TarInfo(link_name)
+                info.type = tarfile.SYMTYPE
+                info.linkname = link_target
+                info.mode = 0o777
+                archive.addfile(info)
+        "#})
+        .arg(archive)
+        .arg(serde_json::to_string(&(entries, symlink))?)
+        .assert()
+        .success();
+    Ok(())
+}
+
 fn write_many_files_wheel(path: &Path, source_files: usize) -> Result<()> {
     let mut writer = ZipFileWriter::new(Vec::new());
     let mut record = String::new();
@@ -124,11 +160,66 @@ fn install_http_wheel_hashes_trailing_bytes() -> Result<()> {
 #[test]
 fn install_wheel_cache_incompatible_with_older_uv() -> Result<()> {
     allow_duplicates! {
-        for version in ["0.11.1", "0.12.0"] {
+        for (version, manifest_hash) in [
+            ("0.11.1", "74dccc0b9e738c3491a4bdfd3a2eb96e2a86b10f94469979574f01e217712c38"),
+            ("0.12.0", "625cade2a341d2dceaf8197e51c7271728060b729f64670562d0a74df303ef73"),
+        ] {
             let context = uv_test::test_context!("3.12")
                 // TODO: Remove this once the older `interpreter-v4` cache layout is supported.
-                .with_filter((r"(?m)^WARN Broken interpreter cache entry at .*\n", ""))
-                .with_filter((r" \+ uv==0\.(?:11\.1|12\.0)", " + uv==[VERSION]"));
+                .with_filter((r"(?m)^WARN Broken interpreter cache entry at .*\n", ""));
+            let triple = uv_platform::Platform::from_env()?.as_cargo_dist_triple();
+            let extension = if cfg!(windows) { "zip" } else { "tar.gz" };
+            let filename = format!("uv-{triple}.{extension}");
+            let release = format!("https://github.com/astral-sh/uv/releases/download/{version}");
+
+            // Pin the release's checksum manifest so all supported platforms use the actual
+            // published binary, independently of the package index.
+            let manifest = context.temp_dir.join("sha256.sum");
+            download_to_disk(&format!("{release}/sha256.sum"), &manifest);
+            assert_eq!(hex::encode(Sha256::digest(fs::read(&manifest)?)), manifest_hash);
+            let manifest = fs::read_to_string(&manifest)?;
+            let expected_hash = manifest
+                .lines()
+                .filter_map(|line| line.split_once(" *"))
+                .find_map(|(hash, name)| (name == filename).then_some(hash))
+                .context("uv release is missing the current platform")?;
+            let archive = context.temp_dir.join(&filename);
+            download_to_disk(&format!("{release}/{filename}"), &archive);
+            assert_eq!(hex::encode(Sha256::digest(fs::read(&archive)?)), expected_hash);
+
+            let executable = context.temp_dir.join(format!("uv{}", std::env::consts::EXE_SUFFIX));
+            context.python_command()
+                .arg("-c")
+                .arg(indoc! {r#"
+                    import os
+                    from pathlib import Path
+                    import shutil
+                    import sys
+                    import tarfile
+                    import zipfile
+
+                    archive, target, triple = sys.argv[1:]
+                    if archive.endswith(".zip"):
+                        with zipfile.ZipFile(archive) as package:
+                            with package.open(Path(target).name) as source, open(target, "wb") as destination:
+                                shutil.copyfileobj(source, destination)
+                    else:
+                        member = f"uv-{triple}/{Path(target).name}"
+                        with tarfile.open(archive) as package:
+                            with package.extractfile(member) as source, open(target, "wb") as destination:
+                                shutil.copyfileobj(source, destination)
+                    os.chmod(target, 0o755)
+                "#})
+                .arg(&archive)
+                .arg(&executable)
+                .arg(&triple)
+                .assert()
+                .success();
+            context.external_command(&executable)
+                .arg("--version")
+                .assert()
+                .success()
+                .stdout(predicate::str::starts_with(format!("uv {version} ")));
             let wheel = context.temp_dir.join("large_wheel-1.0.0-py3-none-any.whl");
             write_many_files_wheel(&wheel, 1)?;
 
@@ -136,12 +227,10 @@ fn install_wheel_cache_incompatible_with_older_uv() -> Result<()> {
             context.venv().arg("--clear").assert().success();
 
             // New cache entries should not make older uv versions fail; see astral-sh/uv#20949.
-            uv_snapshot!(context.filters(), context.tool_run()
-                .arg("--from")
-                .arg(format!("uv=={version}"))
-                .arg("uv")
+            uv_snapshot!(context.filters(), context.external_command(&executable)
                 .arg("pip")
                 .arg("install")
+                .arg("--no-index")
                 .arg("--python")
                 .arg(context.venv.path())
                 .arg(&wheel)
@@ -151,10 +240,6 @@ fn install_wheel_cache_incompatible_with_older_uv() -> Result<()> {
                 .env_remove(EnvVars::UV_TEST_AVAILABLE_VERSION_CUTOFF), @"
             exit_code: 0 (success)
             ----- stderr -----
-            Resolved 1 package in [TIME]
-            Prepared 1 package in [TIME]
-            Installed 1 package in [TIME]
-             + uv==[VERSION]
             Resolved 1 package in [TIME]
             Installed 1 package in [TIME]
              + large-wheel==1.0.0 (from file://[TEMP_DIR]/large_wheel-1.0.0-py3-none-any.whl)
@@ -190,7 +275,7 @@ fn empty_requirements_txt() -> Result<()> {
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.touch()?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
@@ -234,7 +319,7 @@ fn compile_bytecode_for_installed_distributions() -> Result<()> {
     Resolved 3 packages in [TIME]
     Prepared 2 packages in [TIME]
     Installed 2 packages in [TIME]
-    Bytecode compiled 45 files in [TIME]
+    Bytecode compiled 2 files in [TIME]
      + anyio==3.7.1
      + idna==3.6
     "
@@ -309,7 +394,7 @@ fn compile_bytecode_for_installed_distributions() -> Result<()> {
     Prepared 1 package in [TIME]
     Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
-    Bytecode compiled 5 files in [TIME]
+    Bytecode compiled 1 file in [TIME]
      ~ sniffio==1.3.1
     "
     );
@@ -342,7 +427,7 @@ fn compile_bytecode_with_symlink_link_mode() {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-    Bytecode compiled 5 files in [TIME]
+    Bytecode compiled 1 file in [TIME]
      + sniffio==1.3.1
     "
     );
@@ -376,7 +461,7 @@ fn compile_bytecode_for_relative_install_root() {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-    Bytecode compiled 5 files in [TIME]
+    Bytecode compiled 1 file in [TIME]
      + sniffio==1.3.1
     "
     );
@@ -401,7 +486,7 @@ fn compile_bytecode_for_relative_install_root() {
     Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
     Resolved 1 package in [TIME]
     Installed 1 package in [TIME]
-    Bytecode compiled 5 files in [TIME]
+    Bytecode compiled 1 file in [TIME]
      + sniffio==1.3.1
     "
     );
@@ -416,14 +501,14 @@ fn compile_bytecode_for_relative_install_root() {
                 .is_some_and(|extension| extension == "pyc")
         })
         .count();
-    assert_eq!(compiled, 5);
+    assert_eq!(compiled, 1);
 }
 
 #[test]
 fn missing_pyproject_toml() {
     let context = uv_test::test_context!("3.12");
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("pyproject.toml"), @"
     exit_code: 2 (failure)
@@ -487,7 +572,7 @@ fn invalid_pyproject_toml_syntax() -> Result<()> {
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str("123 - 456")?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("pyproject.toml"), @"
     exit_code: 2 (failure)
@@ -927,7 +1012,7 @@ fn no_solution() {
 fn install_package() {
     let context = uv_test::test_context!("3.12");
 
-    // Install Flask.
+    // Install the locally generated wheel with malformed optional dependency metadata.
     uv_snapshot!(context.pip_install()
         .arg("Flask")
         .arg("--strict"), @"
@@ -2122,10 +2207,14 @@ fn install_editable_incompatible_constraint_version() -> Result<()> {
 
 #[test]
 fn install_editable_incompatible_constraint_url() -> Result<()> {
+    let artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
 
     let constraints_txt = context.temp_dir.child("constraints.txt");
-    constraints_txt.write_str("black @ https://files.pythonhosted.org/packages/0f/89/294c9a6b6c75a08da55e9d05321d0707e9418735e3062b12ef0f54c33474/black-24.4.2-py3-none-any.whl")?;
+    constraints_txt.write_str(&format!(
+        "black @ {}",
+        artifacts.file_url("black-24.4.2-py3-none-any.whl")
+    ))?;
 
     // Install the editable package with an incompatible constraint.
     uv_snapshot!(context.filters(), context.pip_install()
@@ -2137,7 +2226,7 @@ fn install_editable_incompatible_constraint_url() -> Result<()> {
     ----- stderr -----
     error: Requirements contain conflicting URLs for package `black`:
     - file://[WORKSPACE]/test/packages/black_editable (editable)
-    - https://files.pythonhosted.org/packages/0f/89/294c9a6b6c75a08da55e9d05321d0707e9418735e3062b12ef0f54c33474/black-24.4.2-py3-none-any.whl
+    - http://[LOCALHOST]/files/black-24.4.2-py3-none-any.whl
     "
     );
 
@@ -2413,16 +2502,18 @@ fn invalid_editable_named_https_url() -> Result<()> {
 /// that the `flit` install and the source distribution build don't conflict.
 #[test]
 fn reinstall_build_system() -> Result<()> {
+    let artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc! {r"
+    requirements_txt.write_str(&formatdoc! {r"
         flit_core<4.0.0
-        flask @ https://files.pythonhosted.org/packages/d8/09/c1a7354d3925a3c6c8cfdebf4245bae67d633ffda1ba415add06ffc839c5/flask-3.0.0.tar.gz
-        "
+        flask @ {flask_url}
+        ",
+        flask_url = artifacts.file_url("flask-3.0.0.tar.gz"),
     })?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("--reinstall")
         .arg("-r")
         .arg("requirements.txt")
@@ -2434,7 +2525,7 @@ fn reinstall_build_system() -> Result<()> {
     Installed 8 packages in [TIME]
      + blinker==1.7.0
      + click==8.1.7
-     + flask==3.0.0 (from https://files.pythonhosted.org/packages/d8/09/c1a7354d3925a3c6c8cfdebf4245bae67d633ffda1ba415add06ffc839c5/flask-3.0.0.tar.gz)
+     + flask==3.0.0 (from http://[LOCALHOST]/files/flask-3.0.0.tar.gz)
      + flit-core==3.9.0
      + itsdangerous==2.1.2
      + jinja2==3.1.3
@@ -2502,28 +2593,25 @@ fn install_no_index_version() {
 /// Ref: <https://github.com/astral-sh/uv/issues/1600>
 #[test]
 fn install_extra_index_url_has_priority() {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2024-03-09T00:00:00Z");
+    let primary_index = PackseServer::new("packages/pip-commands.toml");
+    let preferred_index = PackseServer::new("packages/pip-compile-index-strategy-extra.toml");
+    let context = uv_test::test_context!("3.12");
 
     uv_snapshot!(context.pip_install()
         .arg("--index-url")
-        .arg("https://test.pypi.org/simple")
+        .arg(primary_index.index_url())
         .arg("--extra-index-url")
-        .arg("https://pypi.org/simple")
-        // This tests what we want because BOTH of the following
-        // are true: `black` is on pypi.org and test.pypi.org, AND
-        // `black==24.2.0` is on pypi.org and NOT test.pypi.org. So
-        // this would previously check for `black` on test.pypi.org,
-        // find it, but then not find a compatible version. After
-        // the fix, uv will check pypi.org first since it is given
-        // priority via --extra-index-url.
-        .arg("black==24.2.0")
+        .arg(preferred_index.index_url())
+        // The package exists on both indexes, but only the extra index has the
+        // requested version. The resolver must check the extra index first.
+        .arg("index-strategy-package==2.0.0")
         .arg("--no-deps"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + black==24.2.0
+     + index-strategy-package==2.0.0
     "
     );
 
@@ -2533,13 +2621,15 @@ fn install_extra_index_url_has_priority() {
 /// Ensure that the index is fetched only once when duplicate indices are specified
 #[tokio::test]
 async fn install_deduplicated_indices() {
+    let index = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
 
     let redirect_server = MockServer::start().await;
 
     Mock::given(method("GET"))
         .respond_with(
-            ResponseTemplate::new(302).insert_header("Location", "https://pypi.org/simple/sniffio"),
+            ResponseTemplate::new(302)
+                .insert_header("Location", format!("{}sniffio/", index.index_url())),
         )
         .expect(1)
         .mount(&redirect_server)
@@ -2865,10 +2955,10 @@ fn install_git_percent_encoded_ref() -> Result<()> {
 
     let repository = context.temp_dir.child("repository");
     repository
-        .child("packages/example/example")
+        .child("packages/example/src/example")
         .create_dir_all()?;
     repository
-        .child("packages/example/example/__init__.py")
+        .child("packages/example/src/example/__init__.py")
         .write_str(r#"__version__ = "0.1.0""#)?;
     repository
         .child("packages/example/pyproject.toml")
@@ -2879,8 +2969,8 @@ fn install_git_percent_encoded_ref() -> Result<()> {
         requires-python = ">=3.12"
 
         [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
     "#})?;
 
     Command::new("git")
@@ -3662,6 +3752,9 @@ fn install_only_binary_overrides_no_binary_all() {
         .arg(":all:")
         .arg("--only-binary")
         .arg("a")
+        // Packse source distributions use the vendored Hatchling wheels as their build backend.
+        .arg("--only-binary")
+        .arg("hatchling,editables,packaging,pathspec,pluggy,trove-classifiers")
         .arg("--strict");
     uv_snapshot!(
         command,
@@ -3959,9 +4052,9 @@ fn no_prerelease_hint_source_builds() -> Result<()> {
     error: Failed to build `project @ file://[TEMP_DIR]/`
       cause: Failed to resolve requirements from `setup.py` build
       cause: No solution found when resolving: `setuptools>=40.8.0`
-      cause: Because only setuptools<=40.4.3 is available and you require setuptools>=40.8.0, we can conclude that your requirements are unsatisfiable.
+      cause: Because only setuptools==40.4.3 is available and you require setuptools>=40.8.0, we can conclude that your requirements are unsatisfiable.
 
-    hint: `setuptools` was filtered by `exclude-newer` to only include packages uploaded before 2018-10-09T00:00:00Z. The latest version satisfying the requirement is v69.2.0, published at 2024-03-13T11:20:54.103Z. Consider using `exclude-newer-package` to override the cutoff for this package.
+    hint: `setuptools` was filtered by `exclude-newer` to only include packages uploaded before 2018-10-09T00:00:00Z. The latest version satisfying the requirement is v69.2.0, published at 2024-03-24T00:00:00Z. Consider using `exclude-newer-package` to override the cutoff for this package.
     "
     );
 
@@ -4262,11 +4355,11 @@ fn no_deps() {
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + flask==3.0.2
-    warning: The package `flask` requires `werkzeug>=3.0.0`, but it's not installed
-    warning: The package `flask` requires `jinja2>=3.1.2`, but it's not installed
-    warning: The package `flask` requires `itsdangerous>=2.1.2`, but it's not installed
-    warning: The package `flask` requires `click>=8.1.3`, but it's not installed
     warning: The package `flask` requires `blinker>=1.6.2`, but it's not installed
+    warning: The package `flask` requires `click>=8.1.3`, but it's not installed
+    warning: The package `flask` requires `itsdangerous>=2.1.2`, but it's not installed
+    warning: The package `flask` requires `jinja2>=3.1.2`, but it's not installed
+    warning: The package `flask` requires `werkzeug>=3.0.0`, but it's not installed
     "
     );
 
@@ -5276,11 +5369,11 @@ fn disallow_transitive_prerelease() {
 fn install_constraints_with_markers() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("pytest")?;
+    requirements_txt.write_str("iniconfig")?;
 
     // Create a constraints file with a marker that is not relevant to the current environment.
     let constraints_txt = context.temp_dir.child("constraints.txt");
-    constraints_txt.write_str("pytest==8.0.0; sys_platform == 'nonexistent-platform'")?;
+    constraints_txt.write_str("iniconfig==2.0.0; sys_platform == 'nonexistent-platform'")?;
 
     uv_snapshot!(context.pip_install()
         .arg("-r")
@@ -5289,13 +5382,10 @@ fn install_constraints_with_markers() -> Result<()> {
         .arg("constraints.txt"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
      + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
     "
     );
 
@@ -5347,11 +5437,15 @@ fn install_pinned_polars_invalid_metadata() {
 /// requirements aren't resolved at their lowest compatible version.
 #[test]
 fn install_sdist_resolution_lowest() -> Result<()> {
+    let artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
     let requirements_in = context.temp_dir.child("requirements.in");
-    requirements_in.write_str("anyio @ https://files.pythonhosted.org/packages/2d/b8/7333d87d5f03247215d86a86362fd3e324111788c6cdd8d2e6196a6ba833/anyio-4.2.0.tar.gz")?;
+    requirements_in.write_str(&format!(
+        "anyio @ {}",
+        artifacts.file_url("anyio-4.2.0.tar.gz")
+    ))?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
             .arg("-r")
             .arg("requirements.in")
             .arg("--resolution=lowest-direct"), @"
@@ -5360,7 +5454,7 @@ fn install_sdist_resolution_lowest() -> Result<()> {
     Resolved 3 packages in [TIME]
     Prepared 3 packages in [TIME]
     Installed 3 packages in [TIME]
-     + anyio==4.2.0 (from https://files.pythonhosted.org/packages/2d/b8/7333d87d5f03247215d86a86362fd3e324111788c6cdd8d2e6196a6ba833/anyio-4.2.0.tar.gz)
+     + anyio==4.2.0 (from http://[LOCALHOST]/files/anyio-4.2.0.tar.gz)
      + idna==3.6
      + sniffio==1.3.1
     "
@@ -5381,20 +5475,18 @@ fn direct_url_zip_file_bunk_permissions() -> Result<()> {
         "opensafely-pipeline @ https://github.com/opensafely-core/pipeline/archive/refs/tags/v2023.11.06.145820.zip",
     )?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Prepared 5 packages in [TIME]
-    Installed 6 packages in [TIME]
-     + distro==1.9.0
+    Resolved 4 packages in [TIME]
+    Prepared 4 packages in [TIME]
+    Installed 4 packages in [TIME]
      + opensafely-pipeline==2023.11.6.145820 (from https://github.com/opensafely-core/pipeline/archive/refs/tags/v2023.11.06.145820.zip)
      + pydantic==1.10.14
      + ruyaml==0.91.0
-     + setuptools==69.2.0
      + typing-extensions==4.10.0
     "
     );
@@ -5634,10 +5726,10 @@ fn config_settings_path() -> Result<()> {
 fn reinstall_duplicate() -> Result<()> {
     use uv_fs::copy_dir_all;
 
-    // Sync a version of `pip` into a virtual environment.
+    // Sync a version of `iniconfig` into a virtual environment.
     let context1 = uv_test::test_context!("3.12");
     let requirements_txt = context1.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("pip==21.3.1")?;
+    requirements_txt.write_str("iniconfig==1.1.1")?;
 
     // Run `pip sync`.
     context1
@@ -5647,10 +5739,10 @@ fn reinstall_duplicate() -> Result<()> {
         .assert()
         .success();
 
-    // Sync a different version of `pip` into a virtual environment.
+    // Sync a different version of `iniconfig` into a virtual environment.
     let context2 = uv_test::test_context!("3.12");
     let requirements_txt = context2.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("pip==22.1.1")?;
+    requirements_txt.write_str("iniconfig==2.0.0")?;
 
     // Run `pip sync`.
     context2
@@ -5662,13 +5754,13 @@ fn reinstall_duplicate() -> Result<()> {
 
     // Copy the virtual environment to a new location.
     copy_dir_all(
-        context2.site_packages().join("pip-22.1.1.dist-info"),
-        context1.site_packages().join("pip-22.1.1.dist-info"),
+        context2.site_packages().join("iniconfig-2.0.0.dist-info"),
+        context1.site_packages().join("iniconfig-2.0.0.dist-info"),
     )?;
 
     // Run `pip install`.
     uv_snapshot!(context1.pip_install()
-        .arg("pip")
+        .arg("iniconfig")
         .arg("--no-deps")
         .arg("--reinstall"),
         @"
@@ -5678,9 +5770,8 @@ fn reinstall_duplicate() -> Result<()> {
     Prepared 1 package in [TIME]
     Uninstalled 2 packages in [TIME]
     Installed 1 package in [TIME]
-     - pip==21.3.1
-     - pip==22.1.1
-     + pip==24.0
+     - iniconfig==1.1.1
+     ~ iniconfig==2.0.0
     "
     );
 
@@ -5689,32 +5780,58 @@ fn reinstall_duplicate() -> Result<()> {
 
 /// Install a package that contains a symlink within the archive.
 #[test]
-fn install_symlink() {
+fn install_symlink() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    uv_snapshot!(context.pip_install()
-        .arg("pgpdump==1.5")
+    let source_dist = context.temp_dir.child("pgpdump-1.5.tar.gz");
+    write_tar_gz_with_symlink(
+        &context,
+        source_dist.path(),
+        &[
+            (
+                "pgpdump-1.5/pyproject.toml",
+                indoc! {r#"
+                [build-system]
+                requires = ["uv_build>=0.7,<10000"]
+                build-backend = "uv_build"
+
+                [project]
+                name = "pgpdump"
+                version = "1.5"
+                requires-python = ">=3.12"
+                "#},
+            ),
+            ("pgpdump-1.5/src/pgpdump/__init__.py", ""),
+            ("pgpdump-1.5/README.md", "pgpdump fixture\n"),
+        ],
+        ("pgpdump-1.5/README-link.md", "README.md"),
+    )?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg(source_dist.path())
         .arg("--strict"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + pgpdump==1.5
+     + pgpdump==1.5 (from file://[TEMP_DIR]/pgpdump-1.5.tar.gz)
     "
     );
 
     context.assert_command("import pgpdump").success();
 
-    uv_snapshot!(context
+    uv_snapshot!(context.filters(), context
         .pip_uninstall()
         .arg("pgpdump"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Uninstalled 1 package in [TIME]
-     - pgpdump==1.5
+     - pgpdump==1.5 (from file://[TEMP_DIR]/pgpdump-1.5.tar.gz)
     "
     );
+
+    Ok(())
 }
 
 #[test]
@@ -6508,9 +6625,13 @@ fn requires_python_source_dist_installed_incompatible_registry() {
 /// Install with `--no-build-isolation`, to disable isolation during PEP 517 builds.
 #[test]
 fn no_build_isolation() -> Result<()> {
+    let artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
     let requirements_in = context.temp_dir.child("requirements.in");
-    requirements_in.write_str("anyio @ https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz")?;
+    requirements_in.write_str(&format!(
+        "requests @ {}",
+        artifacts.file_url("requests-1.2.0.tar.gz")
+    ))?;
 
     // We expect the build to fail, because `setuptools` is not installed.
     uv_snapshot!(context.filters(), context.pip_install()
@@ -6519,19 +6640,19 @@ fn no_build_isolation() -> Result<()> {
         .arg("--no-build-isolation"), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Failed to build `anyio @ https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz`
+    error: Failed to build `requests @ http://[LOCALHOST]/files/requests-1.2.0.tar.gz`
       cause: The build backend returned an error
-      cause: Call to `setuptools.build_meta.prepare_metadata_for_build_wheel` failed (exit status: 1)
+      cause: Call to `setuptools.build_meta:__legacy__.prepare_metadata_for_build_wheel` failed (exit status: 1)
 
              [stderr]
              Traceback (most recent call last):
                File "<string>", line 8, in <module>
              ModuleNotFoundError: No module named 'setuptools'
 
-    hint: This error likely indicates that `anyio` depends on `setuptools`, but doesn't declare it as a build dependency. If `anyio` is a first-party package, consider adding `setuptools` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
+    hint: This error likely indicates that `requests` depends on `setuptools`, but doesn't declare it as a build dependency. If `requests` is a first-party package, consider adding `setuptools` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
 
     [tool.uv.extra-build-dependencies]
-    anyio = ["setuptools"]
+    requests = ["setuptools"]
 
     or `uv pip install setuptools` into the environment and re-run with `--no-build-isolation`.
     "#
@@ -6547,22 +6668,20 @@ fn no_build_isolation() -> Result<()> {
     Prepared 2 packages in [TIME]
     Installed 2 packages in [TIME]
      + setuptools==69.2.0
-     + wheel==0.43.0
+     + wheel==0.42.0
     ");
 
     // We expect the build to succeed, since `setuptools` is now installed.
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("requirements.in")
         .arg("--no-build-isolation"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==0.0.0 (from https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz)
-     + idna==3.6
-     + sniffio==1.3.1
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + requests==1.2.0 (from http://[LOCALHOST]/files/requests-1.2.0.tar.gz)
     "
     );
 
@@ -6572,9 +6691,13 @@ fn no_build_isolation() -> Result<()> {
 /// Ensure that `UV_NO_BUILD_ISOLATION` env var does the same as the `--no-build-isolation` flag
 #[test]
 fn respect_no_build_isolation_env_var() -> Result<()> {
+    let artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
     let requirements_in = context.temp_dir.child("requirements.in");
-    requirements_in.write_str("anyio @ https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz")?;
+    requirements_in.write_str(&format!(
+        "requests @ {}",
+        artifacts.file_url("requests-1.2.0.tar.gz")
+    ))?;
 
     // We expect the build to fail, because `setuptools` is not installed.
     uv_snapshot!(context.filters(), context.pip_install()
@@ -6583,19 +6706,19 @@ fn respect_no_build_isolation_env_var() -> Result<()> {
         .env(EnvVars::UV_NO_BUILD_ISOLATION, "yes"), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Failed to build `anyio @ https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz`
+    error: Failed to build `requests @ http://[LOCALHOST]/files/requests-1.2.0.tar.gz`
       cause: The build backend returned an error
-      cause: Call to `setuptools.build_meta.prepare_metadata_for_build_wheel` failed (exit status: 1)
+      cause: Call to `setuptools.build_meta:__legacy__.prepare_metadata_for_build_wheel` failed (exit status: 1)
 
              [stderr]
              Traceback (most recent call last):
                File "<string>", line 8, in <module>
              ModuleNotFoundError: No module named 'setuptools'
 
-    hint: This error likely indicates that `anyio` depends on `setuptools`, but doesn't declare it as a build dependency. If `anyio` is a first-party package, consider adding `setuptools` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
+    hint: This error likely indicates that `requests` depends on `setuptools`, but doesn't declare it as a build dependency. If `requests` is a first-party package, consider adding `setuptools` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
 
     [tool.uv.extra-build-dependencies]
-    anyio = ["setuptools"]
+    requests = ["setuptools"]
 
     or `uv pip install setuptools` into the environment and re-run with `--no-build-isolation`.
     "#
@@ -6611,22 +6734,20 @@ fn respect_no_build_isolation_env_var() -> Result<()> {
     Prepared 2 packages in [TIME]
     Installed 2 packages in [TIME]
      + setuptools==69.2.0
-     + wheel==0.43.0
+     + wheel==0.42.0
     ");
 
     // We expect the build to succeed, since `setuptools` is now installed.
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("requirements.in")
         .env(EnvVars::UV_NO_BUILD_ISOLATION, "yes"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==0.0.0 (from https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz)
-     + idna==3.6
-     + sniffio==1.3.1
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + requests==1.2.0 (from http://[LOCALHOST]/files/requests-1.2.0.tar.gz)
     "
     );
 
@@ -6730,11 +6851,15 @@ fn dry_run_install() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 fn dry_run_install_url_dependency() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio @ https://files.pythonhosted.org/packages/2d/b8/7333d87d5f03247215d86a86362fd3e324111788c6cdd8d2e6196a6ba833/anyio-4.2.0.tar.gz")?;
+    requirements_txt.write_str(&format!(
+        "anyio @ {}",
+        artifacts.file_url("anyio-4.2.0.tar.gz")
+    ))?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("requirements.txt")
         .arg("--dry-run")
@@ -6744,7 +6869,7 @@ fn dry_run_install_url_dependency() -> std::result::Result<(), Box<dyn std::erro
     Resolved 3 packages in [TIME]
     Would download 3 packages
     Would install 3 packages
-     + anyio @ https://files.pythonhosted.org/packages/2d/b8/7333d87d5f03247215d86a86362fd3e324111788c6cdd8d2e6196a6ba833/anyio-4.2.0.tar.gz
+     + anyio @ http://[LOCALHOST]/files/anyio-4.2.0.tar.gz
      + idna==3.6
      + sniffio==1.3.1
     "
@@ -6755,12 +6880,16 @@ fn dry_run_install_url_dependency() -> std::result::Result<(), Box<dyn std::erro
 
 #[test]
 fn dry_run_uninstall_url_dependency() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio @ https://files.pythonhosted.org/packages/2d/b8/7333d87d5f03247215d86a86362fd3e324111788c6cdd8d2e6196a6ba833/anyio-4.2.0.tar.gz")?;
+    requirements_txt.write_str(&format!(
+        "anyio @ {}",
+        artifacts.file_url("anyio-4.2.0.tar.gz")
+    ))?;
 
     // Install the URL dependency
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
@@ -6769,7 +6898,7 @@ fn dry_run_uninstall_url_dependency() -> std::result::Result<(), Box<dyn std::er
     Resolved 3 packages in [TIME]
     Prepared 3 packages in [TIME]
     Installed 3 packages in [TIME]
-     + anyio==4.2.0 (from https://files.pythonhosted.org/packages/2d/b8/7333d87d5f03247215d86a86362fd3e324111788c6cdd8d2e6196a6ba833/anyio-4.2.0.tar.gz)
+     + anyio==4.2.0 (from http://[LOCALHOST]/files/anyio-4.2.0.tar.gz)
      + idna==3.6
      + sniffio==1.3.1
     "
@@ -6777,7 +6906,7 @@ fn dry_run_uninstall_url_dependency() -> std::result::Result<(), Box<dyn std::er
 
     // Then switch to a registry dependency
     requirements_txt.write_str("anyio")?;
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("requirements.txt")
         .arg("--upgrade-package")
@@ -6790,7 +6919,7 @@ fn dry_run_uninstall_url_dependency() -> std::result::Result<(), Box<dyn std::er
     Would download 1 package
     Would uninstall 1 package
     Would install 1 package
-     - anyio==4.2.0 (from https://files.pythonhosted.org/packages/2d/b8/7333d87d5f03247215d86a86362fd3e324111788c6cdd8d2e6196a6ba833/anyio-4.2.0.tar.gz)
+     - anyio==4.2.0 (from http://[LOCALHOST]/files/anyio-4.2.0.tar.gz)
      + anyio==4.3.0
     "
     );
@@ -7139,14 +7268,22 @@ async fn install_index_with_relative_links() {
 /// Install a package from an index that requires authentication from the keyring.
 #[tokio::test]
 async fn install_package_basic_auth_from_keyring() {
+    let keyring_context = uv_test::test_context!("3.12");
     let context = uv_test::test_context!("3.12");
     let proxy = crate::pypi_proxy::start().await;
 
     // Install our keyring plugin
-    context
+    keyring_context
         .pip_install()
         .arg(
-            context
+            keyring_context
+                .workspace_root
+                .join("test")
+                .join("packages")
+                .join("keyring_stub"),
+        )
+        .arg(
+            keyring_context
                 .workspace_root
                 .join("test")
                 .join("packages")
@@ -7163,7 +7300,7 @@ async fn install_package_basic_auth_from_keyring() {
         .arg("subprocess")
         .arg("--strict")
         .env(EnvVars::KEYRING_TEST_CREDENTIALS, format!(r#"{{"{host}": {{"public": "heron"}}}}"#, host = proxy.host_port()))
-        .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
+        .env(EnvVars::PATH, venv_bin_path(&keyring_context.venv)), @"
     exit_code: 0 (success)
     ----- stderr -----
     Keyring request for public@http://[LOCALHOST]/basic-auth/simple
@@ -7184,14 +7321,22 @@ async fn install_package_basic_auth_from_keyring() {
 /// but the keyring has the wrong password
 #[tokio::test]
 async fn install_package_basic_auth_from_keyring_wrong_password() {
+    let keyring_context = uv_test::test_context!("3.12");
     let context = uv_test::test_context!("3.12");
     let proxy = crate::pypi_proxy::start().await;
 
     // Install our keyring plugin
-    context
+    keyring_context
         .pip_install()
         .arg(
-            context
+            keyring_context
+                .workspace_root
+                .join("test")
+                .join("packages")
+                .join("keyring_stub"),
+        )
+        .arg(
+            keyring_context
                 .workspace_root
                 .join("test")
                 .join("packages")
@@ -7208,7 +7353,7 @@ async fn install_package_basic_auth_from_keyring_wrong_password() {
         .arg("subprocess")
         .arg("--strict")
         .env(EnvVars::KEYRING_TEST_CREDENTIALS, format!(r#"{{"{host}": {{"public": "foobar"}}}}"#, host = proxy.host_port()))
-        .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
+        .env(EnvVars::PATH, venv_bin_path(&keyring_context.venv)), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Keyring request for public@http://[LOCALHOST]/basic-auth/simple
@@ -7225,14 +7370,22 @@ async fn install_package_basic_auth_from_keyring_wrong_password() {
 /// but the keyring has the wrong username
 #[tokio::test]
 async fn install_package_basic_auth_from_keyring_wrong_username() {
+    let keyring_context = uv_test::test_context!("3.12");
     let context = uv_test::test_context!("3.12");
     let proxy = crate::pypi_proxy::start().await;
 
     // Install our keyring plugin
-    context
+    keyring_context
         .pip_install()
         .arg(
-            context
+            keyring_context
+                .workspace_root
+                .join("test")
+                .join("packages")
+                .join("keyring_stub"),
+        )
+        .arg(
+            keyring_context
                 .workspace_root
                 .join("test")
                 .join("packages")
@@ -7249,7 +7402,7 @@ async fn install_package_basic_auth_from_keyring_wrong_username() {
         .arg("subprocess")
         .arg("--strict")
         .env(EnvVars::KEYRING_TEST_CREDENTIALS, format!(r#"{{"{host}": {{"other": "heron"}}}}"#, host = proxy.host_port()))
-        .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
+        .env(EnvVars::PATH, venv_bin_path(&keyring_context.venv)), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Keyring request for public@http://[LOCALHOST]/basic-auth/simple
@@ -7334,25 +7487,99 @@ fn install_site_packages_mtime_updated() -> Result<()> {
 /// entry (because we want to ignore the entire cache from outside), ignoring all python source
 /// files.
 #[test]
-fn deptry_gitignore() {
+fn deptry_gitignore() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    let source_dist_dir = context
-        .workspace_root
-        .join("test/packages/deptry_reproducer");
+    let source_dist = context.temp_dir.child("deptry_reproducer-0.1.0.tar.gz");
+    write_tar_gz(
+        File::create(source_dist.path())?,
+        &[
+            (
+                "deptry_reproducer-0.1.0/pyproject.toml",
+                indoc! {r#"
+                [build-system]
+                requires = []
+                build-backend = "build_backend"
+                backend-path = ["."]
+
+                [project]
+                name = "deptry-reproducer"
+                version = "0.1.0"
+                requires-python = ">=3.8"
+                dependencies = ["cffi"]
+                "#},
+            ),
+            (
+                "deptry_reproducer-0.1.0/build_backend.py",
+                indoc! {r#"
+                import pathlib
+                import zipfile
+
+
+                ROOT = pathlib.Path(__file__).parent
+                DIST_INFO = "deptry_reproducer-0.1.0.dist-info"
+                WHEEL_NAME = "deptry_reproducer-0.1.0-py3-none-any.whl"
+
+
+                def _gitignored(path):
+                    for parent in [path.parent, *path.parents]:
+                        gitignore = parent / ".gitignore"
+                        if gitignore.is_file() and gitignore.read_text().strip() == "*":
+                            return True
+                        if (parent / ".git").exists():
+                            return False
+                    return False
+
+
+                def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+                    wheel_path = pathlib.Path(wheel_directory, WHEEL_NAME)
+                    source_root = ROOT / "src"
+                    module_root = source_root / "deptry_reproducer"
+
+                    with zipfile.ZipFile(wheel_path, "w") as wheel:
+                        for path in module_root.rglob("*.py"):
+                            if not _gitignored(path):
+                                wheel.write(path, path.relative_to(source_root))
+                        wheel.writestr(
+                            f"{DIST_INFO}/METADATA",
+                            "Metadata-Version: 2.3\n"
+                            "Name: deptry-reproducer\n"
+                            "Version: 0.1.0\n"
+                            "Requires-Dist: cffi\n",
+                        )
+                        wheel.writestr(
+                            f"{DIST_INFO}/WHEEL",
+                            "Wheel-Version: 1.0\n"
+                            "Generator: uv-test\n"
+                            "Root-Is-Purelib: true\n"
+                            "Tag: py3-none-any\n",
+                        )
+                        wheel.writestr(f"{DIST_INFO}/RECORD", "")
+
+                    return WHEEL_NAME
+                "#},
+            ),
+            (
+                "deptry_reproducer-0.1.0/src/deptry_reproducer/__init__.py",
+                "",
+            ),
+            (
+                "deptry_reproducer-0.1.0/src/deptry_reproducer/foo.py",
+                "value = 42\n",
+            ),
+        ],
+    )?;
 
     uv_snapshot!(context.filters(), context.pip_install()
-        .arg(format!("deptry_reproducer @ {}", source_dist_dir.join("deptry_reproducer-0.1.0.tar.gz").simplified_display()))
-        .arg("--strict")
-        .current_dir(source_dist_dir), @"
+        .arg(format!("deptry_reproducer @ {}", source_dist.simplified_display()))
+        .arg("--strict"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Using Python 3.12.[X] environment at: [VENV]/
     Resolved 3 packages in [TIME]
     Prepared 3 packages in [TIME]
     Installed 3 packages in [TIME]
      + cffi==1.16.0
-     + deptry-reproducer==0.1.0 (from file://[WORKSPACE]/test/packages/deptry_reproducer/deptry_reproducer-0.1.0.tar.gz)
+     + deptry-reproducer==0.1.0 (from file://[TEMP_DIR]/deptry_reproducer-0.1.0.tar.gz)
      + pycparser==2.21
     "
     );
@@ -7361,6 +7588,8 @@ fn deptry_gitignore() {
     context
         .assert_command("import deptry_reproducer.foo")
         .success();
+
+    Ok(())
 }
 
 /// Reinstall an installed package with `--no-index`
@@ -8474,7 +8703,7 @@ fn find_links_no_binary() {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + tqdm==999.0.0
+     + tqdm==1000.0.0
     "
     );
 }
@@ -8482,23 +8711,21 @@ fn find_links_no_binary() {
 /// Provide valid hashes for all dependencies with `--require-hashes`.
 #[test]
 fn require_hashes() -> Result<()> {
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
 
     // Write to a requirements file.
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc::indoc! {r"
+    requirements_txt.write_str(&indoc::formatdoc!{r"
         anyio==4.0.0 \
-            --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f \
-            --hash=sha256:f7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a
+            --hash=sha256:{artifact_hash_0}
         idna==3.6 \
-            --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-            --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+            --hash=sha256:{artifact_hash_1}
             # via anyio
         sniffio==1.3.1 \
-            --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-            --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+            --hash=sha256:{artifact_hash_2}
             # via anyio
-    "})?;
+    ", artifact_hash_0 = registry_artifacts.file_hash("anyio-4.0.0-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_1 = registry_artifacts.file_hash("idna-3.6-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_2 = registry_artifacts.file_hash("sniffio-1.3.1-py3-none-any.whl").expect("fixture distribution should exist") })?;
 
     uv_snapshot!(context.pip_install()
         .arg("-r")
@@ -8552,15 +8779,16 @@ fn require_hashes_build_dependencies() -> Result<()> {
 /// Omit hashes for dependencies with `--require-hashes`, which is allowed with `--no-deps`.
 #[test]
 fn require_hashes_no_deps() -> Result<()> {
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
 
     // Write to a requirements file.
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc::indoc! {r"
+    requirements_txt.write_str(&indoc::formatdoc!{r"
         anyio==4.0.0 \
-            --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f \
-            --hash=sha256:f7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a
-    "})?;
+            --hash=sha256:{artifact_hash_0} \
+            --hash=sha256:{artifact_hash_1}
+    ", artifact_hash_0 = registry_artifacts.file_hash("anyio-4.0.0-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_1 = registry_artifacts.file_hash("anyio-4.0.0.tar.gz").expect("fixture distribution should exist") })?;
 
     uv_snapshot!(context.pip_install()
         .arg("-r")
@@ -8582,23 +8810,25 @@ fn require_hashes_no_deps() -> Result<()> {
 /// Provide the wrong hash with `--require-hashes`.
 #[test]
 fn require_hashes_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&artifacts.index_url());
 
     // Write to a requirements file.
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc::indoc! {r"
+    requirements_txt.write_str(&formatdoc! {r"
         anyio==4.0.0 \
             --hash=sha256:afdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f \
             --hash=sha256:a7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a
         idna==3.6 \
-            --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-            --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+            --hash=sha256:{idna_hash}
             # via anyio
         sniffio==1.3.1 \
-            --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-            --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+            --hash=sha256:{sniffio_hash}
             # via anyio
-    "})?;
+    ",
+        idna_hash = artifacts.file_hash("idna-3.6-py3-none-any.whl").context("idna wheel should exist")?,
+        sniffio_hash = artifacts.file_hash("sniffio-1.3.1-py3-none-any.whl").context("sniffio wheel should exist")?,
+    })?;
 
     // Raise an error.
     uv_snapshot!(context.pip_install()
@@ -8616,7 +8846,7 @@ fn require_hashes_mismatch() -> Result<()> {
                sha256:a7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a
 
              Computed:
-               sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f
+               sha256:199e461df405c68762d1b9ec6185a32bbb28f0bf3a14deab9f42c630743dfeae
     "
     );
 
@@ -8677,6 +8907,7 @@ fn require_hashes_editable() -> Result<()> {
 /// If a hash is only included as a constraint, that's good enough for `--require-hashes`.
 #[test]
 fn require_hashes_constraint() -> Result<()> {
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
 
     // Include the hash in the constraint file.
@@ -8684,7 +8915,12 @@ fn require_hashes_constraint() -> Result<()> {
     requirements_txt.write_str("anyio==4.0.0")?;
 
     let constraints_txt = context.temp_dir.child("constraints.txt");
-    constraints_txt.write_str("anyio==4.0.0 --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f")?;
+    constraints_txt.write_str(&format!(
+        "anyio==4.0.0 --hash=sha256:{artifact_hash_0}",
+        artifact_hash_0 = registry_artifacts
+            .file_hash("anyio-4.0.0-py3-none-any.whl")
+            .expect("fixture distribution should exist")
+    ))?;
 
     // Install the editable packages.
     uv_snapshot!(context.pip_install()
@@ -8707,9 +8943,12 @@ fn require_hashes_constraint() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(
-        "anyio --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f",
-    )?;
+    requirements_txt.write_str(&format!(
+        "anyio --hash=sha256:{artifact_hash_0}",
+        artifact_hash_0 = registry_artifacts
+            .file_hash("anyio-4.0.0-py3-none-any.whl")
+            .expect("fixture distribution should exist")
+    ))?;
 
     let constraints_txt = context.temp_dir.child("constraints.txt");
     constraints_txt.write_str("anyio==4.0.0")?;
@@ -8737,7 +8976,12 @@ fn require_hashes_constraint() -> Result<()> {
     )?;
 
     let constraints_txt = context.temp_dir.child("constraints.txt");
-    constraints_txt.write_str("anyio==4.0.0 --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f")?;
+    constraints_txt.write_str(&format!(
+        "anyio==4.0.0 --hash=sha256:{artifact_hash_0}",
+        artifact_hash_0 = registry_artifacts
+            .file_hash("anyio-4.0.0-py3-none-any.whl")
+            .expect("fixture distribution should exist")
+    ))?;
 
     // Install the editable packages.
     uv_snapshot!(context.pip_install()
@@ -8757,12 +9001,20 @@ fn require_hashes_constraint() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(
-        "anyio==4.0.0 --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f",
-    )?;
+    requirements_txt.write_str(&format!(
+        "anyio==4.0.0 --hash=sha256:{artifact_hash_0}",
+        artifact_hash_0 = registry_artifacts
+            .file_hash("anyio-4.0.0-py3-none-any.whl")
+            .expect("fixture distribution should exist")
+    ))?;
 
     let constraints_txt = context.temp_dir.child("constraints.txt");
-    constraints_txt.write_str("anyio==4.0.0 --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f")?;
+    constraints_txt.write_str(&format!(
+        "anyio==4.0.0 --hash=sha256:{artifact_hash_0}",
+        artifact_hash_0 = registry_artifacts
+            .file_hash("anyio-4.0.0-py3-none-any.whl")
+            .expect("fixture distribution should exist")
+    ))?;
 
     // Install the editable packages.
     uv_snapshot!(context.pip_install()
@@ -8785,12 +9037,15 @@ fn require_hashes_constraint() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(
-        "anyio==4.0.0 --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f",
-    )?;
+    requirements_txt.write_str(&format!(
+        "anyio==4.0.0 --hash=sha256:{artifact_hash_0}",
+        artifact_hash_0 = registry_artifacts
+            .file_hash("anyio-4.0.0-py3-none-any.whl")
+            .expect("fixture distribution should exist")
+    ))?;
 
     let constraints_txt = context.temp_dir.child("constraints.txt");
-    constraints_txt.write_str("anyio==4.0.0 --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f --hash=sha256:afdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f")?;
+    constraints_txt.write_str(&format!("anyio==4.0.0 --hash=sha256:{artifact_hash_0} --hash=sha256:afdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f", artifact_hash_0 = registry_artifacts.file_hash("anyio-4.0.0-py3-none-any.whl").expect("fixture distribution should exist")))?;
 
     // Install the editable packages.
     uv_snapshot!(context.pip_install()
@@ -8815,23 +9070,28 @@ fn require_hashes_constraint() -> Result<()> {
 /// We allow `--require-hashes` for unnamed URL dependencies.
 #[test]
 fn require_hashes_unnamed() -> Result<()> {
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt
-        .write_str(indoc::indoc! {r"
-            https://files.pythonhosted.org/packages/36/55/ad4de788d84a630656ece71059665e01ca793c04294c463fd84132f40fe6/anyio-4.0.0-py3-none-any.whl --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f
+    requirements_txt.write_str(
+        &indoc::formatdoc!{r"
+            [ANYIO_WHEEL_URL] --hash=sha256:{artifact_hash_0}
             idna==3.6 \
-                --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-                --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+                --hash=sha256:{artifact_hash_1}
                 # via anyio
             sniffio==1.3.1 \
-                --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-                --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+                --hash=sha256:{artifact_hash_2}
                 # via anyio
-        "})?;
+        ", artifact_hash_0 = registry_artifacts.file_hash("anyio-4.3.0-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_1 = registry_artifacts.file_hash("idna-3.6-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_2 = registry_artifacts.file_hash("sniffio-1.3.1-py3-none-any.whl").expect("fixture distribution should exist") }
+        .replace(
+            "[ANYIO_WHEEL_URL]",
+            &artifacts.file_url("anyio-4.3.0-py3-none-any.whl"),
+        ),
+    )?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("requirements.txt")
         .arg("--require-hashes"), @"
@@ -8840,7 +9100,7 @@ fn require_hashes_unnamed() -> Result<()> {
     Resolved 3 packages in [TIME]
     Prepared 3 packages in [TIME]
     Installed 3 packages in [TIME]
-     + anyio==4.0.0 (from https://files.pythonhosted.org/packages/36/55/ad4de788d84a630656ece71059665e01ca793c04294c463fd84132f40fe6/anyio-4.0.0-py3-none-any.whl)
+     + anyio==4.3.0 (from http://[LOCALHOST]/files/anyio-4.3.0-py3-none-any.whl)
      + idna==3.6
      + sniffio==1.3.1
     "
@@ -8853,27 +9113,32 @@ fn require_hashes_unnamed() -> Result<()> {
 /// a repeat of a registered package.
 #[test]
 fn require_hashes_unnamed_repeated() -> Result<()> {
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
 
     // Re-run, but duplicate `anyio`.
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt
-        .write_str(indoc::indoc! {r"
-            anyio==4.0.0 \
-                --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f \
-                --hash=sha256:f7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a
-            https://files.pythonhosted.org/packages/36/55/ad4de788d84a630656ece71059665e01ca793c04294c463fd84132f40fe6/anyio-4.0.0-py3-none-any.whl --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f
+    requirements_txt.write_str(
+        &indoc::formatdoc!{r"
+            anyio==4.3.0 \
+                --hash=sha256:{artifact_hash_0} \
+                --hash=sha256:{artifact_hash_1}
+            [ANYIO_WHEEL_URL] --hash=sha256:{artifact_hash_2}
             idna==3.6 \
-                --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-                --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+                --hash=sha256:{artifact_hash_3}
                 # via anyio
             sniffio==1.3.1 \
-                --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-                --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+                --hash=sha256:{artifact_hash_4}
                 # via anyio
-        "})?;
+        ", artifact_hash_0 = registry_artifacts.file_hash("anyio-4.3.0.tar.gz").expect("fixture distribution should exist"), artifact_hash_1 = registry_artifacts.file_hash("anyio-4.3.0-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_2 = registry_artifacts.file_hash("anyio-4.3.0-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_3 = registry_artifacts.file_hash("idna-3.6-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_4 = registry_artifacts.file_hash("sniffio-1.3.1-py3-none-any.whl").expect("fixture distribution should exist") }
+        .replace(
+            "[ANYIO_WHEEL_URL]",
+            &artifacts.file_url("anyio-4.3.0-py3-none-any.whl"),
+        ),
+    )?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("requirements.txt")
         .arg("--require-hashes"), @"
@@ -8882,7 +9147,7 @@ fn require_hashes_unnamed_repeated() -> Result<()> {
     Resolved 3 packages in [TIME]
     Prepared 3 packages in [TIME]
     Installed 3 packages in [TIME]
-     + anyio==4.0.0 (from https://files.pythonhosted.org/packages/36/55/ad4de788d84a630656ece71059665e01ca793c04294c463fd84132f40fe6/anyio-4.0.0-py3-none-any.whl)
+     + anyio==4.3.0 (from http://[LOCALHOST]/files/anyio-4.3.0-py3-none-any.whl)
      + idna==3.6
      + sniffio==1.3.1
     "
@@ -8995,120 +9260,23 @@ fn install_with_excludes_from_stdin() -> Result<()> {
 }
 
 /// Provide valid hashes for all dependencies with `--require-hashes` with accompanying markers.
-/// Critically, one package (`requests`) depends on another (`urllib3`).
+/// The marked parent has a transitive dependency that also requires a matching hash.
 #[test]
 fn require_hashes_marker() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-01T00:00:00Z");
-
-    // Write to a requirements file.
+    let artifacts = PackseServer::new("packages/require-hashes-marker.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&artifacts.index_url());
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc::indoc! {r"
-        certifi==2024.12.14 ; python_version >= '3.8' \
-            --hash=sha256:1275f7a45be9464efc1173084eaa30f866fe2e47d389406136d332ed4967ec56 \
-            --hash=sha256:b650d30f370c2b724812bee08008be0c4163b163ddaec3f2546c1caf65f191db
-        charset-normalizer==3.4.1 ; python_version >= '3.8' \
-            --hash=sha256:0167ddc8ab6508fe81860a57dd472b2ef4060e8d378f0cc555707126830f2537 \
-            --hash=sha256:01732659ba9b5b873fc117534143e4feefecf3b2078b0a6a2e925271bb6f4cfa \
-            --hash=sha256:01ad647cdd609225c5350561d084b42ddf732f4eeefe6e678765636791e78b9a \
-            --hash=sha256:04432ad9479fa40ec0f387795ddad4437a2b50417c69fa275e212933519ff294 \
-            --hash=sha256:0907f11d019260cdc3f94fbdb23ff9125f6b5d1039b76003b5b0ac9d6a6c9d5b \
-            --hash=sha256:0924e81d3d5e70f8126529951dac65c1010cdf117bb75eb02dd12339b57749dd \
-            --hash=sha256:09b26ae6b1abf0d27570633b2b078a2a20419c99d66fb2823173d73f188ce601 \
-            --hash=sha256:09b5e6733cbd160dcc09589227187e242a30a49ca5cefa5a7edd3f9d19ed53fd \
-            --hash=sha256:0af291f4fe114be0280cdd29d533696a77b5b49cfde5467176ecab32353395c4 \
-            --hash=sha256:0f55e69f030f7163dffe9fd0752b32f070566451afe180f99dbeeb81f511ad8d \
-            --hash=sha256:1a2bc9f351a75ef49d664206d51f8e5ede9da246602dc2d2726837620ea034b2 \
-            --hash=sha256:22e14b5d70560b8dd51ec22863f370d1e595ac3d024cb8ad7d308b4cd95f8313 \
-            --hash=sha256:234ac59ea147c59ee4da87a0c0f098e9c8d169f4dc2a159ef720f1a61bbe27cd \
-            --hash=sha256:2369eea1ee4a7610a860d88f268eb39b95cb588acd7235e02fd5a5601773d4fa \
-            --hash=sha256:237bdbe6159cff53b4f24f397d43c6336c6b0b42affbe857970cefbb620911c8 \
-            --hash=sha256:28bf57629c75e810b6ae989f03c0828d64d6b26a5e205535585f96093e405ed1 \
-            --hash=sha256:2967f74ad52c3b98de4c3b32e1a44e32975e008a9cd2a8cc8966d6a5218c5cb2 \
-            --hash=sha256:2a75d49014d118e4198bcee5ee0a6f25856b29b12dbf7cd012791f8a6cc5c496 \
-            --hash=sha256:2bdfe3ac2e1bbe5b59a1a63721eb3b95fc9b6817ae4a46debbb4e11f6232428d \
-            --hash=sha256:2d074908e1aecee37a7635990b2c6d504cd4766c7bc9fc86d63f9c09af3fa11b \
-            --hash=sha256:2fb9bd477fdea8684f78791a6de97a953c51831ee2981f8e4f583ff3b9d9687e \
-            --hash=sha256:311f30128d7d333eebd7896965bfcfbd0065f1716ec92bd5638d7748eb6f936a \
-            --hash=sha256:329ce159e82018d646c7ac45b01a430369d526569ec08516081727a20e9e4af4 \
-            --hash=sha256:345b0426edd4e18138d6528aed636de7a9ed169b4aaf9d61a8c19e39d26838ca \
-            --hash=sha256:363e2f92b0f0174b2f8238240a1a30142e3db7b957a5dd5689b0e75fb717cc78 \
-            --hash=sha256:3a3bd0dcd373514dcec91c411ddb9632c0d7d92aed7093b8c3bbb6d69ca74408 \
-            --hash=sha256:3bed14e9c89dcb10e8f3a29f9ccac4955aebe93c71ae803af79265c9ca5644c5 \
-            --hash=sha256:44251f18cd68a75b56585dd00dae26183e102cd5e0f9f1466e6df5da2ed64ea3 \
-            --hash=sha256:44ecbf16649486d4aebafeaa7ec4c9fed8b88101f4dd612dcaf65d5e815f837f \
-            --hash=sha256:4532bff1b8421fd0a320463030c7520f56a79c9024a4e88f01c537316019005a \
-            --hash=sha256:49402233c892a461407c512a19435d1ce275543138294f7ef013f0b63d5d3765 \
-            --hash=sha256:4c0907b1928a36d5a998d72d64d8eaa7244989f7aaaf947500d3a800c83a3fd6 \
-            --hash=sha256:4d86f7aff21ee58f26dcf5ae81a9addbd914115cdebcbb2217e4f0ed8982e146 \
-            --hash=sha256:5777ee0881f9499ed0f71cc82cf873d9a0ca8af166dfa0af8ec4e675b7df48e6 \
-            --hash=sha256:5df196eb874dae23dcfb968c83d4f8fdccb333330fe1fc278ac5ceeb101003a9 \
-            --hash=sha256:619a609aa74ae43d90ed2e89bdd784765de0a25ca761b93e196d938b8fd1dbbd \
-            --hash=sha256:6e27f48bcd0957c6d4cb9d6fa6b61d192d0b13d5ef563e5f2ae35feafc0d179c \
-            --hash=sha256:6ff8a4a60c227ad87030d76e99cd1698345d4491638dfa6673027c48b3cd395f \
-            --hash=sha256:73d94b58ec7fecbc7366247d3b0b10a21681004153238750bb67bd9012414545 \
-            --hash=sha256:7461baadb4dc00fd9e0acbe254e3d7d2112e7f92ced2adc96e54ef6501c5f176 \
-            --hash=sha256:75832c08354f595c760a804588b9357d34ec00ba1c940c15e31e96d902093770 \
-            --hash=sha256:7709f51f5f7c853f0fb938bcd3bc59cdfdc5203635ffd18bf354f6967ea0f824 \
-            --hash=sha256:78baa6d91634dfb69ec52a463534bc0df05dbd546209b79a3880a34487f4b84f \
-            --hash=sha256:7974a0b5ecd505609e3b19742b60cee7aa2aa2fb3151bc917e6e2646d7667dcf \
-            --hash=sha256:7a4f97a081603d2050bfaffdefa5b02a9ec823f8348a572e39032caa8404a487 \
-            --hash=sha256:7b1bef6280950ee6c177b326508f86cad7ad4dff12454483b51d8b7d673a2c5d \
-            --hash=sha256:7d053096f67cd1241601111b698f5cad775f97ab25d81567d3f59219b5f1adbd \
-            --hash=sha256:804a4d582ba6e5b747c625bf1255e6b1507465494a40a2130978bda7b932c90b \
-            --hash=sha256:807f52c1f798eef6cf26beb819eeb8819b1622ddfeef9d0977a8502d4db6d534 \
-            --hash=sha256:80ed5e856eb7f30115aaf94e4a08114ccc8813e6ed1b5efa74f9f82e8509858f \
-            --hash=sha256:8417cb1f36cc0bc7eaba8ccb0e04d55f0ee52df06df3ad55259b9a323555fc8b \
-            --hash=sha256:8436c508b408b82d87dc5f62496973a1805cd46727c34440b0d29d8a2f50a6c9 \
-            --hash=sha256:89149166622f4db9b4b6a449256291dc87a99ee53151c74cbd82a53c8c2f6ccd \
-            --hash=sha256:8bfa33f4f2672964266e940dd22a195989ba31669bd84629f05fab3ef4e2d125 \
-            --hash=sha256:8c60ca7339acd497a55b0ea5d506b2a2612afb2826560416f6894e8b5770d4a9 \
-            --hash=sha256:91b36a978b5ae0ee86c394f5a54d6ef44db1de0815eb43de826d41d21e4af3de \
-            --hash=sha256:955f8851919303c92343d2f66165294848d57e9bba6cf6e3625485a70a038d11 \
-            --hash=sha256:97f68b8d6831127e4787ad15e6757232e14e12060bec17091b85eb1486b91d8d \
-            --hash=sha256:9b23ca7ef998bc739bf6ffc077c2116917eabcc901f88da1b9856b210ef63f35 \
-            --hash=sha256:9f0b8b1c6d84c8034a44893aba5e767bf9c7a211e313a9605d9c617d7083829f \
-            --hash=sha256:aabfa34badd18f1da5ec1bc2715cadc8dca465868a4e73a0173466b688f29dda \
-            --hash=sha256:ab36c8eb7e454e34e60eb55ca5d241a5d18b2c6244f6827a30e451c42410b5f7 \
-            --hash=sha256:b010a7a4fd316c3c484d482922d13044979e78d1861f0e0650423144c616a46a \
-            --hash=sha256:b1ac5992a838106edb89654e0aebfc24f5848ae2547d22c2c3f66454daa11971 \
-            --hash=sha256:b7b2d86dd06bfc2ade3312a83a5c364c7ec2e3498f8734282c6c3d4b07b346b8 \
-            --hash=sha256:b97e690a2118911e39b4042088092771b4ae3fc3aa86518f84b8cf6888dbdb41 \
-            --hash=sha256:bc2722592d8998c870fa4e290c2eec2c1569b87fe58618e67d38b4665dfa680d \
-            --hash=sha256:c0429126cf75e16c4f0ad00ee0eae4242dc652290f940152ca8c75c3a4b6ee8f \
-            --hash=sha256:c30197aa96e8eed02200a83fba2657b4c3acd0f0aa4bdc9f6c1af8e8962e0757 \
-            --hash=sha256:c4c3e6da02df6fa1410a7680bd3f63d4f710232d3139089536310d027950696a \
-            --hash=sha256:c75cb2a3e389853835e84a2d8fb2b81a10645b503eca9bcb98df6b5a43eb8886 \
-            --hash=sha256:c96836c97b1238e9c9e3fe90844c947d5afbf4f4c92762679acfe19927d81d77 \
-            --hash=sha256:d7f50a1f8c450f3925cb367d011448c39239bb3eb4117c36a6d354794de4ce76 \
-            --hash=sha256:d973f03c0cb71c5ed99037b870f2be986c3c05e63622c017ea9816881d2dd247 \
-            --hash=sha256:d98b1668f06378c6dbefec3b92299716b931cd4e6061f3c875a71ced1780ab85 \
-            --hash=sha256:d9c3cdf5390dcd29aa8056d13e8e99526cda0305acc038b96b30352aff5ff2bb \
-            --hash=sha256:dad3e487649f498dd991eeb901125411559b22e8d7ab25d3aeb1af367df5efd7 \
-            --hash=sha256:dccbe65bd2f7f7ec22c4ff99ed56faa1e9f785482b9bbd7c717e26fd723a1d1e \
-            --hash=sha256:dd78cfcda14a1ef52584dbb008f7ac81c1328c0f58184bf9a84c49c605002da6 \
-            --hash=sha256:e218488cd232553829be0664c2292d3af2eeeb94b32bea483cf79ac6a694e037 \
-            --hash=sha256:e358e64305fe12299a08e08978f51fc21fac060dcfcddd95453eabe5b93ed0e1 \
-            --hash=sha256:ea0d8d539afa5eb2728aa1932a988a9a7af94f18582ffae4bc10b3fbdad0626e \
-            --hash=sha256:eab677309cdb30d047996b36d34caeda1dc91149e4fdca0b1a039b3f79d9a807 \
-            --hash=sha256:eb8178fe3dba6450a3e024e95ac49ed3400e506fd4e9e5c32d30adda88cbd407 \
-            --hash=sha256:ecddf25bee22fe4fe3737a399d0d177d72bc22be6913acfab364b40bce1ba83c \
-            --hash=sha256:eea6ee1db730b3483adf394ea72f808b6e18cf3cb6454b4d86e04fa8c4327a12 \
-            --hash=sha256:f08ff5e948271dc7e18a35641d2f11a4cd8dfd5634f55228b691e62b37125eb3 \
-            --hash=sha256:f30bf9fd9be89ecb2360c7d94a711f00c09b976258846efe40db3d05828e8089 \
-            --hash=sha256:fa88b843d6e211393a37219e6a1c1df99d35e8fd90446f1118f4216e307e48cd \
-            --hash=sha256:fc54db6c8593ef7d4b2a331b58653356cf04f67c960f584edb7c3d8c97e8f39e \
-            --hash=sha256:fd4ec41f914fa74ad1b8304bbc634b3de73d2a0889bd32076342a573e0779e00 \
-            --hash=sha256:ffc9202a29ab3920fa812879e95a9e78b2465fd10be7fcbd042899695d75e616
-        idna==3.10 ; python_version >= '3.8' \
-            --hash=sha256:12f65c9b470abda6dc35cf8e63cc574b1c52b11df2c86030af0ac09b01b13ea9 \
-            --hash=sha256:946d195a0d259cbba61165e88e65941f16e9b36ea6ddb97f00452bae8b1287d3
-        requests==2.32.3 ; python_version >= '3.8' \
-            --hash=sha256:55365417734eb18255590a9ff9eb97e9e1da868d4ccd6402399eaf68af20a760 \
-            --hash=sha256:70761cfe03c773ceb22aa2f671b4757976145175cdfca038c02654d061d6dcc6
-        urllib3==2.2.3 ; python_version >= '3.8' \
-            --hash=sha256:ca899ca043dcb1bafa3e262d73aa25c465bfb49e0bd9dd5d59f1d0acba2f8fac \
-            --hash=sha256:e7d814a81dad81e6caf2ec9fdedb284ecc9c73076b62654547cc64ccdcae26e9
-    "})?;
+    requirements_txt.write_str(&formatdoc! {r"
+        hash-parent==1.0.0 ; python_version >= '3.8' \
+            --hash=sha256:{parent_hash}
+        hash-dependency==1.0.0 ; python_version >= '3.8' \
+            --hash=sha256:{dependency_hash}
+        hash-dependency==2.0.0 ; python_version < '3.8' \
+            --hash=sha256:0000000000000000000000000000000000000000000000000000000000000000
+    ",
+        parent_hash = artifacts.file_hash("hash_parent-1.0.0-py3-none-any.whl").expect("fixture distribution should exist"),
+        dependency_hash = artifacts.file_hash("hash_dependency-1.0.0-py3-none-any.whl").expect("fixture distribution should exist"),
+    })?;
 
     uv_snapshot!(context.pip_install()
         .arg("-r")
@@ -9116,40 +9284,33 @@ fn require_hashes_marker() -> Result<()> {
         .arg("--require-hashes"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 5 packages in [TIME]
-    Prepared 5 packages in [TIME]
-    Installed 5 packages in [TIME]
-     + certifi==2024.12.14
-     + charset-normalizer==3.4.1
-     + idna==3.10
-     + requests==2.32.3
-     + urllib3==2.2.3
-    "
-    );
-
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + hash-dependency==1.0.0
+     + hash-parent==1.0.0
+    ");
     Ok(())
 }
 
 /// Provide valid hashes for all dependencies with `--require-hashes`.
 #[test]
 fn verify_hashes() -> Result<()> {
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
 
     // Write to a requirements file.
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc::indoc! {r"
+    requirements_txt.write_str(&indoc::formatdoc!{r"
         anyio==4.0.0 \
-            --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f \
-            --hash=sha256:f7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a
+            --hash=sha256:{artifact_hash_0}
         idna==3.6 \
-            --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-            --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+            --hash=sha256:{artifact_hash_1}
             # via anyio
         sniffio==1.3.1 \
-            --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-            --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+            --hash=sha256:{artifact_hash_2}
             # via anyio
-    "})?;
+    ", artifact_hash_0 = registry_artifacts.file_hash("anyio-4.0.0-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_1 = registry_artifacts.file_hash("idna-3.6-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_2 = registry_artifacts.file_hash("sniffio-1.3.1-py3-none-any.whl").expect("fixture distribution should exist") })?;
 
     uv_snapshot!(context.pip_install()
         .arg("-r")
@@ -9172,23 +9333,22 @@ fn verify_hashes() -> Result<()> {
 /// Omit a pinned version with `--verify-hashes`.
 #[test]
 fn verify_hashes_missing_version() -> Result<()> {
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
 
     // Write to a requirements file.
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc::indoc! {r"
+    requirements_txt.write_str(&indoc::formatdoc!{r"
         anyio \
             --hash=sha256:afdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f \
             --hash=sha256:a7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a
         idna==3.6 \
-            --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-            --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+            --hash=sha256:{artifact_hash_0}
             # via anyio
         sniffio==1.3.1 \
-            --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-            --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+            --hash=sha256:{artifact_hash_1}
             # via anyio
-    "})?;
+    ", artifact_hash_0 = registry_artifacts.file_hash("idna-3.6-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_1 = registry_artifacts.file_hash("sniffio-1.3.1-py3-none-any.whl").expect("fixture distribution should exist") })?;
 
     uv_snapshot!(context.pip_install()
         .arg("-r")
@@ -9237,7 +9397,7 @@ fn verify_hashes_mismatch() -> Result<()> {
                sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
 
              Computed:
-               sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+               sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
     "
     );
 
@@ -9377,14 +9537,15 @@ fn verify_hashes_public_pin_local_version() -> Result<()> {
 /// Provide the correct hash with `--verify-hashes`.
 #[test]
 fn verify_hashes_match() -> Result<()> {
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc::indoc! {r"
+    requirements_txt.write_str(&indoc::formatdoc!{r"
         idna==3.6 \
-            --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-            --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
-    "})?;
+            --hash=sha256:{artifact_hash_0} \
+            --hash=sha256:{artifact_hash_1}
+    ", artifact_hash_0 = registry_artifacts.file_hash("idna-3.6.tar.gz").expect("fixture distribution should exist"), artifact_hash_1 = registry_artifacts.file_hash("idna-3.6-py3-none-any.whl").expect("fixture distribution should exist") })?;
 
     uv_snapshot!(context.pip_install()
         .arg("--no-deps")
@@ -9405,13 +9566,17 @@ fn verify_hashes_match() -> Result<()> {
 /// Omit a transitive dependency in `--verify-hashes`. This is allowed.
 #[test]
 fn verify_hashes_omit_dependency() -> Result<()> {
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
 
     // Write to a requirements file.
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(
-        "anyio==4.0.0 --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f",
-    )?;
+    requirements_txt.write_str(&format!(
+        "anyio==4.0.0 --hash=sha256:{artifact_hash_0}",
+        artifact_hash_0 = registry_artifacts
+            .file_hash("anyio-4.0.0-py3-none-any.whl")
+            .expect("fixture distribution should exist")
+    ))?;
 
     // Install without error when `--require-hashes` is omitted.
     uv_snapshot!(context.pip_install()
@@ -9599,36 +9764,99 @@ fn concatenated_quoted_arguments() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn tool_uv_sources() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_filter((r"@[0-9a-f]{40}", "@[COMMIT]"));
+    let git_source = |name: &str| -> Result<(String, String)> {
+        let repository = context.temp_dir.child(name);
+        repository
+            .child("pyproject.toml")
+            .write_str(&formatdoc! {r#"
+            [project]
+            name = "{name}"
+            version = "1.0.0"
+            requires-python = ">=3.8"
+
+            [build-system]
+            requires = ["hatchling"]
+            build-backend = "hatchling.build"
+        "#})?;
+        repository
+            .child(format!("src/{}/__init__.py", name.replace('-', "_")))
+            .write_str("")?;
+        Command::new("git")
+            .arg("init")
+            .arg(repository.path())
+            .assert()
+            .success();
+        Command::new("git")
+            .arg("-C")
+            .arg(repository.path())
+            .args(["-c", "core.autocrlf=false", "add", "."])
+            .assert()
+            .success();
+        Command::new("git")
+            .arg("-C")
+            .arg(repository.path())
+            .args([
+                "-c",
+                "user.name=ferris",
+                "-c",
+                "user.email=ferris@example.com",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-m",
+                "Initial commit",
+            ])
+            .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
+            .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
+            .assert()
+            .success();
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repository.path())
+            .args(["rev-parse", "HEAD"])
+            .output()?;
+        output.clone().assert().success();
+        let revision = String::from_utf8(output.stdout)?.trim().to_owned();
+        let url = Url::from_directory_path(repository.path())
+            .map_err(|()| anyhow!("failed to convert repository path to a file URL"))?;
+        Ok((url.as_str().trim_end_matches('/').to_owned(), revision))
+    };
+    let (direct_git_url, direct_git_rev) = git_source("direct-git-package")?;
+    let (override_git_url, override_git_rev) = git_source("source-override-package")?;
     // Use a subdir to test path normalization.
     let require_path = "some_dir/pyproject.toml";
     let pyproject_toml = context.temp_dir.child(require_path);
-    pyproject_toml.write_str(indoc! {r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "foo"
         version = "0.0.0"
         dependencies = [
           "tqdm>4,<=5",
-          "packaging @ git+https://github.com/pypa/packaging@32deafe8668a2130a3366b98154914d188f3718e",
+          "direct-git-package @ git+{direct_git_url}@{direct_git_rev}",
           "poetry_editable",
-          "urllib3 @ https://files.pythonhosted.org/packages/a2/73/a68704750a7679d0b6d3ad7aa8d4da8e14e151ae82e6fee774e6e0d05ec8/urllib3-2.2.1-py3-none-any.whl",
+          "urllib3 @ {urllib3_url}",
           # Windows consistency
           "colorama>0.4,<5",
         ]
 
         [project.optional-dependencies]
         utils = [
-            "charset-normalizer==3.4.0"
+            "source-override-package==1.0.0"
         ]
         dont_install_me = [
             "broken @ https://example.org/does/not/exist.tar.gz"
         ]
 
         [tool.uv.sources]
-        tqdm = { url = "https://files.pythonhosted.org/packages/a5/d6/502a859bac4ad5e274255576cd3e15ca273cdb91731bc39fb840dd422ee9/tqdm-4.66.0-py3-none-any.whl" }
-        charset-normalizer = { git = "https://github.com/jawah/charset_normalizer", rev = "ffdf7f5f08beb0ceb92dc0637e97382ba27cecfa" }
-        poetry_editable = { path = "../poetry_editable", editable = true }
-    "#})?;
+        tqdm = {{ url = "{tqdm_url}" }}
+        source-override-package = {{ git = "{override_git_url}", rev = "{override_git_rev}" }}
+        poetry_editable = {{ path = "../poetry_editable", editable = true }}
+    "#,
+        tqdm_url = artifacts.file_url("tqdm-4.66.0-py3-none-any.whl"),
+        urllib3_url = artifacts.file_url("urllib3-2.2.1-py3-none-any.whl"),
+    })?;
 
     let project_root = fs_err::canonicalize(std::env::current_dir()?.join("../.."))?;
     fs_err::create_dir_all(context.temp_dir.join("poetry_editable/poetry_editable"))?;
@@ -9655,14 +9883,14 @@ fn tool_uv_sources() -> Result<()> {
     Prepared 9 packages in [TIME]
     Installed 9 packages in [TIME]
      + anyio==4.3.0
-     + charset-normalizer==3.4.1 (from git+https://github.com/jawah/charset_normalizer@ffdf7f5f08beb0ceb92dc0637e97382ba27cecfa)
      + colorama==0.4.6
+     + direct-git-package==1.0.0 (from git+file://[TEMP_DIR]/direct-git-package@[COMMIT])
      + idna==3.6
-     + packaging==24.1.dev0 (from git+https://github.com/pypa/packaging@32deafe8668a2130a3366b98154914d188f3718e)
      + poetry-editable==0.1.0 (from file://[TEMP_DIR]/poetry_editable)
      + sniffio==1.3.1
-     + tqdm==4.66.0 (from https://files.pythonhosted.org/packages/a5/d6/502a859bac4ad5e274255576cd3e15ca273cdb91731bc39fb840dd422ee9/tqdm-4.66.0-py3-none-any.whl)
-     + urllib3==2.2.1 (from https://files.pythonhosted.org/packages/a2/73/a68704750a7679d0b6d3ad7aa8d4da8e14e151ae82e6fee774e6e0d05ec8/urllib3-2.2.1-py3-none-any.whl)
+     + source-override-package==1.0.0 (from git+file://[TEMP_DIR]/source-override-package@[COMMIT])
+     + tqdm==4.66.0 (from http://[LOCALHOST]/files/tqdm-4.66.0-py3-none-any.whl)
+     + urllib3==2.2.1 (from http://[LOCALHOST]/files/urllib3-2.2.1-py3-none-any.whl)
     "
     );
 
@@ -9683,19 +9911,24 @@ fn tool_uv_sources() -> Result<()> {
 
 #[test]
 fn tool_uv_sources_is_in_preview() -> Result<()> {
+    let artifacts = PackseServer::new("packages/pip-install.toml");
+    let iniconfig_url = artifacts.file_url("iniconfig-2.0.0-py3-none-any.whl");
     let context = uv_test::test_context!("3.12");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(indoc! {r#"
-        [project]
-        name = "foo"
-        version = "0.0.0"
-        dependencies = [
-          "iniconfig>1,<=2",
-        ]
+    pyproject_toml.write_str(
+        &indoc! {r#"
+            [project]
+            name = "foo"
+            version = "0.0.0"
+            dependencies = [
+              "iniconfig>1,<=2",
+            ]
 
-        [tool.uv.sources]
-        iniconfig = { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl" }
-    "#})?;
+            [tool.uv.sources]
+            iniconfig = { url = "[INICONFIG_URL]" }
+        "#}
+        .replace("[INICONFIG_URL]", &iniconfig_url),
+    )?;
 
     // Install the editable packages.
     uv_snapshot!(context.filters(), context.pip_install()
@@ -9706,7 +9939,7 @@ fn tool_uv_sources_is_in_preview() -> Result<()> {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + iniconfig==2.0.0 (from https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl)
+     + iniconfig==2.0.0 (from http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl)
     "
     );
 
@@ -9716,23 +9949,30 @@ fn tool_uv_sources_is_in_preview() -> Result<()> {
 /// Allow transitive URLs via recursive extras.
 #[test]
 fn recursive_extra_transitive_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
+    let build_dependencies = PackseServer::empty();
+    let iniconfig_url = artifacts.file_url("iniconfig-2.0.0-py3-none-any.whl");
+    let context =
+        uv_test::test_context!("3.12").with_default_index(&build_dependencies.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(indoc! {r#"
-        [project]
-        name = "project"
-        version = "0.0.0"
-        dependencies = []
+    pyproject_toml.write_str(
+        &indoc! {r#"
+            [project]
+            name = "project"
+            version = "0.0.0"
+            dependencies = []
 
-        [project.optional-dependencies]
-        all = [
-            "project[docs]",
-        ]
-        docs = [
-            "iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl",
-        ]
-    "#})?;
+            [project.optional-dependencies]
+            all = [
+                "project[docs]",
+            ]
+            docs = [
+                "iniconfig @ [INICONFIG_URL]",
+            ]
+        "#}
+        .replace("[INICONFIG_URL]", &iniconfig_url),
+    )?;
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg(".[all]"), @"
@@ -9741,7 +9981,7 @@ fn recursive_extra_transitive_url() -> Result<()> {
     Resolved 2 packages in [TIME]
     Prepared 2 packages in [TIME]
     Installed 2 packages in [TIME]
-     + iniconfig==2.0.0 (from https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl)
+     + iniconfig==2.0.0 (from http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl)
      + project==0.0.0 (from file://[TEMP_DIR]/)
     ");
 
@@ -10377,7 +10617,7 @@ fn compatible_build_constraint_in_pyproject_toml() -> Result<()> {
     pyproject_toml.write_str(
         r#"[tool.uv]
 build-constraint-dependencies = [
-    "setuptools==40.8.0",
+    "setuptools==69.0.2",
 ]
 "#,
     )?;
@@ -10487,79 +10727,83 @@ build-constraint-dependencies = [
 
 #[test]
 fn install_build_isolation_package() -> Result<()> {
+    let artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
 
     // Create a package.
     let package = context.temp_dir.child("project");
-    package.child("pyproject.toml").write_str(
+    package.child("pyproject.toml").write_str(&formatdoc! {
         r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = [
-            "iniconfig @ https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz",
+            "source-distribution @ {source_distribution_url}",
         ]
         "#,
-    )?;
+        source_distribution_url = artifacts.file_url("source_distribution-0.0.3.tar.gz"),
+    })?;
 
-    // Running `uv pip install` should fail for iniconfig.
+    // Running `uv pip install` should fail for `source-distribution`.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--no-build-isolation-package")
-        .arg("iniconfig")
+        .arg("source-distribution")
         .arg(package.path()), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Failed to build `iniconfig @ https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz`
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+    error: Failed to build `source-distribution @ http://[LOCALHOST]/files/source_distribution-0.0.3.tar.gz`
       cause: The build backend returned an error
-      cause: Call to `hatchling.build.prepare_metadata_for_build_wheel` failed (exit status: 1)
+      cause: Call to `hatchling.build.build_wheel` failed (exit status: 1)
 
              [stderr]
              Traceback (most recent call last):
                File "<string>", line 8, in <module>
              ModuleNotFoundError: No module named 'hatchling'
 
-    hint: This error likely indicates that `iniconfig` depends on `hatchling`, but doesn't declare it as a build dependency. If `iniconfig` is a first-party package, consider adding `hatchling` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
+    hint: `source-distribution` was included because `project` (v0.1.0) depends on `source-distribution`
+
+    hint: This error likely indicates that `source-distribution@0.0.3` depends on `hatchling`, but doesn't declare it as a build dependency. If `source-distribution` is a first-party package, consider adding `hatchling` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
 
     [tool.uv.extra-build-dependencies]
-    iniconfig = ["hatchling"]
+    source-distribution = ["hatchling"]
 
     or `uv pip install hatchling` into the environment and re-run with `--no-build-isolation`.
     "#
     );
 
-    // Install `hatchinling`, `hatch-vs` for iniconfig
-    uv_snapshot!(context.filters(), context.pip_install().arg("hatchling").arg("hatch-vcs"), @"
+    // Install `hatchling` for `source-distribution`.
+    uv_snapshot!(context.filters(), context.pip_install().arg("hatchling"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 9 packages in [TIME]
-    Prepared 9 packages in [TIME]
-    Installed 9 packages in [TIME]
-     + hatch-vcs==0.4.0
+    Resolved 5 packages in [TIME]
+    Prepared 5 packages in [TIME]
+    Installed 5 packages in [TIME]
      + hatchling==1.22.4
      + packaging==24.0
      + pathspec==0.12.1
      + pluggy==1.4.0
-     + setuptools==69.2.0
-     + setuptools-scm==8.0.4
      + trove-classifiers==2024.3.3
-     + typing-extensions==4.10.0
     ");
 
     // Running `uv pip install` should succeed.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--no-build-isolation-package")
-        .arg("iniconfig")
+        .arg("source-distribution")
         .arg(package.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
     Prepared 1 package without build isolation in [TIME]
     Installed 1 package in [TIME]
-     + iniconfig==2.0.0 (from https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz)
-     + project==0.1.0 (from file://[TEMP_DIR]/project)
+     ~ project==0.1.0 (from file://[TEMP_DIR]/project)
+     + source-distribution==0.0.3 (from http://[LOCALHOST]/files/source_distribution-0.0.3.tar.gz)
     ");
 
     Ok(())
@@ -11027,16 +11271,18 @@ fn missing_subdirectory_git() -> Result<()> {
 
 #[test]
 fn missing_subdirectory_url() -> Result<()> {
+    let artifacts = PackseServer::new("packages/pip-install.toml");
+    let source_distribution_url = artifacts.file_url("source_distribution-0.0.3.tar.gz");
     let context = uv_test::test_context!("3.12");
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.touch()?;
 
-    uv_snapshot!(context.pip_install()
-        .arg("source-distribution @ https://files.pythonhosted.org/packages/1f/e5/5b016c945d745f8b108e759d428341488a6aee8f51f07c6c4e33498bb91f/source_distribution-0.0.3.tar.gz#subdirectory=missing"), @"
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg(format!("source-distribution @ {source_distribution_url}#subdirectory=missing")), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Failed to download and build `source-distribution @ https://files.pythonhosted.org/packages/1f/e5/5b016c945d745f8b108e759d428341488a6aee8f51f07c6c4e33498bb91f/source_distribution-0.0.3.tar.gz#subdirectory=missing`
-      cause: The source distribution `https://files.pythonhosted.org/packages/1f/e5/5b016c945d745f8b108e759d428341488a6aee8f51f07c6c4e33498bb91f/source_distribution-0.0.3.tar.gz#subdirectory=missing` has no subdirectory `missing`
+    error: Failed to download and build `source-distribution @ http://[LOCALHOST]/files/source_distribution-0.0.3.tar.gz#subdirectory=missing`
+      cause: The source distribution `http://[LOCALHOST]/files/source_distribution-0.0.3.tar.gz#subdirectory=missing` has no subdirectory `missing`
     "
     );
 
@@ -11048,18 +11294,47 @@ fn missing_subdirectory_url() -> Result<()> {
 #[test]
 fn bad_crc32() -> Result<()> {
     let context = uv_test::test_context!("3.11");
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.touch()?;
+    let wheel = context.temp_dir.join("bad_crc32-0.1.0-py3-none-any.whl");
+    let init_py = b"CRC32 regression payload\n";
 
-    uv_snapshot!(context.pip_install()
-        .arg("--python-platform").arg("linux")
-        .arg("osqp @ https://files.pythonhosted.org/packages/00/04/5959347582ab970e9b922f27585d34f7c794ed01125dac26fb4e7dd80205/osqp-1.0.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"), @"
+    let mut writer = ZipFileWriter::new(Vec::new());
+    for (path, contents) in [
+        ("bad_crc32/__init__.py", init_py.as_slice()),
+        (
+            "bad_crc32-0.1.0.dist-info/METADATA",
+            b"Metadata-Version: 2.3\nName: bad-crc32\nVersion: 0.1.0\n".as_slice(),
+        ),
+        (
+            "bad_crc32-0.1.0.dist-info/WHEEL",
+            b"Wheel-Version: 1.0\nGenerator: uv-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
+                .as_slice(),
+        ),
+        ("bad_crc32-0.1.0.dist-info/RECORD", b"".as_slice()),
+    ] {
+        let entry = ZipEntryBuilder::new(path.into(), Compression::Stored);
+        block_on(writer.write_entry_whole(entry, contents))?;
+    }
+
+    let mut bytes = block_on(writer.close())?;
+    let Some(payload_offset) = bytes
+        .windows(init_py.len())
+        .position(|candidate| candidate == init_py)
+    else {
+        return Err(anyhow!(
+            "generated wheel did not contain the module payload"
+        ));
+    };
+    bytes[payload_offset] ^= 1;
+    fs::write(&wheel, bytes)?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg(&wheel), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 7 packages in [TIME]
-    error: Failed to download `osqp @ https://files.pythonhosted.org/packages/00/04/5959347582ab970e9b922f27585d34f7c794ed01125dac26fb4e7dd80205/osqp-1.0.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl`
-      cause: Failed to extract archive: osqp-1.0.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
-      cause: Bad uncompressed size (got 0007b829, expected 0007b828) for file: osqp/ext_builtin.cpython-311-x86_64-linux-gnu.so
+    Resolved 1 package in [TIME]
+    error: Failed to read `bad-crc32 @ file://[TEMP_DIR]/bad_crc32-0.1.0-py3-none-any.whl`
+      cause: Failed to extract archive: [TEMP_DIR]/bad_crc32-0.1.0-py3-none-any.whl
+      cause: Bad CRC (got ee3294ae, expected 4bb904a0) for file: bad_crc32/__init__.py
     "
     );
 
@@ -11142,21 +11417,26 @@ fn static_metadata_source_tree() -> Result<()> {
 /// Regression test for: <https://github.com/astral-sh/uv/issues/18778>
 #[test]
 fn direct_url_hash_source_tree_dependency() -> Result<()> {
+    let artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
 
-    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+    context.temp_dir.child("pyproject.toml").write_str(&indoc! {r#"
         [project]
         name = "pylock"
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = [
-          "protobug @ https://files.pythonhosted.org/packages/f2/cc/db26b91cddffbcf0c6df7834fd642578f737fe34197635ae8ea64643a35f/protobug-0.3.0-py3-none-any.whl#sha256=ee81583f376bb38e5e7af425d2453e5e8d4b57bfbf45e5dba1a75329c2026520",
+          "iniconfig @ [INICONFIG_WHEEL_URL]#sha256=c5185871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374",
         ]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
-    "#})?;
+    "#}
+    .replace(
+        "[INICONFIG_WHEEL_URL]",
+        &artifacts.file_url("iniconfig-2.0.0-py3-none-any.whl"),
+    ))?;
     context
         .temp_dir
         .child("src")
@@ -11169,16 +11449,16 @@ fn direct_url_hash_source_tree_dependency() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    error: Failed to download `protobug @ https://files.pythonhosted.org/packages/f2/cc/db26b91cddffbcf0c6df7834fd642578f737fe34197635ae8ea64643a35f/protobug-0.3.0-py3-none-any.whl#sha256=ee81583f376bb38e5e7af425d2453e5e8d4b57bfbf45e5dba1a75329c2026520`
-      cause: Hash mismatch for `protobug @ https://files.pythonhosted.org/packages/f2/cc/db26b91cddffbcf0c6df7834fd642578f737fe34197635ae8ea64643a35f/protobug-0.3.0-py3-none-any.whl#sha256=ee81583f376bb38e5e7af425d2453e5e8d4b57bfbf45e5dba1a75329c2026520`
+    error: Failed to download `iniconfig @ http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl#sha256=c5185871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374`
+      cause: Hash mismatch for `iniconfig @ http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl#sha256=c5185871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374`
 
              Expected:
-               sha256:ee81583f376bb38e5e7af425d2453e5e8d4b57bfbf45e5dba1a75329c2026520
+               sha256:c5185871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
 
              Computed:
-               sha256:ee81583f376bb38e5e7af425d2453e5e8d4b57bfbf45e5dba1a75329c202652e
+               sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c
 
-    hint: `protobug` (v0.3.0) was included because `pylock` (v0.1.0) depends on `protobug`
+    hint: `iniconfig` (v2.0.0) was included because `pylock` (v0.1.0) depends on `iniconfig`
     "
     );
 
@@ -11188,21 +11468,25 @@ fn direct_url_hash_source_tree_dependency() -> Result<()> {
 #[test]
 fn direct_url_hash_source_tree_dependency_conflict() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let vendor =
+        uv_test::find_links::FindLinksServer::new(&context.workspace_root.join("test/vendor"));
+    let packaging_wheel_url = format!("{}/packaging-23.2-py3-none-any.whl", vendor.url());
 
-    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+    context.temp_dir.child("pyproject.toml").write_str(&indoc! {r#"
         [project]
         name = "pylock"
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = [
-          "anyio @ https://files.pythonhosted.org/packages/36/55/ad4de788d84a630656ece71059665e01ca793c04294c463fd84132f40fe6/anyio-4.0.0-py3-none-any.whl#sha256=cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f",
-          "anyio @ https://files.pythonhosted.org/packages/36/55/ad4de788d84a630656ece71059665e01ca793c04294c463fd84132f40fe6/anyio-4.0.0-py3-none-any.whl#sha256=f7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a",
+          "packaging @ [PACKAGING_WHEEL_URL]#sha256=8c491190033a9af7e1d931d0b5dacc2ef47509b34dd0de67ed209b5203fc88c7",
+          "packaging @ [PACKAGING_WHEEL_URL]#sha256=048fb0e9405036518eaaf48a55953c750c11e1a1b68e0dd1a9d62ed0c092cfc5",
         ]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
-    "#})?;
+    "#}
+    .replace("[PACKAGING_WHEEL_URL]", &packaging_wheel_url))?;
     context
         .temp_dir
         .child("src")
@@ -11210,11 +11494,11 @@ fn direct_url_hash_source_tree_dependency_conflict() -> Result<()> {
         .child("__init__.py")
         .touch()?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("."), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Conflicting archive URL hashes for `anyio @ https://files.pythonhosted.org/packages/36/55/ad4de788d84a630656ece71059665e01ca793c04294c463fd84132f40fe6/anyio-4.0.0-py3-none-any.whl#sha256=f7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a`: `sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f` conflicts with `sha256:f7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a`
+    error: Conflicting archive URL hashes for `packaging @ http://[LOCALHOST]/packaging-23.2-py3-none-any.whl#sha256=048fb0e9405036518eaaf48a55953c750c11e1a1b68e0dd1a9d62ed0c092cfc5`: `sha256:8c491190033a9af7e1d931d0b5dacc2ef47509b34dd0de67ed209b5203fc88c7` conflicts with `sha256:048fb0e9405036518eaaf48a55953c750c11e1a1b68e0dd1a9d62ed0c092cfc5`
     "
     );
 
@@ -11224,21 +11508,25 @@ fn direct_url_hash_source_tree_dependency_conflict() -> Result<()> {
 #[test]
 fn direct_url_hash_source_tree_dependency_multiple_hash_algorithms() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let vendor =
+        uv_test::find_links::FindLinksServer::new(&context.workspace_root.join("test/vendor"));
+    let packaging_wheel_url = format!("{}/packaging-23.2-py3-none-any.whl", vendor.url());
 
-    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+    context.temp_dir.child("pyproject.toml").write_str(&indoc! {r#"
         [project]
         name = "pylock"
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = [
-          "anyio @ https://files.pythonhosted.org/packages/36/55/ad4de788d84a630656ece71059665e01ca793c04294c463fd84132f40fe6/anyio-4.0.0-py3-none-any.whl#sha256=cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f",
-          "anyio @ https://files.pythonhosted.org/packages/36/55/ad4de788d84a630656ece71059665e01ca793c04294c463fd84132f40fe6/anyio-4.0.0-py3-none-any.whl#sha512=f30761c1e8725b49c498273b90dba4b05c0fd157811994c806183062cb6647e773364ce45f0e1ff0b10e32fe6d0232ea5ad39476ccf37109d6b49603a09c11c2",
+          "packaging @ [PACKAGING_WHEEL_URL]#sha256=8c491190033a9af7e1d931d0b5dacc2ef47509b34dd0de67ed209b5203fc88c7",
+          "packaging @ [PACKAGING_WHEEL_URL]#sha512=656015f5cc2c04aa0653ee5609c39a7e5f0b6a58c84fe26b20bd070c52d20b4effb810132f7fb771168483e9fd975cc3302837dd7a1a687ee058b0460c857cc4",
         ]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
-    "#})?;
+    "#}
+    .replace("[PACKAGING_WHEEL_URL]", &packaging_wheel_url))?;
     context
         .temp_dir
         .child("src")
@@ -11250,13 +11538,11 @@ fn direct_url_hash_source_tree_dependency_multiple_hash_algorithms() -> Result<(
         .arg("."), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + anyio==4.0.0 (from https://files.pythonhosted.org/packages/36/55/ad4de788d84a630656ece71059665e01ca793c04294c463fd84132f40fe6/anyio-4.0.0-py3-none-any.whl#sha512=f30761c1e8725b49c498273b90dba4b05c0fd157811994c806183062cb6647e773364ce45f0e1ff0b10e32fe6d0232ea5ad39476ccf37109d6b49603a09c11c2)
-     + idna==3.6
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + packaging==23.2 (from http://[LOCALHOST]/packaging-23.2-py3-none-any.whl#sha512=656015f5cc2c04aa0653ee5609c39a7e5f0b6a58c84fe26b20bd070c52d20b4effb810132f7fb771168483e9fd975cc3302837dd7a1a687ee058b0460c857cc4)
      + pylock==0.1.0 (from file://[TEMP_DIR]/)
-     + sniffio==1.3.1
     "
     );
 
@@ -11322,10 +11608,6 @@ fn cyclic_build_dependency() {
     // build.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("circular-one")
-        .arg("--extra-index-url")
-        .arg("https://test.pypi.org/simple")
-        .arg("--index-strategy")
-        .arg("unsafe-best-match")
         .arg("--no-binary")
         .arg("circular-one"), @"
     exit_code: 1 (failure)
@@ -11339,11 +11621,7 @@ fn cyclic_build_dependency() {
 
     // Installing without `--no-binary circular-one` should succeed, since we can use the wheel.
     uv_snapshot!(context.filters(), context.pip_install()
-        .arg("circular-one")
-        .arg("--extra-index-url")
-        .arg("https://test.pypi.org/simple")
-        .arg("--index-strategy")
-        .arg("unsafe-best-match"), @"
+        .arg("circular-one"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -11426,13 +11704,15 @@ fn direct_url_json_git_tag() -> Result<()> {
 
 #[test]
 fn direct_url_json_direct_url() -> Result<()> {
+    let artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(
-    "source-distribution @ https://files.pythonhosted.org/packages/1f/e5/5b016c945d745f8b108e759d428341488a6aee8f51f07c6c4e33498bb91f/source_distribution-0.0.3.tar.gz",
-    )?;
+    requirements_txt.write_str(&format!(
+        "source-distribution @ {}",
+        artifacts.file_url("source_distribution-0.0.3.tar.gz")
+    ))?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
@@ -11441,7 +11721,7 @@ fn direct_url_json_direct_url() -> Result<()> {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + source-distribution==0.0.3 (from https://files.pythonhosted.org/packages/1f/e5/5b016c945d745f8b108e759d428341488a6aee8f51f07c6c4e33498bb91f/source_distribution-0.0.3.tar.gz)
+     + source-distribution==0.0.3 (from http://[LOCALHOST]/files/source_distribution-0.0.3.tar.gz)
     "
     );
 
@@ -11452,8 +11732,11 @@ fn direct_url_json_direct_url() -> Result<()> {
     });
     direct_url.assert(predicates::path::is_file());
 
-    let direct_url_content = fs_err::read_to_string(direct_url.path())?;
-    insta::assert_snapshot!(direct_url_content, @r#"{"url":"https://files.pythonhosted.org/packages/1f/e5/5b016c945d745f8b108e759d428341488a6aee8f51f07c6c4e33498bb91f/source_distribution-0.0.3.tar.gz","archive_info":{}}"#);
+    let direct_url_content = apply_filters(
+        fs_err::read_to_string(direct_url.path())?,
+        context.filters(),
+    );
+    insta::assert_snapshot!(direct_url_content, @r#"{"url":"http://[LOCALHOST]/files/source_distribution-0.0.3.tar.gz","archive_info":{}}"#);
 
     Ok(())
 }
@@ -11818,17 +12101,14 @@ fn other_sources_group() -> Result<()> {
     // and install an editable
     context = new_context()?;
     uv_snapshot!(context.filters(), context.pip_install()
-        .arg("-e").arg(context.workspace_root.join("test/packages/poetry_editable"))
+        .arg("-e").arg(context.workspace_root.join("test/packages/black_editable"))
         .arg("--group").arg("foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 5 packages in [TIME]
-    Prepared 5 packages in [TIME]
-    Installed 5 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + poetry-editable==0.1.0 (from file://[WORKSPACE]/test/packages/poetry_editable)
-     + sniffio==1.3.1
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + black==0.1.0 (from file://[WORKSPACE]/test/packages/black_editable)
      + sortedcontainers==2.4.0
     ");
 
@@ -13237,18 +13517,19 @@ fn pep_751_install_git() -> Result<()> {
 
 #[test]
 fn pep_751_install_url_wheel() -> Result<()> {
+    let artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["anyio @ https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl"]
+        dependencies = ["anyio @ {anyio_wheel_url}"]
         "#,
-    )?;
+        anyio_wheel_url = artifacts.file_url("anyio-4.3.0-py3-none-any.whl"),
+    })?;
 
     context
         .export()
@@ -13265,7 +13546,7 @@ fn pep_751_install_url_wheel() -> Result<()> {
     ----- stderr -----
     Prepared 2 packages in [TIME]
     Installed 3 packages in [TIME]
-     + anyio==4.3.0 (from https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl)
+     + anyio==4.3.0 (from http://[LOCALHOST]/files/anyio-4.3.0-py3-none-any.whl)
      + idna==3.6
      + sniffio==1.3.1
     "
@@ -13341,12 +13622,13 @@ fn pep_751_install_url_sdist() -> Result<()> {
 
 #[test]
 fn pep_751_install_path_wheel() -> Result<()> {
+    let artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
 
     // Download the source.
     let archive = context.temp_dir.child("iniconfig-2.0.0-py3-none-any.whl");
     download_to_disk(
-        "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl",
+        &artifacts.file_url("iniconfig-2.0.0-py3-none-any.whl"),
         &archive,
     );
 
@@ -13387,7 +13669,7 @@ fn pep_751_install_path_wheel() -> Result<()> {
         [[packages]]
         name = "iniconfig"
         version = "2.0.0"
-        archive = { path = "iniconfig-2.0.0-py3-none-any.whl", hashes = { sha256 = "b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374" } }
+        archive = { path = "iniconfig-2.0.0-py3-none-any.whl", hashes = { sha256 = "8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c" } }
         "#
         );
     });
@@ -13466,14 +13748,12 @@ fn pep_751_prefers_path_over_url() -> Result<()> {
 
 #[test]
 fn pep_751_install_path_sdist() -> Result<()> {
+    let artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
 
     // Download the source.
     let archive = context.temp_dir.child("iniconfig-2.0.0.tar.gz");
-    download_to_disk(
-        "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz",
-        &archive,
-    );
+    download_to_disk(&artifacts.file_url("iniconfig-2.0.0.tar.gz"), &archive);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -13690,12 +13970,14 @@ fn pep_751_unsupported_hashes() -> Result<()> {
 
 #[test]
 fn pep_751_hash_mismatch() -> Result<()> {
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
 
     // Download the source.
     let archive = context.temp_dir.child("iniconfig-2.0.0-py3-none-any.whl");
     download_to_disk(
-        "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl",
+        &artifacts.file_url("iniconfig-2.0.0-py3-none-any.whl"),
         &archive,
     );
 
@@ -13727,14 +14009,18 @@ fn pep_751_hash_mismatch() -> Result<()> {
                sha256:c5185871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
 
              Computed:
-               sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
+               sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c
     "
     );
 
-    pylock_toml.write_str(&fs::read_to_string(&pylock_toml)?.replace(
-        "c5185871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374",
-        "b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374",
-    ))?;
+    pylock_toml.write_str(
+        &fs::read_to_string(&pylock_toml)?.replace(
+            "c5185871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374",
+            registry_artifacts
+                .file_hash("iniconfig-2.0.0-py3-none-any.whl")
+                .expect("fixture distribution should exist"),
+        ),
+    )?;
 
     // A matching supported hash should permit installation alongside an unsupported algorithm.
     uv_snapshot!(context.filters(), context.pip_install()
@@ -13857,11 +14143,13 @@ fn pep_751_multiple_sources() -> Result<()> {
 
 #[test]
 fn pep_751_groups() -> Result<()> {
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.13");
 
     let pylock_toml = context.temp_dir.child("pylock.toml");
     pylock_toml.write_str(
-        r#"
+        &format!(r#"
 lock-version = "1.0"
 requires-python = "==3.13.*"
 environments = [
@@ -13873,11 +14161,10 @@ default-groups = ["default"]
 created-by = "pdm"
 [[packages]]
 name = "anyio"
-version = "4.9.0"
-requires-python = ">=3.9"
-sdist = {name = "anyio-4.9.0.tar.gz", url = "https://files.pythonhosted.org/packages/95/7d/4c1bd541d4dffa1b52bd83fb8527089e097a106fc90b467a7313b105f840/anyio-4.9.0.tar.gz", hashes = {sha256 = "673c0c244e15788651a4ff38710fea9675823028a6f08a5eda409e0c9840a028"}}
+version = "4.3.0"
+requires-python = ">=3.8"
 wheels = [
-    {name = "anyio-4.9.0-py3-none-any.whl",url = "https://files.pythonhosted.org/packages/a1/ee/48ca1a7c89ffec8b6a0c5d02b89c305671d5ffd8d3c94acf8b8c408575bb/anyio-4.9.0-py3-none-any.whl",hashes = {sha256 = "9f76d541cad6e36af7beb62e978876f3b41e3e04f2c1fbf0884604c0a9c4d93c"}},
+    {{name = "anyio-4.3.0-py3-none-any.whl",url = "[ANYIO_WHEEL_URL]",hashes = {{sha256 = "{artifact_hash_0}"}}}},
 ]
 marker = "\"async\" in extras"
 
@@ -13891,11 +14178,10 @@ dependencies = [
 
 [[packages]]
 name = "blinker"
-version = "1.9.0"
-requires-python = ">=3.9"
-sdist = {name = "blinker-1.9.0.tar.gz", url = "https://files.pythonhosted.org/packages/21/28/9b3f50ce0e048515135495f198351908d99540d69bfdc8c1d15b73dc55ce/blinker-1.9.0.tar.gz", hashes = {sha256 = "b4ce2265a7abece45e7cc896e98dbebe6cead56bcf805a3d23136d145f5445bf"}}
+version = "1.7.0"
+requires-python = ">=3.12"
 wheels = [
-    {name = "blinker-1.9.0-py3-none-any.whl",url = "https://files.pythonhosted.org/packages/10/cb/f2ad4230dc2eb1a74edf38f1a38b9b52277f75bef262d8908e60d957e13c/blinker-1.9.0-py3-none-any.whl",hashes = {sha256 = "ba0efaa9080b619ff2f3459d1d500c57bddea4a6b424b60a91141db6fd2f08bc"}},
+    {{name = "blinker-1.7.0-py3-none-any.whl",url = "[BLINKER_WHEEL_URL]",hashes = {{sha256 = "{artifact_hash_1}"}}}},
 ]
 marker = "\"dev\" in extras"
 
@@ -13904,11 +14190,10 @@ dependencies = []
 
 [[packages]]
 name = "idna"
-version = "3.10"
+version = "3.6"
 requires-python = ">=3.6"
-sdist = {name = "idna-3.10.tar.gz", url = "https://files.pythonhosted.org/packages/f1/70/7703c29685631f5a7590aa73f1f1d3fa9a380e654b86af429e0934a32f7d/idna-3.10.tar.gz", hashes = {sha256 = "12f65c9b470abda6dc35cf8e63cc574b1c52b11df2c86030af0ac09b01b13ea9"}}
 wheels = [
-    {name = "idna-3.10-py3-none-any.whl",url = "https://files.pythonhosted.org/packages/76/c6/c88e154df9c4e1a2a66ccf0005a88dfb2650c1dffb6f5ce603dfbd452ce3/idna-3.10-py3-none-any.whl",hashes = {sha256 = "946d195a0d259cbba61165e88e65941f16e9b36ea6ddb97f00452bae8b1287d3"}},
+    {{name = "idna-3.6-py3-none-any.whl",url = "[IDNA_WHEEL_URL]",hashes = {{sha256 = "{artifact_hash_2}"}}}},
 ]
 marker = "\"async\" in extras"
 
@@ -13917,11 +14202,10 @@ dependencies = []
 
 [[packages]]
 name = "iniconfig"
-version = "2.1.0"
+version = "2.0.0"
 requires-python = ">=3.8"
-sdist = {name = "iniconfig-2.1.0.tar.gz", url = "https://files.pythonhosted.org/packages/f2/97/ebf4da567aa6827c909642694d71c9fcf53e5b504f2d96afea02718862f3/iniconfig-2.1.0.tar.gz", hashes = {sha256 = "3abbd2e30b36733fee78f9c7f7308f2d0050e88f0087fd25c2645f63c773e1c7"}}
 wheels = [
-    {name = "iniconfig-2.1.0-py3-none-any.whl",url = "https://files.pythonhosted.org/packages/2c/e1/e6716421ea10d38022b952c159d5161ca1193197fb744506875fbb87ea7b/iniconfig-2.1.0-py3-none-any.whl",hashes = {sha256 = "9deba5723312380e77435581c6bf4935c94cbfab9b1ed33ef8d238ea168eb760"}},
+    {{name = "iniconfig-2.0.0-py3-none-any.whl",url = "[INICONFIG_WHEEL_URL]",hashes = {{sha256 = "{artifact_hash_3}"}}}},
 ]
 marker = "\"default\" in dependency_groups"
 
@@ -13929,12 +14213,11 @@ marker = "\"default\" in dependency_groups"
 dependencies = []
 
 [[packages]]
-name = "pygments"
-version = "2.19.2"
+name = "typing-extensions"
+version = "4.10.0"
 requires-python = ">=3.8"
-sdist = {name = "pygments-2.19.2.tar.gz", url = "https://files.pythonhosted.org/packages/b0/77/a5b8c569bf593b0140bde72ea885a803b82086995367bf2037de0159d924/pygments-2.19.2.tar.gz", hashes = {sha256 = "636cb2477cec7f8952536970bc533bc43743542f70392ae026374600add5b887"}}
 wheels = [
-    {name = "pygments-2.19.2-py3-none-any.whl",url = "https://files.pythonhosted.org/packages/c7/21/705964c7812476f378728bdf590ca4b771ec72385c533964653c68e86bdc/pygments-2.19.2-py3-none-any.whl",hashes = {sha256 = "86540386c03d588bb81d44bc3928634ff26449851e99741617ecb9037ee5ec0b"}},
+    {{name = "typing_extensions-4.10.0-py3-none-any.whl",url = "[TYPING_EXTENSIONS_WHEEL_URL]",hashes = {{sha256 = "{artifact_hash_4}"}}}},
 ]
 marker = "\"test\" in dependency_groups"
 
@@ -13945,9 +14228,8 @@ dependencies = []
 name = "sniffio"
 version = "1.3.1"
 requires-python = ">=3.7"
-sdist = {name = "sniffio-1.3.1.tar.gz", url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hashes = {sha256 = "f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc"}}
 wheels = [
-    {name = "sniffio-1.3.1-py3-none-any.whl",url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl",hashes = {sha256 = "2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2"}},
+    {{name = "sniffio-1.3.1-py3-none-any.whl",url = "[SNIFFIO_WHEEL_URL]",hashes = {{sha256 = "{artifact_hash_5}"}}}},
 ]
 marker = "\"async\" in extras"
 
@@ -13955,11 +14237,35 @@ marker = "\"async\" in extras"
 dependencies = []
 
 [tool.pdm]
-hashes = {sha256 = "51795362d337720c28bd6c3a26eb33751f2b69590261f599ffb4172ee2c441c6"}
+hashes = {{sha256 = "51795362d337720c28bd6c3a26eb33751f2b69590261f599ffb4172ee2c441c6"}}
 
 [[tool.pdm.targets]]
 requires_python = "==3.13.*"
-        "#,
+        "#, artifact_hash_0 = registry_artifacts.file_hash("anyio-4.3.0-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_1 = registry_artifacts.file_hash("blinker-1.7.0-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_2 = registry_artifacts.file_hash("idna-3.6-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_3 = registry_artifacts.file_hash("iniconfig-2.0.0-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_4 = registry_artifacts.file_hash("typing_extensions-4.10.0-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_5 = registry_artifacts.file_hash("sniffio-1.3.1-py3-none-any.whl").expect("fixture distribution should exist"))
+        .replace(
+            "[ANYIO_WHEEL_URL]",
+            &artifacts.file_url("anyio-4.3.0-py3-none-any.whl"),
+        )
+        .replace(
+            "[BLINKER_WHEEL_URL]",
+            &artifacts.file_url("blinker-1.7.0-py3-none-any.whl"),
+        )
+        .replace(
+            "[IDNA_WHEEL_URL]",
+            &artifacts.file_url("idna-3.6-py3-none-any.whl"),
+        )
+        .replace(
+            "[INICONFIG_WHEEL_URL]",
+            &artifacts.file_url("iniconfig-2.0.0-py3-none-any.whl"),
+        )
+        .replace(
+            "[TYPING_EXTENSIONS_WHEEL_URL]",
+            &artifacts.file_url("typing_extensions-4.10.0-py3-none-any.whl"),
+        )
+        .replace(
+            "[SNIFFIO_WHEEL_URL]",
+            &artifacts.file_url("sniffio-1.3.1-py3-none-any.whl"),
+        ),
     )?;
 
     // By default, only `iniconfig` should be installed, since it's in the default group.
@@ -13971,7 +14277,7 @@ requires_python = "==3.13.*"
     ----- stderr -----
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + iniconfig==2.1.0
+     + iniconfig==2.0.0
     "
     );
 
@@ -13986,13 +14292,13 @@ requires_python = "==3.13.*"
     ----- stderr -----
     Prepared 3 packages in [TIME]
     Installed 3 packages in [TIME]
-     + anyio==4.9.0
-     + idna==3.10
+     + anyio==4.3.0
+     + idna==3.6
      + sniffio==1.3.1
     "
     );
 
-    // With `--group test`, `pygments` should be installed.
+    // With `--group test`, `typing-extensions` should be installed.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--preview")
         .arg("-r")
@@ -14003,7 +14309,7 @@ requires_python = "==3.13.*"
     ----- stderr -----
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + pygments==2.19.2
+     + typing-extensions==4.10.0
     "
     );
 
@@ -14017,7 +14323,7 @@ requires_python = "==3.13.*"
     ----- stderr -----
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + blinker==1.9.0
+     + blinker==1.7.0
     "
     );
 
@@ -14188,6 +14494,7 @@ fn pep_751_requires_python() -> Result<()> {
 /// Test that uv doesn't hang if an index returns a distribution for the wrong package.
 #[tokio::test]
 async fn bogus_redirect() -> Result<()> {
+    let index = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
 
     let redirect_server = MockServer::start().await;
@@ -14195,7 +14502,8 @@ async fn bogus_redirect() -> Result<()> {
     // Configure a bogus redirect where for all packages, anyio is returned.
     Mock::given(method("GET"))
         .respond_with(
-            ResponseTemplate::new(302).insert_header("Location", "https://pypi.org/simple/anyio/"),
+            ResponseTemplate::new(302)
+                .insert_header("Location", format!("{}anyio/", index.index_url())),
         )
         .mount(&redirect_server)
         .await;
@@ -14918,10 +15226,13 @@ fn accept_normalized_wheel_entrypoint_paths() -> Result<()> {
 
 #[test]
 fn pep_751_dependency() -> Result<()> {
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12");
 
     let pylock_toml = context.temp_dir.child("pylock.toml");
-    pylock_toml.write_str(r#"
+    pylock_toml.write_str(
+        &format!(r#"
         # This file was autogenerated by uv via the following command:
         #    uv export --cache-dir [CACHE_DIR] -o pylock.toml
         lock-version = "1.0"
@@ -14931,25 +15242,44 @@ fn pep_751_dependency() -> Result<()> {
         [[packages]]
         name = "anyio"
         version = "4.3.0"
-        sdist = { url = "https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz", upload-time = 2024-02-19T08:36:28Z, size = 159642, hashes = { sha256 = "f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6" } }
-        wheels = [{ url = "https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl", upload-time = 2024-02-19T08:36:26Z, size = 85584, hashes = { sha256 = "048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8" } }]
+        sdist = {{ url = "[ANYIO_SDIST_URL]", upload-time = 2024-03-24T00:00:00Z, hashes = {{ sha256 = "{artifact_hash_0}" }} }}
+        wheels = [{{ url = "[ANYIO_WHEEL_URL]", upload-time = 2024-03-24T00:00:00Z, hashes = {{ sha256 = "{artifact_hash_1}" }} }}]
         dependencies = [
-            { name = "idna" },
-            { name = "sniffio" },
+            {{ name = "idna" }},
+            {{ name = "sniffio" }},
         ]
 
         [[packages]]
         name = "idna"
         version = "3.6"
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", upload-time = 2023-11-25T15:40:54Z, size = 175426, hashes = { sha256 = "9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca" } }
-        wheels = [{ url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", upload-time = 2023-11-25T15:40:52Z, size = 61567, hashes = { sha256 = "c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f" } }]
+        sdist = {{ url = "[IDNA_SDIST_URL]", upload-time = 2024-03-24T00:00:00Z, hashes = {{ sha256 = "{artifact_hash_2}" }} }}
+        wheels = [{{ url = "[IDNA_WHEEL_URL]", upload-time = 2024-03-24T00:00:00Z, hashes = {{ sha256 = "{artifact_hash_3}" }} }}]
 
         [[packages]]
         name = "sniffio"
         version = "1.3.1"
-        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", upload-time = 2024-02-25T23:20:04Z, size = 20372, hashes = { sha256 = "f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc" } }
-        wheels = [{ url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-02-25T23:20:01Z, size = 10235, hashes = { sha256 = "2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2" } }]
-    "#)?;
+        sdist = {{ url = "[SNIFFIO_SDIST_URL]", upload-time = 2024-03-24T00:00:00Z, hashes = {{ sha256 = "{artifact_hash_4}" }} }}
+        wheels = [{{ url = "[SNIFFIO_WHEEL_URL]", upload-time = 2024-03-24T00:00:00Z, hashes = {{ sha256 = "{artifact_hash_5}" }} }}]
+    "#, artifact_hash_0 = registry_artifacts.file_hash("anyio-4.3.0.tar.gz").expect("fixture distribution should exist"), artifact_hash_1 = registry_artifacts.file_hash("anyio-4.3.0-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_2 = registry_artifacts.file_hash("idna-3.6.tar.gz").expect("fixture distribution should exist"), artifact_hash_3 = registry_artifacts.file_hash("idna-3.6-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_4 = registry_artifacts.file_hash("sniffio-1.3.1.tar.gz").expect("fixture distribution should exist"), artifact_hash_5 = registry_artifacts.file_hash("sniffio-1.3.1-py3-none-any.whl").expect("fixture distribution should exist"))
+        .replace("[ANYIO_SDIST_URL]", &artifacts.file_url("anyio-4.3.0.tar.gz"))
+        .replace(
+            "[ANYIO_WHEEL_URL]",
+            &artifacts.file_url("anyio-4.3.0-py3-none-any.whl"),
+        )
+        .replace("[IDNA_SDIST_URL]", &artifacts.file_url("idna-3.6.tar.gz"))
+        .replace(
+            "[IDNA_WHEEL_URL]",
+            &artifacts.file_url("idna-3.6-py3-none-any.whl"),
+        )
+        .replace(
+            "[SNIFFIO_SDIST_URL]",
+            &artifacts.file_url("sniffio-1.3.1.tar.gz"),
+        )
+        .replace(
+            "[SNIFFIO_WHEEL_URL]",
+            &artifacts.file_url("sniffio-1.3.1-py3-none-any.whl"),
+        ),
+    )?;
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--preview")
@@ -15290,30 +15620,33 @@ fn config_settings_package() -> Result<()> {
 
 #[test]
 fn reject_invalid_archive_member_names() {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-10-07T00:00:00Z");
+    let artifacts = PackseServer::empty();
+    let context = uv_test::test_context!("3.12");
+    let wheel_url = artifacts.file_url("cbwheeldiff2-0.0.1-py2.py3-none-any.whl");
 
     uv_snapshot!(context.filters(), context.pip_install()
-        .arg("cbwheeldiff2==0.0.1"), @"
+        .arg(format!("cbwheeldiff2 @ {wheel_url}")), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 1 package in [TIME]
-    error: Failed to download `cbwheeldiff2==0.0.1`
-      cause: Failed to extract archive: cbwheeldiff2-0.0.1-py2.py3-none-any.whl
-      cause: Archive contains unacceptable filename: cbwheeldiff2-0.0.1.dist-info/RECORD�
+    error: Failed to download `cbwheeldiff2 @ http://[LOCALHOST]/files/cbwheeldiff2-0.0.1-py2.py3-none-any.whl`
+      cause: Failed to unzip wheel: cbwheeldiff2-0.0.1-py2.py3-none-any.whl
+      cause: filename contained an embedded NUL byte
     "
     );
 }
 
 #[test]
 fn reject_invalid_streaming_zip() {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-07-10T00:00:00Z");
+    let artifacts = PackseServer::empty();
+    let context = uv_test::test_context!("3.12");
+    let wheel_url = artifacts.file_url("cbwheelstreamtest-0.0.1-py2.py3-none-any.whl");
 
     uv_snapshot!(context.filters(), context.pip_install()
-        .arg("cbwheelstreamtest==0.0.1"), @"
+        .arg(format!("cbwheelstreamtest @ {wheel_url}")), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    error: Failed to download `cbwheelstreamtest==0.0.1`
+    error: Failed to download `cbwheelstreamtest @ http://[LOCALHOST]/files/cbwheelstreamtest-0.0.1-py2.py3-none-any.whl`
       cause: Failed to extract archive: cbwheelstreamtest-0.0.1-py2.py3-none-any.whl
       cause: ZIP file contains multiple entries with different contents for: cbwheelstreamtest/__init__.py
     "
@@ -15335,16 +15668,17 @@ fn reject_invalid_streaming_zip() {
 
 #[test]
 fn reject_invalid_double_zip() {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-07-10T00:00:00Z");
+    let artifacts = PackseServer::empty();
+    let context = uv_test::test_context!("3.12");
+    let wheel_url = artifacts.file_url("cbwheelziptest-0.0.2-py2.py3-none-any.whl");
 
     uv_snapshot!(context.filters(), context.pip_install()
-        .arg("cbwheelziptest==0.0.2"), @"
+        .arg(format!("cbwheelziptest @ {wheel_url}")), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 2 packages in [TIME]
-    error: Failed to download `cbwheelziptest==0.0.2`
-      cause: Failed to extract archive: cbwheelziptest-0.0.2-py2.py3-none-any.whl
-      cause: ZIP file contains trailing contents after the end-of-central-directory record
+    error: Failed to download `cbwheelziptest @ http://[LOCALHOST]/files/cbwheelziptest-0.0.2-py2.py3-none-any.whl`
+      cause: Failed to unzip wheel: cbwheelziptest-0.0.2-py2.py3-none-any.whl
+      cause: the central directory end (0x458) did not bind to the end record at 0x8c6
     "
     );
 }
@@ -17254,13 +17588,13 @@ fn compile_bytecode_excludes_stdlib() -> Result<()> {
 
     let output = uv_snapshot!(context.filters(), context.pip_install()
         .arg("sniffio==1.3.1")
-        .arg("--compile-bytecode"), @r"
+        .arg("--compile-bytecode"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-    Bytecode compiled [COUNT] files in [TIME]
+    Bytecode compiled 1 file in [TIME]
      + sniffio==1.3.1
     ");
 

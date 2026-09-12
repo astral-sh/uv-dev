@@ -1,0 +1,22 @@
+name = "local-platform-cuda"
+description = "A conflicting accelerator index with its own local versions."
+
+[root]
+
+[expected]
+satisfiable = true
+
+[packages.platform-engine.versions."2.5.1+cu124"]
+requires_python = ">=3.12"
+requires = ["platform-common", "platform-accelerator; platform_machine == 'x86_64' and sys_platform == 'linux'"]
+sdist = false
+wheel_tags = ["py3-none-linux_x86_64", "py3-none-win_amd64"]
+
+[packages.platform-image.versions."0.20.1+cu124"]
+requires_python = ">=3.12"
+requires = ["platform-engine==2.5.1", "platform-math"]
+sdist = false
+wheel_tags = ["py3-none-linux_x86_64", "py3-none-win_amd64"]
+
+[testgen]
+disable = true

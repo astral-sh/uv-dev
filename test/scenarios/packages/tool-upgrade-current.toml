@@ -1,0 +1,60 @@
+name = "tool-upgrade-current"
+description = "A newer index snapshot with constrained tool upgrade paths."
+
+[root]
+requires = ["babel", "python-dotenv"]
+
+[expected]
+satisfiable = true
+
+[packages.babel.versions."2.6.0"]
+requires_python = false
+requires = ["pytz"]
+sdist_backend = "in-tree"
+scripts = { pybabel = "babel:main" }
+
+[packages.babel.versions."2.9.1"]
+requires_python = false
+requires = ["pytz"]
+sdist_backend = "in-tree"
+scripts = { pybabel = "babel:main" }
+
+[packages.babel.versions."2.11.0"]
+requires_python = false
+requires = ["pytz"]
+sdist_backend = "in-tree"
+scripts = { pybabel = "babel:main" }
+
+[packages.babel.versions."2.13.1"]
+requires_python = false
+requires = ["setuptools==69.2.0"]
+sdist_backend = "in-tree"
+scripts = { pybabel = "babel:main" }
+
+[packages.babel.versions."2.14.0"]
+requires_python = false
+sdist_backend = "in-tree"
+scripts = { pybabel = "babel:main" }
+
+[packages.pytz.versions."2018.5"]
+requires_python = false
+sdist_backend = "in-tree"
+
+[packages.pytz.versions."2024.1"]
+requires_python = false
+sdist_backend = "in-tree"
+
+[packages.python-dotenv.versions."0.10.2.post2"]
+requires_python = false
+module_name = "dotenv"
+sdist_backend = "in-tree"
+scripts = { dotenv = "dotenv:main" }
+
+[packages.python-dotenv.versions."1.0.1"]
+requires_python = false
+module_name = "dotenv"
+sdist_backend = "in-tree"
+scripts = { dotenv = "dotenv:main" }
+
+[testgen]
+disable = true

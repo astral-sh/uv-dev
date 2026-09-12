@@ -15,17 +15,32 @@ use uv_cache::Cache;
 use uv_fs::link::{LinkMode, LinkOptions, link_dir};
 use uv_static::EnvVars;
 
-use uv_test::uv_snapshot;
+use uv_test::{TestContext, uv_snapshot};
+
+fn find_index_cache_entry(context: &TestContext, filename: &str) -> Result<std::path::PathBuf> {
+    let index = Cache::from_path(context.cache_dir.path())
+        .bucket(uv_cache::CacheBucket::Simple)
+        .join("index");
+    for shard in fs_err::read_dir(index)? {
+        let entry = shard?.path().join(filename);
+        if entry.exists() {
+            return Ok(entry);
+        }
+    }
+    anyhow::bail!("Expected the index cache to contain `{filename}`")
+}
 
 /// `cache clean` should remove all packages.
 #[test]
 fn clean_all() -> Result<()> {
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
     let context = uv_test::test_context!("3.12")
+        .with_default_index(&_server.index_url())
         .with_filtered_file_counts()
         .with_filtered_sizes_and_units();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("typing-extensions\niniconfig")?;
+    requirements_txt.write_str("simple-package\nother-package")?;
 
     // Install a requirement, to populate the cache.
     context
@@ -249,12 +264,14 @@ fn clean_all_compressed_file() -> Result<()> {
 /// `cache clear` should behave as an alias of `cache clean`.
 #[test]
 fn clear_all_alias() -> Result<()> {
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
     let context = uv_test::test_context!("3.12")
+        .with_default_index(&_server.index_url())
         .with_filtered_file_counts()
         .with_filtered_sizes_and_units();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("typing-extensions\niniconfig")?;
+    requirements_txt.write_str("simple-package\nother-package")?;
 
     // Install a requirement, to populate the cache.
     context
@@ -280,42 +297,42 @@ fn clear_all_alias() -> Result<()> {
 
 #[tokio::test]
 async fn clean_force() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
+    let context = context
         .with_filtered_counts()
         .with_filtered_sizes_and_units();
-
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("typing-extensions\niniconfig")?;
-
-    // Install a requirement, to populate the cache.
+    requirements_txt.write_str("simple-package\nother-package")?; // Install a requirement, to populate the cache.
     context
         .pip_sync()
         .arg("requirements.txt")
         .assert()
-        .success();
-
-    // When unlocked, `--force` should still take a lock
-    uv_snapshot!(context.filters(), context.clean().arg("--verbose").arg("--force"), @"
+        .success(); // When unlocked, `--force` should still take a lock
+    uv_snapshot!(
+        context.filters(),
+        context.clean().arg("--verbose").arg("--force"),
+        @"
     exit_code: 0 (success)
     ----- stderr -----
     DEBUG Searching for user configuration in: `[UV_USER_CONFIG_DIR]/uv.toml`
     DEBUG uv [VERSION] ([COMMIT] DATE)
     Clearing cache at: [CACHE_DIR]/
     Removed [N] files ([SIZE])
-    ");
-
-    // Install a requirement, to re-populate the cache.
+    "
+    ); // Install a requirement, to re-populate the cache.
     context
         .pip_sync()
         .arg("requirements.txt")
         .assert()
-        .success();
-
-    // When locked, `--force` should proceed without blocking
+        .success(); // When locked, `--force` should proceed without blocking
     let _cache = uv_cache::Cache::from_path(context.cache_dir.path())
         .with_exclusive_lock()
         .await;
-    uv_snapshot!(context.filters(), context.clean().arg("--verbose").arg("--force"), @"
+    uv_snapshot!(
+        context.filters(),
+        context.clean().arg("--verbose").arg("--force"),
+        @"
     exit_code: 0 (success)
     ----- stderr -----
     DEBUG Searching for user configuration in: `[UV_USER_CONFIG_DIR]/uv.toml`
@@ -324,8 +341,8 @@ async fn clean_force() -> Result<()> {
     DEBUG Cache is currently in use, proceeding due to `--force`
     Clearing cache at: [CACHE_DIR]/
     Removed [N] files ([SIZE])
-    ");
-
+    "
+    );
     Ok(())
 }
 
@@ -351,12 +368,13 @@ fn clean_package_pypi() -> Result<()> {
         .assert()
         .success();
 
-    // Assert that the `.rkyv` file is created for `iniconfig`.
-    let rkyv = context
-        .cache_dir
-        .child("simple-v25")
-        .child("pypi")
-        .child("iniconfig.rkyv");
+    // Populate the dedicated PyPI shard with metadata obtained from the local index.
+    let pypi = Cache::from_path(context.cache_dir.path())
+        .bucket(uv_cache::CacheBucket::Simple)
+        .join("pypi");
+    fs_err::create_dir_all(&pypi)?;
+    let rkyv = pypi.join("iniconfig.rkyv");
+    fs_err::copy(find_index_cache_entry(&context, "iniconfig.rkyv")?, &rkyv)?;
     assert!(
         rkyv.exists(),
         "Expected the `.rkyv` file to exist for `iniconfig`"
@@ -394,6 +412,7 @@ fn clean_package_pypi() -> Result<()> {
 #[test]
 fn clean_package_index() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/pip-commands.toml")
         .with_filtered_file_counts()
         .with_filtered_sizes_and_units()
         // The cache entry does not have a stable key, so we filter it out.
@@ -403,30 +422,23 @@ fn clean_package_index() -> Result<()> {
         ));
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio\niniconfig")?;
+    requirements_txt.write_str("simple-package\nother-package")?;
 
     // Install a requirement, to populate the cache.
     context
         .pip_sync()
         .arg("requirements.txt")
-        .arg("--index-url")
-        .arg("https://test.pypi.org/simple")
         .assert()
         .success();
 
-    // Assert that the `.rkyv` file is created for `iniconfig`.
-    let rkyv = context
-        .cache_dir
-        .child("simple-v25")
-        .child("index")
-        .child("e8208120cae3ba69")
-        .child("iniconfig.rkyv");
+    // Assert that the `.rkyv` file is created for `simple-package`.
+    let rkyv = find_index_cache_entry(&context, "simple-package.rkyv")?;
     assert!(
         rkyv.exists(),
-        "Expected the `.rkyv` file to exist for `iniconfig`"
+        "Expected the `.rkyv` file to exist for `simple-package`"
     );
 
-    uv_snapshot!(context.filters(), context.clean().arg("--verbose").arg("iniconfig"), @"
+    uv_snapshot!(context.filters(), context.clean().arg("--verbose").arg("simple-package"), @"
     exit_code: 0 (success)
     ----- stderr -----
     DEBUG Searching for user configuration in: `[UV_USER_CONFIG_DIR]/uv.toml`
@@ -435,10 +447,10 @@ fn clean_package_index() -> Result<()> {
     Removed [N] files ([SIZE])
     ");
 
-    // Assert that the `.rkyv` file is removed for `iniconfig`.
+    // Assert that the `.rkyv` file is removed for `simple-package`.
     assert!(
         !rkyv.exists(),
-        "Expected the `.rkyv` file to be removed for `iniconfig`"
+        "Expected the `.rkyv` file to be removed for `simple-package`"
     );
 
     Ok(())

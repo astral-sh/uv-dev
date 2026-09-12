@@ -1,0 +1,29 @@
+name = "version-constraints"
+description = "Registry package versions constrained by a workspace member version."
+
+[root]
+requires = ["version-parent"]
+
+[expected]
+satisfiable = true
+
+[expected.packages]
+version-parent = "2.0.0"
+version-child = "3.0.0"
+
+[packages.version-parent.versions."1.0.0"]
+requires = ["version-child>=2,<3"]
+sdist_backend = "in-tree"
+
+[packages.version-parent.versions."2.0.0"]
+requires = ["version-child>=3"]
+sdist_backend = "in-tree"
+
+[packages.version-child.versions."2.0.0"]
+sdist_backend = "in-tree"
+
+[packages.version-child.versions."3.0.0"]
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true

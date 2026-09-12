@@ -235,7 +235,6 @@ fn workspace_metadata_ignores_unusable_environment() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn workspace_metadata_script() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_python_names()
@@ -285,52 +284,35 @@ import iniconfig
       "module_owners": {
         "iniconfig": [
           {
-            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
-          }
-        ],
-        "iniconfig._parse": [
-          {
-            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
-          }
-        ],
-        "iniconfig._version": [
-          {
-            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
-          }
-        ],
-        "iniconfig.exceptions": [
-          {
-            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+            "package_id": "iniconfig==2.0.0@registry+http://[LOCALHOST]/simple/"
           }
         ]
       },
       "resolution": {
-        "iniconfig==2.0.0@registry+https://pypi.org/simple": {
+        "iniconfig==2.0.0@registry+http://[LOCALHOST]/simple/": {
           "name": "iniconfig",
           "version": "2.0.0",
           "source": {
             "registry": {
-              "url": "https://pypi.org/simple"
+              "url": "http://[LOCALHOST]/simple/"
             }
           },
           "kind": "package",
           "dependencies": [],
           "sdist": {
-            "url": "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz",
+            "url": "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz",
             "hashes": {
-              "sha256": "2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3"
+              "sha256": "48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3"
             },
-            "size": 4646,
-            "upload_time": "2023-01-07T11:08:11.254Z"
+            "upload_time": "2024-03-24T00:00:00Z"
           },
           "wheels": [
             {
-              "url": "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl",
+              "url": "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl",
               "hashes": {
-                "sha256": "b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374"
+                "sha256": "8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c"
               },
-              "size": 5892,
-              "upload_time": "2023-01-07T11:08:09.864Z",
+              "upload_time": "2024-03-24T00:00:00Z",
               "filename": "iniconfig-2.0.0-py3-none-any.whl"
             }
           ]
@@ -340,7 +322,7 @@ import iniconfig
           "path": "[TEMP_DIR]/script.py",
           "dependencies": [
             {
-              "id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+              "id": "iniconfig==2.0.0@registry+http://[LOCALHOST]/simple/"
             }
           ]
         }
@@ -1417,9 +1399,9 @@ dependencies = [
 
 /// Test metadata for a root workspace (workspace with a root package).
 #[test]
-#[cfg(feature = "test-pypi")]
 fn workspace_metadata_root_workspace() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/workspace.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let workspace = context.temp_dir.child("workspace");
 
     copy_dir_ignore(
@@ -1475,7 +1457,7 @@ fn workspace_metadata_root_workspace() -> Result<()> {
               "id": "bird-feeder==1.0.0@editable+[TEMP_DIR]/workspace/packages/bird-feeder"
             },
             {
-              "id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+              "id": "iniconfig==2.0.0@registry+http://[LOCALHOST]/simple/"
             }
           ]
         },
@@ -1488,69 +1470,65 @@ fn workspace_metadata_root_workspace() -> Result<()> {
           "kind": "package",
           "dependencies": [
             {
-              "id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+              "id": "iniconfig==2.0.0@registry+http://[LOCALHOST]/simple/"
             },
             {
               "id": "seeds==1.0.0@editable+[TEMP_DIR]/workspace/packages/seeds"
             }
           ]
         },
-        "idna==3.6@registry+https://pypi.org/simple": {
+        "idna==3.6@registry+http://[LOCALHOST]/simple/": {
           "name": "idna",
           "version": "3.6",
           "source": {
             "registry": {
-              "url": "https://pypi.org/simple"
+              "url": "http://[LOCALHOST]/simple/"
             }
           },
           "kind": "package",
           "dependencies": [],
           "sdist": {
-            "url": "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz",
+            "url": "http://[LOCALHOST]/files/idna-3.6.tar.gz",
             "hashes": {
-              "sha256": "9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca"
+              "sha256": "17c3305b5e499cc941947e6a5b235c4ff7b4364a4034cd404239eecf341bc1a6"
             },
-            "size": 175426,
-            "upload_time": "2023-11-25T15:40:54.902Z"
+            "upload_time": "2024-03-24T00:00:00Z"
           },
           "wheels": [
             {
-              "url": "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl",
+              "url": "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl",
               "hashes": {
-                "sha256": "c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f"
+                "sha256": "30a9a2a1651ab73e8e74b49e5ab084e4d0ad280bc9280d5a7f978ae44a05aa78"
               },
-              "size": 61567,
-              "upload_time": "2023-11-25T15:40:52.604Z",
+              "upload_time": "2024-03-24T00:00:00Z",
               "filename": "idna-3.6-py3-none-any.whl"
             }
           ]
         },
-        "iniconfig==2.0.0@registry+https://pypi.org/simple": {
+        "iniconfig==2.0.0@registry+http://[LOCALHOST]/simple/": {
           "name": "iniconfig",
           "version": "2.0.0",
           "source": {
             "registry": {
-              "url": "https://pypi.org/simple"
+              "url": "http://[LOCALHOST]/simple/"
             }
           },
           "kind": "package",
           "dependencies": [],
           "sdist": {
-            "url": "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz",
+            "url": "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz",
             "hashes": {
-              "sha256": "2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3"
+              "sha256": "33672cc386cd5920d7edd83e6e8e231cb0f98a5c3644f7156ca5002710906680"
             },
-            "size": 4646,
-            "upload_time": "2023-01-07T11:08:11.254Z"
+            "upload_time": "2024-03-24T00:00:00Z"
           },
           "wheels": [
             {
-              "url": "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl",
+              "url": "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl",
               "hashes": {
-                "sha256": "b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374"
+                "sha256": "535b954a261c3adcacbb744f0259ae3e7083c5b20cb79e063293f581356f2b52"
               },
-              "size": 5892,
-              "upload_time": "2023-01-07T11:08:09.864Z",
+              "upload_time": "2024-03-24T00:00:00Z",
               "filename": "iniconfig-2.0.0-py3-none-any.whl"
             }
           ]
@@ -1564,7 +1542,7 @@ fn workspace_metadata_root_workspace() -> Result<()> {
           "kind": "package",
           "dependencies": [
             {
-              "id": "idna==3.6@registry+https://pypi.org/simple"
+              "id": "idna==3.6@registry+http://[LOCALHOST]/simple/"
             }
           ]
         },
@@ -1588,9 +1566,9 @@ fn workspace_metadata_root_workspace() -> Result<()> {
 
 /// Test metadata for a virtual workspace (no root package).
 #[test]
-#[cfg(feature = "test-pypi")]
 fn workspace_metadata_virtual_workspace() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/workspace.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let workspace = context.temp_dir.child("workspace");
 
     copy_dir_ignore(
@@ -1652,43 +1630,41 @@ fn workspace_metadata_virtual_workspace() -> Result<()> {
               "id": "bird-feeder==1.0.0@editable+[TEMP_DIR]/workspace/packages/bird-feeder"
             },
             {
-              "id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+              "id": "iniconfig==2.0.0@registry+http://[LOCALHOST]/simple/"
             }
           ]
         },
-        "anyio==4.3.0@registry+https://pypi.org/simple": {
+        "anyio==4.3.0@registry+http://[LOCALHOST]/simple/": {
           "name": "anyio",
           "version": "4.3.0",
           "source": {
             "registry": {
-              "url": "https://pypi.org/simple"
+              "url": "http://[LOCALHOST]/simple/"
             }
           },
           "kind": "package",
           "dependencies": [
             {
-              "id": "idna==3.6@registry+https://pypi.org/simple"
+              "id": "idna==3.6@registry+http://[LOCALHOST]/simple/"
             },
             {
-              "id": "sniffio==1.3.1@registry+https://pypi.org/simple"
+              "id": "sniffio==1.3.1@registry+http://[LOCALHOST]/simple/"
             }
           ],
           "sdist": {
-            "url": "https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz",
+            "url": "http://[LOCALHOST]/files/anyio-4.3.0.tar.gz",
             "hashes": {
-              "sha256": "f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6"
+              "sha256": "40e76bce278e96f0fc43374abf030a483db9cc9accb20f829d838e8593d5fb81"
             },
-            "size": 159642,
-            "upload_time": "2024-02-19T08:36:28.641Z"
+            "upload_time": "2024-03-24T00:00:00Z"
           },
           "wheels": [
             {
-              "url": "https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl",
+              "url": "http://[LOCALHOST]/files/anyio-4.3.0-py3-none-any.whl",
               "hashes": {
-                "sha256": "048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8"
+                "sha256": "0786abaa19b025c388576d6fa37439f4d8dde3d0c81d50bcf4138d1aa5bea724"
               },
-              "size": 85584,
-              "upload_time": "2024-02-19T08:36:26.842Z",
+              "upload_time": "2024-03-24T00:00:00Z",
               "filename": "anyio-4.3.0-py3-none-any.whl"
             }
           ]
@@ -1702,69 +1678,65 @@ fn workspace_metadata_virtual_workspace() -> Result<()> {
           "kind": "package",
           "dependencies": [
             {
-              "id": "anyio==4.3.0@registry+https://pypi.org/simple"
+              "id": "anyio==4.3.0@registry+http://[LOCALHOST]/simple/"
             },
             {
               "id": "seeds==1.0.0@editable+[TEMP_DIR]/workspace/packages/seeds"
             }
           ]
         },
-        "idna==3.6@registry+https://pypi.org/simple": {
+        "idna==3.6@registry+http://[LOCALHOST]/simple/": {
           "name": "idna",
           "version": "3.6",
           "source": {
             "registry": {
-              "url": "https://pypi.org/simple"
+              "url": "http://[LOCALHOST]/simple/"
             }
           },
           "kind": "package",
           "dependencies": [],
           "sdist": {
-            "url": "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz",
+            "url": "http://[LOCALHOST]/files/idna-3.6.tar.gz",
             "hashes": {
-              "sha256": "9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca"
+              "sha256": "17c3305b5e499cc941947e6a5b235c4ff7b4364a4034cd404239eecf341bc1a6"
             },
-            "size": 175426,
-            "upload_time": "2023-11-25T15:40:54.902Z"
+            "upload_time": "2024-03-24T00:00:00Z"
           },
           "wheels": [
             {
-              "url": "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl",
+              "url": "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl",
               "hashes": {
-                "sha256": "c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f"
+                "sha256": "30a9a2a1651ab73e8e74b49e5ab084e4d0ad280bc9280d5a7f978ae44a05aa78"
               },
-              "size": 61567,
-              "upload_time": "2023-11-25T15:40:52.604Z",
+              "upload_time": "2024-03-24T00:00:00Z",
               "filename": "idna-3.6-py3-none-any.whl"
             }
           ]
         },
-        "iniconfig==2.0.0@registry+https://pypi.org/simple": {
+        "iniconfig==2.0.0@registry+http://[LOCALHOST]/simple/": {
           "name": "iniconfig",
           "version": "2.0.0",
           "source": {
             "registry": {
-              "url": "https://pypi.org/simple"
+              "url": "http://[LOCALHOST]/simple/"
             }
           },
           "kind": "package",
           "dependencies": [],
           "sdist": {
-            "url": "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz",
+            "url": "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz",
             "hashes": {
-              "sha256": "2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3"
+              "sha256": "33672cc386cd5920d7edd83e6e8e231cb0f98a5c3644f7156ca5002710906680"
             },
-            "size": 4646,
-            "upload_time": "2023-01-07T11:08:11.254Z"
+            "upload_time": "2024-03-24T00:00:00Z"
           },
           "wheels": [
             {
-              "url": "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl",
+              "url": "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl",
               "hashes": {
-                "sha256": "b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374"
+                "sha256": "535b954a261c3adcacbb744f0259ae3e7083c5b20cb79e063293f581356f2b52"
               },
-              "size": 5892,
-              "upload_time": "2023-01-07T11:08:09.864Z",
+              "upload_time": "2024-03-24T00:00:00Z",
               "filename": "iniconfig-2.0.0-py3-none-any.whl"
             }
           ]
@@ -1778,36 +1750,34 @@ fn workspace_metadata_virtual_workspace() -> Result<()> {
           "kind": "package",
           "dependencies": [
             {
-              "id": "idna==3.6@registry+https://pypi.org/simple"
+              "id": "idna==3.6@registry+http://[LOCALHOST]/simple/"
             }
           ]
         },
-        "sniffio==1.3.1@registry+https://pypi.org/simple": {
+        "sniffio==1.3.1@registry+http://[LOCALHOST]/simple/": {
           "name": "sniffio",
           "version": "1.3.1",
           "source": {
             "registry": {
-              "url": "https://pypi.org/simple"
+              "url": "http://[LOCALHOST]/simple/"
             }
           },
           "kind": "package",
           "dependencies": [],
           "sdist": {
-            "url": "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz",
+            "url": "http://[LOCALHOST]/files/sniffio-1.3.1.tar.gz",
             "hashes": {
-              "sha256": "f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc"
+              "sha256": "77f2e620becbdf061b22f1a43376c215c0d11acb00b418450ce50ddec444aec0"
             },
-            "size": 20372,
-            "upload_time": "2024-02-25T23:20:04.057Z"
+            "upload_time": "2024-03-24T00:00:00Z"
           },
           "wheels": [
             {
-              "url": "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl",
+              "url": "http://[LOCALHOST]/files/sniffio-1.3.1-py3-none-any.whl",
               "hashes": {
-                "sha256": "2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2"
+                "sha256": "70679c208c27416a7f48156e0eb74c0a88a7d7e92eb9f70ec7f97c7d3a6bb183"
               },
-              "size": 10235,
-              "upload_time": "2024-02-25T23:20:01.196Z",
+              "upload_time": "2024-03-24T00:00:00Z",
               "filename": "sniffio-1.3.1-py3-none-any.whl"
             }
           ]
@@ -1832,9 +1802,9 @@ fn workspace_metadata_virtual_workspace() -> Result<()> {
 
 /// Test metadata when run from a workspace member directory.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn workspace_metadata_from_member() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/workspace.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let workspace = context.temp_dir.child("workspace");
 
     copy_dir_ignore(
@@ -1892,7 +1862,7 @@ fn workspace_metadata_from_member() -> Result<()> {
               "id": "bird-feeder==1.0.0@editable+[TEMP_DIR]/workspace/packages/bird-feeder"
             },
             {
-              "id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+              "id": "iniconfig==2.0.0@registry+http://[LOCALHOST]/simple/"
             }
           ]
         },
@@ -1905,69 +1875,65 @@ fn workspace_metadata_from_member() -> Result<()> {
           "kind": "package",
           "dependencies": [
             {
-              "id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+              "id": "iniconfig==2.0.0@registry+http://[LOCALHOST]/simple/"
             },
             {
               "id": "seeds==1.0.0@editable+[TEMP_DIR]/workspace/packages/seeds"
             }
           ]
         },
-        "idna==3.6@registry+https://pypi.org/simple": {
+        "idna==3.6@registry+http://[LOCALHOST]/simple/": {
           "name": "idna",
           "version": "3.6",
           "source": {
             "registry": {
-              "url": "https://pypi.org/simple"
+              "url": "http://[LOCALHOST]/simple/"
             }
           },
           "kind": "package",
           "dependencies": [],
           "sdist": {
-            "url": "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz",
+            "url": "http://[LOCALHOST]/files/idna-3.6.tar.gz",
             "hashes": {
-              "sha256": "9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca"
+              "sha256": "17c3305b5e499cc941947e6a5b235c4ff7b4364a4034cd404239eecf341bc1a6"
             },
-            "size": 175426,
-            "upload_time": "2023-11-25T15:40:54.902Z"
+            "upload_time": "2024-03-24T00:00:00Z"
           },
           "wheels": [
             {
-              "url": "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl",
+              "url": "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl",
               "hashes": {
-                "sha256": "c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f"
+                "sha256": "30a9a2a1651ab73e8e74b49e5ab084e4d0ad280bc9280d5a7f978ae44a05aa78"
               },
-              "size": 61567,
-              "upload_time": "2023-11-25T15:40:52.604Z",
+              "upload_time": "2024-03-24T00:00:00Z",
               "filename": "idna-3.6-py3-none-any.whl"
             }
           ]
         },
-        "iniconfig==2.0.0@registry+https://pypi.org/simple": {
+        "iniconfig==2.0.0@registry+http://[LOCALHOST]/simple/": {
           "name": "iniconfig",
           "version": "2.0.0",
           "source": {
             "registry": {
-              "url": "https://pypi.org/simple"
+              "url": "http://[LOCALHOST]/simple/"
             }
           },
           "kind": "package",
           "dependencies": [],
           "sdist": {
-            "url": "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz",
+            "url": "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz",
             "hashes": {
-              "sha256": "2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3"
+              "sha256": "33672cc386cd5920d7edd83e6e8e231cb0f98a5c3644f7156ca5002710906680"
             },
-            "size": 4646,
-            "upload_time": "2023-01-07T11:08:11.254Z"
+            "upload_time": "2024-03-24T00:00:00Z"
           },
           "wheels": [
             {
-              "url": "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl",
+              "url": "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl",
               "hashes": {
-                "sha256": "b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374"
+                "sha256": "535b954a261c3adcacbb744f0259ae3e7083c5b20cb79e063293f581356f2b52"
               },
-              "size": 5892,
-              "upload_time": "2023-01-07T11:08:09.864Z",
+              "upload_time": "2024-03-24T00:00:00Z",
               "filename": "iniconfig-2.0.0-py3-none-any.whl"
             }
           ]
@@ -1981,7 +1947,7 @@ fn workspace_metadata_from_member() -> Result<()> {
           "kind": "package",
           "dependencies": [
             {
-              "id": "idna==3.6@registry+https://pypi.org/simple"
+              "id": "idna==3.6@registry+http://[LOCALHOST]/simple/"
             }
           ]
         },
@@ -2165,9 +2131,9 @@ fn workspace_metadata_single_project() {
 
 /// Test metadata with excluded packages.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn workspace_metadata_with_excluded() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/workspace.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let workspace = context.temp_dir.child("workspace");
 
     copy_dir_ignore(
@@ -2210,36 +2176,34 @@ fn workspace_metadata_with_excluded() -> Result<()> {
           "kind": "package",
           "dependencies": [
             {
-              "id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+              "id": "iniconfig==2.0.0@registry+http://[LOCALHOST]/simple/"
             }
           ]
         },
-        "iniconfig==2.0.0@registry+https://pypi.org/simple": {
+        "iniconfig==2.0.0@registry+http://[LOCALHOST]/simple/": {
           "name": "iniconfig",
           "version": "2.0.0",
           "source": {
             "registry": {
-              "url": "https://pypi.org/simple"
+              "url": "http://[LOCALHOST]/simple/"
             }
           },
           "kind": "package",
           "dependencies": [],
           "sdist": {
-            "url": "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz",
+            "url": "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz",
             "hashes": {
-              "sha256": "2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3"
+              "sha256": "33672cc386cd5920d7edd83e6e8e231cb0f98a5c3644f7156ca5002710906680"
             },
-            "size": 4646,
-            "upload_time": "2023-01-07T11:08:11.254Z"
+            "upload_time": "2024-03-24T00:00:00Z"
           },
           "wheels": [
             {
-              "url": "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl",
+              "url": "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl",
               "hashes": {
-                "sha256": "b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374"
+                "sha256": "535b954a261c3adcacbb744f0259ae3e7083c5b20cb79e063293f581356f2b52"
               },
-              "size": 5892,
-              "upload_time": "2023-01-07T11:08:09.864Z",
+              "upload_time": "2024-03-24T00:00:00Z",
               "filename": "iniconfig-2.0.0-py3-none-any.whl"
             }
           ]
@@ -2264,9 +2228,9 @@ fn workspace_metadata_with_excluded() -> Result<()> {
 
 /// Test metadata for dependency groups defined on a non-package workspace root.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn workspace_metadata_group_only() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/workspace.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let workspace = context.temp_dir.child("workspace");
 
     copy_dir_ignore(
@@ -2293,32 +2257,30 @@ fn workspace_metadata_group_only() -> Result<()> {
         "sets": []
       },
       "resolution": {
-        "iniconfig==2.0.0@registry+https://pypi.org/simple": {
+        "iniconfig==2.0.0@registry+http://[LOCALHOST]/simple/": {
           "name": "iniconfig",
           "version": "2.0.0",
           "source": {
             "registry": {
-              "url": "https://pypi.org/simple"
+              "url": "http://[LOCALHOST]/simple/"
             }
           },
           "kind": "package",
           "dependencies": [],
           "sdist": {
-            "url": "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz",
+            "url": "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz",
             "hashes": {
-              "sha256": "2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3"
+              "sha256": "33672cc386cd5920d7edd83e6e8e231cb0f98a5c3644f7156ca5002710906680"
             },
-            "size": 4646,
-            "upload_time": "2023-01-07T11:08:11.254Z"
+            "upload_time": "2024-03-24T00:00:00Z"
           },
           "wheels": [
             {
-              "url": "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl",
+              "url": "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl",
               "hashes": {
-                "sha256": "b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374"
+                "sha256": "535b954a261c3adcacbb744f0259ae3e7083c5b20cb79e063293f581356f2b52"
               },
-              "size": 5892,
-              "upload_time": "2023-01-07T11:08:09.864Z",
+              "upload_time": "2024-03-24T00:00:00Z",
               "filename": "iniconfig-2.0.0-py3-none-any.whl"
             }
           ]
@@ -2341,7 +2303,7 @@ fn workspace_metadata_group_only() -> Result<()> {
           "path": "[TEMP_DIR]/workspace",
           "dependencies": [
             {
-              "id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+              "id": "iniconfig==2.0.0@registry+http://[LOCALHOST]/simple/"
             }
           ]
         }
@@ -2367,30 +2329,17 @@ fn workspace_metadata_group_only() -> Result<()> {
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
     let module_owners = serde_json::to_string_pretty(&metadata["module_owners"])?;
 
+    insta::with_settings!({ filters => context.filters() }, {
     insta::assert_snapshot!(module_owners, @r#"
     {
       "iniconfig": [
         {
-          "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
-        }
-      ],
-      "iniconfig._parse": [
-        {
-          "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
-        }
-      ],
-      "iniconfig._version": [
-        {
-          "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
-        }
-      ],
-      "iniconfig.exceptions": [
-        {
-          "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+          "package_id": "iniconfig==2.0.0@registry+http://[LOCALHOST]/simple/"
         }
       ]
     }
     "#);
+    });
 
     Ok(())
 }
@@ -2411,9 +2360,9 @@ fn workspace_metadata_no_project() {
 
 /// Test optional-dependencies, dependency-groups, and build-system
 #[test]
-#[cfg(feature = "test-pypi")]
 fn workspace_metadata_various_dependency_rainbow() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/workspace.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let workspace = context.temp_dir.child("workspace");
 
     copy_dir_ignore(
@@ -2458,7 +2407,7 @@ fn workspace_metadata_various_dependency_rainbow() -> Result<()> {
           },
           "dependencies": [
             {
-              "id": "idna==3.6@registry+https://pypi.org/simple"
+              "id": "idna==3.6@registry+http://[LOCALHOST]/simple/"
             }
           ]
         },
@@ -2471,7 +2420,7 @@ fn workspace_metadata_various_dependency_rainbow() -> Result<()> {
           "kind": "package",
           "dependencies": [
             {
-              "id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+              "id": "iniconfig==2.0.0@registry+http://[LOCALHOST]/simple/"
             }
           ],
           "optional_dependencies": [
@@ -2501,133 +2450,125 @@ fn workspace_metadata_various_dependency_rainbow() -> Result<()> {
               "id": "albatross==0.1.0@editable+[TEMP_DIR]/workspace/"
             },
             {
-              "id": "anyio==4.3.0@registry+https://pypi.org/simple"
+              "id": "anyio==4.3.0@registry+http://[LOCALHOST]/simple/"
             }
           ]
         },
-        "anyio==4.3.0@registry+https://pypi.org/simple": {
+        "anyio==4.3.0@registry+http://[LOCALHOST]/simple/": {
           "name": "anyio",
           "version": "4.3.0",
           "source": {
             "registry": {
-              "url": "https://pypi.org/simple"
+              "url": "http://[LOCALHOST]/simple/"
             }
           },
           "kind": "package",
           "dependencies": [
             {
-              "id": "idna==3.6@registry+https://pypi.org/simple"
+              "id": "idna==3.6@registry+http://[LOCALHOST]/simple/"
             },
             {
-              "id": "sniffio==1.3.1@registry+https://pypi.org/simple"
+              "id": "sniffio==1.3.1@registry+http://[LOCALHOST]/simple/"
             }
           ],
           "sdist": {
-            "url": "https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz",
+            "url": "http://[LOCALHOST]/files/anyio-4.3.0.tar.gz",
             "hashes": {
-              "sha256": "f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6"
+              "sha256": "40e76bce278e96f0fc43374abf030a483db9cc9accb20f829d838e8593d5fb81"
             },
-            "size": 159642,
-            "upload_time": "2024-02-19T08:36:28.641Z"
+            "upload_time": "2024-03-24T00:00:00Z"
           },
           "wheels": [
             {
-              "url": "https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl",
+              "url": "http://[LOCALHOST]/files/anyio-4.3.0-py3-none-any.whl",
               "hashes": {
-                "sha256": "048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8"
+                "sha256": "0786abaa19b025c388576d6fa37439f4d8dde3d0c81d50bcf4138d1aa5bea724"
               },
-              "size": 85584,
-              "upload_time": "2024-02-19T08:36:26.842Z",
+              "upload_time": "2024-03-24T00:00:00Z",
               "filename": "anyio-4.3.0-py3-none-any.whl"
             }
           ]
         },
-        "idna==3.6@registry+https://pypi.org/simple": {
+        "idna==3.6@registry+http://[LOCALHOST]/simple/": {
           "name": "idna",
           "version": "3.6",
           "source": {
             "registry": {
-              "url": "https://pypi.org/simple"
+              "url": "http://[LOCALHOST]/simple/"
             }
           },
           "kind": "package",
           "dependencies": [],
           "sdist": {
-            "url": "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz",
+            "url": "http://[LOCALHOST]/files/idna-3.6.tar.gz",
             "hashes": {
-              "sha256": "9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca"
+              "sha256": "17c3305b5e499cc941947e6a5b235c4ff7b4364a4034cd404239eecf341bc1a6"
             },
-            "size": 175426,
-            "upload_time": "2023-11-25T15:40:54.902Z"
+            "upload_time": "2024-03-24T00:00:00Z"
           },
           "wheels": [
             {
-              "url": "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl",
+              "url": "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl",
               "hashes": {
-                "sha256": "c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f"
+                "sha256": "30a9a2a1651ab73e8e74b49e5ab084e4d0ad280bc9280d5a7f978ae44a05aa78"
               },
-              "size": 61567,
-              "upload_time": "2023-11-25T15:40:52.604Z",
+              "upload_time": "2024-03-24T00:00:00Z",
               "filename": "idna-3.6-py3-none-any.whl"
             }
           ]
         },
-        "iniconfig==2.0.0@registry+https://pypi.org/simple": {
+        "iniconfig==2.0.0@registry+http://[LOCALHOST]/simple/": {
           "name": "iniconfig",
           "version": "2.0.0",
           "source": {
             "registry": {
-              "url": "https://pypi.org/simple"
+              "url": "http://[LOCALHOST]/simple/"
             }
           },
           "kind": "package",
           "dependencies": [],
           "sdist": {
-            "url": "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz",
+            "url": "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz",
             "hashes": {
-              "sha256": "2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3"
+              "sha256": "33672cc386cd5920d7edd83e6e8e231cb0f98a5c3644f7156ca5002710906680"
             },
-            "size": 4646,
-            "upload_time": "2023-01-07T11:08:11.254Z"
+            "upload_time": "2024-03-24T00:00:00Z"
           },
           "wheels": [
             {
-              "url": "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl",
+              "url": "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl",
               "hashes": {
-                "sha256": "b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374"
+                "sha256": "535b954a261c3adcacbb744f0259ae3e7083c5b20cb79e063293f581356f2b52"
               },
-              "size": 5892,
-              "upload_time": "2023-01-07T11:08:09.864Z",
+              "upload_time": "2024-03-24T00:00:00Z",
               "filename": "iniconfig-2.0.0-py3-none-any.whl"
             }
           ]
         },
-        "sniffio==1.3.1@registry+https://pypi.org/simple": {
+        "sniffio==1.3.1@registry+http://[LOCALHOST]/simple/": {
           "name": "sniffio",
           "version": "1.3.1",
           "source": {
             "registry": {
-              "url": "https://pypi.org/simple"
+              "url": "http://[LOCALHOST]/simple/"
             }
           },
           "kind": "package",
           "dependencies": [],
           "sdist": {
-            "url": "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz",
+            "url": "http://[LOCALHOST]/files/sniffio-1.3.1.tar.gz",
             "hashes": {
-              "sha256": "f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc"
+              "sha256": "77f2e620becbdf061b22f1a43376c215c0d11acb00b418450ce50ddec444aec0"
             },
-            "size": 20372,
-            "upload_time": "2024-02-25T23:20:04.057Z"
+            "upload_time": "2024-03-24T00:00:00Z"
           },
           "wheels": [
             {
-              "url": "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl",
+              "url": "http://[LOCALHOST]/files/sniffio-1.3.1-py3-none-any.whl",
               "hashes": {
-                "sha256": "2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2"
+                "sha256": "70679c208c27416a7f48156e0eb74c0a88a7d7e92eb9f70ec7f97c7d3a6bb183"
               },
-              "size": 10235,
-              "upload_time": "2024-02-25T23:20:01.196Z",
+              "upload_time": "2024-03-24T00:00:00Z",
               "filename": "sniffio-1.3.1-py3-none-any.whl"
             }
           ]

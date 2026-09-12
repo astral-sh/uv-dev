@@ -1,0 +1,78 @@
+name = "tool-selection"
+description = "Executable packages for selecting locked and environment-provided tools."
+
+[root]
+requires = ["ty"]
+
+[expected]
+satisfiable = true
+
+[packages.ty.versions."0.0.16"]
+requires_python = ">=3.8"
+upload_time = "2026-02-11T00:00:00Z"
+scripts = { ty = "ty:main" }
+init_py = '''
+import sys
+
+__version__ = "0.0.16"
+
+def main():
+    if "--version" in sys.argv:
+        print("ty " + __version__)
+    elif len(sys.argv) > 1 and sys.argv[1] == "check":
+        print("All checks passed!")
+    else:
+        raise SystemExit(2)
+'''
+sdist_backend = "in-tree"
+
+[packages.ty.versions."0.0.17"]
+requires_python = ">=3.8"
+upload_time = "2026-02-13T00:00:00Z"
+scripts = { ty = "ty:main" }
+init_py = '''
+import sys
+
+__version__ = "0.0.17"
+
+def main():
+    if "--version" in sys.argv:
+        print("ty " + __version__)
+    elif len(sys.argv) > 1 and sys.argv[1] == "check":
+        print("All checks passed!")
+    else:
+        raise SystemExit(2)
+'''
+sdist_backend = "in-tree"
+
+[packages.ruff.versions."0.3.4"]
+requires_python = ">=3.8"
+scripts = { ruff = "ruff:main" }
+init_py = '''
+from pathlib import Path
+import sys
+
+def main():
+    if "--version" in sys.argv:
+        print("ruff 0.3.4")
+    elif len(sys.argv) > 1 and sys.argv[1] == "format":
+        path = Path("main.py")
+        assert path.read_text() == "x    = 1"
+        path.write_text("x = 1\n")
+        print("1 file reformatted")
+    else:
+        raise SystemExit(2)
+'''
+sdist_backend = "in-tree"
+
+[packages.iniconfig.versions."2.0.0"]
+requires_python = ">=3.8"
+init_py = '''
+class IniConfig:
+    def __init__(self, path: str):
+        self.path = path
+'''
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true

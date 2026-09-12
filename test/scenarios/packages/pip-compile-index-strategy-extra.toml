@@ -1,0 +1,23 @@
+name = "pip-compile-index-strategy-extra"
+description = "Preferred-index package versions for pip compile index strategy tests."
+
+[root]
+requires = []
+
+[expected]
+satisfiable = true
+
+[packages.index-strategy-package.versions."2.0.0"]
+sdist_backend = "in-tree"
+
+[packages.outdated-package.versions."3.0.0"]
+sdist_backend = "in-tree"
+
+[packages.no-version-package.versions]
+
+[packages.same-version-package.versions."1.0.0"]
+sdist = false
+wheel_tags = ["cp311-cp311-win_arm64"]
+
+[testgen]
+disable = true

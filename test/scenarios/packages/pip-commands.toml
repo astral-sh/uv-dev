@@ -1,0 +1,206 @@
+name = "pip-commands"
+description = "Representative packages for pip metadata and environment inspection commands."
+
+[root]
+requires = ["tree-root"]
+
+[expected]
+satisfiable = true
+
+[expected.packages]
+tree-root = "3.0.2"
+tree-branch-a = "1.7.0"
+tree-branch-b = "8.1.7"
+tree-branch-c = "2.1.2"
+tree-branch-d = "3.1.3"
+tree-branch-e = "3.0.1"
+tree-shared-leaf = "2.1.5"
+
+[packages.simple-package.versions."1.0.0"]
+sdist_backend = "in-tree"
+[packages.simple-package.versions."2.0.0"]
+sdist_backend = "in-tree"
+[packages.simple-package.versions."2.1.3"]
+sdist_backend = "in-tree"
+
+[packages.other-package.versions."2.0.1"]
+sdist_backend = "in-tree"
+
+[packages.sdist-package.versions."0.0.1"]
+wheel = false
+sdist_backend = "in-tree"
+
+[packages.outdated-package.versions."1.4.0"]
+sdist_backend = "in-tree"
+[packages.outdated-package.versions."3.0.0"]
+sdist_backend = "in-tree"
+[packages.outdated-package.versions."3.7.0"]
+sdist_backend = "in-tree"
+[packages.outdated-package.versions."4.3.0"]
+sdist_backend = "in-tree"
+
+[packages.index-strategy-package.versions."1.0.0"]
+sdist_backend = "in-tree"
+[packages.no-version-package.versions."1.0.0"]
+sdist_backend = "in-tree"
+[packages.same-version-package.versions."1.0.0"]
+sdist_backend = "in-tree"
+
+[packages.marker-parent.versions."8.1.7"]
+requires = ["marker-child; python_version < '3.8'"]
+sdist_backend = "in-tree"
+
+[packages.marker-child.versions."1.0.0"]
+sdist_backend = "in-tree"
+[packages.marker-child.versions."1.3.1"]
+sdist_backend = "in-tree"
+
+[packages.tree-parent.versions."2.31.0"]
+requires = [
+  "tree-leaf-a>=2017.4.17",
+  "tree-leaf-b>=2,<4",
+  "tree-leaf-c>=2.5,<4",
+  "tree-leaf-d>=1.21.1,<3",
+]
+sdist_backend = "in-tree"
+
+[packages.tree-parent-two.versions."4.0.0"]
+requires = ["tree-leaf-c"]
+sdist_backend = "in-tree"
+
+[packages.tree-leaf-a.versions."2024.2.2"]
+sdist_backend = "in-tree"
+[packages.tree-leaf-b.versions."3.3.2"]
+sdist_backend = "in-tree"
+[packages.tree-leaf-c.versions."3.6"]
+sdist_backend = "in-tree"
+[packages.tree-leaf-d.versions."2.2.1"]
+sdist_backend = "in-tree"
+
+[packages.tree-root.versions."2.0.0"]
+requires = [
+  "tree-branch-b>=8.0",
+  "tree-branch-c>=2",
+  "tree-branch-d>=3",
+  "tree-branch-e>=3",
+]
+sdist_backend = "in-tree"
+
+[packages.tree-root.versions."3.0.2"]
+requires = [
+  "tree-branch-a>=1.6.2",
+  "tree-branch-b>=8.1.3",
+  "tree-branch-c>=2.1.2",
+  "tree-branch-d>=3.1.2",
+  "tree-branch-e>=3.0.0",
+]
+sdist_backend = "in-tree"
+
+[packages.tree-root.versions."3.0.2".extras]
+dotenv = ["tree-extra"]
+inspect = ["tree-inspect-extra"]
+
+[packages.tree-branch-a.versions."1.7.0"]
+sdist_backend = "in-tree"
+[packages.tree-branch-b.versions."8.1.7"]
+sdist_backend = "in-tree"
+[packages.tree-branch-c.versions."2.1.2"]
+sdist_backend = "in-tree"
+
+[packages.tree-branch-d.versions."3.1.3"]
+requires = ["tree-shared-leaf>=2.0"]
+sdist_backend = "in-tree"
+
+[packages.tree-branch-e.versions."3.0.1"]
+requires = ["tree-shared-leaf>=2.1.1"]
+sdist_backend = "in-tree"
+
+[packages.tree-shared-leaf.versions."2.1.5"]
+sdist_backend = "in-tree"
+[packages.tree-extra.versions."1.0.1"]
+sdist_backend = "in-tree"
+[packages.tree-inspect-extra.versions."2.0.1"]
+sdist_backend = "in-tree"
+
+[packages.marker-extra-root.versions."3.1.18"]
+requires = [
+  "marker-extra-base",
+  "marker-extra-windows; sys_platform == 'win32'",
+]
+sdist_backend = "in-tree"
+
+[packages.marker-extra-root.versions."3.1.18".extras]
+binary = ["marker-extra-binary; implementation_name != 'pypy'"]
+
+[packages.marker-extra-base.versions."4.10.0"]
+sdist_backend = "in-tree"
+[packages.marker-extra-binary.versions."3.1.18"]
+sdist_backend = "in-tree"
+[packages.marker-extra-windows.versions."2024.1"]
+sdist_backend = "in-tree"
+
+[packages.platform-parent.versions."24.3.0"]
+requires = ["platform-marker", "platform-leaf"]
+sdist_backend = "in-tree"
+
+[packages.platform-marker.versions."8.1.7"]
+requires = ["platform-windows; sys_platform == 'win32'"]
+sdist_backend = "in-tree"
+
+[packages.platform-leaf.versions."1.0.0"]
+sdist_backend = "in-tree"
+[packages.platform-windows.versions."0.4.6"]
+sdist_backend = "in-tree"
+
+[packages.cycle-root.versions."2.3.0"]
+requires = [
+  "cycle-backref",
+  "cycle-leaf-a",
+  "cycle-leaf-b",
+  "cycle-nested",
+]
+sdist_backend = "in-tree"
+
+[packages.cycle-backref.versions."3.0.0"]
+requires = ["cycle-root", "cycle-leaf-c"]
+sdist_backend = "in-tree"
+
+[packages.cycle-leaf-a.versions."1.0.0"]
+sdist_backend = "in-tree"
+[packages.cycle-leaf-b.versions."6.0.0"]
+sdist_backend = "in-tree"
+[packages.cycle-leaf-c.versions."1.16.0"]
+sdist_backend = "in-tree"
+
+[packages.cycle-nested.versions."1.1.0"]
+requires = ["cycle-leaf-d", "cycle-leaf-c", "cycle-trace"]
+sdist_backend = "in-tree"
+
+[packages.cycle-trace.versions."1.4.0"]
+requires = ["cycle-leaf-e"]
+sdist_backend = "in-tree"
+
+[packages.cycle-leaf-d.versions."1.4.0"]
+sdist_backend = "in-tree"
+[packages.cycle-leaf-e.versions."1.0.0"]
+sdist_backend = "in-tree"
+
+[packages.shared-root.versions."3.0.0"]
+requires = ["shared-leaf", "shared-branch", "shared-extra"]
+sdist_backend = "in-tree"
+
+[packages.shared-branch.versions."2.14.1"]
+requires = ["shared-leaf"]
+sdist_backend = "in-tree"
+
+[packages.shared-leaf.versions."2.9.0"]
+requires = ["shared-bottom"]
+sdist_backend = "in-tree"
+
+[packages.shared-bottom.versions."1.16.0"]
+sdist_backend = "in-tree"
+[packages.shared-extra.versions."2024.1"]
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true

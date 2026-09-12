@@ -1,0 +1,55 @@
+name = "pip-compile-local-versions"
+description = "Local-version forks for universal pip compile tests."
+
+[root]
+requires = []
+
+[expected]
+satisfiable = true
+
+[packages.torch.versions."2.0.0"]
+requires_python = ">=3.8"
+sdist_backend = "in-tree"
+
+[packages.torch.versions."2.2.0"]
+requires_python = ">=3.8"
+sdist_backend = "in-tree"
+
+[packages.torch.versions."2.0.0+cpu"]
+requires_python = ">=3.8"
+sdist_backend = "in-tree"
+
+[packages.torch.versions."2.0.0+cu118"]
+requires_python = ">=3.8"
+sdist_backend = "in-tree"
+
+[packages.torch.versions."2.3.0"]
+requires_python = ">=3.8"
+sdist_backend = "in-tree"
+
+[packages.torch.versions."2.5.1"]
+requires_python = ">=3.8"
+sdist = false
+wheel_tags = ["py3-none-macosx_10_13_universal2"]
+
+[packages.torch.versions."2.5.1+cpu"]
+requires_python = ">=3.8"
+sdist = false
+wheel_tags = [
+  "py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64",
+  "py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64",
+  "py3-none-win_amd64",
+]
+
+[packages.torchvision.versions."0.15.1"]
+requires_python = ">=3.8"
+requires = ["torch==2.0.0"]
+sdist_backend = "in-tree"
+
+[packages.torchvision.versions."0.17.0"]
+requires_python = ">=3.8"
+requires = ["torch==2.2.0"]
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true

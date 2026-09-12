@@ -1,0 +1,15 @@
+name = "requires-python-dynamic"
+description = "Source metadata requires an interpreter newer than the active interpreter."
+
+[root]
+
+[expected]
+satisfiable = true
+
+[packages.dynamic-python-source.versions."1.0.0"]
+requires_python = ">=3.10"
+wheel = false
+sdist_backend = "legacy-setuptools"
+
+[testgen]
+disable = true

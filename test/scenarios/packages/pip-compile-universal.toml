@@ -1,0 +1,135 @@
+name = "pip-compile-universal"
+description = "Representative metadata graphs for universal pip compile tests."
+
+[root]
+requires = []
+
+[expected]
+satisfiable = true
+
+[packages.astroid.versions."2.13.5"]
+requires_python = ">=3.8"
+sdist_backend = "in-tree"
+
+[packages.astroid.versions."3.1.0"]
+requires_python = ">=3.8"
+sdist_backend = "in-tree"
+
+[packages.cffi.versions."1.15.0"]
+requires_python = ">=3.8"
+requires = ["pycparser"]
+sdist_backend = "in-tree"
+
+[packages.cffi.versions."1.16.0rc1"]
+requires_python = ">=3.8"
+requires = ["pycparser"]
+sdist_backend = "in-tree"
+
+[packages.cffi.versions."1.16.0rc2"]
+requires_python = ">=3.8"
+requires = ["pycparser"]
+sdist_backend = "in-tree"
+
+[packages.cffi.versions."1.16.0"]
+requires_python = ">=3.8"
+requires = ["pycparser"]
+sdist_backend = "in-tree"
+
+[packages.cffi.versions."1.17.0rc1"]
+requires_python = ">=3.8"
+requires = ["pycparser"]
+sdist_backend = "in-tree"
+
+[packages.cryptography.versions."42.0.8"]
+requires_python = ">=3.8"
+requires = ["cffi>=1.12"]
+sdist_backend = "in-tree"
+
+[packages.iniconfig.versions."2.0.0"]
+requires_python = ">=3.7"
+sdist_backend = "in-tree"
+
+[packages.impossible-leaf.versions."1.0.0"]
+requires_python = ">=3.8"
+sdist_backend = "in-tree"
+
+[packages.impossible-root.versions."1.0.0"]
+requires_python = ">=3.8"
+requires = [
+  "possible-leaf",
+  "impossible-leaf; python_version < '0'",
+]
+sdist_backend = "in-tree"
+
+[packages.nox.versions."2024.4.15"]
+requires_python = ">=3.7"
+sdist_backend = "in-tree"
+
+[packages.nox.versions."2024.4.15".extras]
+uv = ["uv>=0.5.0"]
+
+[packages.nox.versions."2024.10.9"]
+requires_python = ">=3.8"
+sdist_backend = "in-tree"
+
+[packages.nox.versions."2024.10.9".extras]
+uv = ["uv>=0.5.0"]
+
+[packages.numpy.versions."1.24.4"]
+requires_python = ">=3.8"
+sdist_backend = "in-tree"
+
+[packages.possible-leaf.versions."2.0.0"]
+requires_python = ">=3.8"
+sdist_backend = "in-tree"
+
+[packages.numpy.versions."1.26.4"]
+requires_python = ">=3.9"
+sdist_backend = "in-tree"
+
+[packages.pycparser.versions."2.22"]
+requires_python = ">=3.8"
+sdist_backend = "in-tree"
+
+[packages.pylint.versions."2.15.8"]
+requires_python = ">=3.11"
+requires = ["astroid==2.13.5"]
+sdist_backend = "in-tree"
+
+[packages.pylint.versions."3.1.0"]
+requires_python = "<3.11"
+requires = ["astroid==3.1.0"]
+sdist_backend = "in-tree"
+
+[packages.sphinx-common.versions."1.0.0"]
+requires_python = ">=3.8"
+sdist_backend = "in-tree"
+
+[packages.sphinx.versions."7.1.2"]
+requires_python = ">=3.8, <3.9"
+requires = ["sphinx-common"]
+sdist_backend = "in-tree"
+
+[packages.sphinx.versions."7.2.6"]
+requires_python = ">=3.9"
+requires = ["sphinx-common"]
+sdist_backend = "in-tree"
+
+[packages.uv.versions."0.1.24"]
+requires_python = ">=3.8"
+sdist_backend = "in-tree"
+
+[packages.uv.versions."0.5.10"]
+requires_python = ">=3.8"
+sdist_backend = "in-tree"
+
+[packages.upper-bound-root.versions."2.17.7"]
+requires_python = ">=3.8"
+sdist_backend = "in-tree"
+
+[packages.upper-bound-root.versions."3.1.0"]
+requires_python = ">=3.8"
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true

@@ -730,6 +730,18 @@ impl EnvVars {
     #[attr_added_in("0.8.0")]
     pub const UV_INTERNAL__TEST_PYTHON_MANAGED: &'static str = "UV_INTERNAL__TEST_PYTHON_MANAGED";
 
+    /// Stop virtual environment discovery at this directory during tests.
+    #[attr_hidden]
+    pub const UV_INTERNAL__TEST_PYTHON_CEILING: &'static str = "UV_INTERNAL__TEST_PYTHON_CEILING";
+
+    /// Reject HTTP requests to the public Python package indexes during tests.
+    #[attr_hidden]
+    pub const UV_INTERNAL__TEST_DENY_PYPI: &'static str = "UV_INTERNAL__TEST_DENY_PYPI";
+
+    /// Replace the implicit PyPI index with a local index during tests.
+    #[attr_hidden]
+    pub const UV_INTERNAL__TEST_DEFAULT_INDEX: &'static str = "UV_INTERNAL__TEST_DEFAULT_INDEX";
+
     /// Used to force ignoring Git LFS commands as `git-lfs` detection cannot be overridden via PATH.
     #[attr_hidden]
     #[attr_added_in("0.9.15")]

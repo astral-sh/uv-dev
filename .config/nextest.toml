@@ -18,6 +18,14 @@ path = "junit.xml"
 [profile.ci-linux]
 inherits = "ci"
 
+[profile.ci-pypi]
+inherits = "ci"
+default-filter = '''
+test(/^ecosystem::/) +
+test(/^publish::(username_password_no_longer_supported|invalid_token|check_keyring_behaviours)$/) +
+test(/^ssl_certs::test_(webpki_roots_trusts_pypi|system_certs_trusts_pypi|system_certs_with_ssl_cert_(file|dir)_replaces_system_roots)$/)
+'''
+
 [profile.ci-macos]
 inherits = "ci"
 test-threads = 12

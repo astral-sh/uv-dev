@@ -1,0 +1,182 @@
+name = "tool-run"
+description = "Representative tools and requirements for tool run tests."
+
+[root]
+requires = ["run-tool"]
+
+[expected]
+satisfiable = true
+
+[expected.packages]
+run-tool = "8.1.1"
+run-helper = "1.4.0"
+
+[packages.run-tool.versions."7.0.0"]
+requires = ["run-helper>=1.3.0"]
+sdist_backend = "in-tree"
+
+[packages.run-tool.versions."7.0.0".scripts]
+run-tool = "run_tool:main"
+
+[packages.run-tool.versions."8.0.0"]
+requires = ["run-helper>=1.3.0"]
+sdist_backend = "in-tree"
+
+[packages.run-tool.versions."8.0.0".scripts]
+run-tool = "run_tool:main"
+
+[packages.run-tool.versions."8.0.2"]
+requires = ["run-helper>=1.3.0"]
+sdist_backend = "in-tree"
+
+[packages.run-tool.versions."8.0.2".scripts]
+run-tool = "run_tool:main"
+
+[packages.run-tool.versions."8.1.1"]
+requires = ["run-helper>=1.4.0"]
+sdist_backend = "in-tree"
+
+[packages.run-tool.versions."8.1.1".scripts]
+run-tool = "run_tool:main"
+
+[packages.run-helper.versions."1.3.0"]
+sdist_backend = "in-tree"
+[packages.run-helper.versions."1.4.0"]
+sdist_backend = "in-tree"
+
+[packages.format-tool.versions."23.1.0"]
+requires = ["format-support"]
+requires_python = ">=3.11"
+upload_time = "2023-01-31T00:00:00Z"
+sdist_backend = "in-tree"
+scripts = { format-tool = "format_tool:main", format-tool-daemon = "format_tool:main" }
+
+[packages.format-tool.versions."24.1.0"]
+requires = ["format-support"]
+requires_python = ">=3.11"
+upload_time = "2024-01-25T00:00:00Z"
+sdist_backend = "in-tree"
+
+[packages.format-tool.versions."24.1.0".scripts]
+format-tool = "format_tool:main"
+format-tool-daemon = "format_tool:main"
+
+[packages.format-tool.versions."24.1.1"]
+requires = ["format-support"]
+requires_python = ">=3.11"
+upload_time = "2024-01-29T00:00:00Z"
+sdist_backend = "in-tree"
+
+[packages.format-tool.versions."24.1.1".scripts]
+format-tool = "format_tool:main"
+format-tool-daemon = "format_tool:main"
+
+[packages.format-tool.versions."24.2.0"]
+requires = ["format-support"]
+requires_python = ">=3.11"
+upload_time = "2024-02-16T00:00:00Z"
+sdist_backend = "in-tree"
+
+[packages.format-tool.versions."24.2.0".scripts]
+format-tool = "format_tool:main"
+format-tool-daemon = "format_tool:main"
+
+[packages.format-tool.versions."24.3.0"]
+requires = ["format-support"]
+requires_python = ">=3.11"
+upload_time = "2024-03-16T00:00:00Z"
+sdist_backend = "in-tree"
+
+[packages.format-tool.versions."24.3.0".scripts]
+format-tool = "format_tool:main"
+format-tool-daemon = "format_tool:main"
+
+[packages.format-support.versions."1.0.0"]
+requires_python = ">=3.11"
+upload_time = "2023-01-01T00:00:00Z"
+sdist_backend = "in-tree"
+
+[packages.additional-tool.versions."1.0.0"]
+requires_python = ">=3.11"
+sdist_backend = "in-tree"
+scripts = { additional-tool = "additional_tool:main" }
+
+[packages.python-tool.versions."1.0.0"]
+requires_python = ">=3.8"
+scripts = { python-tool = "python_tool:main" }
+init_py = '''
+import platform
+
+def main():
+    print("Python " + platform.python_version())
+'''
+sdist_backend = "in-tree"
+
+[packages.web-tool.versions."2.3.3"]
+requires = ["web-runtime>=2.3.8,<3"]
+sdist_backend = "in-tree"
+
+[packages.web-tool.versions."2.3.3".scripts]
+web-tool = "web_tool:main"
+
+[packages.web-tool.versions."3.0.0"]
+requires = ["web-runtime>=3.0.1"]
+sdist_backend = "in-tree"
+
+[packages.web-tool.versions."3.0.0".scripts]
+web-tool = "web_tool:main"
+
+[packages.web-tool.versions."3.0.2"]
+requires = ["web-runtime>=3.0.0"]
+sdist_backend = "in-tree"
+
+[packages.web-tool.versions."3.0.2".scripts]
+web-tool = "web_tool:main"
+
+[packages.web-tool.versions."3.0.2".extras]
+dotenv = ["web-extra"]
+
+[packages.web-runtime.versions."2.3.8"]
+sdist_backend = "in-tree"
+[packages.web-runtime.versions."3.0.0"]
+sdist_backend = "in-tree"
+[packages.web-runtime.versions."3.0.1"]
+sdist_backend = "in-tree"
+[packages.web-extra.versions."1.0.1"]
+sdist_backend = "in-tree"
+
+[packages.cli-provider.versions."0.1.0"]
+requires = ["provider-cli"]
+sdist_backend = "in-tree"
+
+[packages.provider-cli.versions."0.1.0"]
+sdist_backend = "in-tree"
+init_py = '''
+def main():
+    raise SystemExit(2)
+'''
+
+[packages.provider-cli.versions."0.1.0".scripts]
+cli-provider = "provider_cli:main"
+provider-cli = "provider_cli:main"
+
+[packages.no-script.versions."2.31.0"]
+requires = ["no-script-leaf"]
+sdist_backend = "in-tree"
+
+[packages.no-script-leaf.versions."1.0.0"]
+sdist_backend = "in-tree"
+
+[packages.verbatim-tool.versions."0.5.0"]
+sdist_backend = "in-tree"
+
+[packages.verbatim-tool.versions."0.5.0".scripts]
+verbatim_tool = "verbatim_tool:main"
+
+[packages.extra-requirement.versions."2.0.0"]
+sdist_backend = "in-tree"
+[packages.other-requirement.versions."4.10.0"]
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true

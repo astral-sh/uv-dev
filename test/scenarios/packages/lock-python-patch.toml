@@ -1,0 +1,33 @@
+name = "lock-python-patch"
+description = "Patch-version lock packages with representative ABI3 wheels."
+
+[root]
+requires = ["opencv-python-headless>=4.8"]
+
+[expected]
+satisfiable = true
+
+[expected.packages]
+numpy = "1.26.4"
+opencv-python-headless = "4.9.0.80"
+
+[packages.numpy.versions."1.26.4"]
+requires_python = ">=3.9"
+wheel = false
+sdist_backend = "in-tree"
+
+[packages.opencv-python-headless.versions."4.9.0.80"]
+requires_python = ">=3.6"
+requires = ["numpy"]
+wheel_tags = [
+  "cp37-abi3-macosx_10_16_x86_64",
+  "cp37-abi3-macosx_11_0_arm64",
+  "cp37-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64",
+  "cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64",
+  "cp37-abi3-win32",
+  "cp37-abi3-win_amd64",
+]
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true

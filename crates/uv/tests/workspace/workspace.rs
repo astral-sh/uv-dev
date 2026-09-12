@@ -13,6 +13,7 @@ use insta::assert_json_snapshot;
 use insta::assert_snapshot;
 use serde::{Deserialize, Serialize};
 
+use uv_test::packse::PackseServer;
 use uv_test::{copy_dir_ignore, make_project, uv_snapshot};
 
 fn workspaces_dir() -> PathBuf {
@@ -27,9 +28,9 @@ fn workspaces_dir() -> PathBuf {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn test_albatross_in_examples_bird_feeder() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/workspace.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let workspace = context.temp_dir.child("workspace");
 
     copy_dir_ignore(workspaces_dir(), &workspace).unwrap();
@@ -65,9 +66,9 @@ fn test_albatross_in_examples_bird_feeder() {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn test_albatross_in_examples() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/workspace.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let workspace = context.temp_dir.child("workspace");
 
     copy_dir_ignore(workspaces_dir(), &workspace).unwrap();
@@ -100,9 +101,9 @@ fn test_albatross_in_examples() {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn test_albatross_just_project() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/workspace.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let workspace = context.temp_dir.child("workspace");
 
     copy_dir_ignore(workspaces_dir(), &workspace).unwrap();
@@ -135,9 +136,9 @@ fn test_albatross_just_project() {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn test_albatross_project_in_excluded() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/workspace.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let workspace = context.temp_dir.child("workspace");
 
     copy_dir_ignore(workspaces_dir(), &workspace).unwrap();
@@ -199,9 +200,9 @@ fn test_albatross_project_in_excluded() {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn test_albatross_root_workspace() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/workspace.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let workspace = context.temp_dir.child("workspace");
 
     copy_dir_ignore(workspaces_dir(), &workspace).unwrap();
@@ -237,9 +238,9 @@ fn test_albatross_root_workspace() {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn test_albatross_root_workspace_bird_feeder() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/workspace.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let workspace = context.temp_dir.child("workspace");
 
     copy_dir_ignore(workspaces_dir(), &workspace).unwrap();
@@ -277,9 +278,9 @@ fn test_albatross_root_workspace_bird_feeder() {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn test_albatross_root_workspace_albatross() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/workspace.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let workspace = context.temp_dir.child("workspace");
 
     copy_dir_ignore(workspaces_dir(), &workspace).unwrap();
@@ -317,9 +318,9 @@ fn test_albatross_root_workspace_albatross() {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn test_albatross_virtual_workspace() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/workspace.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let workspace = context.temp_dir.child("workspace");
 
     copy_dir_ignore(workspaces_dir(), &workspace).unwrap();
@@ -359,9 +360,9 @@ fn test_albatross_virtual_workspace() {
 
 /// Check that `uv run --package` works in a virtual workspace.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn test_uv_run_with_package_virtual_workspace() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/workspace.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let work_dir = context.temp_dir.join("albatross-virtual-workspace");
 
     copy_dir_ignore(
@@ -427,9 +428,9 @@ fn test_uv_run_with_package_virtual_workspace() -> Result<()> {
 /// Check that `uv run` works from a virtual workspace root, which should sync all packages in the
 /// workspace.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn test_uv_run_virtual_workspace_root() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/workspace.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let work_dir = context.temp_dir.join("albatross-virtual-workspace");
 
     copy_dir_ignore(
@@ -467,9 +468,9 @@ fn test_uv_run_virtual_workspace_root() -> Result<()> {
 
 /// Check that `uv run --package` works in a root workspace.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn test_uv_run_with_package_root_workspace() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/workspace.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let work_dir = context.temp_dir.join("albatross-root-workspace");
 
     copy_dir_ignore(workspaces_dir().join("albatross-root-workspace"), &work_dir)?;
@@ -527,10 +528,11 @@ fn test_uv_run_with_package_root_workspace() -> Result<()> {
 }
 
 /// Check that `uv run --isolated` creates isolated virtual environments.
-#[cfg(all(feature = "test-pypi", feature = "test-universal"))]
+#[cfg(feature = "test-universal")]
 #[test]
 fn test_uv_run_isolate() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/workspace.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let work_dir = context.temp_dir.join("albatross-root-workspace");
 
     copy_dir_ignore(workspaces_dir().join("albatross-root-workspace"), &work_dir)?;
@@ -618,10 +620,11 @@ fn test_uv_run_isolate() -> Result<()> {
 
 /// Check that the resolution is the same no matter where in the workspace we are.
 fn workspace_lock_idempotence(workspace: &str, subdirectories: &[&str]) -> Result<()> {
+    let server = PackseServer::new("packages/workspace.toml");
     let mut shared_lock = None;
 
     for dir in subdirectories {
-        let context = uv_test::test_context!("3.12");
+        let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
         let work_dir = context.temp_dir.join(workspace);
 
         copy_dir_ignore(workspaces_dir().join(workspace), &work_dir)?;
@@ -645,7 +648,6 @@ fn workspace_lock_idempotence(workspace: &str, subdirectories: &[&str]) -> Resul
 
 /// Check that the resolution is the same no matter where in the workspace we are.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn workspace_lock_idempotence_root_workspace() -> Result<()> {
     workspace_lock_idempotence(
         "albatross-root-workspace",
@@ -657,7 +659,6 @@ fn workspace_lock_idempotence_root_workspace() -> Result<()> {
 /// Check that the resolution is the same no matter where in the workspace we are, and that locking
 /// works even if there is no root project.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn workspace_lock_idempotence_virtual_workspace() -> Result<()> {
     workspace_lock_idempotence(
         "albatross-virtual-workspace",
@@ -1484,10 +1485,11 @@ fn workspace_inherit_sources() -> Result<()> {
 }
 
 /// Tests error messages when a workspace member's dependencies cannot be resolved.
-#[cfg(all(feature = "test-pypi", feature = "test-universal"))]
+#[cfg(feature = "test-universal")]
 #[test]
 fn workspace_unsatisfiable_member_dependencies() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/workspace-conflicts.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     // Create the workspace root.
     let workspace = context.temp_dir.child("workspace");
@@ -1513,7 +1515,7 @@ fn workspace_unsatisfiable_member_dependencies() -> Result<()> {
         [project]
         name = "leaf"
         version = "0.1.0"
-        dependencies = ["httpx>9999"]
+        dependencies = ["workspace-http>9999"]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
@@ -1527,7 +1529,7 @@ fn workspace_unsatisfiable_member_dependencies() -> Result<()> {
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     error: No solution found when resolving dependencies
-      cause: Because only httpx<=0.27.0 is available and leaf depends on httpx>9999, we can conclude that leaf's requirements are unsatisfiable.
+      cause: Because only workspace-http==0.27.0 is available and leaf depends on workspace-http>9999, we can conclude that leaf's requirements are unsatisfiable.
              And because your workspace requires leaf, we can conclude that your workspace's requirements are unsatisfiable.
     "
     );
@@ -1537,10 +1539,11 @@ fn workspace_unsatisfiable_member_dependencies() -> Result<()> {
 
 /// Tests error messages when a workspace member's dependencies conflict with
 /// another member's.
-#[cfg(all(feature = "test-pypi", feature = "test-universal"))]
+#[cfg(feature = "test-universal")]
 #[test]
 fn workspace_unsatisfiable_member_dependencies_conflicting() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/workspace-conflicts.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     // Create the workspace root.
     let workspace = context.temp_dir.child("workspace");
@@ -1566,7 +1569,7 @@ fn workspace_unsatisfiable_member_dependencies_conflicting() -> Result<()> {
         [project]
         name = "foo"
         version = "0.1.0"
-        dependencies = ["anyio==4.1.0"]
+        dependencies = ["workspace-shared==4.1.0"]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
@@ -1578,7 +1581,7 @@ fn workspace_unsatisfiable_member_dependencies_conflicting() -> Result<()> {
         [project]
         name = "bar"
         version = "0.1.0"
-        dependencies = ["anyio==4.2.0"]
+        dependencies = ["workspace-shared==4.2.0"]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
@@ -1592,7 +1595,7 @@ fn workspace_unsatisfiable_member_dependencies_conflicting() -> Result<()> {
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     error: No solution found when resolving dependencies
-      cause: Because bar depends on anyio==4.2.0 and foo depends on anyio==4.1.0, we can conclude that bar and foo are incompatible.
+      cause: Because bar depends on workspace-shared==4.2.0 and foo depends on workspace-shared==4.1.0, we can conclude that bar and foo are incompatible.
              And because your workspace requires bar and foo, we can conclude that your workspace's requirements are unsatisfiable.
     "
     );
@@ -1602,10 +1605,11 @@ fn workspace_unsatisfiable_member_dependencies_conflicting() -> Result<()> {
 
 /// Tests error messages when a workspace member's dependencies conflict with
 /// two other member's.
-#[cfg(all(feature = "test-pypi", feature = "test-universal"))]
+#[cfg(feature = "test-universal")]
 #[test]
 fn workspace_unsatisfiable_member_dependencies_conflicting_threeway() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/workspace-conflicts.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     // Create the workspace root.
     let workspace = context.temp_dir.child("workspace");
@@ -1631,7 +1635,7 @@ fn workspace_unsatisfiable_member_dependencies_conflicting_threeway() -> Result<
         [project]
         name = "red"
         version = "0.1.0"
-        dependencies = ["anyio==4.1.0"]
+        dependencies = ["workspace-shared==4.1.0"]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
@@ -1643,7 +1647,7 @@ fn workspace_unsatisfiable_member_dependencies_conflicting_threeway() -> Result<
         [project]
         name = "knot"
         version = "0.1.0"
-        dependencies = ["anyio==4.2.0"]
+        dependencies = ["workspace-shared==4.2.0"]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
@@ -1658,7 +1662,7 @@ fn workspace_unsatisfiable_member_dependencies_conflicting_threeway() -> Result<
         [project]
         name = "bird"
         version = "0.1.0"
-        dependencies = ["anyio==4.3.0"]
+        dependencies = ["workspace-shared==4.3.0"]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
@@ -1672,7 +1676,7 @@ fn workspace_unsatisfiable_member_dependencies_conflicting_threeway() -> Result<
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     error: No solution found when resolving dependencies
-      cause: Because bird depends on anyio==4.3.0 and knot depends on anyio==4.2.0, we can conclude that bird and knot are incompatible.
+      cause: Because bird depends on workspace-shared==4.3.0 and knot depends on workspace-shared==4.2.0, we can conclude that bird and knot are incompatible.
              And because your workspace requires bird and knot, we can conclude that your workspace's requirements are unsatisfiable.
     "
     );
@@ -1682,10 +1686,11 @@ fn workspace_unsatisfiable_member_dependencies_conflicting_threeway() -> Result<
 
 /// Tests error messages when a workspace member's dependencies conflict with
 /// another member's optional dependencies.
-#[cfg(all(feature = "test-pypi", feature = "test-universal"))]
+#[cfg(feature = "test-universal")]
 #[test]
 fn workspace_unsatisfiable_member_dependencies_conflicting_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/workspace-conflicts.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     // Create the workspace root.
     let workspace = context.temp_dir.child("workspace");
@@ -1711,7 +1716,7 @@ fn workspace_unsatisfiable_member_dependencies_conflicting_extra() -> Result<()>
         [project]
         name = "foo"
         version = "0.1.0"
-        dependencies = ["anyio==4.1.0"]
+        dependencies = ["workspace-shared==4.1.0"]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
@@ -1725,7 +1730,7 @@ fn workspace_unsatisfiable_member_dependencies_conflicting_extra() -> Result<()>
         version = "0.1.0"
 
         [project.optional-dependencies]
-        some_extra = ["anyio==4.2.0"]
+        some_extra = ["workspace-shared==4.2.0"]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
@@ -1739,7 +1744,7 @@ fn workspace_unsatisfiable_member_dependencies_conflicting_extra() -> Result<()>
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     error: No solution found when resolving dependencies
-      cause: Because bar[some-extra] depends on anyio==4.2.0 and foo depends on anyio==4.1.0, we can conclude that foo and bar[some-extra] are incompatible.
+      cause: Because bar[some-extra] depends on workspace-shared==4.2.0 and foo depends on workspace-shared==4.1.0, we can conclude that foo and bar[some-extra] are incompatible.
              And because your workspace requires bar[some-extra] and foo, we can conclude that your workspace's requirements are unsatisfiable.
     "
     );
@@ -1749,10 +1754,11 @@ fn workspace_unsatisfiable_member_dependencies_conflicting_extra() -> Result<()>
 
 /// Tests error messages when a workspace member's dependencies conflict with
 /// another member's development dependencies.
-#[cfg(all(feature = "test-pypi", feature = "test-universal"))]
+#[cfg(feature = "test-universal")]
 #[test]
 fn workspace_unsatisfiable_member_dependencies_conflicting_dev() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/workspace-conflicts.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     // Create the workspace root.
     let workspace = context.temp_dir.child("workspace");
@@ -1778,7 +1784,7 @@ fn workspace_unsatisfiable_member_dependencies_conflicting_dev() -> Result<()> {
         [project]
         name = "foo"
         version = "0.1.0"
-        dependencies = ["anyio==4.1.0"]
+        dependencies = ["workspace-shared==4.1.0"]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
@@ -1796,7 +1802,7 @@ fn workspace_unsatisfiable_member_dependencies_conflicting_dev() -> Result<()> {
         build-backend = "uv_build"
 
         [tool.uv]
-        dev-dependencies = ["anyio==4.2.0"]
+        dev-dependencies = ["workspace-shared==4.2.0"]
     "#})?;
     bar.child("src/__init__.py").touch()?;
 
@@ -1807,7 +1813,7 @@ fn workspace_unsatisfiable_member_dependencies_conflicting_dev() -> Result<()> {
     warning: The `tool.uv.dev-dependencies` field (used in `packages/bar/pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     error: No solution found when resolving dependencies
-      cause: Because bar:dev depends on anyio==4.2.0 and foo depends on anyio==4.1.0, we can conclude that foo and bar:dev are incompatible.
+      cause: Because bar:dev depends on workspace-shared==4.2.0 and foo depends on workspace-shared==4.1.0, we can conclude that foo and bar:dev are incompatible.
              And because your workspace requires bar:dev and foo, we can conclude that your workspace's requirements are unsatisfiable.
     "
     );
@@ -1817,10 +1823,11 @@ fn workspace_unsatisfiable_member_dependencies_conflicting_dev() -> Result<()> {
 
 /// Tests error messages when a workspace member's name shadows a dependency of
 /// another member.
-#[cfg(all(feature = "test-pypi", feature = "test-universal"))]
+#[cfg(feature = "test-universal")]
 #[test]
 fn workspace_member_name_shadows_dependencies() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/workspace-conflicts.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     // Create the workspace root.
     let workspace = context.temp_dir.child("workspace");
@@ -1840,13 +1847,13 @@ fn workspace_member_name_shadows_dependencies() -> Result<()> {
     "#})?;
     workspace.child("src/__init__.py").touch()?;
 
-    // Create a workspace member that depends on `anyio`
+    // Create a workspace member that depends on `workspace-shared`
     let foo = workspace.child("packages").child("foo");
     foo.child("pyproject.toml").write_str(indoc! {r#"
         [project]
         name = "foo"
         version = "0.1.0"
-        dependencies = ["anyio==4.1.0"]
+        dependencies = ["workspace-shared==4.1.0"]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
@@ -1854,11 +1861,13 @@ fn workspace_member_name_shadows_dependencies() -> Result<()> {
     "#})?;
     foo.child("src/__init__.py").touch()?;
 
-    // Then create an `anyio` workspace member
-    let anyio = workspace.child("packages").child("anyio");
-    anyio.child("pyproject.toml").write_str(indoc! {r#"
+    // Then create a `workspace-shared` workspace member
+    let workspace_shared = workspace.child("packages").child("workspace-shared");
+    workspace_shared
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
         [project]
-        name = "anyio"
+        name = "workspace-shared"
         version = "0.1.0"
         dependencies = []
 
@@ -1866,7 +1875,7 @@ fn workspace_member_name_shadows_dependencies() -> Result<()> {
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
     "#})?;
-    anyio.child("src/__init__.py").touch()?;
+    workspace_shared.child("src/__init__.py").touch()?;
 
     // We should fail
     // TODO(zanieb): This error message is bad?
@@ -1875,8 +1884,8 @@ fn workspace_member_name_shadows_dependencies() -> Result<()> {
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     error: Failed to build `foo @ file://[TEMP_DIR]/workspace/packages/foo`
-      cause: Failed to parse entry: `anyio`
-      cause: `anyio` is included as a workspace member, but is missing an entry in `tool.uv.sources` (e.g., `anyio = { workspace = true }`)
+      cause: Failed to parse entry: `workspace-shared`
+      cause: `workspace-shared` is included as a workspace member, but is missing an entry in `tool.uv.sources` (e.g., `workspace-shared = { workspace = true }`)
     "
     );
 
@@ -1966,13 +1975,14 @@ fn transitive_dep_in_git_workspace_no_root() -> Result<()> {
     let lock1: SourceLock =
         toml::from_str(&fs_err::read_to_string(context.temp_dir.child("uv.lock"))?)?;
 
+    insta::with_settings!({ filters => context.filters() }, {
     assert_json_snapshot!(lock1.sources(), @r#"
     {
       "a": {
         "virtual": "."
       },
       "anyio": {
-        "registry": "https://pypi.org/simple"
+        "registry": "http://[LOCALHOST]/simple/"
       },
       "c": {
         "git": "https://github.com/astral-sh/workspace-virtual-root-test?subdirectory=packages%2Fc&rev=fac39c8d4c5d0ef32744e2bb309bbe34a759fd46#fac39c8d4c5d0ef32744e2bb309bbe34a759fd46"
@@ -1981,13 +1991,14 @@ fn transitive_dep_in_git_workspace_no_root() -> Result<()> {
         "git": "https://github.com/astral-sh/workspace-virtual-root-test?subdirectory=packages%2Fd&rev=fac39c8d4c5d0ef32744e2bb309bbe34a759fd46#fac39c8d4c5d0ef32744e2bb309bbe34a759fd46"
       },
       "idna": {
-        "registry": "https://pypi.org/simple"
+        "registry": "http://[LOCALHOST]/simple/"
       },
       "sniffio": {
-        "registry": "https://pypi.org/simple"
+        "registry": "http://[LOCALHOST]/simple/"
       }
     }
     "#);
+    });
 
     // Check that we don't report a conflict here either.
     pyproject_toml.write_str(

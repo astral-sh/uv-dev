@@ -1,0 +1,81 @@
+name = "lock-direct-artifacts"
+description = "Direct artifact packages for lock integration tests."
+
+[root]
+
+[expected]
+satisfiable = true
+
+[packages.anyio.versions."4.3.0"]
+requires_python = ">=3.8"
+requires = [
+  "exceptiongroup>=1.0.2; python_version < '3.11'",
+  "idna>=2.8",
+  "sniffio>=1.1",
+  "typing-extensions>=4.1; python_version < '3.11'",
+]
+sdist_backend = "in-tree"
+
+[packages.anyio.versions."4.3.0".extras]
+doc = [
+  "packaging",
+  "sphinx>=7",
+  "sphinx-autodoc-typehints>=1.2.0",
+  "sphinx-rtd-theme",
+]
+test = [
+  "anyio[trio]",
+  "coverage[toml]>=7",
+  "exceptiongroup>=1.2.0",
+  "hypothesis>=4.0",
+  "psutil>=5.9",
+  "pytest>=7.0",
+  "pytest-mock>=3.6.1",
+  "trustme",
+  "uvloop>=0.17; platform_python_implementation == 'CPython' and sys_platform != 'win32'",
+]
+trio = ["trio>=0.23"]
+
+[packages.anyio.versions."4.4.0"]
+requires_python = ">=3.8"
+requires = [
+  "exceptiongroup>=1.0.2; python_version < '3.11'",
+  "idna",
+  "sniffio",
+  "typing-extensions>=4.1; python_version < '3.11'",
+]
+sdist_backend = "in-tree"
+
+[packages.anyio.versions."4.4.0".extras]
+trio = ["trio>=0.23"]
+
+[packages.cffi.versions."1.17.1"]
+requires_python = ">=3.8"
+requires = ["pycparser"]
+wheel_tags = ["cp310-cp310-macosx_11_0_arm64"]
+sdist_backend = "in-tree"
+
+[packages.iniconfig.versions."2.0.0"]
+requires_python = ">=3.7"
+sdist_backend = "in-tree"
+
+[packages.jinja2.versions."3.1.4"]
+requires_python = ">=3.8"
+requires = ["markupsafe>=2.0"]
+sdist_backend = "in-tree"
+
+[packages.jinja2.versions."3.1.4".extras]
+i18n = ["babel>=2.7"]
+
+[packages.numpy.versions."2.3.5"]
+wheel_tags = ["cp311-cp311-macosx_14_0_arm64"]
+sdist = false
+
+[packages.root.versions."0.0.1"]
+requires = ["anyio"]
+wheel = false
+sdist_subdirectory = "packages/root"
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true

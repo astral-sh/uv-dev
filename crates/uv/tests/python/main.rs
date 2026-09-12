@@ -11,7 +11,7 @@ mod python_install;
 #[cfg(feature = "test-python")]
 mod python_list;
 
-#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+#[cfg(feature = "test-python")]
 mod python_module;
 
 #[cfg(feature = "test-python")]

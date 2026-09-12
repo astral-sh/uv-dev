@@ -152,6 +152,85 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  cargo-test-pypi:
+    timeout-minutes: 10
+    runs-on: depot-ubuntu-24.04-16
+    name: "cargo test against PyPI"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: "Install mold"
+        run: ./scripts/install-mold.sh
+
+      - name: "Install Rust toolchain"
+        run: rustup toolchain install --profile minimal
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        id: rust-cache
+        with:
+          prefix-key: v1-rust-workspace
+          key: pypi-${{ hashFiles('Cargo.toml') }}
+          cache-workspace-crates: "true"
+          save-if: ${{ inputs.save-rust-cache == 'true' }}
+
+      - name: "Record Cargo cache freshness"
+        if: ${{ inputs.save-rust-cache == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        run: touch "$RUNNER_TEMP/uv-cargo-cache-marker"
+
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.10"
+          checksum: "173d95a0c32d18c896c46ba6fafbf3cf9c14ab74b033f81b76c883ef492a976b"
+
+      - name: "Install required Python versions"
+        run: uv python install
+
+      - name: "Install cargo nextest"
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
+        with:
+          tool: cargo-nextest
+
+      - name: "Cargo test against PyPI"
+        env:
+          UV_HTTP_RETRIES: 5
+          RUST_BACKTRACE: 1
+          CARGO_UNSTABLE_MTIME_ON_USE: ${{ inputs.save-rust-cache == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
+          INSTA_UPDATE: new
+          INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
+        run: |
+          cargo nextest run \
+            --cargo-profile fast-build-nightly \
+            -Z panic-abort-tests \
+            -Z checksum-freshness \
+            --features test-pypi,test-universal \
+            --workspace \
+            --profile ci-pypi
+
+      - name: "Prune superseded workspace artifacts"
+        if: ${{ inputs.save-rust-cache == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        run: python3 scripts/prune_cargo_workspace_cache.py target/fast-build-nightly "$RUNNER_TEMP/uv-cargo-cache-marker"
+
+      - name: "Upload pending snapshots"
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pending-snapshots-pypi
+          path: pending-snapshots/
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 14
+
+      - name: "Upload JUnit results"
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: junit-results-pypi
+          path: target/nextest/ci-pypi/junit.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
   cargo-test-macos:
     timeout-minutes: 20
     # Only run macOS tests on main without opt-in
@@ -227,7 +306,7 @@ jobs:
             -Z panic-abort-tests \
             -Z checksum-freshness \
             --no-default-features \
-            --features test-python,test-python-managed,test-pypi,test-git,test-git-lfs,performance,test-crates-io,native-auth,apple-native \
+            --features test-python,test-python-managed,test-git,test-git-lfs,performance,test-crates-io,native-auth,apple-native \
             --workspace \
             --profile ci-macos
 
@@ -338,7 +417,7 @@ jobs:
             -Z panic-abort-tests \
             -Z checksum-freshness \
             --no-default-features \
-            --features test-python,test-pypi,test-python-managed,test-windows-registry,native-auth,windows-native \
+            --features test-python,test-python-managed,test-windows-registry,native-auth,windows-native \
             --workspace \
             --profile ci-windows \
             --partition hash:${{ matrix.partition }}/3
