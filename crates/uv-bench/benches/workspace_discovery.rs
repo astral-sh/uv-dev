@@ -9,12 +9,13 @@ use std::hint::black_box;
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
-use criterion::{Criterion, criterion_group, criterion_main, measurement::WallTime};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main, measurement::WallTime};
 
 use uv::GlobalInitialization;
 use uv::commands::ExitStatus;
 use uv_cache::Cache;
 use uv_cli::Cli;
+use uv_workspace::pyproject::{PyProjectToml, PyProjectTomlSource};
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 
 const EXCLUDE_NEWER: &str = "2024-08-08";
@@ -266,6 +267,45 @@ fn member_pyproject(member_index: usize) -> String {
     toml::to_string_pretty(&pyproject).expect("Failed to serialize member pyproject.toml")
 }
 
+fn parse_pyproject_sources(c: &mut Criterion<WallTime>) {
+    let mut group = c.benchmark_group("pyproject_sources");
+    for (name, raw) in [
+        ("root", root_pyproject(EXCLUDE_COUNT)),
+        ("member", member_pyproject(MEMBER_COUNT / 2)),
+    ] {
+        let source = PyProjectTomlSource::parse(raw).expect("Failed to parse benchmark source");
+        group.bench_function(BenchmarkId::new("fresh", name), |b| {
+            b.iter(|| {
+                black_box(
+                    PyProjectToml::from_string(
+                        black_box(source.contents().to_owned()),
+                        "pyproject.toml",
+                    )
+                    .expect("Failed to parse benchmark manifest"),
+                );
+            });
+        });
+        group.bench_function(BenchmarkId::new("syntax", name), |b| {
+            b.iter(|| {
+                black_box(
+                    PyProjectTomlSource::parse(black_box(source.contents().to_owned()))
+                        .expect("Failed to parse benchmark source"),
+                );
+            });
+        });
+        group.bench_function(BenchmarkId::new("replay", name), |b| {
+            b.iter(|| {
+                black_box(
+                    black_box(&source)
+                        .deserialize()
+                        .expect("Failed to deserialize benchmark source"),
+                );
+            });
+        });
+    }
+    group.finish();
+}
+
 fn discover_workspace_from_all_members(c: &mut Criterion<WallTime>) {
     discover_workspace(c, "discover_workspace_from_all_members", 0);
 }
@@ -387,6 +427,7 @@ fn run_cli(
 
 criterion_group!(
     workspace_discovery,
+    parse_pyproject_sources,
     discover_workspace_from_all_members,
     discover_workspace_from_all_members_with_excludes,
     run_python_version_synthetic_workspace
