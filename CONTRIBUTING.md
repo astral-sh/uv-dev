@@ -108,6 +108,11 @@ not a particular preferred version. It uses a closed-world local index and rejec
 policies, including pre-releases, yanked candidates, non-universal wheels, and non-additive extras.
 `--max-states` bounds the exhaustive search and fails explicitly when a graph is too large.
 
+Pass `--lock` to check a universal project lock, its canonical round trip, and a frozen requirements
+export in the selected environment. An unsatisfiable lock is only confirmed when that environment
+provides an unsatisfiable witness; a successful sample cannot prove the entire marker universe is
+satisfiable.
+
 ### Snapshot testing
 
 uv uses [insta](https://insta.rs/) for snapshot testing. It's recommended (but not necessary) to use
