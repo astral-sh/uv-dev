@@ -523,7 +523,7 @@ impl PrioritizedDist {
 
     /// If this prioritized dist has at least one wheel, then this creates
     /// a built distribution with the best wheel in this prioritized dist.
-    pub fn built_dist(&self) -> Option<RegistryBuiltDist> {
+    pub(crate) fn built_dist(&self) -> Option<RegistryBuiltDist> {
         let best_wheel_index = self.0.best_wheel_index?;
 
         // Remove any excluded wheels from the list of wheels, and adjust the wheel index to be
@@ -555,7 +555,7 @@ impl PrioritizedDist {
 
     /// If this prioritized dist has an sdist, then this creates a source
     /// distribution.
-    pub fn source_dist(&self) -> Option<RegistrySourceDist> {
+    pub(crate) fn source_dist(&self) -> Option<RegistrySourceDist> {
         let mut sdist = self
             .0
             .source
@@ -578,7 +578,7 @@ impl PrioritizedDist {
 
     /// Returns the "best" wheel in this prioritized distribution, if one
     /// exists.
-    pub fn best_wheel(&self) -> Option<&(RegistryBuiltWheel, WheelCompatibility)> {
+    pub(crate) fn best_wheel(&self) -> Option<&(RegistryBuiltWheel, WheelCompatibility)> {
         self.0.best_wheel_index.map(|i| &self.0.wheels[i])
     }
 
