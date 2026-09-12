@@ -198,6 +198,8 @@ pub struct PythonReport {
     /// Python implementation name.
     #[cfg_attr(feature = "schemars", schemars(with = "String"))]
     implementation: LenientImplementationName,
+    /// Interpreter installation key, as used by `uv python list`.
+    key: String,
 }
 
 impl From<&Interpreter> for PythonReport {
@@ -206,6 +208,7 @@ impl From<&Interpreter> for PythonReport {
             path: PortablePathBuf::from(interpreter.sys_executable()),
             version: interpreter.python_full_version().clone(),
             implementation: LenientImplementationName::from(interpreter.implementation_name()),
+            key: interpreter.key().to_string(),
         }
     }
 }

@@ -865,6 +865,10 @@
           "description": "Python implementation name.",
           "type": "string"
         },
+        "key": {
+          "description": "Interpreter installation key, as used by `uv python list`.",
+          "type": "string"
+        },
         "path": {
           "description": "Absolute path to the Python executable.",
           "allOf": [
@@ -878,7 +882,7 @@
           "type": "string"
         }
       },
-      "required": ["path", "version", "implementation"]
+      "required": ["path", "version", "implementation", "key"]
     },
     "SchemaReport": {
       "description": "The schema metadata for the metadata report.",

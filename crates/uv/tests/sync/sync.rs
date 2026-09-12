@@ -730,10 +730,58 @@ fn multiple_packages() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn sync_json_python_key() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "python-report-key"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+        "#})?;
+
+    let report = context
+        .sync()
+        .args([
+            "--output-format",
+            "json",
+            "--preview-features",
+            "json-output",
+        ])
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&report.get_output().stdout)?;
+    let key = report["sync"]["environment"]["python"]["key"]
+        .as_str()
+        .ok_or_else(|| anyhow!("sync report has no Python installation key"))?;
+
+    let installations = context
+        .python_list()
+        .args(["--only-installed", "--output-format", "json"])
+        .assert()
+        .success();
+    let installations: serde_json::Value =
+        serde_json::from_slice(&installations.get_output().stdout)?;
+    assert!(
+        installations
+            .as_array()
+            .ok_or_else(|| anyhow!("Python list is not an array"))?
+            .iter()
+            .any(|installation| installation["key"].as_str() == Some(key)),
+        "sync Python key {key} was not present in `uv python list`: {installations}"
+    );
+
+    Ok(())
+}
+
 /// Test json output
 #[test]
 fn sync_json() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_filtered_python_keys()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin();
 
@@ -769,7 +817,8 @@ fn sync_json() -> Result<()> {
           "python": {
             "path": "[VENV]/[BIN]/[PYTHON]",
             "version": "3.12.[X]",
-            "implementation": "cpython"
+            "implementation": "cpython",
+            "key": "cpython-3.12.[X]-[PLATFORM]"
           }
         },
         "action": "check",
@@ -819,7 +868,8 @@ fn sync_json() -> Result<()> {
           "python": {
             "path": "[VENV]/[BIN]/[PYTHON]",
             "version": "3.12.[X]",
-            "implementation": "cpython"
+            "implementation": "cpython",
+            "key": "cpython-3.12.[X]-[PLATFORM]"
           }
         },
         "action": "check",
@@ -858,7 +908,8 @@ fn sync_json() -> Result<()> {
           "python": {
             "path": "[VENV]/[BIN]/[PYTHON]",
             "version": "3.12.[X]",
-            "implementation": "cpython"
+            "implementation": "cpython",
+            "key": "cpython-3.12.[X]-[PLATFORM]"
           }
         },
         "action": "check",
@@ -923,7 +974,8 @@ fn sync_json() -> Result<()> {
           "python": {
             "path": "[VENV]/[BIN]/[PYTHON]",
             "version": "3.12.[X]",
-            "implementation": "cpython"
+            "implementation": "cpython",
+            "key": "cpython-3.12.[X]-[PLATFORM]"
           }
         },
         "action": "check",
@@ -943,6 +995,7 @@ fn sync_json() -> Result<()> {
 #[test]
 fn sync_json_check_outdated_environment() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_filtered_python_keys()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin();
 
@@ -979,7 +1032,8 @@ fn sync_json_check_outdated_environment() -> Result<()> {
           "python": {
             "path": "[VENV]/[BIN]/[PYTHON]",
             "version": "3.12.[X]",
-            "implementation": "cpython"
+            "implementation": "cpython",
+            "key": "cpython-3.12.[X]-[PLATFORM]"
           }
         },
         "action": "check",
@@ -1013,6 +1067,7 @@ fn sync_json_check_outdated_environment() -> Result<()> {
 #[test]
 fn sync_dry_json() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"])
+        .with_filtered_python_keys()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin();
 
@@ -1050,7 +1105,8 @@ fn sync_dry_json() -> Result<()> {
           "python": {
             "path": "[VENV]/[BIN]/[PYTHON]",
             "version": "3.12.[X]",
-            "implementation": "cpython"
+            "implementation": "cpython",
+            "key": "cpython-3.12.[X]-[PLATFORM]"
           }
         },
         "action": "create",
@@ -7211,8 +7267,18 @@ fn sync_active_script_environment() -> Result<()> {
 #[test]
 fn sync_active_script_environment_json() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+        .with_filtered_python_keys()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix();
+
+    // Script discovery can select a compatible parent virtual environment before searching PATH.
+    // Keep the nearest environment inside the fixture so the initial Python version is deterministic.
+    context
+        .venv()
+        .arg("--python")
+        .arg("3.11")
+        .assert()
+        .success();
 
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! { r#"
@@ -7248,7 +7314,8 @@ fn sync_active_script_environment_json() -> Result<()> {
           "python": {
             "path": "[CACHE_DIR]/environments-v2/script-[HASH]/[BIN]/python",
             "version": "3.11.[X]",
-            "implementation": "cpython"
+            "implementation": "cpython",
+            "key": "cpython-3.11.[X]-[PLATFORM]"
           }
         },
         "action": "create",
@@ -7310,7 +7377,8 @@ fn sync_active_script_environment_json() -> Result<()> {
           "python": {
             "path": "[TEMP_DIR]/foo/[BIN]/python",
             "version": "3.11.[X]",
-            "implementation": "cpython"
+            "implementation": "cpython",
+            "key": "cpython-3.11.[X]-[PLATFORM]"
           }
         },
         "action": "create",
@@ -7382,7 +7450,8 @@ fn sync_active_script_environment_json() -> Result<()> {
           "python": {
             "path": "[TEMP_DIR]/foo/[BIN]/python",
             "version": "3.12.[X]",
-            "implementation": "cpython"
+            "implementation": "cpython",
+            "key": "cpython-3.12.[X]-[PLATFORM]"
           }
         },
         "action": "update",

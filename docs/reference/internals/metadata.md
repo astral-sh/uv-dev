@@ -205,7 +205,9 @@ Here is a human-readable annotated example:
       // The full Python version
       "version": "3.12.12",
       // The Python implementation name
-      "implementation": "cpython"
+      "implementation": "cpython",
+      // The installation key, as used by `uv python list`
+      "key": "cpython-3.12.12-linux-x86_64-gnu"
     },
     // The locked packages selected for this interpreter, whether or not they are installed
     "selected_packages": {
