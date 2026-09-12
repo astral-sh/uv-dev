@@ -816,30 +816,6 @@ pub(crate) async fn do_sync<'a>(
         &tags,
     )?;
 
-    // Avoid constructing an HTTP client and build dispatch when planning shows that there is no
-    // installation work to perform.
-    if installation_plan.is_noop(modifications, bytecode_compilation, dry_run) {
-        maybe_check_malware(
-            &target,
-            &resolution,
-            &malware_check_client_builder,
-            concurrency,
-            cache,
-            preview,
-            &malware_context,
-        )
-        .await?;
-
-        return Ok(installation_plan.finish_noop(
-            &resolution,
-            modifications,
-            bytecode_compilation,
-            logger.as_ref(),
-            dry_run,
-            printer,
-        )?);
-    }
-
     // Initialize the registry client.
     let client = RegistryClientBuilder::new(client_builder, cache.clone())
         .index_locations(index_locations.clone())
@@ -910,6 +886,17 @@ pub(crate) async fn do_sync<'a>(
         &malware_context,
     )
     .await?;
+
+    if installation_plan.is_noop(modifications, bytecode_compilation, dry_run) {
+        return Ok(installation_plan.finish_noop(
+            &resolution,
+            modifications,
+            bytecode_compilation,
+            logger.as_ref(),
+            dry_run,
+            printer,
+        )?);
+    }
 
     // Sync the environment.
     let changelog = installation_plan
