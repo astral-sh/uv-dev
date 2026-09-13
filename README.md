@@ -6,87 +6,124 @@ Classification: question
 
 ## Summary
 
-The reporter asks whether replacing an unspecified `.unwrap()` in lockfile handling with propagated,
-contextual errors would be a suitable `good first issue`. They assert that a missing or malformed
-lockfile can cause a panic, but provide no exact source location, command, uv version, lockfile,
-panic message, stack trace, or reproduction. The suggested path,
-`crates/uv/src/commands/lock.rs` “or similar,” does not identify a file in the current layout; the
-project lock implementation is under `crates/uv/src/commands/project/`.
+The reporter asks whether replacing an unspecified `.unwrap()` in lockfile handling with
+propagated, contextual errors would be suitable contributor work. They assert that a missing or
+malformed lockfile can panic, but provide no exact source location, command, uv version, lockfile,
+panic message, stack trace, platform, or project configuration. The suggested
+`crates/uv/src/commands/lock.rs` “or similar” path does not exist in the current layout; project
+lock handling is under `crates/uv/src/commands/project/`.
 
-Current source and integration tests contradict the missing-lockfile claim as stated. `LockTarget`
-reads a missing lockfile as `Ok(None)` and propagates other I/O and parse errors. Lock modes then
-convert `None` into `ProjectError::MissingLockfile`. Integration snapshots cover missing `uv.lock`
-for `uv sync --locked`, `uv sync --frozen`, `uv lock --locked`, `uv lock --frozen`,
-`uv lock --check-exists`, project-run modes, and related commands, all with a normal user-facing
-“Unable to find lockfile” error rather than a panic. The lock and sync suites also cover malformed
-TOML and semantic lockfile errors as `Failed to parse uv.lock` failures.
+Representative missing, malformed, and non-file lockfile cases were tested with the installed uv
+and all returned normal user-facing errors. Current source also handles a missing lockfile as
+`Ok(None)`, propagates parse and other I/O failures, and converts the absent value to
+`ProjectError::MissingLockfile` in locked or frozen modes. No reported panic was reproduced, but
+the issue is too underspecified to target a particular alleged panic path.
 
-The closest historical defect is astral-sh/uv#19854, where a specifically malformed registry
-package without a `version` reached `expect("version for registry source")`. That issue included an
-exact `uv sync --frozen` reproduction and was fixed by merged astral-sh/uv#19855. Current source
-validates that condition during lockfile deserialization and retains its regression test.
+## Reproduction
+
+Outcome: `needs_more_information`.
+
+Environment:
+
+- uv 0.12.13 (`x86_64-unknown-linux-gnu`)
+- Linux x86_64, kernel 6.17.0-1022-azure
+- CPython 3.12.3 at `/usr/bin/python3`
+- Isolated project and uv cache under `/tmp`; commands used `--offline`
+- Repository commit `c0df400a4cf4aad88f7f34bb2ac3ebb5a8f3839e`
+
+Minimal project:
+
+```toml
+[project]
+name = "repro"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = []
+```
+
+With no `uv.lock`, each of these commands exited 2 and did not panic:
+
+```console
+$ uv lock --locked --offline
+error: Unable to find lockfile at `uv.lock`, but `--locked` was provided. To create a lockfile, run `uv lock` or `uv sync` without the flag.
+
+$ uv lock --frozen --offline
+error: Unable to find lockfile at `uv.lock`, but `--frozen` was provided. To create a lockfile, run `uv lock` or `uv sync` without the flag.
+
+$ uv sync --locked --offline
+error: Unable to find lockfile at `uv.lock`, but `--locked` was provided. To create a lockfile, run `uv lock` or `uv sync` without the flag.
+
+$ uv sync --frozen --offline
+error: Unable to find lockfile at `uv.lock`, but `--frozen` was provided. To create a lockfile, run `uv lock` or `uv sync` without the flag.
+```
+
+Writing the single line `invalid` to `uv.lock` and rerunning all four commands produced a
+`Failed to parse uv.lock` TOML error at line 1, column 8, again with exit code 2 and no panic.
+Replacing `uv.lock` with a directory produced
+`failed to read from file .../uv.lock: Is a directory (os error 21)` for both lock modes, also
+without a panic.
+
+Existing coverage was checked rather than inferred from test names:
+
+- `crates/uv/tests/sync/sync.rs::locked` and `::frozen` construct projects without a lockfile
+  and snapshot the same normal missing-lockfile errors from `uv sync --locked` and
+  `uv sync --frozen`.
+- `crates/uv/tests/lock/lock.rs::lock_frozen_errors_report_source` snapshots normal
+  missing-lockfile errors from `uv lock --frozen`, `uv lock --check-exists`, and
+  `UV_FROZEN=1 uv lock`.
+- `crates/uv/tests/project/check.rs::check_no_sync_errors_on_invalid_lockfile` writes
+  `invalid` to `uv.lock` and snapshots a propagated TOML parse error.
+- `crates/uv-resolver/src/lock/mod.rs::missing_package_version_registry` verifies that the
+  previously panicking malformed registry-package case is rejected during deserialization with
+  `Package ... from a registry source has a missing version field`.
+
+To construct a meaningful targeted reproduction, maintainers need the exact `.unwrap()` or panic
+site, full uv command and arguments, uv version and installation source, operating system, working
+directory and project/workspace configuration, exact `uv.lock` contents or missing-file setup,
+and the complete panic output or backtrace.
 
 ## Draft response
 
-Thanks for checking. The current lockfile read path already treats a missing file as `Ok(None)` and
-commands such as `uv sync --locked` and `uv sync --frozen` return a normal “Unable to find
-lockfile” error; malformed TOML is also propagated as a parse error. The closest concrete panic,
-astral-sh/uv#19854, involved a registry package missing its `version` field and was fixed by
-astral-sh/uv#19855.
+Thanks for checking. Current lockfile handling already returns a normal “Unable to find lockfile”
+error for missing `uv.lock` files and propagates malformed TOML and other read failures as
+user-facing errors. I could not reproduce a panic with `uv lock` or `uv sync` in locked or
+frozen mode.
 
-Could you provide the exact `.unwrap()` location, uv command, uv version, lockfile contents, and
-panic output for the remaining case? Without a concrete reachable path, there is not yet a scoped
-issue to mark as `good first issue`.
+Could you provide the exact `.unwrap()` location, uv command and version, project and lockfile
+contents, platform, and full panic output? Without a concrete reachable path, there is not yet a
+scoped issue to mark as `good first issue`.
 
 ## Classification
 
-Classify as `question`. The issue primarily asks whether a proposed cleanup is suitable contributor
-work, while its premise does not establish incorrect current behavior. The referenced location is
-not specific, and there is no reproduction or observable panic to associate with any remaining
-`.unwrap()`. More importantly, the current missing-lockfile read path and integration snapshots
-already demonstrate explicit fallible handling and a clear error.
+Classify as `question`. The issue primarily asks whether a proposed cleanup is suitable
+contributor work, while its premise does not establish incorrect current behavior. Current source,
+integration coverage, and the representative commands above all show explicit fallible handling,
+but the missing report details prevent excluding a different configuration-dependent path.
 
-This is not a duplicate of astral-sh/uv#19854. That issue tracked one precise malformed-lockfile
-invariant violation and was closed by astral-sh/uv#19855; astral-sh/uv#21643 does not identify the
-same trigger, show that it regressed, or establish another reachable panic. If the reporter supplies
-a different exact panic path, the classification can be revisited as a bug.
+This is not established as a duplicate of astral-sh/uv#19854. That issue tracked one precise
+malformed-lockfile invariant violation and was closed by astral-sh/uv#19855; astral-sh/uv#21643
+does not identify the same trigger, show that it regressed, or establish another reachable panic.
 
 ## Related
 
 - astral-sh/uv#19854 — Closed issue with the closest concrete symptom. A registry-source package
   missing its `version` field caused `uv sync --frozen` to panic at
-  `expect("version for registry source")`. Maintainer discussion agreed that this malformed input
-  should not panic, while noting that no normal uv workflow was known to generate the malformed
-  lockfile. Unlike astral-sh/uv#21643, it supplied a specific lockfile, command, version, and panic
-  site.
+  `expect("version for registry source")`. Unlike astral-sh/uv#21643, it supplied a specific
+  lockfile, command, version, and panic site.
 - astral-sh/uv#19855 — Merged pull request that closed astral-sh/uv#19854. It added
-  `MissingPackageVersion` validation during lockfile deserialization and a regression test, turning
-  that precise malformed-lockfile case into a graceful parse error. It is evidence that the known
-  malformed registry-package panic is already fixed, not evidence for the new report's unspecified
-  missing-lockfile claim.
+  `MissingPackageVersion` validation during lockfile deserialization and a regression test,
+  turning that precise malformed-lockfile case into a graceful parse error.
 
 ## Search and supporting evidence
 
-GitHub searches covered open and closed issues and open, closed, and merged pull requests. Literal
-queries included “missing lockfile,” “uv.lock missing panic,” “malformed lockfile,” “lockfile
-panic,” “unwrap lock,” “Result::unwrap,” “lockfile not found,” “lockfile does not exist,” and exact
-parse-error language. Conceptual queries covered graceful lockfile errors, absent files, malformed
-input, panic/error propagation, and `good first issue` cleanup requests. Fix-oriented searches used
-the known `version for registry source` panic text and reviewed the closing relationship, body,
-comments, and changed files of astral-sh/uv#19854 and astral-sh/uv#19855.
+`LockTarget::read_with_contents` in `crates/uv/src/commands/project/lock_target.rs` maps
+`NotFound` to `Ok(None)`, parses present content through `Lock::from_toml`, and propagates
+other I/O errors. `LockOperation::execute` in
+`crates/uv/src/commands/project/lock.rs` maps `None` to
+`ProjectError::MissingLockfile` in frozen and locked modes. The `.unwrap()` calls in
+`lock_target.rs` operate on already-established script parent paths or lockfile filenames; no
+file-read result is unwrapped there.
 
-astral-sh/uv#15459 was inspected as a superficially plausible missing-lockfile/parse-error result
-and ruled out. It reported a dynamic-version lockfile parse failure under `--frozen`; maintainers
-identified inconsistent uv versions as the likely explanation, and the reporter could no longer
-reproduce it. It did not report a panic or an unhandled file-operation result.
-
-Repository evidence checked alongside GitHub results:
-
-- `LockTarget::read_with_contents` maps `NotFound` to `Ok(None)`, parses present content through
-  `Lock::from_toml`, and propagates other errors.
-- `LockOperation::execute` maps a missing lockfile to `ProjectError::MissingLockfile` for frozen and
-  locked modes.
-- Integration snapshots in the lock, sync, run, audit, and check suites assert clear errors for
-  missing lockfiles; malformed lockfile snapshots assert structured parse errors.
-- The validation and regression test introduced by astral-sh/uv#19855 remain in
-  `crates/uv-resolver/src/lock/mod.rs`.
+The prior context's related-issue search also inspected astral-sh/uv#15459 and ruled it out: it
+reported a dynamic-version lockfile parse failure under `--frozen`, not a panic, and the reporter
+could no longer reproduce it.

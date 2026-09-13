@@ -1,0 +1,4 @@
+{
+  "reproduction": "needs_more_information",
+  "reason": "astral-sh/uv#21643 provides no exact command, uv version, lockfile, panic output, or `.unwrap()` location. On Linux x86_64 with uv 0.12.13 and Python 3.12.3, an isolated minimal project produced normal exit-code-2 errors for `uv lock` and `uv sync` with `--locked` or `--frozen` when `uv.lock` was missing. An invalid TOML lockfile and a directory named `uv.lock` also produced propagated parse/I/O errors, not panics. Existing coverage includes `crates/uv/tests/sync/sync.rs::locked`, `::frozen`, and `crates/uv/tests/lock/lock.rs::lock_frozen_errors_report_source`. A targeted reproduction requires the exact command, version, project and lockfile contents, platform, panic output/backtrace, and alleged panic site."
+}
