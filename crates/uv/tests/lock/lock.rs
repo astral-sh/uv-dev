@@ -18647,6 +18647,197 @@ fn lock_canonicalizes_unreachable_extra_edges() -> Result<()> {
     Ok(())
 }
 
+/// Resolved extra availability must agree before and after serializing the lockfile.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_canonicalizes_empty_requested_extras() -> Result<()> {
+    use uv_test::packse::check::{ScenarioPlatform, ScenarioTarget, parse_pins};
+
+    let server = PackseServer::new("fork/empty-extra-lock-roundtrip.toml");
+    let targets = ScenarioTarget::matrix(
+        &[
+            "3.12".parse().expect("valid Python version"),
+            "3.13".parse().expect("valid Python version"),
+            "3.14".parse().expect("valid Python version"),
+        ],
+        &[
+            ScenarioPlatform::Linux,
+            ScenarioPlatform::Macos,
+            ScenarioPlatform::Windows,
+        ],
+    );
+    let expected_version = "1.0.0".parse::<uv_pep440::Version>()?;
+
+    for (requested, activate_elsewhere) in [
+        ("feature", false),
+        ("feature", true),
+        ("empty", false),
+        ("missing", false),
+    ] {
+        let context = uv_test::test_context!("3.12");
+        let other = if activate_elsewhere {
+            "\"a[feature]; python_full_version >= '3.13' and sys_platform == 'win32'\""
+        } else {
+            ""
+        };
+        context
+            .temp_dir
+            .child("pyproject.toml")
+            .write_str(&formatdoc! {r#"
+                [project]
+                name = "project"
+                version = "0.1.0"
+                requires-python = ">=3.12,<3.15"
+                dependencies = ["a[{requested}]==1; python_full_version < '3.13'"]
+
+                [project.optional-dependencies]
+                empty = []
+                other = [{other}]
+
+                [dependency-groups]
+                dev = ["b[feature]==1; python_full_version < '3.14'"]
+            "#})?;
+        let command = || {
+            let mut command = context.lock();
+            command
+                .arg("--no-config")
+                .arg("--index-url")
+                .arg(server.index_url())
+                .arg("--no-build")
+                .env_remove(EnvVars::UV_EXCLUDE_NEWER);
+            command
+        };
+
+        let output = command().output()?;
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr).contains("does not have an extra named"),
+            requested == "missing",
+            "requested {requested}; activate_elsewhere={activate_elsewhere}"
+        );
+        output.assert().success();
+        let initial = context.read("uv.lock");
+        command()
+            .arg("--locked")
+            .arg("--offline")
+            .assert()
+            .success();
+        assert_eq!(context.read("uv.lock"), initial);
+        command()
+            .arg("--check")
+            .arg("--refresh")
+            .arg("--preview-features")
+            .arg("lockfile-format-check")
+            .assert()
+            .success();
+        assert_eq!(context.read("uv.lock"), initial);
+        command()
+            .arg("--refresh")
+            .arg("--preview-features")
+            .arg("lockfile-format-check")
+            .assert()
+            .success();
+        assert_eq!(context.read("uv.lock"), initial);
+
+        let lock = toml::from_str::<toml::Value>(&initial)?;
+        let packages = lock["package"].as_array().unwrap();
+        let package = packages
+            .iter()
+            .find(|package| package["name"].as_str() == Some("a"))
+            .unwrap();
+        let feature = package
+            .get("optional-dependencies")
+            .and_then(|dependencies| dependencies.get("feature"))
+            .and_then(toml::Value::as_array);
+        assert_eq!(
+            feature.is_some_and(|dependencies| !dependencies.is_empty()),
+            activate_elsewhere
+        );
+        let project = packages
+            .iter()
+            .find(|package| package["name"].as_str() == Some("project"))
+            .unwrap();
+        let dependency = project["dependencies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|dependency| dependency["name"].as_str() == Some("a"))
+            .unwrap();
+        let extras = dependency
+            .get("extra")
+            .and_then(toml::Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|extra| extra.as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            extras,
+            if activate_elsewhere {
+                vec!["feature"]
+            } else {
+                vec![]
+            }
+        );
+        assert!(
+            project["metadata"]["provides-extras"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|extra| extra.as_str() == Some("empty"))
+        );
+
+        for selection in ["base", "empty", "dev", "other"] {
+            if selection == "other" && !activate_elsewhere {
+                continue;
+            }
+            let arguments: &[&str] = match selection {
+                "base" => &[],
+                "empty" => &["--extra", "empty"],
+                "dev" => &["--only-group", "dev"],
+                "other" => &["--extra", "other"],
+                _ => unreachable!(),
+            };
+            let output = context
+                .export()
+                .arg("--no-config")
+                .arg("--frozen")
+                .arg("--offline")
+                .arg("--no-default-groups")
+                .arg("--no-emit-project")
+                .arg("--no-header")
+                .arg("--no-hashes")
+                .arg("--no-annotate")
+                .args(arguments)
+                .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+                .output()?;
+            assert!(output.status.success(), "{output:?}");
+            let requirements = std::str::from_utf8(&output.stdout)?;
+            for target in &targets {
+                let pins = parse_pins(requirements, &target.markers()?)?;
+                let other = selection == "other"
+                    && target.python.minor() >= 13
+                    && target.platform == ScenarioPlatform::Windows;
+                let mut expected = Vec::new();
+                if target.python.minor() < 13 || other {
+                    expected.push("a".to_owned());
+                }
+                if (selection == "dev" && target.python.minor() < 14) || other {
+                    expected.push("b".to_owned());
+                }
+                assert_eq!(
+                    pins.keys().map(ToString::to_string).collect::<Vec<_>>(),
+                    expected,
+                    "requested {requested}; activate_elsewhere={activate_elsewhere}; {selection} for {target}"
+                );
+                for version in pins.values() {
+                    assert_eq!(version, &expected_version);
+                }
+            }
+            assert_eq!(context.read("uv.lock"), initial);
+        }
+    }
+    Ok(())
+}
+
 /// Disjoint markers on different dependency edges must not require an unreachable package.
 #[cfg(feature = "test-universal")]
 #[test]
