@@ -334,14 +334,27 @@ mod tests {
             definitions["Action"]["enum"],
             serde_json::json!(["use", "check", "update", "create"])
         );
+        let mut statuses = Vec::new();
+        for variant in definitions["Status"]["oneOf"]
+            .as_array()
+            .expect("status variants")
+        {
+            if let Some(value) = variant.get("const") {
+                statuses.push(value.as_str().expect("status value"));
+            } else {
+                statuses.extend(
+                    variant["enum"]
+                        .as_array()
+                        .expect("status values")
+                        .iter()
+                        .map(|value| value.as_str().expect("status value")),
+                );
+            }
+        }
+        statuses.sort_unstable();
         assert_eq!(
-            definitions["Status"]["oneOf"]
-                .as_array()
-                .expect("status variants")
-                .iter()
-                .map(|variant| variant["const"].as_str().expect("status value"))
-                .collect::<Vec<_>>(),
-            vec!["fresh", "stale", "not_checked", "indeterminate"]
+            statuses,
+            vec!["fresh", "indeterminate", "not_checked", "stale"]
         );
         assert_eq!(
             reason["properties"]["package"]["allOf"][0]["$ref"],
