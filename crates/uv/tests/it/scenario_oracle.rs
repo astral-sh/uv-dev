@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 use uv_python::PythonVersion;
 use uv_test::packse::check::{
@@ -9,7 +9,8 @@ use uv_test::packse::check::{
     check_project_lock_scenario_with_artifacts, check_scenario,
 };
 use uv_test::packse::generate::{
-    SmallGraphOptions, generate_marker_graph, generate_project_graph, generate_small_graph,
+    SmallGraphOptions, generate_marker_graph, generate_project_graph,
+    generate_satisfiable_project_graph, generate_small_graph,
 };
 use uv_test::packse::project::{ProjectSelection, ScenarioProject};
 use uv_test::packse::scenario::{Scenario, ScenarioDocument};
@@ -449,6 +450,39 @@ fn generated_project_graphs_match_selected_exports() -> Result<()> {
         if let LockCheckResult::Satisfiable { projections, .. } = result {
             assert_eq!(projections, targets.len() * selections.len());
         }
+    }
+    Ok(())
+}
+
+#[test]
+fn witnessed_project_graphs_match_selected_exports() -> Result<()> {
+    let versions = ["3.12", "3.13", "3.14"]
+        .map(|version| PythonVersion::from_str(version).expect("valid Python version"));
+    let targets = ScenarioTarget::matrix(
+        &versions,
+        &[
+            ScenarioPlatform::Linux,
+            ScenarioPlatform::Macos,
+            ScenarioPlatform::Windows,
+        ],
+    );
+    let options = SmallGraphOptions {
+        packages: 3,
+        versions: 2,
+    };
+    for seed in [0, 1] {
+        let graph = generate_satisfiable_project_graph(seed, options, &targets, 27)?;
+        assert_eq!(graph.certify_universal_witness()?.assigned_packages, 3);
+        assert_eq!(graph.check_witness(&targets)?, 99);
+        let scenario = graph.document.scenario()?;
+        let selections = ScenarioProject::new(&scenario)?.selection_matrix();
+        let context = uv_test::test_context!("3.12");
+        let result = check_project_lock_scenario(&context, &scenario, &targets, &selections, 27)
+            .with_context(|| format!("witnessed project lock graph seed {seed}"))?;
+        let LockCheckResult::Satisfiable { projections, .. } = result else {
+            bail!("witnessed project lock graph seed {seed} must be satisfiable");
+        };
+        assert_eq!(projections, targets.len() * selections.len());
     }
     Ok(())
 }
