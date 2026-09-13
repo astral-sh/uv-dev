@@ -431,7 +431,7 @@ impl CacheKey for Requirement {
                 0u8.cache_key(state);
                 specifier.len().cache_key(state);
                 for spec in specifier.iter() {
-                    spec.operator().as_str().cache_key(state);
+                    spec.operator().cache_key(state);
                     spec.version().cache_key(state);
                 }
                 if let Some(index) = index {

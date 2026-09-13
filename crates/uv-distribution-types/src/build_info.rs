@@ -53,3 +53,84 @@ impl BuildInfo {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use uv_cache_key::cache_digest;
+    use uv_pep440::Version;
+    use uv_pep508::Requirement as Pep508Requirement;
+    use uv_pypi_types::VerbatimParsedUrl;
+
+    use crate::{BuildInfo, BuildVariables, ConfigSettings, ExtraBuildRequirement, Requirement};
+
+    #[test]
+    fn wildcard_build_requirements_leave_legacy_cache_shard() {
+        let version = Version::new([1, 2]);
+        for (operator, exact, wildcard) in [
+            ("==", "foo==1.2", "foo==1.2.*"),
+            ("!=", "foo!=1.2", "foo!=1.2.*"),
+        ] {
+            // The old registry-requirement encoding omitted the wildcard flag. Describe it
+            // independently with typed fields so this also works on different pointer widths.
+            let legacy_requirement = (
+                "foo", 0usize, 0usize, 0u8, 0u8, 1usize, operator, &version, 0u8,
+            );
+            let legacy_key = cache_digest(&legacy_requirement);
+            let legacy_shard = cache_digest(&(
+                ConfigSettings::default(),
+                1usize,
+                legacy_requirement,
+                false,
+                BuildVariables::default(),
+            ));
+
+            let shards = [(exact, false), (wildcard, true)].map(|(input, is_star)| {
+                let requirement = Requirement::from(
+                    input
+                        .parse::<Pep508Requirement<VerbatimParsedUrl>>()
+                        .expect("valid test requirement"),
+                );
+                let expected_requirement = (
+                    "foo",
+                    0usize,
+                    0usize,
+                    0u8,
+                    0u8,
+                    1usize,
+                    (operator, is_star, &version),
+                    0u8,
+                );
+                assert_eq!(
+                    cache_digest(&requirement),
+                    cache_digest(&expected_requirement),
+                );
+                assert_ne!(cache_digest(&requirement), legacy_key);
+
+                let build_info = BuildInfo::from_settings(
+                    ConfigSettings::default(),
+                    vec![ExtraBuildRequirement {
+                        requirement,
+                        match_runtime: false,
+                    }],
+                    None,
+                );
+                let shard = build_info
+                    .cache_shard()
+                    .expect("build requirements create a cache shard");
+                assert_eq!(
+                    shard,
+                    cache_digest(&(
+                        ConfigSettings::default(),
+                        1usize,
+                        expected_requirement,
+                        false,
+                        BuildVariables::default(),
+                    )),
+                );
+                assert_ne!(shard, legacy_shard);
+                shard
+            });
+            assert_ne!(shards[0], shards[1]);
+        }
+    }
+}
