@@ -89,6 +89,8 @@ pub(crate) mod upgrade;
 pub(crate) mod version;
 
 #[cfg(feature = "schemars")]
+pub use lock_report::json_schema as lock_json_schema;
+#[cfg(feature = "schemars")]
 pub use report::json_schema as sync_json_schema;
 
 /// The source of a missing lockfile error.

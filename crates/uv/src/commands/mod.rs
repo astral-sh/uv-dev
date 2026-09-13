@@ -40,6 +40,8 @@ pub(crate) use project::export::export;
 pub(crate) use project::format::format;
 pub(crate) use project::init::{InitKind, InitProjectKind, init};
 pub(crate) use project::lock::lock;
+#[cfg(feature = "schemars")]
+pub use project::lock_json_schema;
 pub(crate) use project::remove::remove;
 pub(crate) use project::run::{ParsedRunCommand, RunCommand, run};
 pub(crate) use project::sync::sync;

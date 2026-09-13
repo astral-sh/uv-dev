@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
@@ -6,8 +8,40 @@ use serde_json::Value;
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
 
 use uv_static::EnvVars;
+use uv_test::json_schema::JsonSchema;
 use uv_test::packse::PackseServer;
 use uv_test::uv_snapshot;
+
+static LOCK_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> = LazyLock::new(|| {
+    JsonSchema::new(include_str!(
+        "../../../../docs/reference/internals/lock.schema.json"
+    ))
+    .map_err(|error| error.to_string())
+});
+
+fn parse_report(contents: &[u8]) -> Result<Value> {
+    LOCK_SCHEMA
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!("invalid lock schema: {error}"))?
+        .parse(contents)
+        .context("lock report schema mismatch")
+}
+
+fn assert_rejects_null_fields(report: &Value, object_pointer: &str, fields: &[&str]) -> Result<()> {
+    for &field in fields {
+        let mut invalid = report.clone();
+        invalid
+            .pointer_mut(object_pointer)
+            .and_then(Value::as_object_mut)
+            .with_context(|| format!("report has no object at {object_pointer}"))?
+            .insert(field.to_owned(), Value::Null);
+        assert!(
+            parse_report(&serde_json::to_vec(&invalid)?).is_err(),
+            "lock schema accepted null for {object_pointer}/{field}"
+        );
+    }
+    Ok(())
+}
 
 #[test]
 fn lock_check_json_freshness() -> Result<()> {
@@ -41,12 +75,22 @@ fn lock_check_json_freshness() -> Result<()> {
     ----- stderr -----
     error: Unable to find lockfile at `uv.lock`, but `--check` was provided. To create a lockfile, run `uv lock` or `uv sync` without the flag.
     "#);
-    serde_json::from_slice::<Value>(&output.stdout)?;
+    let report = parse_report(&output.stdout)?;
+    assert_rejects_null_fields(
+        &report,
+        "",
+        &["path", "action", "reason", "validation_error", "error"],
+    )?;
+    assert_rejects_null_fields(
+        &report,
+        "/reason",
+        &["package", "message", "expected", "actual"],
+    )?;
     assert!(!context.temp_dir.child("uv.lock").exists());
 
     context.lock().arg("--offline").assert().success();
     let lock = context.read("uv.lock");
-    uv_snapshot!(context.filters(), context.lock().args([
+    let output = uv_snapshot!(context.filters(), context.lock().args([
         "--check", "--output-format", "json", "--preview-features", "json-output", "--offline",
     ]), @r#"
     exit_code: 0 (success)
@@ -64,9 +108,10 @@ fn lock_check_json_freshness() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     "#);
+    parse_report(&output.stdout)?;
 
     manifest.write_str(&context.read("pyproject.toml").replace("0.1.0", "0.2.0"))?;
-    uv_snapshot!(context.filters(), context.lock().args([
+    let output = uv_snapshot!(context.filters(), context.lock().args([
         "--check", "--output-format", "json", "--preview-features", "json-output", "--offline",
     ]), @r#"
     exit_code: 1 (failure)
@@ -97,10 +142,11 @@ fn lock_check_json_freshness() -> Result<()> {
 
     hint: To update the lockfile, run `uv lock`.
     "#);
+    parse_report(&output.stdout)?;
     assert_eq!(context.read("uv.lock"), lock);
 
     // An ordinary JSON lock updates the file instead of implicitly checking it.
-    uv_snapshot!(context.filters(), context.lock().args([
+    let output = uv_snapshot!(context.filters(), context.lock().args([
         "--output-format", "json", "--preview-features", "json-output", "--offline",
     ]), @r#"
     exit_code: 0 (success)
@@ -129,6 +175,7 @@ fn lock_check_json_freshness() -> Result<()> {
     Resolved 1 package in [TIME]
     Updated project v0.1.0 -> v0.2.0
     "#);
+    parse_report(&output.stdout)?;
     assert_ne!(context.read("uv.lock"), lock);
     context
         .lock()
@@ -149,7 +196,7 @@ fn lock_json_actions() -> Result<()> {
         requires-python = ">=3.12"
     "#})?;
 
-    uv_snapshot!(context.filters(), context.lock().args([
+    let output = uv_snapshot!(context.filters(), context.lock().args([
         "--dry-run", "--output-format", "json", "--preview-features", "json-output", "--offline",
     ]), @r#"
     exit_code: 0 (success)
@@ -171,9 +218,10 @@ fn lock_json_actions() -> Result<()> {
     Resolved 1 package in [TIME]
     Add project v0.1.0
     "#);
+    parse_report(&output.stdout)?;
     assert!(!context.temp_dir.child("uv.lock").exists());
 
-    uv_snapshot!(context.filters(), context.lock().args([
+    let output = uv_snapshot!(context.filters(), context.lock().args([
         "--output-format", "json", "--preview-features", "json-output", "--offline",
     ]), @r#"
     exit_code: 0 (success)
@@ -194,8 +242,9 @@ fn lock_json_actions() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     "#);
+    parse_report(&output.stdout)?;
     let lock = context.read("uv.lock");
-    uv_snapshot!(context.filters(), context.lock().args([
+    let output = uv_snapshot!(context.filters(), context.lock().args([
         "--output-format", "json", "--preview-features", "json-output", "--offline",
     ]), @r#"
     exit_code: 0 (success)
@@ -213,9 +262,10 @@ fn lock_json_actions() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     "#);
+    parse_report(&output.stdout)?;
     assert_eq!(context.read("uv.lock"), lock);
 
-    uv_snapshot!(context.filters(), context.lock().args([
+    let output = uv_snapshot!(context.filters(), context.lock().args([
         "--dry-run", "--output-format", "json", "--preview-features", "json-output", "--offline",
     ]), @r#"
     exit_code: 0 (success)
@@ -234,10 +284,11 @@ fn lock_json_actions() -> Result<()> {
     Resolved 1 package in [TIME]
     No lockfile changes detected
     "#);
+    parse_report(&output.stdout)?;
     assert_eq!(context.read("uv.lock"), lock);
 
     manifest.write_str(&context.read("pyproject.toml").replace("0.1.0", "0.2.0"))?;
-    uv_snapshot!(context.filters(), context.lock().args([
+    let output = uv_snapshot!(context.filters(), context.lock().args([
         "--dry-run", "--output-format", "json", "--preview-features", "json-output", "--offline",
     ]), @r#"
     exit_code: 0 (success)
@@ -266,10 +317,11 @@ fn lock_json_actions() -> Result<()> {
     Resolved 1 package in [TIME]
     Update project v0.1.0 -> v0.2.0
     "#);
+    parse_report(&output.stdout)?;
     assert_eq!(context.read("uv.lock"), lock);
 
     // Existence-only checks must not claim that the stale lock is fresh.
-    uv_snapshot!(context.filters(), context.lock().args([
+    let output = uv_snapshot!(context.filters(), context.lock().args([
         "--check-exists", "--output-format", "json", "--preview-features", "json-output", "--offline",
     ]), @r#"
     exit_code: 0 (success)
@@ -287,6 +339,7 @@ fn lock_json_actions() -> Result<()> {
     ----- stderr -----
     warning: The lockfile at `uv.lock` was only checked for validity, not whether it is up-to-date, because `--check-exists` was provided; use `--check` instead
     "#);
+    parse_report(&output.stdout)?;
     assert_eq!(context.read("uv.lock"), lock);
     Ok(())
 }
@@ -329,7 +382,7 @@ fn lock_json_invalid_lockfile_has_no_action() -> Result<()> {
                 command.arg("--dry-run");
             }
             let output = command.assert().code(2);
-            let report: Value = serde_json::from_slice(&output.get_output().stdout)?;
+            let report = parse_report(&output.get_output().stdout)?;
             assert!(report.get("action").is_none());
             assert_eq!(report["status"], "indeterminate");
             assert_eq!(report["dry_run"], dry_run);
@@ -337,6 +390,70 @@ fn lock_json_invalid_lockfile_has_no_action() -> Result<()> {
             assert_eq!(context.read(lock_filename), invalid);
         }
     }
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn lock_json_failed_write_has_no_action() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let manifest = context.temp_dir.child("pyproject.toml");
+    manifest.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+    let original = context.read("uv.lock");
+    manifest.write_str(&context.read("pyproject.toml").replace("0.1.0", "0.2.0"))?;
+
+    let lockfile = context.temp_dir.child("uv.lock");
+    let permissions = fs_err::metadata(lockfile.path())?.permissions();
+    let mut readonly = permissions.clone();
+    readonly.set_readonly(true);
+    fs_err::set_permissions(lockfile.path(), readonly)?;
+
+    let dry_run = context
+        .lock()
+        .args([
+            "--output-format",
+            "json",
+            "--preview-features",
+            "json-output",
+            "--offline",
+            "--dry-run",
+        ])
+        .output();
+    let write = context
+        .lock()
+        .args([
+            "--output-format",
+            "json",
+            "--preview-features",
+            "json-output",
+            "--offline",
+        ])
+        .output();
+    fs_err::set_permissions(lockfile.path(), permissions)?;
+
+    let dry_run = dry_run?.assert().success();
+    let report = parse_report(&dry_run.get_output().stdout)?;
+    assert_eq!(report["action"], "update");
+    assert_eq!(report["status"], "stale");
+    assert_eq!(report["dry_run"], true);
+
+    let write = write?.assert().code(2);
+    let report = parse_report(&write.get_output().stdout)?;
+    assert!(report.get("action").is_none());
+    assert_eq!(report["status"], "stale");
+    assert_eq!(report["dry_run"], false);
+    assert_eq!(report["reason"]["code"], "version_changed");
+    assert_eq!(report["error"]["code"], "evaluation_failed");
+    assert!(
+        String::from_utf8_lossy(&write.get_output().stderr).contains("failed to write to file")
+    );
+    assert_eq!(context.read("uv.lock"), original);
     Ok(())
 }
 
@@ -354,7 +471,7 @@ fn lock_check_json_cutoff() -> Result<()> {
     "#})?;
     context.lock().arg("--offline").assert().success();
     let lock = context.read("uv.lock");
-    uv_snapshot!(context.filters(), context.lock().args([
+    let output = uv_snapshot!(context.filters(), context.lock().args([
         "--check", "--output-format", "json", "--preview-features", "json-output",
         "--exclude-newer", "2024-01-01T00:00:00Z", "--offline",
     ]), @r#"
@@ -381,6 +498,7 @@ fn lock_check_json_cutoff() -> Result<()> {
 
     hint: To update the lockfile, run `uv lock`.
     "#);
+    parse_report(&output.stdout)?;
     assert_eq!(context.read("uv.lock"), lock);
     Ok(())
 }
@@ -413,7 +531,7 @@ fn lock_check_json_offline_metadata() -> Result<()> {
     let lock = context.read("uv.lock");
 
     // A requested upgrade is not evidence that the existing lock is stale.
-    uv_snapshot!(context.filters(), context.lock().args([
+    let output = uv_snapshot!(context.filters(), context.lock().args([
         "--check", "--output-format", "json", "--preview-features", "json-output",
         "--upgrade-package", "a", "--offline", "--no-cache",
     ]), @r#"
@@ -438,10 +556,11 @@ fn lock_check_json_offline_metadata() -> Result<()> {
     error: Failed to download `a @ http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`
       cause: Network connectivity is disabled, but the requested data wasn't found in the cache for: `http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`
     "#);
+    parse_report(&output.stdout)?;
 
     // A subsequent metadata failure must not erase a proven requirement mismatch.
     member.write_str(&fs_err::read_to_string(&member)?.replace(">=0.1.0", ">=1.0.0"))?;
-    uv_snapshot!(context.filters(), context.lock().args([
+    let output = uv_snapshot!(context.filters(), context.lock().args([
         "--check", "--output-format", "json", "--preview-features", "json-output",
         "--offline", "--no-cache",
     ]), @r#"
@@ -476,10 +595,11 @@ fn lock_check_json_offline_metadata() -> Result<()> {
     error: Failed to download `a @ http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`
       cause: Network connectivity is disabled, but the requested data wasn't found in the cache for: `http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`
     "#);
+    parse_report(&output.stdout)?;
     assert_eq!(context.read("uv.lock"), lock);
 
     // Failed updates retain the same mismatch and original error without claiming a write.
-    uv_snapshot!(context.filters(), context.lock().args([
+    let output = uv_snapshot!(context.filters(), context.lock().args([
         "--output-format", "json", "--preview-features", "json-output", "--offline", "--no-cache",
     ]), @r#"
     exit_code: 1 (failure)
@@ -512,6 +632,7 @@ fn lock_check_json_offline_metadata() -> Result<()> {
     error: Failed to download `a @ http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`
       cause: Network connectivity is disabled, but the requested data wasn't found in the cache for: `http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`
     "#);
+    parse_report(&output.stdout)?;
     assert_eq!(context.read("uv.lock"), lock);
     Ok(())
 }
@@ -547,7 +668,7 @@ async fn lock_check_json_authentication() -> Result<()> {
         .replace(&wheel_url, &unauthorized_url);
     context.temp_dir.child("uv.lock").write_str(&lock)?;
 
-    uv_snapshot!(context.filters(), context.lock().args([
+    let output = uv_snapshot!(context.filters(), context.lock().args([
         "--check", "--output-format", "json", "--preview-features", "json-output",
         "--no-cache",
     ]), @r#"
@@ -574,6 +695,7 @@ async fn lock_check_json_authentication() -> Result<()> {
       cause: Failed to fetch: `http://[LOCALHOST]/a-1.0.0-py3-none-any.whl`
       cause: HTTP status client error (401 Unauthorized) for url (http://[LOCALHOST]/a-1.0.0-py3-none-any.whl)
     "#);
+    parse_report(&output.stdout)?;
     assert_eq!(context.read("uv.lock"), lock);
     Ok(())
 }
@@ -597,7 +719,7 @@ async fn lock_json_failed_create() -> Result<()> {
         dependencies = ["a @ {wheel_url}"]
     "#, wheel_url = format!("{}/a-1.0.0-py3-none-any.whl", unauthorized.uri())})?;
 
-    uv_snapshot!(context.filters(), context.lock().args([
+    let output = uv_snapshot!(context.filters(), context.lock().args([
         "--output-format", "json", "--preview-features", "json-output", "--no-cache",
     ]), @r#"
     exit_code: 2 (failure)
@@ -625,6 +747,7 @@ async fn lock_json_failed_create() -> Result<()> {
       cause: Failed to fetch: `http://[LOCALHOST]/a-1.0.0-py3-none-any.whl`
       cause: HTTP status client error (401 Unauthorized) for url (http://[LOCALHOST]/a-1.0.0-py3-none-any.whl)
     "#);
+    parse_report(&output.stdout)?;
     assert!(!context.temp_dir.child("uv.lock").exists());
     Ok(())
 }
@@ -668,7 +791,7 @@ async fn lock_json_failed_replacement_has_no_action() -> Result<()> {
             command.arg("--dry-run");
         }
         let output = command.assert().code(2);
-        let report: Value = serde_json::from_slice(&output.get_output().stdout)?;
+        let report = parse_report(&output.get_output().stdout)?;
         assert!(report.get("action").is_none());
         assert_eq!(report["status"], "stale");
         assert_eq!(report["dry_run"], dry_run);
@@ -703,7 +826,7 @@ fn lock_json_omits_unparsed_dependency_group_values() -> Result<()> {
         ])
         .assert()
         .code(2);
-    let report: Value = serde_json::from_slice(&output.get_output().stdout)?;
+    let report = parse_report(&output.get_output().stdout)?;
     insta::assert_json_snapshot!(report, {".path" => "[TEMP_DIR]/uv.lock"}, @r#"
     {
       "dry_run": false,
@@ -782,7 +905,7 @@ fn lock_json_omits_invalid_registry_values() -> Result<()> {
         }
         let output = command.assert().success();
         let stdout = &output.get_output().stdout;
-        let report: Value = serde_json::from_slice(stdout)?;
+        let report = parse_report(stdout)?;
         insta::allow_duplicates! {
             insta::assert_json_snapshot!(report["validation_error"], @r#"
             {
@@ -844,10 +967,11 @@ async fn lock_json_http_error_codes() -> Result<()> {
             .assert()
             .code(2);
         let stdout = &output.get_output().stdout;
-        let report: Value = serde_json::from_slice(stdout)?;
+        let report = parse_report(stdout)?;
         assert_eq!(report["status"], "stale");
         assert_eq!(report["reason"]["code"], "missing_lockfile");
         assert!(report.get("action").is_none());
+        assert_rejects_null_fields(&report, "/error", &["package", "http_status"])?;
         assert!(!String::from_utf8_lossy(stdout).contains("lock-http-secret-canary"));
         errors.push(report["error"].clone());
         assert!(!context.temp_dir.child("uv.lock").exists());
