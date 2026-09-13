@@ -292,6 +292,55 @@ fn lock_json_actions() -> Result<()> {
 }
 
 #[test]
+fn lock_json_invalid_lockfile_has_no_action() -> Result<()> {
+    for (script, lock_filename) in [(None, "uv.lock"), (Some("script.py"), "script.py.lock")] {
+        let context = uv_test::test_context!("3.12");
+        context
+            .temp_dir
+            .child("pyproject.toml")
+            .write_str(indoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+        "#})?;
+        context.temp_dir.child("script.py").write_str(indoc! {r#"
+            # /// script
+            # requires-python = ">=3.12"
+            # dependencies = []
+            # ///
+        "#})?;
+
+        let invalid = "version = [\n";
+        for dry_run in [true, false] {
+            context.temp_dir.child(lock_filename).write_str(invalid)?;
+            let mut command = context.lock();
+            command.args([
+                "--output-format",
+                "json",
+                "--preview-features",
+                "json-output",
+                "--offline",
+            ]);
+            if let Some(script) = script {
+                command.args(["--script", script]);
+            }
+            if dry_run {
+                command.arg("--dry-run");
+            }
+            let output = command.assert().code(2);
+            let report: Value = serde_json::from_slice(&output.get_output().stdout)?;
+            assert!(report.get("action").is_none());
+            assert_eq!(report["status"], "indeterminate");
+            assert_eq!(report["dry_run"], dry_run);
+            assert_eq!(report["error"]["code"], "evaluation_failed");
+            assert_eq!(context.read(lock_filename), invalid);
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn lock_check_json_cutoff() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context
@@ -580,6 +629,56 @@ async fn lock_json_failed_create() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn lock_json_failed_replacement_has_no_action() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let manifest = context.temp_dir.child("pyproject.toml");
+    manifest.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+    let original = context.read("uv.lock");
+
+    let unauthorized = MockServer::start().await;
+    Mock::given(path("/a-1.0.0-py3-none-any.whl"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&unauthorized)
+        .await;
+    manifest.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a @ {wheel_url}"]
+    "#, wheel_url = format!("{}/a-1.0.0-py3-none-any.whl", unauthorized.uri())})?;
+
+    for dry_run in [true, false] {
+        let mut command = context.lock();
+        command.args([
+            "--output-format",
+            "json",
+            "--preview-features",
+            "json-output",
+            "--no-cache",
+        ]);
+        if dry_run {
+            command.arg("--dry-run");
+        }
+        let output = command.assert().code(2);
+        let report: Value = serde_json::from_slice(&output.get_output().stdout)?;
+        assert!(report.get("action").is_none());
+        assert_eq!(report["status"], "stale");
+        assert_eq!(report["dry_run"], dry_run);
+        assert_eq!(report["reason"]["code"], "requirements_changed");
+        assert_eq!(report["error"]["code"], "authentication");
+        assert_eq!(context.read("uv.lock"), original);
+    }
+    Ok(())
+}
+
 #[test]
 fn lock_json_omits_unparsed_dependency_group_values() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -693,6 +792,7 @@ fn lock_json_omits_invalid_registry_values() -> Result<()> {
             "#);
         }
         assert!(!String::from_utf8_lossy(stdout).contains("lock-registry-secret-canary"));
+        assert_eq!(report["action"], "update");
         assert_eq!(report["status"], if dry_run { "stale" } else { "fresh" });
         assert_eq!(report["dry_run"], dry_run);
         if dry_run {
