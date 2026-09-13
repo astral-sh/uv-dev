@@ -122,7 +122,7 @@ fn install_http_wheel_hashes_trailing_bytes() -> Result<()> {
 }
 
 #[test]
-fn install_http_wheel_rejects_deflated_directory_with_data_descriptor() -> Result<()> {
+fn install_http_wheel_accepts_deflated_directory_with_data_descriptor() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let filename = "descriptor_directory-1.0.0-py3-none-any.whl";
     context
@@ -179,20 +179,18 @@ fn install_http_wheel_rejects_deflated_directory_with_data_descriptor() -> Resul
     let server = FindLinksServer::new(context.temp_dir.path());
     let context = context.with_filter((server.url().to_string(), "http://[LOCALHOST]"));
 
-    // This valid empty directory is rejected because its DEFLATE stream is two bytes; see
-    // astral-sh/uv#21644.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--no-cache")
         .arg("--target")
         .arg(context.temp_dir.child("target").path())
         .arg(format!("{}/{filename}", server.url())), @"
-    exit_code: 1 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: .venv/bin/python
     Resolved 1 package in [TIME]
-    error: Failed to download `descriptor-directory @ http://[LOCALHOST]/descriptor_directory-1.0.0-py3-none-any.whl`
-      cause: Failed to extract archive: descriptor_directory-1.0.0-py3-none-any.whl
-      cause: Bad compressed size (got 00000000, expected 00000002) for file: descriptor_directory
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + descriptor-directory==1.0.0 (from http://[LOCALHOST]/descriptor_directory-1.0.0-py3-none-any.whl)
     ");
 
     Ok(())
