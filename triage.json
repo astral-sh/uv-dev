@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 19854,
+        "title": "uv panics (`expect(\"version for registry source\")`) on a `uv.lock` registry package missing `version`",
+        "url": "https://github.com/astral-sh/uv/issues/19854",
+        "state": "closed",
+        "reason": "Closest historical issue: it documented a specific malformed-lockfile panic with an exact command, lockfile, and panic site. The new report does not identify this trigger or show a regression."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19855,
+        "title": "Error on a registry uv.lock package without a version instead of panicking",
+        "url": "https://github.com/astral-sh/uv/pull/19855",
+        "state": "merged",
+        "reason": "Fixed astral-sh/uv#19854 by validating the missing registry-package version during deserialization and adding a regression test. It does not establish the new report's unspecified missing-lockfile panic."
+      }
+    ],
+    "search_scope": "Searched authenticated GitHub results across open and closed issues and open, closed, and merged pull requests using literal terms including “missing lockfile,” “uv.lock missing panic,” “malformed lockfile,” “lockfile panic,” “unwrap lock,” “Result::unwrap,” “lockfile not found,” and parse-error text. Conceptual and fix-oriented searches covered absent files, malformed input, graceful error propagation, contributor cleanup requests, and the exact “version for registry source” panic. Inspected the discussion and closing fix for astral-sh/uv#19854 and astral-sh/uv#19855. Also inspected and ruled out astral-sh/uv#15459: it concerned inconsistent uv versions and an unreproducible parse failure, not a panic. Current source and integration snapshots confirm that missing lockfiles and ordinary malformed TOML already produce structured errors."
+  },
+  "type": "question",
+  "type_reason": "The issue primarily asks whether an unspecified `.unwrap()` cleanup would be suitable contributor work, but does not provide an exact location, command, version, lockfile, or panic output. Current source explicitly maps a missing lockfile to `Ok(None)` and then to a user-facing `MissingLockfile` error, while malformed TOML is propagated as a parse error. No incorrect current behavior is established.",
+  "summary": "No matching current defect was found. The closest malformed-lockfile panic was astral-sh/uv#19854, fixed by merged astral-sh/uv#19855; missing-lockfile handling is already covered by explicit error paths and integration snapshots.",
+  "draft_response": "Thanks for checking. The current lockfile read path already treats a missing file as `Ok(None)`, and commands such as `uv sync --locked` and `uv sync --frozen` return a normal “Unable to find lockfile” error. Malformed TOML is also propagated as a parse error. The closest concrete panic, astral-sh/uv#19854, involved a registry package missing its `version` field and was fixed by astral-sh/uv#19855.\n\nCould you provide the exact `.unwrap()` location, uv command, uv version, lockfile contents, and panic output for the remaining case? Without a concrete reachable path, there is not yet a scoped issue to mark as `good first issue`."
+}
