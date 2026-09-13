@@ -1,0 +1,59 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 13717,
+        "title": "Test flake with broken pipe while unpacking from `ecosystem-test-caches`",
+        "url": "https://github.com/astral-sh/uv/issues/13717",
+        "state": "open",
+        "reason": "Open canonical match: a registry source distribution fails during streamed extraction with the same archive, member-specific unpack, and response-body errors. Its broken pipe is the same class of interrupted stream as astral-sh/uv#21641's connection reset."
+      },
+      {
+        "kind": "issue",
+        "number": 12359,
+        "title": "Retrying in case of a broken pipe",
+        "url": "https://github.com/astral-sh/uv/issues/12359",
+        "state": "closed",
+        "reason": "Historical user-facing match involving large PySpark source distributions and the same streamed member-unpack failure. It was closed after the reporter reduced its CI frequency, not because sdist resumption was implemented."
+      },
+      {
+        "kind": "pull_request",
+        "number": 13281,
+        "title": "Retry streaming downloads on broken pipe errors",
+        "url": "https://github.com/astral-sh/uv/pull/13281",
+        "state": "merged",
+        "reason": "This retry fix was prompted by astral-sh/uv#12359. The new log shows that retrying occurs and exhausts its budget, so the fix is relevant history but does not resolve repeated interruptions."
+      },
+      {
+        "kind": "issue",
+        "number": 14171,
+        "title": "Python installation fails during streamed unpack with connection reset error",
+        "url": "https://github.com/astral-sh/uv/issues/14171",
+        "state": "closed",
+        "reason": "It has an almost identical extraction and connection-reset chain, but concerns `uv python install`; its fixes are scoped to managed Python and binary downloads, not registry package sdists."
+      },
+      {
+        "kind": "issue",
+        "number": 16934,
+        "title": "Support resumable downloads",
+        "url": "https://github.com/astral-sh/uv/issues/16934",
+        "state": "closed",
+        "reason": "It describes uv restarting interrupted downloads while pip can resume, matching the robustness gap here. It is broader than streamed sdist extraction and was closed by a wheel-focused implementation."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21570,
+        "title": "Retry failed partial downloads with HTTP Range header when supported",
+        "url": "https://github.com/astral-sh/uv/pull/21570",
+        "state": "merged",
+        "reason": "This fix resumes interrupted wheel downloads with HTTP range requests. Repository code places it in `download_wheel_response`, while registry sdists still stream directly into the extractor, so it does not cover this path."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using `wxpython`, `Invalid tar file`, `failed to unpack`, `error decoding response body`, `error reading a body from connection`, `connection reset`, and `broken pipe`. Conceptual and fix-oriented searches covered registry sdists, streamed archive extraction, retry exhaustion, interrupted downloads, resumption, and HTTP range requests. astral-sh/uv#14171 was ruled out as the canonical tracker because it is Python-download-specific; astral-sh/uv#21570 is wheel-only. astral-sh/uv#15896 concerns Artifactory TLS/server behavior, while astral-sh/uv#2138 concerns Azure Artifacts index behavior."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#13717 is open and tracks the same underlying failure: a transport error interrupts a registry sdist while uv streams it into the tar extractor, producing a member-specific unpack error. Broken pipe versus connection reset is only a low-level transport variant. This is not a regression of astral-sh/uv#13281 because the new log shows three retry delays and four fresh requests, nor of the Python-specific fixes for astral-sh/uv#14171.",
+  "summary": "astral-sh/uv#13717 is the closest open match. astral-sh/uv#12359 and astral-sh/uv#13281 document the same sdist stream failure and retry handling; astral-sh/uv#14171 is a Python-download analogue, while astral-sh/uv#16934 and astral-sh/uv#21570 concern resumable downloads but currently implement recovery only for wheels.",
+  "draft_response": "This is the same streamed source-distribution download failure tracked in astral-sh/uv#13717. The final causes show that the PyPI response is interrupted by a connection reset while uv is unpacking it; the changing member path and successful local-tarball install indicate that the tar file itself is not the problem.\n\nYour verbose log also shows that uv retries the complete download three times before failing. astral-sh/uv#21570 added partial-download resumption for wheels, but source distributions are still unpacked as they stream, so that change does not cover this path. We'll keep the source-distribution case centralized in astral-sh/uv#13717; your wxPython reproduction provides another user-facing example."
+}
