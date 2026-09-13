@@ -53,52 +53,7 @@ impl<'a> ScenarioOracle<'a> {
         environment: &'a MarkerEnvironment,
         root_requirements: Vec<Requirement>,
     ) -> Result<Self> {
-        ensure!(
-            scenario.resolver_options.no_binary.is_empty(),
-            "the scenario oracle does not model source-build requirements"
-        );
-        ensure!(
-            scenario.resolver_options.required_environments.is_empty(),
-            "the scenario oracle checks one environment at a time"
-        );
-
-        for requirement in &root_requirements {
-            validate_requirement(requirement)?;
-        }
-        for (name, package) in &scenario.packages {
-            for (version, metadata) in &package.versions {
-                ensure!(
-                    !version.any_prerelease(),
-                    "the scenario oracle does not model pre-release selection: {name}=={version}"
-                );
-                ensure!(
-                    !metadata.yanked,
-                    "the scenario oracle does not model yanked releases: {name}=={version}"
-                );
-                ensure!(
-                    metadata.wheel.is_some()
-                        && (metadata.wheel_tags.is_empty()
-                            || metadata
-                                .wheel_tags
-                                .iter()
-                                .all(|tag| tag.as_str() == "py3-none-any")),
-                    "the scenario oracle requires universal wheels: {name}=={version}"
-                );
-                ensure!(
-                    metadata.requires_python.as_ref().is_none_or(|specifier| {
-                        !release_specifiers_to_ranges(specifier.clone()).is_empty()
-                    }),
-                    "the scenario oracle does not model empty Requires-Python ranges: {name}=={version}"
-                );
-                for requirement in metadata
-                    .requires
-                    .iter()
-                    .chain(metadata.extras.values().flatten())
-                {
-                    validate_requirement(requirement)?;
-                }
-            }
-        }
+        validate_scenario(scenario, &root_requirements)?;
 
         Ok(Self {
             scenario,
@@ -296,6 +251,60 @@ impl<'a> ScenarioOracle<'a> {
         }
         Ok(changed)
     }
+}
+
+/// Validate the policy subset without choosing a marker environment.
+pub(super) fn validate_scenario(
+    scenario: &Scenario,
+    root_requirements: &[Requirement],
+) -> Result<()> {
+    ensure!(
+        scenario.resolver_options.no_binary.is_empty(),
+        "the scenario oracle does not model source-build requirements"
+    );
+    ensure!(
+        scenario.resolver_options.required_environments.is_empty(),
+        "the scenario oracle checks one environment at a time"
+    );
+
+    for requirement in root_requirements {
+        validate_requirement(requirement)?;
+    }
+    for (name, package) in &scenario.packages {
+        for (version, metadata) in &package.versions {
+            ensure!(
+                !version.any_prerelease(),
+                "the scenario oracle does not model pre-release selection: {name}=={version}"
+            );
+            ensure!(
+                !metadata.yanked,
+                "the scenario oracle does not model yanked releases: {name}=={version}"
+            );
+            ensure!(
+                metadata.wheel.is_some()
+                    && (metadata.wheel_tags.is_empty()
+                        || metadata
+                            .wheel_tags
+                            .iter()
+                            .all(|tag| tag.as_str() == "py3-none-any")),
+                "the scenario oracle requires universal wheels: {name}=={version}"
+            );
+            ensure!(
+                metadata.requires_python.as_ref().is_none_or(|specifier| {
+                    !release_specifiers_to_ranges(specifier.clone()).is_empty()
+                }),
+                "the scenario oracle does not model empty Requires-Python ranges: {name}=={version}"
+            );
+            for requirement in metadata
+                .requires
+                .iter()
+                .chain(metadata.extras.values().flatten())
+            {
+                validate_requirement(requirement)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Apply uv's documented lower-bound-only policy to dependency metadata.

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anstream::println;
 use anyhow::{Context, Result, ensure};
+use serde_json::json;
 
 use uv_python::PythonVersion;
 use uv_test::TestContext;
@@ -14,7 +15,8 @@ use uv_test::packse::check::{
     check_project_lock_scenario_with_artifacts, check_scenario, check_scenario_with_artifacts,
 };
 use uv_test::packse::generate::{
-    SmallGraphOptions, generate_marker_graph, generate_project_graph, generate_small_graph,
+    SmallGraphOptions, generate_marker_graph, generate_project_graph,
+    generate_satisfiable_project_graph, generate_small_graph,
 };
 use uv_test::packse::project::ScenarioProject;
 use uv_test::packse::scenario::ScenarioDocument;
@@ -58,6 +60,10 @@ pub(crate) struct Args {
     /// Add Python and platform markers over three Python minor lines to generated graphs.
     #[arg(long, requires = "seed")]
     markers: bool,
+
+    /// Construct generated projects around an independently checked satisfying assignment.
+    #[arg(long, requires_all = ["seed", "project_selections"])]
+    satisfiable: bool,
 
     /// Number of consecutive seeds to check (defaults to 100).
     #[arg(long, requires = "seed")]
@@ -128,16 +134,44 @@ pub(crate) fn main(args: &Args) -> Result<()> {
             let seed = first_seed
                 .checked_add(u64::try_from(offset)?)
                 .context("the requested seed range overflows u64")?;
-            let document = if args.project_selections {
-                generate_project_graph(seed, options, target, args.max_states)?
+            let (document, witness) = if args.satisfiable {
+                let graph =
+                    generate_satisfiable_project_graph(seed, options, &targets, args.max_states)?;
+                let universal_certificate = graph.certify_universal_witness()?;
+                let checked_projections = graph.check_witness(&targets)?;
+                let witness = serde_json::to_string_pretty(&json!({
+                    "seed": seed,
+                    "assignment": graph.assignment,
+                    "universal_certificate": universal_certificate,
+                    "checked_targets": targets.iter().map(|target| json!({
+                        "python_version": target.python.to_string(),
+                        "python_platform": target.platform.as_str(),
+                    })).collect::<Vec<_>>(),
+                    "checked_projections": checked_projections,
+                }))?;
+                (graph.document, Some(format!("{witness}\n")))
+            } else if args.project_selections {
+                (
+                    generate_project_graph(seed, options, target, args.max_states)?,
+                    None,
+                )
             } else if args.markers {
-                generate_marker_graph(seed, options, target, args.max_states)?
+                (
+                    generate_marker_graph(seed, options, target, args.max_states)?,
+                    None,
+                )
             } else {
-                generate_small_graph(seed, options, target, args.max_states)?
+                (
+                    generate_small_graph(seed, options, target, args.max_states)?,
+                    None,
+                )
             };
             let scenario = document.scenario()?;
             let path = output_dir.join(format!("{}.toml", scenario.name));
             save_scenario_input(&path, &document.to_toml()?)?;
+            if let Some(witness) = witness {
+                save_scenario_input(&path.with_extension("witness.json"), &witness)?;
+            }
             let result = check_case(&uv, &interpreter, &document, &targets, args)
                 .with_context(|| format!("generated scenario `{}` failed", path.display()))?;
             satisfiable += result.satisfiable;
@@ -145,8 +179,13 @@ pub(crate) fn main(args: &Args) -> Result<()> {
             export_projections += result.export_projections;
         }
         if args.project_selections {
+            let kind = if args.satisfiable {
+                "witness-backed project"
+            } else {
+                "project"
+            };
             println!(
-                "Checked {cases} generated project graphs (locks: {satisfiable} satisfiable, {unsatisfiable} unsatisfiable; export projections: {export_projections})"
+                "Checked {cases} generated {kind} graphs (locks: {satisfiable} satisfiable, {unsatisfiable} unsatisfiable; export projections: {export_projections})"
             );
             return Ok(());
         }

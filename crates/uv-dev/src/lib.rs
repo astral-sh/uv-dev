@@ -216,6 +216,43 @@ mod tests {
     }
 
     #[test]
+    fn scenario_checker_requires_generated_project_roots_for_witnesses() {
+        let arguments = [
+            "uv-dev",
+            "check-scenarios",
+            "--uv",
+            "uv",
+            "--satisfiable",
+            "--seed",
+            "0",
+            "--output-dir",
+            "cases",
+        ];
+        assert!(Cli::try_parse_from(arguments).is_err());
+        assert!(
+            Cli::try_parse_from(
+                arguments
+                    .into_iter()
+                    .chain(["--lock", "--project-selections"])
+            )
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "uv-dev",
+                "check-scenarios",
+                "--uv",
+                "uv",
+                "--lock",
+                "--project-selections",
+                "--satisfiable",
+                "scenario.toml",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
     fn scenario_checker_accepts_target_matrices() {
         let arguments = [
             "uv-dev",

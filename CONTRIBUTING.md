@@ -163,6 +163,19 @@ exported subset.
 cargo dev check-scenarios --uv target/debug/uv --lock --project-selections --seed 0 --cases 100 --python-version 3.12,3.13,3.14 --python-platform linux,macos,windows --output-dir generated-projects
 ```
 
+Add `--satisfiable` to construct project graphs around a compatible version assignment. An
+independent certificate checks every possible root and selected-version dependency, without
+discarding inactive markers, and requires the selected versions to cover the project's entire Python
+range. The oracle also checks the assignment's exact reachable closure for every selected target and
+project selection before uv runs. The assignment, whole-domain certificate, and checked targets are
+saved in a neighboring `.witness.json` file. The assignment does not prescribe which versions uv
+should prefer; alternative candidates retain their generated constraints, and uv's actual exports
+are still checked by the exhaustive oracle.
+
+```shell
+cargo dev check-scenarios --uv target/debug/uv --lock --project-selections --satisfiable --seed 0 --cases 100 --python-version 3.12,3.13,3.14 --python-platform linux,macos,windows --output-dir satisfiable-projects
+```
+
 When a generated check fails, the checker also saves the commands, output, and exact served
 distributions in a neighboring `.failure` directory. Lock checks additionally retain the temporary
 project and the lockfile after each command. If uv rejects its freshly written lockfile, the capture
