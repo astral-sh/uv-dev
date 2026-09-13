@@ -19,6 +19,10 @@ and all returned normal user-facing errors. Current source also handles a missin
 `ProjectError::MissingLockfile` in locked or frozen modes. No reported panic was reproduced, but
 the issue is too underspecified to target a particular alleged panic path.
 
+Maintainer zanieb has now asked whether there is any actual situation in which the alleged panic
+can occur, specifically noting that running uv without a lockfile is not expected to panic. No
+additional reproduction or panic site has been provided in response.
+
 ## Reproduction
 
 Outcome: `needs_more_information`.
@@ -80,7 +84,8 @@ Existing coverage was checked rather than inferred from test names:
 To construct a meaningful targeted reproduction, maintainers need the exact `.unwrap()` or panic
 site, full uv command and arguments, uv version and installation source, operating system, working
 directory and project/workspace configuration, exact `uv.lock` contents or missing-file setup,
-and the complete panic output or backtrace.
+and the complete panic output or backtrace. This is also the information requested by maintainer
+zanieb before treating the proposed panic as reachable.
 
 ## Draft response
 
@@ -99,6 +104,8 @@ Classify as `question`. The issue primarily asks whether a proposed cleanup is s
 contributor work, while its premise does not establish incorrect current behavior. Current source,
 integration coverage, and the representative commands above all show explicit fallible handling,
 but the missing report details prevent excluding a different configuration-dependent path.
+Maintainer zanieb's follow-up likewise asks the reporter to establish an actual situation where the
+panic occurs; it does not confirm a bug or endorse the proposed cleanup as a scoped contribution.
 
 This is not established as a duplicate of astral-sh/uv#19854. That issue tracked one precise
 malformed-lockfile invariant violation and was closed by astral-sh/uv#19855; astral-sh/uv#21643
