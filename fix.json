@@ -1,0 +1,12 @@
+{
+  "outcome": "fixed",
+  "summary": "The streaming ZIP extractor treated every directory’s compressed size as zero without consuming its payload. It now reads directory entries through the checked reader, validates they remain empty, and uses the measured compressed size for descriptor validation; the parent regression now expects the valid wheel to install successfully.",
+  "validation": [
+    "Focused pip-install regression, normal and preview modes",
+    "Data-descriptor and ZIP64 acceptance tests",
+    "Malformed descriptor compressed-size rejection test",
+    "Focused uv-extract clippy",
+    "Rust formatting and diff checks"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/1747"
+}
