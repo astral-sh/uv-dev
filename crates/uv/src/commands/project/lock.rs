@@ -538,6 +538,9 @@ impl<'env> LockOperation<'env> {
                 // Read the existing lockfile.
                 let (existing, existing_contents) = match target.read_with_contents().await {
                     Ok(Some((existing, existing_contents))) => {
+                        if let Some(report) = self.report.as_deref_mut() {
+                            report.record_existing_lockfile();
+                        }
                         (Some(existing), Some(existing_contents))
                     }
                     Ok(None) => {
@@ -547,6 +550,9 @@ impl<'env> LockOperation<'env> {
                         (None, None)
                     }
                     Err(ProjectError::Lock(err)) => {
+                        if let Some(report) = self.report.as_deref_mut() {
+                            report.record_existing_lockfile();
+                        }
                         warn_user!(
                             "Failed to read existing lockfile; ignoring locked requirements: {err}"
                         );

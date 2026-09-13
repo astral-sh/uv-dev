@@ -60,6 +60,9 @@ pub(crate) struct LockReport {
     dry_run: bool,
     #[serde(skip)]
     completed: bool,
+    /// Whether the initial read found a lockfile, even if its contents could not be reused.
+    #[serde(skip)]
+    had_existing_lockfile: bool,
     /// Why the previous lock could not be reused, if known.
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<LockReason>,
@@ -90,6 +93,7 @@ impl LockReport {
             action,
             dry_run,
             completed: false,
+            had_existing_lockfile: false,
             reason: None,
             validation_error: None,
             error: None,
@@ -98,6 +102,10 @@ impl LockReport {
 
     pub(super) fn set_path(&mut self, path: &Path) {
         self.path = Some(path.into());
+    }
+
+    pub(super) fn record_existing_lockfile(&mut self) {
+        self.had_existing_lockfile = true;
     }
 
     /// Record a proven mismatch, not merely a request to refresh or upgrade.
@@ -142,7 +150,7 @@ impl LockReport {
                     self.validation_error = None;
                 }
                 LockResult::Changed(previous, _) => {
-                    let action = if previous.is_some() {
+                    let action = if self.had_existing_lockfile || previous.is_some() {
                         Action::Update
                     } else {
                         Action::Create
