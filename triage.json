@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 12677,
+        "title": "UV fails installing a python library with CRC mismatch",
+        "url": "https://github.com/astral-sh/uv/issues/12677",
+        "state": "closed",
+        "reason": "A valid data-descriptor wheel was rejected because uv treated an inline zero placeholder as authoritative CRC data. This is the closest prior false-positive validation report, but it concerns a regular file's CRC rather than an empty directory's compressed size."
+      },
+      {
+        "kind": "pull_request",
+        "number": 12722,
+        "title": "only warn if CRC appears to be missing",
+        "url": "https://github.com/astral-sh/uv/pull/12722",
+        "state": "merged",
+        "reason": "This fixed the earlier descriptor-related CRC false positive by recognizing zero placeholder metadata. It does not address compressed-size accounting for directory entries."
+      },
+      {
+        "kind": "pull_request",
+        "number": 15136,
+        "title": "Harden ZIP streaming to reject repeated entries and other malformed ZIP files",
+        "url": "https://github.com/astral-sh/uv/pull/15136",
+        "state": "merged",
+        "reason": "This introduced comprehensive descriptor validation, including the combination visible in current source: directory entries receive computed compressed size zero, then descriptor sizes are compared against it."
+      }
+    ],
+    "search_scope": "Searched exact failures and identifiers including “Bad compressed size,” zero-versus-two size fragments, META-INF, ibapi, and ComputedEntry; literal ZIP, data-descriptor, DEFLATE, and empty-directory terms; and conceptual streaming, local-header, central-directory, CRC/size-validation, async_zip, direct-URL, and subdirectory-install terminology across open and closed issues and all pull-request states. Followed the descriptor-support and CRC-validation chains. astral-sh/uv#2216 and astral-sh/uv#2809 concern broad descriptor support rather than this directory-only regression. astral-sh/uv#15158 only concerns network access for ZIP conformance tests, while astral-sh/uv#19528 concerns conflicting duplicate entries."
+  },
+  "type": "bug",
+  "type_reason": "The current extractor confirms that directory entries are assigned computed compressed size zero and that data descriptors are then checked against that value. A valid empty DEFLATE payload has nonzero compressed length, so uv rejects a supported ZIP representation. No existing open issue or pull request tracks this exact regression.",
+  "summary": "No existing item tracks the same empty-directory failure. The closest history is the descriptor false positive in astral-sh/uv#12677 and its fix astral-sh/uv#12722; astral-sh/uv#15136 later introduced the strict descriptor-validation path containing the current mismatch.",
+  "draft_response": "Thanks for the self-contained reproduction. The current source confirms this is a bug in streaming ZIP validation: directory entries are assigned a computed compressed size of zero, and that value is later compared with the data descriptor, even though an empty DEFLATE stream has a nonzero compressed length. The earlier descriptor-related false positive in astral-sh/uv#12677 was fixed by astral-sh/uv#12722, but that fix does not cover directory compressed-size accounting; the current validation path was added in astral-sh/uv#15136. The next step is to add integration coverage for the descriptor and no-descriptor cases, along with malformed CRC, size, and nonempty-directory controls, then make the directory path consume and measure the entry without weakening descriptor validation."
+}
