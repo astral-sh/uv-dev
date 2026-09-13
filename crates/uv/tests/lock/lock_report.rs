@@ -368,7 +368,7 @@ fn lock_check_json_offline_metadata() -> Result<()> {
         "--check", "--output-format", "json", "--preview-features", "json-output",
         "--upgrade-package", "a", "--offline", "--no-cache",
     ]), @r#"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stdout -----
     {
       "schema": {
@@ -396,7 +396,7 @@ fn lock_check_json_offline_metadata() -> Result<()> {
         "--check", "--output-format", "json", "--preview-features", "json-output",
         "--offline", "--no-cache",
     ]), @r#"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stdout -----
     {
       "schema": {
@@ -433,7 +433,7 @@ fn lock_check_json_offline_metadata() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock().args([
         "--output-format", "json", "--preview-features", "json-output", "--offline", "--no-cache",
     ]), @r#"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stdout -----
     {
       "schema": {
@@ -684,12 +684,14 @@ fn lock_json_omits_invalid_registry_values() -> Result<()> {
         let output = command.assert().success();
         let stdout = &output.get_output().stdout;
         let report: Value = serde_json::from_slice(stdout)?;
-        insta::assert_json_snapshot!(report["validation_error"], @r#"
-        {
-          "code": "evaluation_failed",
-          "message": "Lock operation failed"
+        insta::allow_duplicates! {
+            insta::assert_json_snapshot!(report["validation_error"], @r#"
+            {
+              "code": "evaluation_failed",
+              "message": "Lock operation failed"
+            }
+            "#);
         }
-        "#);
         assert!(!String::from_utf8_lossy(stdout).contains("lock-registry-secret-canary"));
         assert_eq!(report["status"], if dry_run { "stale" } else { "fresh" });
         assert_eq!(report["dry_run"], dry_run);
