@@ -27,6 +27,22 @@ fn parse_report(contents: &[u8]) -> Result<Value> {
         .context("lock report schema mismatch")
 }
 
+fn assert_rejects_null_fields(report: &Value, object_pointer: &str, fields: &[&str]) -> Result<()> {
+    for &field in fields {
+        let mut invalid = report.clone();
+        invalid
+            .pointer_mut(object_pointer)
+            .and_then(Value::as_object_mut)
+            .with_context(|| format!("report has no object at {object_pointer}"))?
+            .insert(field.to_owned(), Value::Null);
+        assert!(
+            parse_report(&serde_json::to_vec(&invalid)?).is_err(),
+            "lock schema accepted null for {object_pointer}/{field}"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn lock_check_json_freshness() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -59,7 +75,17 @@ fn lock_check_json_freshness() -> Result<()> {
     ----- stderr -----
     error: Unable to find lockfile at `uv.lock`, but `--check` was provided. To create a lockfile, run `uv lock` or `uv sync` without the flag.
     "#);
-    parse_report(&output.stdout)?;
+    let report = parse_report(&output.stdout)?;
+    assert_rejects_null_fields(
+        &report,
+        "",
+        &["path", "action", "reason", "validation_error", "error"],
+    )?;
+    assert_rejects_null_fields(
+        &report,
+        "/reason",
+        &["package", "message", "expected", "actual"],
+    )?;
     assert!(!context.temp_dir.child("uv.lock").exists());
 
     context.lock().arg("--offline").assert().success();
@@ -364,6 +390,70 @@ fn lock_json_invalid_lockfile_has_no_action() -> Result<()> {
             assert_eq!(context.read(lock_filename), invalid);
         }
     }
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn lock_json_failed_write_has_no_action() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let manifest = context.temp_dir.child("pyproject.toml");
+    manifest.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+    let original = context.read("uv.lock");
+    manifest.write_str(&context.read("pyproject.toml").replace("0.1.0", "0.2.0"))?;
+
+    let lockfile = context.temp_dir.child("uv.lock");
+    let permissions = fs_err::metadata(lockfile.path())?.permissions();
+    let mut readonly = permissions.clone();
+    readonly.set_readonly(true);
+    fs_err::set_permissions(lockfile.path(), readonly)?;
+
+    let dry_run = context
+        .lock()
+        .args([
+            "--output-format",
+            "json",
+            "--preview-features",
+            "json-output",
+            "--offline",
+            "--dry-run",
+        ])
+        .output();
+    let write = context
+        .lock()
+        .args([
+            "--output-format",
+            "json",
+            "--preview-features",
+            "json-output",
+            "--offline",
+        ])
+        .output();
+    fs_err::set_permissions(lockfile.path(), permissions)?;
+
+    let dry_run = dry_run?.assert().success();
+    let report = parse_report(&dry_run.get_output().stdout)?;
+    assert_eq!(report["action"], "update");
+    assert_eq!(report["status"], "stale");
+    assert_eq!(report["dry_run"], true);
+
+    let write = write?.assert().code(2);
+    let report = parse_report(&write.get_output().stdout)?;
+    assert!(report.get("action").is_none());
+    assert_eq!(report["status"], "stale");
+    assert_eq!(report["dry_run"], false);
+    assert_eq!(report["reason"]["code"], "version_changed");
+    assert_eq!(report["error"]["code"], "evaluation_failed");
+    assert!(
+        String::from_utf8_lossy(&write.get_output().stderr).contains("failed to write to file")
+    );
+    assert_eq!(context.read("uv.lock"), original);
     Ok(())
 }
 
@@ -881,6 +971,7 @@ async fn lock_json_http_error_codes() -> Result<()> {
         assert_eq!(report["status"], "stale");
         assert_eq!(report["reason"]["code"], "missing_lockfile");
         assert!(report.get("action").is_none());
+        assert_rejects_null_fields(&report, "/error", &["package", "http_status"])?;
         assert!(!String::from_utf8_lossy(stdout).contains("lock-http-secret-canary"));
         errors.push(report["error"].clone());
         assert!(!context.temp_dir.child("uv.lock").exists());

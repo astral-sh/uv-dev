@@ -315,7 +315,11 @@ mod tests {
 
         assert_eq!(schema["title"], "uv lock (preview)");
         assert_eq!(definitions["SchemaVersion"]["oneOf"][0]["const"], "preview");
-        assert_eq!(schema["properties"]["path"]["type"], "string");
+        assert_eq!(
+            schema["properties"]["path"]["allOf"][0]["$ref"],
+            "#/definitions/PortablePathBuf"
+        );
+        assert_eq!(definitions["PortablePathBuf"]["type"], "string");
         assert_eq!(schema["properties"]["dry_run"]["type"], "boolean");
         for field in ["schema", "status", "dry_run"] {
             assert!(required.iter().any(|required| required == field));
@@ -339,7 +343,11 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["fresh", "stale", "not_checked", "indeterminate"]
         );
-        assert_eq!(reason["properties"]["package"]["type"], "string");
+        assert_eq!(
+            reason["properties"]["package"]["allOf"][0]["$ref"],
+            "#/definitions/PackageName"
+        );
+        assert_eq!(definitions["PackageName"]["type"], "string");
         for field in ["expected", "actual"] {
             assert_eq!(reason["properties"][field]["type"], "array");
             assert_eq!(reason["properties"][field]["items"]["type"], "string");

@@ -1,0 +1,252 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "uv lock (preview)",
+  "description": "The preview `uv lock` JSON report.",
+  "type": "object",
+  "properties": {
+    "action": {
+      "description": "The lockfile action; create and update are proposed actions in a dry run.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/Action"
+        }
+      ]
+    },
+    "dry_run": {
+      "description": "Whether the operation reports proposed changes without writing the lockfile.",
+      "type": "boolean"
+    },
+    "error": {
+      "description": "The error that prevented the operation from completing.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/ErrorReport"
+        }
+      ]
+    },
+    "path": {
+      "description": "The lockfile path, once the project or script has been discovered.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/PortablePathBuf"
+        }
+      ]
+    },
+    "reason": {
+      "description": "Why the previous lock could not be reused, if known.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/LockReason"
+        }
+      ]
+    },
+    "schema": {
+      "description": "Format information.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/SchemaReport"
+        }
+      ]
+    },
+    "status": {
+      "description": "The lockfile's freshness after the operation.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/Status"
+        }
+      ]
+    },
+    "validation_error": {
+      "description": "A failed check of the previous lock, even if a later resolution also fails.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/ErrorReport"
+        }
+      ]
+    }
+  },
+  "required": ["schema", "status", "dry_run"],
+  "definitions": {
+    "Action": {
+      "type": "string",
+      "enum": ["use", "check", "update", "create"]
+    },
+    "ErrorCode": {
+      "type": "string",
+      "enum": [
+        "evaluation_failed",
+        "metadata_unavailable",
+        "offline_cache_miss",
+        "authentication",
+        "access_denied",
+        "http",
+        "network"
+      ]
+    },
+    "ErrorReport": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "A machine-readable classification of the failure.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ErrorCode"
+            }
+          ]
+        },
+        "http_status": {
+          "description": "The HTTP status code, when the failure came from an HTTP response.",
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "message": {
+          "description": "A fixed description that does not include unparsed input or source text.",
+          "type": "string"
+        },
+        "package": {
+          "description": "The affected package, when it can be identified.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PackageName"
+            }
+          ]
+        }
+      },
+      "required": ["code", "message"]
+    },
+    "LockReason": {
+      "type": "object",
+      "properties": {
+        "actual": {
+          "description": "The values recorded in the existing lockfile.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "code": {
+          "description": "The mismatch that prevents reuse of the previous lock.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasonCode"
+            }
+          ]
+        },
+        "expected": {
+          "description": "The values required by the current inputs.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "message": {
+          "description": "Additional details about the mismatch.",
+          "type": "string"
+        },
+        "package": {
+          "description": "The affected package, when the mismatch is package-specific.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PackageName"
+            }
+          ]
+        }
+      },
+      "required": ["code"]
+    },
+    "PackageName": {
+      "description": "The normalized name of a package.\n\nConverts the name to lowercase and collapses runs of `-`, `_`, and `.` down to a single `-`.\nFor example, `---`, `.`, and `__` are all converted to a single `-`.\n\nSee: <https://packaging.python.org/en/latest/specifications/name-normalization/>",
+      "type": "string"
+    },
+    "PortablePathBuf": {
+      "type": "string"
+    },
+    "ReasonCode": {
+      "type": "string",
+      "enum": [
+        "missing_lockfile",
+        "non_canonical_formatting",
+        "lock_changed",
+        "resolution_mode_changed",
+        "fork_strategy_changed",
+        "exclude_newer_changed",
+        "marker_coverage_changed",
+        "python_coverage_changed",
+        "environments_changed",
+        "required_environments_changed",
+        "conflicts_changed",
+        "requires_python_changed",
+        "prerelease_changed",
+        "hash_algorithms_changed",
+        "members_changed",
+        "editable_changed",
+        "virtual_changed",
+        "dynamic_changed",
+        "version_changed",
+        "requirements_changed",
+        "constraints_changed",
+        "overrides_changed",
+        "excludes_changed",
+        "build_constraints_changed",
+        "dependency_groups_changed",
+        "static_metadata_changed",
+        "missing_root",
+        "missing_remote_index",
+        "missing_local_index",
+        "package_requirements_changed",
+        "package_dependencies_changed",
+        "package_dependency_groups_changed",
+        "package_extras_changed",
+        "missing_version"
+      ]
+    },
+    "SchemaReport": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "description": "The version of the schema.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SchemaVersion"
+            }
+          ]
+        }
+      },
+      "required": ["version"]
+    },
+    "SchemaVersion": {
+      "oneOf": [
+        {
+          "description": "An unstable, experimental schema.",
+          "type": "string",
+          "const": "preview"
+        }
+      ]
+    },
+    "Status": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": ["indeterminate"]
+        },
+        {
+          "description": "The lockfile on disk is up-to-date after the operation.",
+          "type": "string",
+          "const": "fresh"
+        },
+        {
+          "description": "The lockfile on disk is missing or needs changes.",
+          "type": "string",
+          "const": "stale"
+        },
+        {
+          "description": "Freshness was deliberately not checked.",
+          "type": "string",
+          "const": "not_checked"
+        }
+      ]
+    }
+  }
+}
