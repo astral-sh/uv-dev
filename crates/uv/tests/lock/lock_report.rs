@@ -672,7 +672,7 @@ async fn lock_json_failed_replacement_has_no_action() -> Result<()> {
         assert!(report.get("action").is_none());
         assert_eq!(report["status"], "stale");
         assert_eq!(report["dry_run"], dry_run);
-        assert_eq!(report["reason"]["code"], "requirements_changed");
+        assert_eq!(report["reason"]["code"], "package_requirements_changed");
         assert_eq!(report["error"]["code"], "authentication");
         assert_eq!(context.read("uv.lock"), original);
     }
