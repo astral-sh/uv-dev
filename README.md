@@ -6,11 +6,12 @@ Classification: bug
 
 ## Summary
 
-uv 0.12.13 rejects a ZIP source distribution containing an explicit empty directory when the
-directory uses DEFLATE and stores its sizes in a data descriptor. The reported synthetic control
-without a descriptor succeeds, while the descriptor form fails with `Bad compressed size (got
-00000000, expected 00000002) for file: META-INF`. The same failure is reported for an official
-`ibapi` direct-URL source archive with a `subdirectory` fragment.
+The failure is reproducible with installed uv 0.12.13. A minimal valid wheel containing an explicit
+empty `META-INF/` entry compressed with DEFLATE fails when the entry uses a data descriptor. An
+otherwise equivalent archive without descriptors installs successfully. The observed error exactly
+matches the report: `Bad compressed size (got 00000000, expected 00000002) for file: META-INF`.
+The issue additionally reports the same failure for an official `ibapi` direct-URL source archive
+with a `subdirectory` fragment; that external archive was not needed for the targeted reproduction.
 
 The current streaming extractor supports the reported mechanism. Its directory branch records a
 computed CRC and uncompressed size of zero, which are appropriate for an empty directory, but also
@@ -22,12 +23,55 @@ No existing open issue or pull request tracks this exact empty-directory failure
 history is a prior false rejection of data-descriptor ZIPs in astral-sh/uv#12677, its fix in
 astral-sh/uv#12722, and the comprehensive streaming ZIP validation added by astral-sh/uv#15136.
 
+## Reproduction
+
+Outcome: **reproducible**.
+
+The reproduction ran on Linux 6.17.0-1022-azure x86_64 with installed `uv 0.12.13
+(x86_64-unknown-linux-gnu)` and CPython 3.12.3. All archives, targets, and the uv cache were created
+under a fresh temporary directory and removed afterward.
+
+Python 3.12's `zipfile.ZipFile` was used to construct two valid `fixture-0.0.1-py3-none-any.whl`
+archives with identical members. Both included an explicit empty `META-INF/` directory using
+DEFLATE. The descriptor archive was written to a non-seekable in-memory stream, while the control
+was written to a seekable stream. `ZipFile.testzip()` returned `None` for both. In both central
+directories, `META-INF/` had compressed size 2 and uncompressed size 0; only the descriptor
+archive had general-purpose flag bit 3 set.
+
+Each archive was served from a loopback HTTP server and installed with this command shape (using
+separate target directories):
+
+```console
+UV_CACHE_DIR=/tmp/uv-21644/cache uv pip install --no-cache \
+  --target /tmp/uv-21644/target \
+  http://127.0.0.1:<port>/<variant>/fixture-0.0.1-py3-none-any.whl
+```
+
+The descriptor variant exited 1 before installation with:
+
+```text
+Failed to extract archive: fixture-0.0.1-py3-none-any.whl
+Bad compressed size (got 00000000, expected 00000002) for file: META-INF
+```
+
+The no-descriptor control exited 0, reported `Installed 1 package`, and placed `fixture.py` in the
+target. This isolates the descriptor flag as the relevant difference and reproduces the reported
+ZIP extraction behavior independently of package building or the external `ibapi` archive.
+
+No existing integration test covers this exact combination. The closest tests are
+`crates/uv/tests/build/extract.rs::malo_accept_data_descriptor` and
+`crates/uv/tests/build/extract.rs::malo_accept_deflate`; each streams an external fixture and asserts
+successful extraction, but neither test setup or assertion identifies a DEFLATE-compressed empty
+directory with a data descriptor. The rejection tests in the same file cover malformed descriptor
+CRC and size fields for regular entries.
+
 ## Draft response
 
-Thanks for the self-contained reproduction. The current source confirms this is a bug in streaming
-ZIP validation: directory entries are assigned a computed compressed size of zero, and that value
-is later compared with the data descriptor, even though an empty DEFLATE stream has a nonzero
-compressed length.
+Thanks for the self-contained reproduction. I reproduced the exact error with uv 0.12.13 using a
+minimal valid wheel, and the equivalent no-descriptor control installed successfully. The current
+source is consistent with the observation: directory entries are assigned a computed compressed
+size of zero, and that value is later compared with the data descriptor, even though the tested
+empty DEFLATE stream has a two-byte compressed payload.
 
 The earlier descriptor-related false positive in astral-sh/uv#12677 was fixed by
 astral-sh/uv#12722, but that fix does not cover directory compressed-size accounting; the current
@@ -38,11 +82,11 @@ validation.
 
 ## Classification
 
-This is a bug rather than an enhancement or question because uv rejects a valid instance of a ZIP
-representation that its streaming extractor supports. The source confirms the key mismatch:
+This is a bug rather than an enhancement or question because the targeted reproduction shows uv
+rejecting a valid ZIP representation accepted by Python's ZIP integrity check, while the equivalent
+no-descriptor archive installs. Source inspection is consistent with the observed mismatch:
 directory entries receive a computed compressed size of zero, while descriptor validation compares
-that value with the actual compressed size. The report's two-byte value is consistent with an empty
-DEFLATE stream having nonzero encoded length.
+that value with the descriptor's recorded two-byte compressed size.
 
 This is not a duplicate. No open issue or pull request covers the directory-specific size mismatch.
 The earlier data-descriptor reports cover broader missing support or CRC placeholder handling, and

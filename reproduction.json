@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with installed uv 0.12.13 and CPython 3.12.3, a valid wheel containing a DEFLATE-compressed empty `META-INF/` entry with a data descriptor failed via `uv pip install --no-cache --target <tmp-target> http://127.0.0.1:<port>/fixture-0.0.1-py3-none-any.whl`. uv exited 1 with `Bad compressed size (got 00000000, expected 00000002) for file: META-INF`. Python's `ZipFile.testzip()` accepted the archive and reported compressed size 2, uncompressed size 0, and descriptor flag bit 3. An otherwise identical no-descriptor control installed successfully and produced the expected target files. All files and caches were isolated under a temporary directory. The issue-context README was updated with the full findings."
+}
