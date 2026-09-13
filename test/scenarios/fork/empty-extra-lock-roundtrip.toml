@@ -1,0 +1,32 @@
+name = "fork-empty-extra-lock-roundtrip"
+
+[root]
+requires_python = ">=3.12,<3.15"
+requires = ["a[feature]==1; python_full_version < '3.13'"]
+
+[root.dependency_groups]
+dev = ["b[feature]==1; python_full_version < '3.14'"]
+
+[root.optional_dependencies]
+empty = []
+
+[expected]
+satisfiable = true
+
+[packages.a.versions."1.0.0"]
+requires_python = ">=3.12,<3.15"
+sdist = false
+
+[packages.a.versions."1.0.0".extras]
+empty = []
+feature = ["b[feature]; python_full_version >= '3.13' and sys_platform == 'win32'"]
+
+[packages.b.versions."1.0.0"]
+requires_python = ">=3.12,<3.15"
+sdist = false
+
+[packages.b.versions."1.0.0".extras]
+feature = ["a; python_full_version < '3.13'"]
+
+[testgen]
+disable = true

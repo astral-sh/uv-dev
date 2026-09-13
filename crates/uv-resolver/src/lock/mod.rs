@@ -1118,6 +1118,15 @@ impl Lock {
             }
         }
 
+        // Empty resolved extra sections are omitted from `uv.lock`. Remove them after all
+        // resolution nodes have been accumulated, so incoming extra references use the same
+        // availability as the serialized graph. Explicit empty sections in existing lockfiles can
+        // still activate production or conflict-marked dependencies and are retained by the reader.
+        for package in packages.values_mut() {
+            package
+                .optional_dependencies
+                .retain(|_, dependencies| !dependencies.is_empty());
+        }
         let packages = packages.into_values().collect();
 
         let options = ResolverOptions {
@@ -1161,6 +1170,34 @@ impl Lock {
         mut fork_markers: Vec<UniversalMarker>,
     ) -> Result<Self, LockError> {
         sort_fork_markers(&mut fork_markers, &requires_python, &options);
+
+        // Build up a map from ID to extras.
+        let mut extras_by_id = FxHashMap::default();
+        for dist in &packages {
+            for extra in dist.optional_dependencies.keys() {
+                extras_by_id
+                    .entry(dist.id.clone())
+                    .or_insert_with(FxHashSet::default)
+                    .insert(extra.clone());
+            }
+        }
+
+        // Remove references to extras that are absent from the lock before sorting dependency
+        // edges. Extras participate in dependency ordering and equality, including duplicate checks.
+        for dist in &mut packages {
+            for dep in dist
+                .dependencies
+                .iter_mut()
+                .chain(dist.optional_dependencies.values_mut().flatten())
+                .chain(dist.dependency_groups.values_mut().flatten())
+            {
+                dep.extra.retain(|extra| {
+                    extras_by_id
+                        .get(&dep.package_id)
+                        .is_some_and(|extras| extras.contains(extra))
+                });
+            }
+        }
 
         // Put all dependencies for each package in a canonical order and
         // check for duplicates.
@@ -1218,33 +1255,6 @@ impl Lock {
                     id: dist.id.clone(),
                 }
                 .into());
-            }
-        }
-
-        // Build up a map from ID to extras.
-        let mut extras_by_id = FxHashMap::default();
-        for dist in &packages {
-            for extra in dist.optional_dependencies.keys() {
-                extras_by_id
-                    .entry(dist.id.clone())
-                    .or_insert_with(FxHashSet::default)
-                    .insert(extra.clone());
-            }
-        }
-
-        // Remove any non-existent extras (e.g., extras that were requested but don't exist).
-        for dist in &mut packages {
-            for dep in dist
-                .dependencies
-                .iter_mut()
-                .chain(dist.optional_dependencies.values_mut().flatten())
-                .chain(dist.dependency_groups.values_mut().flatten())
-            {
-                dep.extra.retain(|extra| {
-                    extras_by_id
-                        .get(&dep.package_id)
-                        .is_some_and(|extras| extras.contains(extra))
-                });
             }
         }
 
@@ -3965,7 +3975,8 @@ impl Package {
             let package_id = PackageId::from_annotated_dist(distribution, root)?;
             let extras = distribution.extra.iter().cloned().collect();
 
-            // Preserve the distinction between an empty extra and an extra with dependencies.
+            // An unreachable edge can leave an empty extra context. `Lock::from_resolution`
+            // removes these after accumulating every resolution node.
             builder.add(
                 context.dependencies_mut(self),
                 package_id,
@@ -8142,6 +8153,199 @@ mod tests {
             sys_platform: "darwin",
         })
         .expect("valid marker environment")
+    }
+
+    #[test]
+    fn explicit_empty_extra_contexts_are_preserved() -> Result<(), Box<dyn Error>> {
+        let value: toml::Value = toml::from_str(
+            r#"
+version = 1
+revision = 3
+requires-python = ">=3.12,<3.15"
+
+[[package]]
+name = "a"
+version = "1.0.0"
+source = { registry = "https://example.org/simple" }
+
+[package.optional-dependencies]
+empty = []
+feature = [{ name = "b", marker = "sys_platform == 'win32'" }]
+
+[package.metadata]
+provides-extras = ["empty", "feature"]
+
+[[package]]
+name = "b"
+version = "1.0.0"
+source = { registry = "https://example.org/simple" }
+
+[[package]]
+name = "project"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [{ name = "a", extra = ["empty", "feature", "missing"], marker = "sys_platform != 'win32'" }]
+
+[package.optional-dependencies]
+other = [{ name = "a", extra = ["feature"], marker = "sys_platform == 'win32'" }]
+
+[package.metadata]
+provides-extras = ["other"]
+"#,
+        )?;
+
+        for include_metadata in [true, false] {
+            let mut value = value.clone();
+            if !include_metadata {
+                value["revision"] = toml::Value::Integer(i64::from(METADATA_FREE_REVISION));
+                for package in value["package"].as_array_mut().expect("package array") {
+                    package
+                        .as_table_mut()
+                        .expect("package table")
+                        .remove("metadata");
+                }
+            }
+            let lock: Lock = toml::from_str(&toml::to_string(&value)?)?;
+            let empty = ExtraName::from_str("empty")?;
+            let feature = ExtraName::from_str("feature")?;
+            let package = lock
+                .packages
+                .iter()
+                .find(|package| package.id.name.as_ref() == "a")
+                .expect("locked package");
+            assert!(package.optional_dependencies.contains_key(&empty));
+            assert!(package.optional_dependencies.contains_key(&feature));
+            assert_eq!(
+                package.provides_extras(),
+                if include_metadata {
+                    vec![empty.clone(), feature.clone()]
+                } else {
+                    vec![]
+                }
+            );
+
+            let project = lock
+                .packages
+                .iter()
+                .find(|package| package.id.name.as_ref() == "project")
+                .expect("locked project");
+            assert_eq!(
+                project.dependencies[0].extra,
+                BTreeSet::from([empty, feature])
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn dependency_order_uses_normalized_extras() -> Result<(), Box<dyn Error>> {
+        let markers = ["sys_platform == 'win32'", "sys_platform != 'win32'"];
+        for extra_index in 0..markers.len() {
+            let dependencies = markers
+                .iter()
+                .enumerate()
+                .map(|(index, marker)| {
+                    serde_json::json!({
+                        "name": "a",
+                        "marker": marker,
+                        "extra": if index == extra_index { vec!["missing"] } else { vec![] },
+                    })
+                })
+                .collect::<Vec<_>>();
+            let value = serde_json::json!({
+                "version": 1,
+                "requires-python": ">=3.12,<3.15",
+                "package": [
+                    {
+                        "name": "a",
+                        "version": "1.0.0",
+                        "source": { "registry": "https://example.org/simple" },
+                    },
+                    {
+                        "name": "project",
+                        "version": "0.1.0",
+                        "source": { "virtual": "." },
+                        "dependencies": dependencies,
+                        "optional-dependencies": { "other": dependencies },
+                        "dev-dependencies": { "dev": dependencies },
+                    },
+                ],
+            });
+            let lock: Lock = toml::from_str(&toml::to_string(&value)?)?;
+            let project = lock
+                .packages
+                .iter()
+                .find(|package| package.id.name.as_ref() == "project")
+                .expect("locked project");
+            for dependencies in iter::once(&project.dependencies)
+                .chain(project.optional_dependencies.values())
+                .chain(project.dependency_groups.values())
+            {
+                assert!(
+                    dependencies
+                        .iter()
+                        .all(|dependency| dependency.extra.is_empty())
+                );
+                assert!(dependencies.is_sorted());
+            }
+            let serialized = lock.to_toml()?;
+            let read: Lock = toml::from_str(&serialized)?;
+            assert_eq!(lock, read);
+            assert_eq!(serialized, read.to_toml()?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_normalized_dependencies_are_rejected() -> Result<(), Box<dyn Error>> {
+        for context in ["production", "extra", "group"] {
+            let dependencies = serde_json::json!([
+                { "name": "a" },
+                { "name": "a", "extra": ["missing"] },
+            ]);
+            let mut project = serde_json::json!({
+                "name": "project",
+                "version": "0.1.0",
+                "source": { "virtual": "." },
+            });
+            match context {
+                "production" => project["dependencies"] = dependencies,
+                "extra" => {
+                    project["optional-dependencies"] =
+                        serde_json::json!({ "feature": dependencies });
+                }
+                "group" => {
+                    project["dev-dependencies"] = serde_json::json!({ "dev": dependencies });
+                }
+                _ => unreachable!(),
+            }
+            let value = serde_json::json!({
+                "version": 1,
+                "requires-python": ">=3.12",
+                "package": [
+                    {
+                        "name": "a",
+                        "version": "1.0.0",
+                        "source": { "registry": "https://example.org/simple" },
+                        "metadata": { "provides-extras": ["declared"] },
+                    },
+                    project,
+                ],
+            });
+            let input = toml::to_string(&value)?;
+            let error = Lock::try_from(toml::from_str::<LockWire>(&input)?).unwrap_err();
+            assert!(
+                matches!(
+                    (context, &*error.kind),
+                    ("production", LockErrorKind::DuplicateDependency { .. })
+                        | ("extra", LockErrorKind::DuplicateOptionalDependency { .. })
+                        | ("group", LockErrorKind::DuplicateDevDependency { .. })
+                ),
+                "{error}"
+            );
+            assert!(toml::from_str::<Lock>(&input).is_err());
+        }
+        Ok(())
     }
 
     #[test]
