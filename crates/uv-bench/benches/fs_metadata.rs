@@ -69,34 +69,38 @@ fn configure_installer_parallelism() -> usize {
 }
 
 fn report_installer_parallelism(parallelism: usize) {
-    if parallelism > 1 {
-        initialize_rayon_once();
-        let observed = rayon::current_num_threads();
-        assert_eq!(
-            observed, parallelism,
-            "The installer pool must use the requested benchmark width"
-        );
-        writeln!(
-            io::stderr().lock(),
-            "installed_package_sidecars: configured_width={parallelism}, observed_width={observed}"
-        )
-        .expect("Failed to report installer pool width");
-    } else if parallelism == 1 {
-        writeln!(
-            io::stderr().lock(),
-            "installed_package_sidecars: configured_width=1, sidecar_path=serial, observed_width=unqueried"
-        )
-        .expect("Failed to report serial installer configuration");
-    } else {
-        let available = thread::available_parallelism().map_or_else(
-            |_| "unavailable".to_owned(),
-            |value| value.get().to_string(),
-        );
-        writeln!(
-            io::stderr().lock(),
-            "installed_package_sidecars: configured_width=default, inferred_available_parallelism={available}, observed_width=unqueried"
-        )
-        .expect("Failed to report default installer configuration");
+    match parallelism {
+        0 => {
+            let available = thread::available_parallelism().map_or_else(
+                |_| "unavailable".to_owned(),
+                |value| value.get().to_string(),
+            );
+            writeln!(
+                io::stderr().lock(),
+                "installed_package_sidecars: configured_width=default, inferred_available_parallelism={available}, observed_width=unqueried"
+            )
+            .expect("Failed to report default installer configuration");
+        }
+        1 => {
+            writeln!(
+                io::stderr().lock(),
+                "installed_package_sidecars: configured_width=1, sidecar_path=serial, observed_width=unqueried"
+            )
+            .expect("Failed to report serial installer configuration");
+        }
+        _ => {
+            initialize_rayon_once();
+            let observed = rayon::current_num_threads();
+            assert_eq!(
+                observed, parallelism,
+                "The installer pool must use the requested benchmark width"
+            );
+            writeln!(
+                io::stderr().lock(),
+                "installed_package_sidecars: configured_width={parallelism}, observed_width={observed}"
+            )
+            .expect("Failed to report installer pool width");
+        }
     }
 }
 
