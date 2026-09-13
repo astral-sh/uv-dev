@@ -250,10 +250,54 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                 }
             }
 
+            // Consume the entry to validate that the directory is empty and measure its compressed
+            // representation. In particular, an empty DEFLATE stream has a nonzero compressed size.
+            let mut actual_uncompressed_size = 0;
+            copy_buffer.resize(DEFAULT_BUF_SIZE, 0);
+            loop {
+                let read = entry
+                    .reader_mut()
+                    .read(&mut copy_buffer)
+                    .await
+                    .map_err(Error::io_or_zip)?;
+                if read == 0 {
+                    break;
+                }
+                actual_uncompressed_size += read as u64;
+            }
+            let reader = entry.reader_mut();
+            let actual_compressed_size = reader.bytes_read();
+            let actual_crc32 = reader.compute_hash();
+
+            if actual_uncompressed_size != 0 && !skip_validation {
+                return Err(Error::BadUncompressedSize {
+                    path: relpath.to_path_buf(),
+                    computed: actual_uncompressed_size,
+                    expected: 0,
+                });
+            }
+            if actual_crc32 != 0 && !skip_validation {
+                return Err(Error::BadCrc32 {
+                    path: relpath.to_path_buf(),
+                    computed: actual_crc32,
+                    expected: 0,
+                });
+            }
+            if actual_compressed_size != expected_compressed_size
+                && !(expected_compressed_size == 0 && expected_data_descriptor)
+                && !skip_validation
+            {
+                return Err(Error::BadCompressedSize {
+                    path: relpath.to_path_buf(),
+                    computed: actual_compressed_size,
+                    expected: expected_compressed_size,
+                });
+            }
+
             ComputedEntry {
-                crc32: 0,
-                uncompressed_size: 0,
-                compressed_size: 0,
+                crc32: actual_crc32,
+                uncompressed_size: actual_uncompressed_size,
+                compressed_size: actual_compressed_size,
                 digest: None,
             }
         } else {
