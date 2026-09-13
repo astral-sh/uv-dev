@@ -43,6 +43,8 @@ pub(crate) enum Target {
     WorkspaceMetadata,
     /// The preview `uv tool list` JSON output format.
     ToolList,
+    /// The preview `uv lock` JSON output format.
+    Lock,
     /// The preview `uv sync` JSON output format.
     Sync,
     /// The preview `uv pip check` JSON output format.
@@ -55,6 +57,7 @@ impl Target {
             Self::Configuration => "uv.schema.json",
             Self::WorkspaceMetadata => "docs/reference/internals/metadata.schema.json",
             Self::ToolList => "docs/reference/internals/tool-list.schema.json",
+            Self::Lock => "docs/reference/internals/lock.schema.json",
             Self::Sync => "docs/reference/internals/sync.schema.json",
             Self::PipCheck => "docs/reference/internals/pip-check.schema.json",
         }
@@ -65,6 +68,7 @@ impl Target {
             Self::Configuration => "cargo dev generate-json-schema",
             Self::WorkspaceMetadata => "cargo dev generate-json-schema --target workspace-metadata",
             Self::ToolList => "cargo dev generate-json-schema --target tool-list",
+            Self::Lock => "cargo dev generate-json-schema --target lock",
             Self::Sync => "cargo dev generate-json-schema --target sync",
             Self::PipCheck => "cargo dev generate-json-schema --target pip-check",
         }
@@ -139,6 +143,7 @@ fn schema(target: Target) -> schemars::Schema {
             .into_generator()
             .into_root_schema_for::<uv_resolver::Metadata>(),
         Target::ToolList => uv::commands::tool_list_json_schema(),
+        Target::Lock => uv::commands::lock_json_schema(),
         Target::Sync => uv::commands::sync_json_schema(),
         Target::PipCheck => uv::commands::pip_check_json_schema(),
     }
@@ -297,6 +302,65 @@ mod tests {
             "string"
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn lock_schema_describes_serialized_values() -> anyhow::Result<()> {
+        let schema = serde_json::to_value(schema(Target::Lock))?;
+        let definitions = &schema["definitions"];
+        let reason = &definitions["LockReason"];
+        let error = &definitions["ErrorReport"];
+        let required = schema["required"].as_array().expect("required fields");
+
+        assert_eq!(schema["title"], "uv lock (preview)");
+        assert_eq!(definitions["SchemaVersion"]["oneOf"][0]["const"], "preview");
+        assert_eq!(schema["properties"]["path"]["type"], "string");
+        assert_eq!(schema["properties"]["dry_run"]["type"], "boolean");
+        for field in ["schema", "status", "dry_run"] {
+            assert!(required.iter().any(|required| required == field));
+        }
+        for field in ["path", "action", "reason", "validation_error", "error"] {
+            assert!(!required.iter().any(|required| required == field));
+        }
+        for field in ["completed", "had_existing_lockfile"] {
+            assert!(schema["properties"].get(field).is_none());
+        }
+        assert_eq!(
+            definitions["Action"]["enum"],
+            serde_json::json!(["use", "check", "update", "create"])
+        );
+        assert_eq!(
+            definitions["Status"]["oneOf"]
+                .as_array()
+                .expect("status variants")
+                .iter()
+                .map(|variant| variant["const"].as_str().expect("status value"))
+                .collect::<Vec<_>>(),
+            vec!["fresh", "stale", "not_checked", "indeterminate"]
+        );
+        assert_eq!(reason["properties"]["package"]["type"], "string");
+        for field in ["expected", "actual"] {
+            assert_eq!(reason["properties"][field]["type"], "array");
+            assert_eq!(reason["properties"][field]["items"]["type"], "string");
+        }
+        assert_eq!(error["properties"]["message"]["type"], "string");
+        assert_eq!(error["properties"]["http_status"]["type"], "integer");
+        assert_eq!(error["properties"]["http_status"]["minimum"], 0);
+        assert_eq!(error["properties"]["http_status"]["maximum"], 65535);
+        assert!(error["properties"].get("causes").is_none());
+        assert_eq!(
+            definitions["ErrorCode"]["enum"],
+            serde_json::json!([
+                "evaluation_failed",
+                "metadata_unavailable",
+                "offline_cache_miss",
+                "authentication",
+                "access_denied",
+                "http",
+                "network"
+            ])
+        );
         Ok(())
     }
 

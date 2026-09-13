@@ -18,16 +18,12 @@ use crate::commands::ExitStatus;
 use crate::commands::pip::operations::Error as OperationError;
 use crate::commands::project::ProjectError;
 use crate::commands::project::lock::{LockMode, LockResult};
+use crate::commands::report::SchemaReport;
 use crate::settings::{FrozenSource, LockCheck};
-
-/// This schema is intentionally experimental, like the `uv sync` JSON report.
-#[derive(Debug, Serialize)]
-struct Schema {
-    version: &'static str,
-}
 
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 enum Status {
     /// The lockfile on disk is up-to-date after the operation.
     Fresh,
@@ -41,6 +37,7 @@ enum Status {
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 enum Action {
     Use,
     Check,
@@ -48,15 +45,24 @@ enum Action {
     Create,
 }
 
+/// The preview `uv lock` JSON report.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schemars", schemars(title = "uv lock (preview)"))]
 pub(crate) struct LockReport {
-    schema: Schema,
+    /// Format information.
+    schema: SchemaReport,
+    /// The lockfile path, once the project or script has been discovered.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "PortablePathBuf"))]
     path: Option<PortablePathBuf>,
+    /// The lockfile's freshness after the operation.
     status: Status,
     /// The lockfile action; create and update are proposed actions in a dry run.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "Action"))]
     action: Option<Action>,
+    /// Whether the operation reports proposed changes without writing the lockfile.
     dry_run: bool,
     #[serde(skip)]
     completed: bool,
@@ -65,11 +71,25 @@ pub(crate) struct LockReport {
     had_existing_lockfile: bool,
     /// Why the previous lock could not be reused, if known.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "LockReason"))]
     reason: Option<LockReason>,
+    /// A failed check of the previous lock, even if a later resolution also fails.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "ErrorReport"))]
     validation_error: Option<ErrorReport>,
+    /// The error that prevented the operation from completing.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "ErrorReport"))]
     error: Option<ErrorReport>,
+}
+
+/// Generate the preview `uv lock` output schema for repository development tools.
+#[cfg(feature = "schemars")]
+pub fn json_schema() -> schemars::Schema {
+    schemars::generate::SchemaSettings::draft07()
+        .for_serialize()
+        .into_generator()
+        .into_root_schema_for::<LockReport>()
 }
 
 impl LockReport {
@@ -87,7 +107,7 @@ impl LockReport {
             }
         };
         Self {
-            schema: Schema { version: "preview" },
+            schema: SchemaReport::default(),
             path: None,
             status: Status::Indeterminate,
             action,
@@ -211,6 +231,7 @@ impl LockReport {
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub(super) enum ReasonCode {
     MissingLockfile,
     NonCanonicalFormatting,
@@ -249,17 +270,25 @@ pub(super) enum ReasonCode {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub(super) struct LockReason {
+    /// The mismatch that prevents reuse of the previous lock.
     code: ReasonCode,
+    /// The affected package, when the mismatch is package-specific.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "PackageName"))]
     package: Option<PackageName>,
+    /// Additional details about the mismatch.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "String"))]
     message: Option<String>,
     /// The values required by the current inputs.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "Vec<String>"))]
     expected: Option<Vec<String>>,
     /// The values recorded in the existing lockfile.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "Vec<String>"))]
     actual: Option<Vec<String>>,
 }
 
@@ -376,6 +405,7 @@ impl LockReason {
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 enum ErrorCode {
     EvaluationFailed,
     MetadataUnavailable,
@@ -401,12 +431,19 @@ impl ErrorCode {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct ErrorReport {
+    /// A machine-readable classification of the failure.
     code: ErrorCode,
+    /// The affected package, when it can be identified.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "PackageName"))]
     package: Option<PackageName>,
+    /// The HTTP status code, when the failure came from an HTTP response.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "u16"))]
     http_status: Option<u16>,
+    /// A fixed description that does not include unparsed input or source text.
     message: &'static str,
 }
 

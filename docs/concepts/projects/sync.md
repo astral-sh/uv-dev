@@ -64,6 +64,23 @@ explicitly created or updated using `uv lock`:
 $ uv lock
 ```
 
+### Machine-readable lock output
+
+Use `uv lock --output-format json` to report the lockfile's freshness and the action taken. Add
+`--check` to check the existing lockfile, or `--dry-run` to inspect a proposed create or update
+without writing it. Selecting JSON does not change locking behavior or exit statuses. Ordinary
+diagnostics remain on stderr.
+
+The report distinguishes a proven stale lockfile from an indeterminate check, such as one blocked by
+unavailable metadata or authentication. A known mismatch is retained if a later resolution fails. An
+existence-only check reports `not_checked` instead of claiming freshness. Errors have
+machine-readable codes and fixed descriptions; detailed error chains are not copied into the JSON.
+Failures before command setup completes may not produce a report.
+
+The [JSON Schema](../../reference/internals/lock.schema.json) is generated from the report types
+with `cargo dev generate-json-schema --target lock`. The format is in preview and may change without
+warning. Pass `--preview-features json-output` to suppress the preview warning.
+
 ## Syncing the environment
 
 While the environment is synced [automatically](#automatic-lock-and-sync), it may also be explicitly
