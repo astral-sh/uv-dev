@@ -829,7 +829,7 @@ async fn build_package(
             let ext = SourceDistExtension::from_path(path.as_path())
                 .map_err(|err| Error::InvalidSourceDistExt(path.user_display().to_string(), err))?;
             let temp_dir = tempfile::tempdir_in(cache.bucket(CacheBucket::SourceDistributions))?;
-            let (temp_dir, _) = uv_extract::stream::archive(
+            let temp_dir = uv_extract::stream::archive(
                 &mut reader,
                 ext,
                 temp_dir,
@@ -948,7 +948,7 @@ async fn build_package(
                 Error::InvalidSourceDistExt(source.path().user_display().to_string(), err)
             })?;
             let temp_dir = tempfile::tempdir_in(output_dir)?;
-            let (temp_dir, _) = uv_extract::stream::archive(
+            let temp_dir = uv_extract::stream::archive(
                 &mut reader,
                 ext,
                 temp_dir,
