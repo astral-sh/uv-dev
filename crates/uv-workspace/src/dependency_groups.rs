@@ -10,6 +10,7 @@ use uv_normalize::{DEV_DEPENDENCIES, GroupName};
 use uv_pep440::VersionSpecifiers;
 use uv_pep508::Pep508Error;
 use uv_pypi_types::{DependencyGroupSpecifier, VerbatimParsedUrl};
+use uv_redacted::redact_url_credentials;
 
 use crate::pyproject::{DependencyGroupSettings, PyProjectToml, ToolUvDependencyGroups};
 
@@ -268,7 +269,7 @@ pub struct DependencyGroupError {
 
 #[derive(Debug, Error)]
 enum DependencyGroupErrorInner {
-    #[error("Failed to parse entry in group `{0}`: `{1}`")]
+    #[error("Failed to parse entry in group `{0}`: `{entry}`", entry = redact_url_credentials(.1))]
     GroupParseError(
         GroupName,
         String,

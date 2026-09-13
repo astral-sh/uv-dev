@@ -31132,6 +31132,47 @@ fn lock_group_invalid_entry_package() -> Result<()> {
 
 #[cfg(feature = "test-universal")]
 #[test]
+fn lock_group_invalid_entry_url_credentials() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "diagnostic-group"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.13"
+
+        [dependency-groups]
+        dev = ["demo-a @ https://probe:diagnostic-group-password-canary@example.invalid/demo_a.whl ; invalid_marker_name == 'value'"]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Project `diagnostic-group` has malformed dependency groups
+      cause: Failed to parse entry in group `dev`: `demo-a @ https://**************************************@example.invalid/demo_a.whl ; invalid_marker_name == 'value'`
+      cause: Expected a quoted string or a valid marker name, found `invalid_marker_name`
+             demo-a @ https://**************************************@example.invalid/demo_a.whl ; invalid_marker_name == 'value'
+                                                                                                  ^^^^^^^^^^^^^^^^^^^
+    "#);
+
+    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev").arg("--offline"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Project `diagnostic-group` has malformed dependency groups
+      cause: Failed to parse entry in group `dev`: `demo-a @ https://**************************************@example.invalid/demo_a.whl ; invalid_marker_name == 'value'`
+      cause: Expected a quoted string or a valid marker name, found `invalid_marker_name`
+             demo-a @ https://**************************************@example.invalid/demo_a.whl ; invalid_marker_name == 'value'
+                                                                                                  ^^^^^^^^^^^^^^^^^^^
+    "#);
+
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[test]
 fn lock_group_invalid_entry_group_name() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
