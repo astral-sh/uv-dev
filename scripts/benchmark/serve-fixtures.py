@@ -30,10 +30,18 @@ class Fixtures:
         manifest: Path,
         lockfiles: list[Path],
         git_directory: Path | None,
+        python_archives: Path | None = None,
     ) -> None:
         self.files: dict[str, Path] = {}
         self.metadata: dict[str, bytes] = {}
         self.requirements: dict[str, bytes] = {}
+        self.python_archives: dict[str, Path] = {}
+        if python_archives is not None:
+            for archive in json.loads((python_archives / "manifest.json").read_text()):
+                path = python_archives / archive["filename"]
+                if not path.is_file():
+                    raise FileNotFoundError(f"Run prepare-python-archives.py: {path}")
+                self.python_archives[unquote(archive["mirror-path"])] = path
         self.vulnerabilities: dict[str, dict] = {}
         self.osv_queries: dict[tuple[str, str], list[str]] = {}
         self.git_commits: dict[tuple[str, str, str], bytes] = {}
@@ -233,7 +241,12 @@ class Handler(BaseHTTPRequestHandler):
             self.server.counts[f"{self.command} {path}"] += 1
         time.sleep(self.server.delay)
         parts = path.strip("/").split("/")
-        if parts[0] == "requirements":
+        if parts[0] == "python":
+            archive = self.server.fixtures.python_archives.get("/".join(parts[1:]))
+            if archive is not None:
+                self.serve_file(archive, head=head)
+                return
+        elif parts[0] == "requirements":
             content = self.server.fixtures.requirements.get("/".join(parts[1:]))
             if content is not None:
                 self.respond(content, "text/plain", head=head)
@@ -323,7 +336,8 @@ class Handler(BaseHTTPRequestHandler):
         if not head:
             kind = "range" if range_header else "body"
             with self.server.counts_lock:
-                self.server.counts[f"GET /files/{path.name} [{kind}]"] += 1
+                request_path = unquote(urlsplit(self.path).path)
+                self.server.counts[f"GET {request_path} [{kind}]"] += 1
         self.send_response(206 if range_header else 200)
         self.send_header("Content-Type", "application/octet-stream")
         self.send_header("Content-Length", str(length))
@@ -354,13 +368,20 @@ def main() -> None:
     )
     parser.add_argument("--lockfile", type=Path, action="append", default=[])
     parser.add_argument("--git-directory", type=Path)
+    parser.add_argument("--python-archives", type=Path)
     parser.add_argument("--delay-ms", type=float, default=20)
     parser.add_argument("--require-s3", action="store_true")
     args = parser.parse_args()
     if args.delay_ms < 0:
         parser.error("--delay-ms must be nonnegative")
     server = Server(
-        Fixtures(args.directory, args.manifest, args.lockfile, args.git_directory),
+        Fixtures(
+            args.directory,
+            args.manifest,
+            args.lockfile,
+            args.git_directory,
+            args.python_archives,
+        ),
         args.delay_ms / 1000,
         args.require_s3,
     )

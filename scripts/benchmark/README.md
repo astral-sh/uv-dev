@@ -36,6 +36,13 @@ offline from the same lockfiles and cached package artifacts.
 Pass `--discovery` to also install the pinned Python 3.10 and 3.13 interpreters used by the Python
 discovery workloads.
 
+Run `python3 scripts/benchmark/prepare-python-archives.py` to prepare the host-native interpreter
+archives in `python-archives.json`. These records are copied from uv's pinned download metadata and
+retain their original URLs and SHA-256 values. The prepared files use uv's actual archive-cache
+names, and `serve-fixtures.py --python-archives .cache/bench-python-archives` can replay them as a
+Python installation mirror. Python-management workloads select this frozen download metadata so
+later interpreter rebuilds do not silently change their inputs.
+
 Pass `--project-caches` to also prepare a separate cache for each frozen environment. Cache
 maintenance workloads copy these caches and reconstruct their environments before timing, retaining
 the real cache layout and links between installed files and cached wheel contents.
