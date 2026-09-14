@@ -54,7 +54,7 @@ impl EphemeralEnvironment {
         let module = format!("_uv_ephemeral_overlay_{}", cache_digest(&paths));
         let paths = paths
             .iter()
-            .map(|path| path.escape_for_python())
+            .map(PythonExt::escape_for_python)
             .collect::<Vec<_>>()
             .join(", ");
         let contents = include_str!("_overlay.py")
