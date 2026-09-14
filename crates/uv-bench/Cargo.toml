@@ -79,6 +79,11 @@ path = "benches/source_cache_keys.rs"
 harness = false
 
 [[bench]]
+name = "source_metadata"
+path = "benches/source_metadata.rs"
+harness = false
+
+[[bench]]
 name = "core_metadata"
 path = "benches/core_metadata.rs"
 harness = false
