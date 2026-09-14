@@ -36,8 +36,10 @@ fn run_profile_rejects_unsupported_targets() -> Result<()> {
     error: `--profile` requires a Python script or module
     ");
 
-    let context = uv_test::test_context!("3.15");
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    context.python_install().arg("3.15").assert().success();
     uv_snapshot!(context.filters(), context.run().arg("--quiet")
+        .arg("--python").arg("3.15")
         .arg("--profile").arg("python").arg("-c").arg("pass"), @"
     exit_code: 2 (failure)
     ----- stderr -----
@@ -57,7 +59,8 @@ fn run_profile_script_and_module() -> Result<()> {
         [packages.profile-dependency.versions."1.0.0"]
         sdist = false
     "#})?);
-    let context = uv_test::test_context!("3.15");
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    context.python_install().arg("3.15").assert().success();
     context
         .temp_dir
         .child("pyproject.toml")
@@ -99,7 +102,7 @@ fn run_profile_script_and_module() -> Result<()> {
     context
         .temp_dir
         .child("profile_module.py")
-        .write_str(indoc! {r#"
+        .write_str(indoc! {r"
         import json
         import sys
         import time
@@ -107,7 +110,7 @@ fn run_profile_script_and_module() -> Result<()> {
 
         time.sleep(0.1)
         Path('module.json').write_text(json.dumps(sys.argv[1:]))
-    "#})?;
+    "})?;
     context
         .run()
         .arg("--no-project")
