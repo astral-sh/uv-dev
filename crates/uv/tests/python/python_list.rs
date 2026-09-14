@@ -644,6 +644,20 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
         .await;
 
     let versioned_json = format!(r#"{{"version": 1, "downloads": {remote_json}}}"#);
+    let build_variants_json = versioned_json
+        .replace("+custom", "+custom+pgo+lto")
+        .replace(
+            r#""build_variant": "custom""#,
+            r#""build_variant": "custom+pgo+lto""#,
+        );
+    Mock::given(method("GET"))
+        .and(path("/build-variants"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(build_variants_json, "application/json"),
+        )
+        .mount(&server)
+        .await;
+
     Mock::given(method("GET"))
         .and(path("/versioned-invalid-default"))
         .respond_with(ResponseTemplate::new(200).set_body_raw(
@@ -691,6 +705,45 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     cpython-3.12.9+custom-linux-x86_64-gnu    https://custom.com/cpython-3.12.9+custom-linux-x86_64-gnu.tar.gz
+    ");
+
+    // A provider request accepts artifacts with additional optimization tags.
+    uv_snapshot!(context
+        .python_list()
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .arg("3.12+custom")
+        .arg("--only-downloads")
+        .arg("--all-platforms")
+        .arg("--all-arches")
+        .arg("--show-urls")
+        .arg("--python-downloads-json-url").arg(format!("{}/build-variants", server.uri())), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.12.9+custom+pgo+lto-linux-x86_64-gnu    https://custom.com/cpython-3.12.9+custom+pgo+lto-linux-x86_64-gnu.tar.gz
+    ");
+
+    // Every requested tag must be present.
+    uv_snapshot!(context
+        .python_list()
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .arg("3.12+custom+noopt")
+        .arg("--only-downloads")
+        .arg("--all-platforms")
+        .arg("--all-arches")
+        .arg("--python-downloads-json-url").arg(format!("{}/build-variants", server.uri())), @"
+    exit_code: 0 (success)
+    ");
+
+    // Partial tag names must not match.
+    uv_snapshot!(context
+        .python_list()
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .arg("3.12+cust")
+        .arg("--only-downloads")
+        .arg("--all-platforms")
+        .arg("--all-arches")
+        .arg("--python-downloads-json-url").arg(format!("{}/build-variants", server.uri())), @"
+    exit_code: 0 (success)
     ");
 
     // test invalid URL path
