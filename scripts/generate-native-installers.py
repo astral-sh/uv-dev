@@ -19,6 +19,7 @@ import hashlib
 import json
 import re
 import subprocess
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,12 @@ def render_installers(
     if not re.fullmatch(r"v?\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?", tag):
         raise ValueError(f"Invalid release tag: {tag!r}")
     validate_repository(repository)
+    minimums = tomllib.loads(
+        (ROOT / "release-targets.toml").read_text(encoding="utf-8")
+    )["min-glibc-version"]
+    for minimum in minimums.values():
+        if not re.fullmatch(r"2\.[0-9]+", minimum):
+            raise ValueError(f"Unsupported minimum glibc version: {minimum!r}")
     for target, checksum in checksums.items():
         if not re.fullmatch(r"[a-z0-9_]+(?:-[a-z0-9_]+)+", target):
             raise ValueError(f"Invalid release target: {target!r}")
@@ -61,6 +68,9 @@ def render_installers(
     data = {
         "version": tag,
         "repository": repository,
+        "glibc_default": minimums["*"].removeprefix("2."),
+        "glibc_aarch64": minimums["aarch64-unknown-linux-gnu"].removeprefix("2."),
+        "glibc_riscv64": minimums["riscv64gc-unknown-linux-gnu"].removeprefix("2."),
         "checksums": [
             {"target": target, "checksum": checksum}
             for target, checksum in sorted(checksums.items())

@@ -19,8 +19,8 @@ jobs:
       - name: "Install uv"
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.10"
-          checksum: "173d95a0c32d18c896c46ba6fafbf3cf9c14ab74b033f81b76c883ef492a976b"
+          version: "0.12.12"
+          checksum: "ab9b309d4586403f024e100abaceb396616e178a553e2500c36087d180f09509"
           enable-cache: true
 
       - name: Run dist plan
@@ -28,3 +28,7 @@ jobs:
           uv run --locked --only-dev dist plan --output-format=json > plan-dist-manifest.json
           echo "dist plan completed successfully"
           cat plan-dist-manifest.json
+      - name: Compare native release plan
+        run: |
+          python3 scripts/plan-release.py --compare plan-dist-manifest.json > native-release-manifest.json
+          uv run --locked --script scripts/test-native-release-plan.py
