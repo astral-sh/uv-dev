@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -18,6 +19,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--uv", type=Path, default=root / "target/profiling/uv")
     parser.add_argument("--refresh-locks", action="store_true")
+    parser.add_argument("--individual-caches", action="store_true")
     args = parser.parse_args()
     cache = root / ".cache"
     environment = {
@@ -27,7 +29,7 @@ def main() -> None:
     }
     environment["UV_PYTHON_INSTALL_DIR"] = str(cache / "bench-python")
     environment["UV_PYTHON_DOWNLOADS"] = "never"
-    command = [str(args.uv.resolve()), "--no-config", "--cache-dir", str(cache)]
+    command = [str(args.uv.resolve()), "--no-config"]
     workloads = json.loads(Path(__file__).with_name("tools.json").read_text())
     locks = Path(__file__).with_name("tool-locks")
     if args.refresh_locks:
@@ -36,6 +38,8 @@ def main() -> None:
             subprocess.run(
                 [
                     *command,
+                    "--cache-dir",
+                    str(cache),
                     "pip",
                     "compile",
                     "--universal",
@@ -62,28 +66,41 @@ def main() -> None:
 
     temporary_root = root / "target"
     temporary_root.mkdir(exist_ok=True)
-    with tempfile.TemporaryDirectory(
-        prefix="bench-tools-", dir=temporary_root
-    ) as temporary:
-        environment["UV_TOOL_DIR"] = str(Path(temporary) / "tools")
-        environment["UV_TOOL_BIN_DIR"] = str(Path(temporary) / "bin")
+    selected = [(cache, workloads)]
+    if args.individual_caches:
         for workload in workloads:
-            subprocess.run(
-                [
-                    *command,
-                    "tool",
-                    "install",
-                    "--no-build",
-                    "--managed-python",
-                    "--python",
-                    PYTHON,
-                    "--constraints",
-                    str(locks / f"{workload['name']}.txt"),
-                    f"{workload['name']}=={workload['version']}",
-                ],
-                env=environment,
-                check=True,
-            )
+            if workload.get("cached-run"):
+                tool_cache = cache / "bench-tool-caches" / workload["name"]
+                if tool_cache.exists():
+                    shutil.rmtree(tool_cache)
+                selected.append((tool_cache, [workload]))
+    for tool_cache, selected_tools in selected:
+        with tempfile.TemporaryDirectory(
+            prefix="bench-tools-", dir=temporary_root
+        ) as temporary:
+            tool_environment = environment | {
+                "UV_TOOL_DIR": str(Path(temporary) / "tools"),
+                "UV_TOOL_BIN_DIR": str(Path(temporary) / "bin"),
+            }
+            for workload in selected_tools:
+                subprocess.run(
+                    [
+                        *command,
+                        "--cache-dir",
+                        str(tool_cache),
+                        "tool",
+                        "install",
+                        "--no-build",
+                        "--managed-python",
+                        "--python",
+                        PYTHON,
+                        "--constraints",
+                        str(locks / f"{workload['name']}.txt"),
+                        f"{workload['name']}=={workload['version']}",
+                    ],
+                    env=tool_environment,
+                    check=True,
+                )
 
 
 if __name__ == "__main__":

@@ -169,6 +169,11 @@ path = "benches/tool_list.rs"
 harness = false
 
 [[bench]]
+name = "cached_tool_run"
+path = "benches/cached_tool_run.rs"
+harness = false
+
+[[bench]]
 name = "uv_pypi_types"
 path = "benches/uv_pypi_types.rs"
 harness = false
