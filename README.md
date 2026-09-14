@@ -2,7 +2,7 @@
 
 Issue: astral-sh/uv#21602
 
-Classification: bug, reproduction needs more information
+Classification: duplicate of astral-sh/uv#10428; exact parser-error mechanism needs more information
 
 ## Summary
 
@@ -32,22 +32,30 @@ succeed:
 powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-This is a credible affected-host workaround and narrows the trigger to a difference introduced by
-the explicit execution-policy launch context. It also weakens response headers or a network
-intermediary as a sufficient explanation by themselves, because the same endpoint succeeds from
-the same host without that option. Repeatability and the precise interaction remain unconfirmed.
+This is a credible affected-host workaround. The reporter subsequently identified a Windows
+Defender event for the exact failing command: Defender marked it severe, detected
+`#CleanNotToMoac`, reported potentially unwanted behavior, and removed the threat or app. This
+establishes endpoint-security intervention as the important host-specific difference and brings the
+report under the security-software behavior already tracked in astral-sh/uv#10428.
+
+It is not established how Defender produces the observed `Invoke-Expression` parser errors. The
+reporter's suggestions that it truncates or rewrites the command are hypotheses, not findings. The
+successful invocation without `-ExecutionPolicy ByPass` suggests that exact command shape affects
+Defender's heuristic, but does not explain the transformation.
 
 The final mirror response currently has no `Content-Type` header. That is a useful diagnostic lead,
 not a confirmed cause: PowerShell Core 6.0.0 and 7.6.5 both materialized the same live response as
-one `System.String` in independent checks.
+one `System.String` in independent checks, and the affected host reaches the same endpoint
+successfully when `-ExecutionPolicy ByPass` is omitted. The Defender record makes the header lead
+lower priority.
 
 ## Reproduction
 
 Outcome: `needs_more_information`.
 
 A maintainer could not reproduce the failure on Windows PowerShell 5.1.26100.8655. The exact
-documented command installed uv successfully, so an affected-host reproduction is required to
-identify what causes `Invoke-RestMethod` output to be enumerated there.
+documented command installed uv successfully, so affected-host evidence is required to determine
+how Defender's intervention produces the reported errors.
 
 The reporter provided the following affected-host A/B result:
 
@@ -62,6 +70,12 @@ powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 The host is Windows 11 Enterprise LTSC 2009, build 10.0.26100, with Windows PowerShell
 5.1.26100.8655. This is the most specific reproduction information currently available, although
 the reporter has not yet confirmed repeated alternating runs.
+
+Windows Defender Protection History shows a severe block affecting the exact
+`powershell.exe -ExecutionPolicy ByPass -c irm https://astral.sh/uv/install.ps1 | iex` command. It
+records detection `#CleanNotToMoac`, status `Removed`, and “potentially unwanted behaviour.” This
+corroborates the reporter's endpoint-security diagnosis, although it does not show how the block
+becomes the captured empty-command and multiline-comment errors.
 
 The available environment was Linux x86_64 with installed `uv 0.12.13` and PowerShell Core 7.6.5;
 Windows PowerShell 5.1 was not available. The command does not use Python. The live vanity URL
@@ -120,12 +134,13 @@ Get-ExecutionPolicy -List
 (Invoke-WebRequest -UseBasicParsing https://astral.sh/uv/install.ps1).Headers
 ```
 
-Whether a proxy, endpoint-security product, or content-filtering gateway is present remains useful
-context. The Windows edition/build is now known, and the successful command without
-`-ExecutionPolicy ByPass` shifts attention toward process launch or policy handling. The reporter
-also says a locally saved copy worked after removing the block comment, but that changed both the
-delivery path and script content. Testing an otherwise unmodified download-to-file workaround on
-the same host would show whether only pipeline materialization is affected:
+Endpoint security is now known to be present and to have blocked the exact command. Defender
+platform/intelligence versions, confirmation that each failure coincides with a new Protection
+History event, and repeated A/B results would clarify the scope without requiring Defender to be
+disabled. The reporter also says a locally saved copy worked after removing the block comment, but
+that changed both the delivery path and script content. Testing an otherwise unmodified
+download-to-file workaround on the same host would show whether avoiding the piped execution is
+sufficient:
 
 ```powershell
 Invoke-RestMethod https://astral.sh/uv/install.ps1 -OutFile install-uv.ps1
@@ -143,33 +158,31 @@ A maintainer first reproduced successfully on Windows PowerShell 5.1.26100.6584,
 the reporter's exact 5.1.26100.8655 patch version and could not reproduce the failure. They requested
 the affected Windows version and confirmation that the behavior is consistent. The reporter then
 identified Windows 11 Enterprise LTSC 2009, build 10.0.26100, and reported that omitting
-`-ExecutionPolicy ByPass` makes the same installation pipeline succeed. The diagnostics above can
-determine whether the explicit execution-policy launch changes response materialization or another
-part of the child PowerShell environment.
+`-ExecutionPolicy ByPass` makes the same installation pipeline succeed. They later supplied a
+Windows Defender Protection History record showing that Defender blocked and removed the exact
+failing command as `#CleanNotToMoac`. The remaining uncertainty is how that intervention surfaces
+as the reported PowerShell parser errors, not whether endpoint security acted on the command.
 
 ## Classification
 
-Keep the bug classification provisionally. The repository documents the reported command as the
-Windows installation method, and the screenshot establishes a real pre-install parse failure on the
-reported host. Independent evidence confirms what produces those exact errors, but does not yet
-establish whether the trigger is Windows PowerShell 5.1 itself, the headerless mirror response, or a
-host/network-specific transformation.
+Classify this as a duplicate of astral-sh/uv#10428. That open issue tracks security software
+blocking the same documented `irm ... | iex` Windows installer pattern, including fileless-content
+detections and a download-to-file workaround. The Defender Protection History evidence now places
+astral-sh/uv#21602 in that same underlying endpoint-security problem even though its visible
+PowerShell errors are unusual and more specific.
 
-The successful maintainer test on the exact reported PowerShell patch version means the issue must
-not be described as a general Windows PowerShell 5.1 or 5.1.26100.8655 incompatibility. It remains a
-provisional bug because the screenshot establishes a real failure on the reporter's host, but its
-scope and priority depend on consistent affected-host reproduction. The newly isolated
-`-ExecutionPolicy ByPass` condition makes this specifically a failure of the documented invocation,
-not evidence that the installer script or PowerShell 5.1 always fails.
-
-This is not currently identified as a duplicate. The closest issues cover different failure modes
-involving the same PowerShell installer path.
+The successful maintainer tests on Windows PowerShell 5.1.26100.6584 and 5.1.26100.8655 also rule
+out a general PowerShell-version incompatibility. The unexplained parser-error presentation is
+useful additional evidence for the canonical security-software discussion, but does not require a
+separate tracker unless it persists without a corresponding Defender intervention.
 
 ## Related
 
 - astral-sh/uv#10428 (open issue), “Doc and install: avoid security issue on Windows”: the closest
-  same-command report. It concerns endpoint security blocking fileless execution and records a
-  download-to-file workaround, not the empty-command and isolated-comment parser errors.
+  and now canonical report. It concerns endpoint security blocking the same fileless
+  `Invoke-RestMethod | Invoke-Expression` execution pattern and records a download-to-file
+  workaround. astral-sh/uv#21602 adds a Windows Defender `#CleanNotToMoac` detection and unusual
+  empty-command/isolated-comment errors.
 - astral-sh/uv#5460 (open issue), “uv self update: failed to execute installer (status: exit code:
   1) on Windows”: an adjacent Windows PowerShell/cargo-dist installer compatibility tracker. Its
   confirmed failure is execution policy when self-update launches a saved script in Windows
@@ -193,6 +206,10 @@ involving the same PowerShell installer path.
   matching the reporter's PowerShell patch version; they also succeeded on 5.1.26100.6584.
 - The affected system is Windows 11 Enterprise LTSC 2009, build 10.0.26100. On that host, the
   reporter says the installation succeeds when only `-ExecutionPolicy ByPass` is removed.
+- Windows Defender Protection History records a severe `#CleanNotToMoac` detection for the exact
+  failing command, with status `Removed` and a potentially unwanted behavior description.
+- The claim that Defender truncates or rewrites the command is unconfirmed; the screenshot records
+  the intervention but not how it leads to the parser errors.
 - The reporter's locally saved, comment-removed copy succeeded, but that experiment changed both
   the execution path and the script, so it does not distinguish between them.
 - The current final mirror response has no `Content-Type` header, while the canonical GitHub release
