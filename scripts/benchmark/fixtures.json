@@ -215,6 +215,16 @@
     "sha256": "da5e00372763193d73cecbf71084a3848458cecf4cee36b9a1e8d318d114a87b"
   },
   {
+    "filename": "flask-3.1.1.tar.gz",
+    "url": "https://files.pythonhosted.org/packages/c0/de/e47735752347f4128bcf354e0da07ef311a78244eba9e3dc1d4a5ab21a98/flask-3.1.1.tar.gz",
+    "sha256": "284c7b8f2f58cb737f0cf1c30fd7eaf0ccfcde196099d24ecede3fc2005aa59e"
+  },
+  {
+    "filename": "numpy-2.2.6.tar.gz",
+    "url": "https://files.pythonhosted.org/packages/76/21/7d2a95e4bba9dc13d043ee156a356c0a8f0c6309dff6b21b4d71a073b8a8/numpy-2.2.6.tar.gz",
+    "sha256": "e29554e2bef54a90aa5cc07da6ce955accb83f21ab5de01a62c8478897b264fd"
+  },
+  {
     "filename": "packse.lock",
     "url": "https://raw.githubusercontent.com/astral-sh/packse/18be7766b14aa3e03db37bc575959b3f4c6fbacb/uv.lock",
     "sha256": "1a52ca1f4c0a66acb04663c2995a6a03858db801661565270415910074630cae"

@@ -8,6 +8,10 @@ download them into `.cache/bench-fixtures`. The script verifies every fixture ag
 SHA-256, including files already present. CI prepares these inputs before timing and includes them
 in the walltime runner artifact, so the measured workloads do not download fixtures.
 
+Source-distribution extraction compares the normal and preview tar implementations on published
+Flask, Django, and NumPy archives. The inputs retain their real documentation, tests, Python
+modules, and native source files while spanning roughly 0.7–20 MB of compressed data.
+
 `walltime-shards.py` assigns every built walltime suite to exactly one of up to eight independent
 runs. The saved plan is checked against the extracted benchmark binaries before execution, so a
 missing or stale artifact cannot silently reduce coverage. Each shard retains its own CodSpeed
