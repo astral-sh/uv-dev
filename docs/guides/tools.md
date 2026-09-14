@@ -250,6 +250,11 @@ interpreter's `key` uses the same format as `uv python list`. The schema is in p
 change without warning. A [JSON Schema](../reference/internals/tool-list.schema.json) is generated
 from the report's serialization types.
 
+Use `--output-format jsonl --preview-features jsonl` to consume the same report as a single-line
+`"type": "result"` record. With `--outdated`, version lookups emit `"type": "progress"` records
+before the result. Pass `--no-progress` or `--quiet` to emit only the result. JSONL is a separate
+preview format and may change without warning.
+
 ## Upgrading tools
 
 To upgrade a tool, use `uv tool upgrade`:

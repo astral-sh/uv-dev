@@ -26,7 +26,7 @@ use crate::commands::ExitStatus;
 use crate::commands::pip::latest::LatestClient;
 use crate::commands::report::{EnvironmentReport, SchemaReport};
 use crate::commands::reporters::LatestVersionReporter;
-use crate::printer::Printer;
+use crate::printer::{Printer, jsonl_result};
 use crate::settings::ResolverInstallerSettings;
 
 /// Whether to list all installed tools or only those with available updates.
@@ -140,6 +140,10 @@ impl ToolListReport {
                     "{}",
                     serde_json::to_string_pretty(self)?
                 )?;
+                Ok(())
+            }
+            ToolListFormat::Jsonl => {
+                writeln!(printer.stdout_important(), "{}", jsonl_result(self)?)?;
                 Ok(())
             }
         }
@@ -441,7 +445,7 @@ pub(crate) async fn list(
 fn render_no_tools(format: ToolListFormat, printer: Printer) -> Result<ExitStatus> {
     match format {
         ToolListFormat::Text => writeln!(printer.stderr(), "No tools installed")?,
-        ToolListFormat::Json => {
+        ToolListFormat::Json | ToolListFormat::Jsonl => {
             ToolListReport::default().render(format, ToolListOutput::empty(), printer)?;
         }
     }

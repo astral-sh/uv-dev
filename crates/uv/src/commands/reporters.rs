@@ -988,6 +988,7 @@ impl uv_publish::Reporter for PublishReporter {
 
 #[derive(Debug)]
 pub(crate) struct LatestVersionReporter {
+    printer: Printer,
     progress: ProgressBar,
 }
 
@@ -998,7 +999,7 @@ impl From<Printer> for LatestVersionReporter {
             ProgressStyle::with_template("{bar:20} [{pos}/{len}] {wide_msg:.dim}").unwrap(),
         );
         progress.set_message("Fetching latest versions...");
-        Self { progress }
+        Self { printer, progress }
     }
 }
 
@@ -1006,20 +1007,40 @@ impl LatestVersionReporter {
     #[must_use]
     pub(crate) fn with_length(self, length: u64) -> Self {
         self.progress.set_length(length);
+        let mut event = JsonlProgressEvent::new("latest_version", ProgressStatus::Started);
+        event.total = Some(length);
+        emit_jsonl_progress(self.printer, &event);
         self
     }
 
     pub(crate) fn on_fetch_progress(&self) {
         self.progress.inc(1);
+        self.emit_update(None, None);
     }
 
     pub(crate) fn on_fetch_version(&self, name: &PackageName, version: &Version) {
         self.progress.set_message(format!("{name} v{version}"));
         self.progress.inc(1);
+        self.emit_update(Some(name), Some(version));
+    }
+
+    fn emit_update(&self, name: Option<&PackageName>, version: Option<&Version>) {
+        if self.printer.emits_jsonl_progress() {
+            let mut event = JsonlProgressEvent::new("latest_version", ProgressStatus::Updated);
+            event.name = name.map(ToString::to_string);
+            event.version = version.map(ToString::to_string);
+            event.completed = Some(self.progress.position());
+            event.total = self.progress.length();
+            emit_jsonl_progress(self.printer, &event);
+        }
     }
 
     pub(crate) fn on_fetch_complete(&self) {
         self.progress.set_message("");
+        let mut event = JsonlProgressEvent::new("latest_version", ProgressStatus::Completed);
+        event.completed = Some(self.progress.position());
+        event.total = self.progress.length();
+        emit_jsonl_progress(self.printer, &event);
         self.progress.finish_and_clear();
     }
 }
