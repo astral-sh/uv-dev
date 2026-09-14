@@ -2,7 +2,6 @@
 // https://github.com/rust-lang/rust/issues/64402
 extern crate uv_performance_memory_allocator;
 
-use std::env;
 use std::fmt::Write;
 use std::hint::black_box;
 use std::path::Path;
@@ -17,6 +16,7 @@ use futures::io::AllowStdIo;
 use sha2::{Digest, Sha256};
 use tar_codec::{ArchiveBuilder as _, EntryMetadata, TarEncoder};
 use tokio_util::compat::FuturesAsyncWriteCompatExt;
+use uv_bench::is_codspeed_simulation;
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, Connectivity, RegistryClientBuilder};
 use uv_distribution_filename::{SourceDistExtension, WheelFilename};
@@ -33,14 +33,6 @@ const MANY_FILES_WHEEL_FILE_COUNT: usize = 10_000;
 const MANY_FILES_SDIST_TOP_LEVEL: &str = "manyfiles-0.0.0";
 const MANY_FILES_SDIST_FILE_COUNT: usize = 10_000;
 const SHA256_BENCHMARK_SIZE: usize = 1024 * 1024;
-
-fn is_codspeed_simulation() -> bool {
-    // CodSpeed reports Simulation as `instrumentation` in current versions.
-    matches!(
-        env::var("CODSPEED_RUNNER_MODE").as_deref(),
-        Ok("instrumentation" | "simulation")
-    )
-}
 
 fn hash_sha256(c: &mut Criterion<WallTime>) {
     let bytes = vec![0_u8; SHA256_BENCHMARK_SIZE];

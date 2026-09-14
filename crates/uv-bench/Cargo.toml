@@ -39,6 +39,11 @@ path = "benches/lockfile.rs"
 harness = false
 
 [[bench]]
+name = "wheel_extract"
+path = "benches/wheel_extract.rs"
+harness = false
+
+[[bench]]
 name = "uv_pypi_types"
 path = "benches/uv_pypi_types.rs"
 harness = false
