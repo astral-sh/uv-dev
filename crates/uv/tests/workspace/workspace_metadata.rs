@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::process::Output;
 use std::sync::LazyLock;
 
 use anyhow::{Context, Result, anyhow};
@@ -13,6 +14,7 @@ use url::Url;
 use uv_fs::PortablePathBuf;
 use uv_static::EnvVars;
 use uv_test::json_schema::JsonSchema;
+use uv_test::jsonl::{JsonlOutput, JsonlResultExpectation};
 use uv_test::{copy_dir_ignore, uv_snapshot};
 
 static METADATA_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> = LazyLock::new(|| {
@@ -38,14 +40,14 @@ fn parse_metadata(contents: &[u8]) -> Result<serde_json::Value> {
         .context("workspace metadata schema mismatch")
 }
 
-fn parse_metadata_jsonl_records(contents: &[u8]) -> Result<Vec<serde_json::Value>> {
+fn parse_metadata_jsonl(
+    output: &Output,
+    expectation: JsonlResultExpectation,
+) -> Result<JsonlOutput> {
     let schema = METADATA_JSONL_SCHEMA
         .as_ref()
         .map_err(|error| anyhow!("invalid JSONL workspace metadata schema: {error}"))?;
-    std::str::from_utf8(contents)?
-        .lines()
-        .map(|line| schema.parse(line.as_bytes()))
-        .collect()
+    JsonlOutput::parse(schema, output, expectation)
 }
 
 macro_rules! metadata_snapshot {
@@ -381,7 +383,7 @@ fn workspace_metadata_jsonl() -> Result<()> {
     Resolved 1 package in [TIME]
     "#
     );
-    parse_metadata_jsonl_records(&output.stdout)?;
+    parse_metadata_jsonl(&output, JsonlResultExpectation::Required)?;
     Ok(())
 }
 
@@ -409,10 +411,12 @@ fn workspace_metadata_jsonl_sync_progress() -> Result<()> {
         .output()?;
     assert!(output.status.success());
 
-    let items = parse_metadata_jsonl_records(&output.stdout)?;
-    let Some((metadata, progress)) = items.split_last() else {
-        anyhow::bail!("expected JSONL progress and a final metadata report");
-    };
+    let parsed = parse_metadata_jsonl(&output, JsonlResultExpectation::Required)?;
+    let metadata = parsed
+        .result
+        .as_ref()
+        .context("missing final metadata report")?;
+    let progress = &parsed.progress;
 
     let progress = progress
         .iter()

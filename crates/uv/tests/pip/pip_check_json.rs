@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
@@ -14,6 +14,7 @@ use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_static::EnvVars;
 use uv_test::json_schema::JsonSchema;
+use uv_test::jsonl::{JsonlOutput, JsonlResultExpectation};
 use uv_test::packse::generate_wheel;
 use uv_test::{TestContext, copy_dir_ignore, uv_snapshot};
 
@@ -64,25 +65,26 @@ fn check_jsonl(context: &TestContext) -> Command {
     command
 }
 
-fn parse_check_jsonl(contents: &[u8]) -> Result<Value> {
-    anyhow::ensure!(
-        contents.ends_with(b"\n"),
-        "incomplete JSONL pip-check record"
-    );
-    let lines = std::str::from_utf8(contents)?.lines().collect::<Vec<_>>();
-    anyhow::ensure!(lines.len() == 1, "expected one JSONL pip-check result");
-    let mut report = CHECK_JSONL_SCHEMA
+fn parse_check_jsonl_output(
+    output: &Output,
+    expectation: JsonlResultExpectation,
+) -> Result<JsonlOutput> {
+    let schema = CHECK_JSONL_SCHEMA
         .as_ref()
-        .map_err(|error| anyhow::anyhow!("invalid JSONL pip-check schema: {error}"))?
-        .parse(lines[0].as_bytes())?;
-    let event_type = report
+        .map_err(|error| anyhow::anyhow!("invalid JSONL pip-check schema: {error}"))?;
+    JsonlOutput::parse(schema, output, expectation)
+}
+
+fn parse_check_jsonl(output: &Output) -> Result<Value> {
+    let parsed = parse_check_jsonl_output(output, JsonlResultExpectation::Required)?;
+    anyhow::ensure!(parsed.progress.is_empty(), "pip check emitted progress");
+    let mut report = parsed
+        .result
+        .context("missing final JSONL pip-check report")?;
+    report
         .as_object_mut()
         .context("JSONL pip-check report is not an object")?
         .remove("type");
-    anyhow::ensure!(
-        event_type == Some(Value::String("result".to_owned())),
-        "JSONL pip-check event is not a result"
-    );
     parse_check(&serde_json::to_vec(&report)?)
 }
 
@@ -179,10 +181,7 @@ fn pip_check_jsonl_empty_and_preview() -> Result<()> {
         .args(["--offline", "--output-format", "jsonl"])
         .assert()
         .success();
-    assert_eq!(
-        parse_check_jsonl(&unacknowledged.get_output().stdout)?,
-        expected
-    );
+    assert_eq!(parse_check_jsonl(unacknowledged.get_output())?, expected);
     let stderr = String::from_utf8_lossy(&unacknowledged.get_output().stderr);
     assert_eq!(
         stderr
@@ -192,10 +191,7 @@ fn pip_check_jsonl_empty_and_preview() -> Result<()> {
     );
     assert!(!stderr.contains("The `--output-format json` option is experimental"));
     let acknowledged = check_jsonl(&context).assert().success().stderr("");
-    assert_eq!(
-        parse_check_jsonl(&acknowledged.get_output().stdout)?,
-        expected
-    );
+    assert_eq!(parse_check_jsonl(acknowledged.get_output())?, expected);
     Ok(())
 }
 
@@ -229,7 +225,7 @@ fn pip_check_jsonl_completed_checks() -> Result<()> {
         .assert()
         .code(1)
         .stderr("");
-    assert_eq!(parse_check_jsonl(&normal.get_output().stdout)?, expected);
+    assert_eq!(parse_check_jsonl(normal.get_output())?, expected);
     for argument in ["--quiet", "--no-progress"] {
         let output = check_jsonl(&context)
             .args(target)
@@ -239,19 +235,22 @@ fn pip_check_jsonl_completed_checks() -> Result<()> {
             .stderr("");
         assert_eq!(output.get_output().stdout, normal.get_output().stdout);
     }
-    check_jsonl(&context)
+    let silent = check_jsonl(&context)
         .args(target)
         .arg("-qq")
         .assert()
         .code(1)
         .stdout("")
         .stderr("");
+    let parsed = parse_check_jsonl_output(silent.get_output(), JsonlResultExpectation::Forbidden)?;
+    assert_eq!(parsed.status.code(), Some(1));
+    assert!(parsed.progress.is_empty());
     assert_eq!(fs_err::read(package.join("METADATA"))?, metadata);
 
     write_metadata(&package, "diag-jsonl", "1.0.0", "")?;
     let json = check_json(&context).args(target).assert().success();
     let compatible = check_jsonl(&context).args(target).assert().success();
-    let report = parse_check_jsonl(&compatible.get_output().stdout)?;
+    let report = parse_check_jsonl(compatible.get_output())?;
     assert_eq!(report, parse_check(&json.get_output().stdout)?);
     assert_eq!(report["packages_checked"], 1);
     assert_eq!(report["diagnostics"], serde_json::json!([]));
@@ -406,7 +405,7 @@ fn pip_check_json_all_diagnostics() -> Result<()> {
         .assert()
         .code(1)
         .stderr("");
-    assert_eq!(parse_check_jsonl(&jsonl.get_output().stdout)?, report);
+    assert_eq!(parse_check_jsonl(jsonl.get_output())?, report);
     let repeated = command().assert().code(1).stderr("");
     assert_eq!(repeated.get_output().stdout, output.stdout);
     assert_eq!(fs_err::read(mixed.join("METADATA"))?, metadata_before);
@@ -493,10 +492,7 @@ fn pip_check_json_omits_invalid_metadata_values() -> Result<()> {
         .env(EnvVars::RUST_LOG, "warn")
         .assert()
         .code(1);
-    assert_eq!(
-        parse_check_jsonl(&repaired_jsonl.get_output().stdout)?,
-        report
-    );
+    assert_eq!(parse_check_jsonl(repaired_jsonl.get_output())?, report);
     for output in [
         &repaired.get_output().stdout,
         &repaired.get_output().stderr,
@@ -629,15 +625,19 @@ fn pip_check_json_setup_error_has_no_report() {
 }
 
 #[test]
-fn pip_check_jsonl_setup_error_has_no_report() {
+fn pip_check_jsonl_setup_error_has_no_report() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    check_jsonl(&context)
+    let output = check_jsonl(&context)
         .arg("--python")
         .arg(context.temp_dir.child("missing-python").path())
         .arg("--no-python-downloads")
         .assert()
         .code(2)
         .stdout("");
+    let parsed = parse_check_jsonl_output(output.get_output(), JsonlResultExpectation::Forbidden)?;
+    assert_eq!(parsed.status.code(), Some(2));
+    assert!(parsed.progress.is_empty());
+    Ok(())
 }
 
 #[test]

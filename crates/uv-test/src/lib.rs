@@ -6,6 +6,8 @@ pub mod find_links;
 mod http_server;
 #[cfg(feature = "jsonschema")]
 pub mod json_schema;
+#[cfg(feature = "jsonschema")]
+pub mod jsonl;
 pub mod packse;
 pub mod pypi_proxy;
 mod vendor;

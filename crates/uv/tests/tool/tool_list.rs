@@ -1,3 +1,4 @@
+use std::process::Output;
 use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
@@ -8,6 +9,7 @@ use insta::assert_snapshot;
 use serde_json::Value;
 use uv_static::EnvVars;
 use uv_test::json_schema::JsonSchema;
+use uv_test::jsonl::{JsonlOutput, JsonlResultExpectation};
 use uv_test::uv_snapshot;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -29,14 +31,6 @@ static TOOL_LIST_JSONL_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>>
         .map_err(|error| error.to_string())
     });
 
-static JSONL_PROGRESS_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> =
-    LazyLock::new(|| {
-        JsonSchema::new(include_str!(
-            "../../../../docs/reference/internals/jsonl-progress.schema.json"
-        ))
-        .map_err(|error| error.to_string())
-    });
-
 fn parse_tool_list(contents: &[u8]) -> Result<Value> {
     TOOL_LIST_SCHEMA
         .as_ref()
@@ -45,39 +39,27 @@ fn parse_tool_list(contents: &[u8]) -> Result<Value> {
         .context("tool-list schema mismatch")
 }
 
-fn parse_tool_list_jsonl(contents: &[u8]) -> Result<(Vec<Value>, Value)> {
-    anyhow::ensure!(
-        contents.ends_with(b"\n"),
-        "incomplete JSONL tool-list record"
-    );
+fn parse_tool_list_jsonl_output(
+    output: &Output,
+    expectation: JsonlResultExpectation,
+) -> Result<JsonlOutput> {
     let schema = TOOL_LIST_JSONL_SCHEMA
         .as_ref()
         .map_err(|error| anyhow::anyhow!("invalid JSONL tool-list schema: {error}"))?;
-    let mut events = std::str::from_utf8(contents)?
-        .lines()
-        .map(|line| schema.parse(line.as_bytes()))
-        .collect::<Result<Vec<_>>>()?;
-    let mut report = events
-        .pop()
+    JsonlOutput::parse(schema, output, expectation)
+}
+
+fn parse_tool_list_jsonl(output: &Output) -> Result<(Vec<Value>, Value)> {
+    let parsed = parse_tool_list_jsonl_output(output, JsonlResultExpectation::Required)?;
+    let mut report = parsed
+        .result
         .context("missing final JSONL tool-list report")?;
-    let progress_schema = JSONL_PROGRESS_SCHEMA
-        .as_ref()
-        .map_err(|error| anyhow::anyhow!("invalid JSONL progress schema: {error}"))?;
-    for event in &events {
-        progress_schema
-            .parse(&serde_json::to_vec(event)?)
-            .context("JSONL progress schema mismatch")?;
-    }
-    let event_type = report
+    report
         .as_object_mut()
         .context("JSONL tool-list report is not an object")?
         .remove("type");
-    anyhow::ensure!(
-        event_type == Some(Value::String("result".to_owned())),
-        "final JSONL event is not a result"
-    );
     let report = parse_tool_list(&serde_json::to_vec(&report)?)?;
-    Ok((events, report))
+    Ok((parsed.progress, report))
 }
 
 fn tool_list_jsonl(context: &uv_test::TestContext) -> std::process::Command {
@@ -965,7 +947,7 @@ fn tool_list_jsonl_empty_modes() -> Result<()> {
                 .args(arguments)
                 .assert()
                 .success();
-            let (progress, report) = parse_tool_list_jsonl(&output.get_output().stdout)?;
+            let (progress, report) = parse_tool_list_jsonl(output.get_output())?;
             assert!(progress.is_empty());
             assert_eq!(
                 report,
@@ -1021,15 +1003,19 @@ fn tool_list_jsonl_installed() -> Result<()> {
             .args(arguments)
             .assert()
             .success();
-        let (progress, report) = parse_tool_list_jsonl(&output.get_output().stdout)?;
+        let (progress, report) = parse_tool_list_jsonl(output.get_output())?;
         assert!(progress.is_empty());
         assert_eq!(report, expected);
     }
-    tool_list_jsonl(&context)
+    let silent = tool_list_jsonl(&context)
         .args(["--offline", "-qq"])
         .assert()
         .success()
         .stdout("");
+    let parsed =
+        parse_tool_list_jsonl_output(silent.get_output(), JsonlResultExpectation::Forbidden)?;
+    assert!(parsed.status.success());
+    assert!(parsed.progress.is_empty());
     Ok(())
 }
 
@@ -1086,7 +1072,7 @@ async fn tool_list_jsonl_outdated_progress() -> Result<()> {
         .args(["--output-format", "jsonl", "--preview-features", "jsonl"])
         .assert()
         .success();
-    let (progress, report) = parse_tool_list_jsonl(&output.get_output().stdout)?;
+    let (progress, report) = parse_tool_list_jsonl(output.get_output())?;
     assert_eq!(report, expected);
     assert_eq!(
         Value::Array(progress),
@@ -1108,7 +1094,7 @@ async fn tool_list_jsonl_outdated_progress() -> Result<()> {
             ])
             .assert()
             .success();
-        let (progress, report) = parse_tool_list_jsonl(&output.get_output().stdout)?;
+        let (progress, report) = parse_tool_list_jsonl(output.get_output())?;
         assert!(progress.is_empty());
         assert_eq!(report, expected);
     }
@@ -1126,7 +1112,7 @@ async fn tool_list_jsonl_outdated_progress() -> Result<()> {
         .args(["--output-format", "jsonl", "--preview-features", "jsonl"])
         .assert()
         .success();
-    let (progress, report) = parse_tool_list_jsonl(&output.get_output().stdout)?;
+    let (progress, report) = parse_tool_list_jsonl(output.get_output())?;
     assert_eq!(report["tools"], serde_json::json!([]));
     assert_eq!(
         Value::Array(progress),
@@ -1165,12 +1151,11 @@ async fn tool_list_jsonl_index_failure() -> Result<()> {
         .code(2);
     let stdout = String::from_utf8_lossy(&output.get_output().stdout);
     assert!(!stdout.contains("tool-list-jsonl-canary"));
-    let events = stdout
-        .lines()
-        .map(serde_json::from_str::<Value>)
-        .collect::<serde_json::Result<Vec<_>>>()?;
+    let parsed =
+        parse_tool_list_jsonl_output(output.get_output(), JsonlResultExpectation::Forbidden)?;
+    assert_eq!(parsed.status.code(), Some(2));
     assert_eq!(
-        Value::Array(events),
+        Value::Array(parsed.progress),
         serde_json::json!([
             {"type":"progress","phase":"latest_version","status":"started","total":1}
         ])
@@ -1200,8 +1185,8 @@ fn tool_list_jsonl_preview_warning() -> Result<()> {
         .assert()
         .success();
     assert_eq!(
-        parse_tool_list_jsonl(&unacknowledged.get_output().stdout)?,
-        parse_tool_list_jsonl(&acknowledged.get_output().stdout)?
+        parse_tool_list_jsonl(unacknowledged.get_output())?,
+        parse_tool_list_jsonl(acknowledged.get_output())?
     );
     assert!(
         !String::from_utf8_lossy(&acknowledged.get_output().stderr)
