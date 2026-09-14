@@ -56,7 +56,7 @@ use uv_workspace::pyproject::ExtraBuildDependencies;
 use crate::commands::pip::loggers::DefaultResolveLogger;
 use crate::commands::pip::{operations, resolution_markers, resolution_tags};
 use crate::commands::reporters::PythonDownloadReporter;
-use crate::commands::{ExitStatus, OutputWriter, UvError};
+use crate::commands::{ExitStatus, OutputStyle, OutputWriter, UvError};
 use crate::printer::Printer;
 
 /// Resolve a set of requirements into a set of pinned versions.
@@ -603,7 +603,11 @@ pub(crate) async fn pip_compile(
     }
 
     // Write the resolved dependencies to the output channel.
-    let mut writer = OutputWriter::new(!quiet || output_file.is_none(), output_file);
+    let mut writer = OutputWriter::new(
+        !quiet || output_file.is_none(),
+        output_file,
+        OutputStyle::Styled,
+    );
 
     if include_header {
         writeln!(
