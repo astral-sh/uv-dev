@@ -806,7 +806,8 @@ mod tests {
             Some("pypi"),
         )?;
         let serialized = serde_json::json!({
-            "indexes": [proxy],
+            "indexes": [],
+            "proxies": [proxy],
             "flat-index": [],
             "no-index": false,
         });
