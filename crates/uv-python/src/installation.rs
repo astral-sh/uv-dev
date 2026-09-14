@@ -644,7 +644,7 @@ impl PythonInstallationKey {
     }
 
     /// Return a registry tag that distinguishes runtime and build variants.
-    #[cfg(any(windows, test))]
+    #[cfg(windows)]
     pub(crate) fn registry_tag(&self) -> String {
         // Preserve the runtime suffix used by older uv versions so registry cleanup recognizes
         // their registrations as belonging to installations that are still present.
@@ -982,6 +982,7 @@ mod tests {
     use super::*;
     use uv_platform::ArchVariant;
 
+    #[cfg(windows)]
     #[test]
     fn test_python_installation_key_registry_tag() -> Result<(), PythonInstallationKeyError> {
         // Keep the registry names written by older uv versions, including when build variants
