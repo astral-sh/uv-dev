@@ -196,6 +196,7 @@ fn create_venv_skips_distutils_patch_on_py310() {
     let site_packages = site_packages_path(context.venv.path(), "python3.10");
     assert!(!site_packages.join("_virtualenv.py").exists());
     assert!(!site_packages.join("_virtualenv.pth").exists());
+    assert!(!site_packages.join("_virtualenv.start").exists());
 }
 
 #[test]
@@ -219,6 +220,7 @@ fn create_venv_keeps_distutils_patch_on_py39() {
     let site_packages = site_packages_path(context.venv.path(), "python3.9");
     assert!(site_packages.join("_virtualenv.py").is_file());
     assert!(site_packages.join("_virtualenv.pth").is_file());
+    assert!(site_packages.join("_virtualenv.start").is_file());
 }
 
 #[test]
