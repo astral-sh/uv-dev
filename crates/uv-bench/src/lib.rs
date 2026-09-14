@@ -33,6 +33,12 @@ pub fn fixture_path(filename: &str) -> PathBuf {
 
 /// Run an optimized uv binary without inheriting user-specific uv configuration.
 pub fn uv_command() -> Command {
+    let cache = std::path::absolute("../../.cache").expect("Failed to locate benchmark cache");
+    uv_command_with_cache(&cache)
+}
+
+/// Run an optimized uv binary with an isolated cache directory.
+pub fn uv_command_with_cache(cache: &Path) -> Command {
     let root = std::path::absolute("../..").expect("Failed to locate repository root");
     let binary = std::env::var_os("UV_BENCH_BINARY")
         .map(PathBuf::from)
@@ -56,7 +62,7 @@ pub fn uv_command() -> Command {
         .env_remove("CONDA_PREFIX")
         .env("UV_PYTHON_DOWNLOADS", "never")
         .args(["--no-config", "--cache-dir"])
-        .arg(root.join(".cache"))
+        .arg(cache)
         .stdout(Stdio::null());
     command
 }
