@@ -90,6 +90,9 @@ struct ToolReport {
     /// Installed version of the tool.
     #[cfg_attr(feature = "schemars", schemars(with = "String"))]
     version: Version,
+    /// Local project path recorded for an editable installation, when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    editable_project_location: Option<PortablePathBuf>,
     /// Latest available version when `--outdated` is requested, or null otherwise.
     #[cfg_attr(feature = "schemars", schemars(with = "Option<String>"))]
     latest_version: Option<Version>,
@@ -160,6 +163,25 @@ impl ToolListReport {
             let name = &tool.name;
             let version = &tool.version;
 
+            let editable = tool
+                .editable_project_location
+                .as_ref()
+                .map(|path| {
+                    // Keep metadata-controlled paths on one line without terminal escape sequences.
+                    let path = path.as_ref().simplified_display().to_string();
+                    let path = anstream::adapter::strip_str(&path).to_string();
+                    let mut escaped = String::with_capacity(path.len());
+                    for character in path.chars() {
+                        if character.is_control() || matches!(character, '\u{2028}' | '\u{2029}') {
+                            escaped.extend(character.escape_default());
+                        } else {
+                            escaped.push(character);
+                        }
+                    }
+                    format!(" (editable from {escaped})")
+                })
+                .unwrap_or_default();
+
             let version_specifier = if output.contains(ToolListOutput::VERSION_SPECIFIERS)
                 && !tool.version_specifiers.is_empty()
             {
@@ -200,7 +222,7 @@ impl ToolListReport {
                 .unwrap_or_default();
 
             let heading = format!(
-                "{name} v{version}{version_specifier}{extra_requirements}{with_requirements}{python_version}{latest_version}"
+                "{name} v{version}{editable}{version_specifier}{extra_requirements}{with_requirements}{python_version}{latest_version}"
             );
             if output.contains(ToolListOutput::PATHS) {
                 writeln!(
@@ -294,8 +316,9 @@ pub(crate) async fn list(
             }
         };
 
-        let version = match tool_env.version() {
-            Ok(version) => version,
+        // Get the installed tool distribution.
+        let distribution = match tool_env.installed_dist() {
+            Ok(distribution) => distribution,
             Err(error) => {
                 if let uv_tool::Error::EnvironmentError(error) = error {
                     warn_user!(
@@ -309,7 +332,7 @@ pub(crate) async fn list(
             }
         };
 
-        valid_tools.push((name, tool, tool_env, version));
+        valid_tools.push((name, tool, tool_env, distribution));
     }
 
     // Determine the latest version for each tool when `--outdated` is requested.
@@ -321,7 +344,7 @@ pub(crate) async fn list(
         let reporter = LatestVersionReporter::from(printer).with_length(valid_tools.len() as u64);
 
         let mut fetches = futures::stream::iter(&valid_tools)
-            .map(|(name, tool, tool_env, _version)| {
+            .map(|(name, tool, tool_env, _distribution)| {
                 let client_builder = client_builder.clone();
                 let download_concurrency = download_concurrency.clone();
                 let args = args.clone();
@@ -383,7 +406,8 @@ pub(crate) async fn list(
 
     let tools = valid_tools
         .into_iter()
-        .filter_map(|(name, tool, tool_env, version)| {
+        .filter_map(|(name, tool, tool_env, distribution)| {
+            let version = distribution.version().clone();
             let latest_version = latest
                 .get(&name)
                 .and_then(Option::as_ref)
@@ -396,6 +420,10 @@ pub(crate) async fn list(
                 return None;
             }
 
+            let editable_project_location = distribution
+                .as_editable()
+                .and_then(|url| url.to_file_path().ok())
+                .map(|path| path.as_path().into());
             let commands = tool
                 .entrypoints()
                 .iter()
@@ -430,6 +458,7 @@ pub(crate) async fn list(
             Some(ToolReport {
                 name,
                 version,
+                editable_project_location,
                 latest_version,
                 environment,
                 commands,
