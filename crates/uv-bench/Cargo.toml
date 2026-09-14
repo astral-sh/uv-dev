@@ -39,6 +39,15 @@ path = "benches/installed_sidecar_reads.rs"
 harness = false
 
 [[bench]]
+name = "cache_key_backends"
+path = "benches/cache_key_backends.rs"
+harness = false
+
+[[test]]
+name = "cache_key_statx"
+path = "tests/cache_key_statx.rs"
+
+[[bench]]
 name = "uv_pep440"
 path = "benches/uv_pep440.rs"
 harness = false
@@ -81,6 +90,7 @@ criterion = { version = "5.0.1", default-features = false, package = "codspeed-c
 flate2 = { workspace = true }
 fs-err = { workspace = true }
 futures = { workspace = true }
+globwalk = { workspace = true }
 hex = { workspace = true }
 jiff = { workspace = true }
 rayon = { workspace = true }
@@ -91,7 +101,9 @@ tempfile = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 toml = { workspace = true }
+walkdir = { workspace = true }
 
 [target.'cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64", target_arch = "loongarch64", target_arch = "powerpc64")))'.dev-dependencies]
 io-uring = { workspace = true }
+linux-raw-sys = { workspace = true, features = ["general"] }
 rustix = { workspace = true }

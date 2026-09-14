@@ -9,6 +9,7 @@ use uv_fs::{Simplified, created_time};
 
 use crate::git_info::{Commit, Tags};
 use crate::glob::cluster_globs;
+use crate::glob_metadata::{GlobMetadataCollector, OrdinaryGlobMetadata};
 use crate::timestamp::Timestamp;
 
 #[derive(Debug, thiserror::Error)]
@@ -62,6 +63,17 @@ impl CacheInfo {
 
     /// Compute the cache info for a given directory.
     pub fn from_directory(directory: &Path) -> Result<Self, CacheInfoError> {
+        Self::from_directory_with_glob_collector(directory, &mut OrdinaryGlobMetadata)
+    }
+
+    /// Compute cache info with a caller-selected collector for clustered-glob leaf metadata.
+    ///
+    /// This comparison hook does not change how cache keys, globs, or non-glob inputs are handled.
+    #[doc(hidden)]
+    pub fn from_directory_with_glob_collector(
+        directory: &Path,
+        collector: &mut impl GlobMetadataCollector,
+    ) -> Result<Self, CacheInfoError> {
         let mut commit = None;
         let mut tags = None;
         let mut last_changed: Option<(PathBuf, Timestamp)> = None;
@@ -232,47 +244,15 @@ impl CacheInfo {
                 )
                 .file_type(globwalk::FileType::FILE | globwalk::FileType::SYMLINK)
                 .build()?;
-                for entry in walker {
-                    let entry = match entry {
-                        Ok(entry) => entry,
-                        Err(err) => {
-                            warn!("Failed to read glob entry: {err}");
-                            continue;
-                        }
-                    };
-                    let metadata = if entry.path_is_symlink() {
-                        // resolve symlinks for leaf entries without following symlinks while globbing
-                        match fs_err::metadata(entry.path()) {
-                            Ok(metadata) => metadata,
-                            Err(err) => {
-                                warn!("Failed to resolve symlink for glob entry: {err}");
-                                continue;
-                            }
-                        }
-                    } else {
-                        match entry.metadata() {
-                            Ok(metadata) => metadata,
-                            Err(err) => {
-                                warn!("Failed to read metadata for glob entry: {err}");
-                                continue;
-                            }
-                        }
-                    };
-                    if !metadata.is_file() {
-                        if !entry.path_is_symlink() {
-                            // don't warn if it was a symlink - it may legitimately resolve to a directory
-                            warn!(
-                                "Expected file for cache key, but found directory: `{}`",
-                                entry.path().display()
-                            );
-                        }
+                for entry in collector.collect(walker)? {
+                    let Some((path, timestamp)) = entry.into_timestamp() else {
                         continue;
-                    }
-                    let timestamp = Timestamp::from_metadata(&metadata);
-                    if last_changed.as_ref().is_none_or(|(_, prev_timestamp)| {
-                        *prev_timestamp < Timestamp::from_metadata(&metadata)
-                    }) {
-                        last_changed = Some((entry.into_path(), timestamp));
+                    };
+                    if last_changed
+                        .as_ref()
+                        .is_none_or(|(_, prev_timestamp)| *prev_timestamp < timestamp)
+                    {
+                        last_changed = Some((path, timestamp));
                     }
                 }
             }
