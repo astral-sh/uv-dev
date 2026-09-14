@@ -34,7 +34,7 @@ use crate::commands::project::{
     ProjectEnvironmentPolicy, ProjectInterpreter, ScriptInterpreter, UniversalState,
     WorkspacePython, default_dependency_groups, detect_conflicts,
 };
-use crate::commands::{ExitStatus, OutputWriter, UvError};
+use crate::commands::{ExitStatus, OutputStyle, OutputWriter, UvError};
 use crate::printer::Printer;
 use crate::settings::{FrozenSource, LockCheck, ResolverSettings};
 
@@ -330,9 +330,6 @@ pub(crate) async fn export(
         ));
     }
 
-    // Write the resolved dependencies to the output channel.
-    let mut writer = OutputWriter::new(!quiet || output_file.is_none(), output_file.as_deref());
-
     // Determine the output format.
     let format = format.unwrap_or_else(|| {
         if output_file
@@ -352,6 +349,17 @@ pub(crate) async fn export(
             ExportFormat::RequirementsTxt
         }
     });
+
+    // Serialized JSON must not pass through terminal-control filtering.
+    let style = match format {
+        ExportFormat::RequirementsTxt | ExportFormat::PylockToml => OutputStyle::Styled,
+        ExportFormat::CycloneDX1_5 => OutputStyle::Raw,
+    };
+    let mut writer = OutputWriter::new(
+        !quiet || output_file.is_none(),
+        output_file.as_deref(),
+        style,
+    );
 
     // Skip conflict detection for CycloneDX exports, as SBOMs are meant to document all dependencies including conflicts.
     if !matches!(format, ExportFormat::CycloneDX1_5) {

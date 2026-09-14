@@ -241,6 +241,183 @@ fn workspace_metadata_serialized_path_ignores_color() -> Result<()> {
     Ok(())
 }
 
+fn create_export_workspace(context: &TestContext, member_path: &str) -> Result<()> {
+    let workspace = context.temp_dir.path();
+    let member = workspace.join(member_path);
+    fs::create_dir_all(&member)?;
+    fs::write(
+        workspace.join("pyproject.toml"),
+        toml::to_string(&json!({
+            "project": {
+                "name": "root",
+                "version": "0.1.0",
+                "requires-python": ">=3.12",
+                "dependencies": ["member"]
+            },
+            "tool": {"uv": {
+                "package": false,
+                "sources": {"member": {"workspace": true}},
+                "workspace": {"members": [member_path]}
+            }}
+        }))?,
+    )?;
+    fs::write(
+        member.join("pyproject.toml"),
+        indoc! {r#"
+            [project]
+            name = "member"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = []
+
+            [tool.uv]
+            package = false
+        "#},
+    )?;
+    context.lock().args(["--python", "3.12"]).assert().success();
+    Ok(())
+}
+
+fn assert_cyclonedx_workspace_path(bytes: &[u8], expected: &str) -> Result<()> {
+    let bom: Value = serde_json::from_slice(bytes)?;
+    assert_eq!(bom["bomFormat"], "CycloneDX");
+    assert_eq!(bom["specVersion"], "1.5");
+    let values: Vec<_> = bom["components"]
+        .as_array()
+        .context("missing CycloneDX components")?
+        .iter()
+        .filter(|component| component["name"] == "member")
+        .flat_map(|component| component["properties"].as_array().into_iter().flatten())
+        .filter(|property| property["name"] == "uv:workspace:path")
+        .map(|property| property["value"].as_str())
+        .collect();
+    assert_eq!(values, [Some(expected)]);
+    Ok(())
+}
+
+#[test]
+fn cyclonedx_export_serialized_path_ignores_color() -> Result<()> {
+    let context = offline_context().with_env(EnvVars::UV_PREVIEW_FEATURES, "sbom-export");
+    let member_path = "member\u{7f}\u{85}\u{2028}\u{2029}";
+    create_export_workspace(&context, member_path)?;
+
+    for color in ["auto", "never", "always"] {
+        for quiet in 0..=2 {
+            for with_file in [false, true] {
+                let output_file = context
+                    .temp_dir
+                    .join(format!("bom-{color}-{quiet}-{with_file}.json"));
+                let mut command = context.export();
+                command
+                    .args([
+                        "--frozen",
+                        "--format",
+                        "cyclonedx1.5",
+                        "--no-hashes",
+                        "--color",
+                        color,
+                    ])
+                    .args(std::iter::repeat_n("--quiet", quiet));
+                if with_file {
+                    command.arg("--output-file").arg(&output_file);
+                }
+                let output = command.assert().success();
+                let output = output.get_output();
+                if !with_file || quiet == 0 {
+                    assert_cyclonedx_workspace_path(&output.stdout, member_path)?;
+                } else {
+                    assert!(output.stdout.is_empty());
+                }
+                if with_file {
+                    assert_cyclonedx_workspace_path(&fs::read(&output_file)?, member_path)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn assert_styled_output_file(output: &Output, output_file: &Path) -> Result<()> {
+    assert!(output.stdout.windows(2).any(|bytes| bytes == b"\x1b["));
+    let contents = fs::read(output_file)?;
+    assert!(!contents.contains(&b'\x1b'));
+    assert_eq!(
+        contents,
+        anstream::adapter::strip_bytes(&output.stdout).into_vec()
+    );
+    Ok(())
+}
+
+#[test]
+fn text_export_and_compile_keep_styled_stdout() -> Result<()> {
+    let context = offline_context();
+    let workspace = context.temp_dir.join("workspace");
+    create_workspace(&context, &workspace)?;
+    fs::write(workspace.join("requirements.in"), "")?;
+
+    for (format, export_file, compile_file) in [
+        ("requirements.txt", "export.txt", "compile.txt"),
+        ("pylock.toml", "pylock.export.toml", "pylock.compile.toml"),
+    ] {
+        let export_file = workspace.join(export_file);
+        let output = context
+            .export()
+            .current_dir(&workspace)
+            .args(["--frozen", "--format", format, "--color", "always"])
+            .arg("--output-file")
+            .arg(&export_file)
+            .assert()
+            .success();
+        assert_styled_output_file(output.get_output(), &export_file)?;
+
+        let compile_file = workspace.join(compile_file);
+        let output = context
+            .pip_compile()
+            .current_dir(&workspace)
+            .args(["requirements.in", "--format", format, "--color", "always"])
+            .arg("--output-file")
+            .arg(&compile_file)
+            .assert()
+            .success();
+        assert_styled_output_file(output.get_output(), &compile_file)?;
+    }
+    Ok(())
+}
+
+/// A failed stdout write must not commit an output-file buffer.
+#[test]
+#[cfg(unix)]
+fn cyclonedx_export_closed_pipe_leaves_output_file() -> Result<()> {
+    let context = offline_context().with_env(EnvVars::UV_PREVIEW_FEATURES, "sbom-export");
+    create_export_workspace(&context, "member")?;
+    let output_file = context.temp_dir.join("bom.json");
+    fs::write(&output_file, "untouched\n")?;
+
+    for with_file in [false, true] {
+        let (read, write) = nix::unistd::pipe()?;
+        drop(read);
+        let mut command = context.export();
+        command.args([
+            "--frozen",
+            "--format",
+            "cyclonedx1.5",
+            "--no-hashes",
+            "--color",
+            "never",
+        ]);
+        if with_file {
+            command.arg("--output-file").arg(&output_file);
+        }
+        command
+            .stdout(Stdio::from(write))
+            .assert()
+            .code(2)
+            .stderr(predicates::str::contains("Broken pipe"));
+        assert_eq!(fs::read(&output_file)?, b"untouched\n");
+    }
+    Ok(())
+}
+
 /// A consumer that closes its pipe keeps the command's established output-error policy.
 #[test]
 #[cfg(unix)]

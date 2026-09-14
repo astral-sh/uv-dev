@@ -481,19 +481,36 @@ fn write_bytecode_summary(
 
 /// A multicasting writer that writes to both the standard output and an output file, if present.
 struct OutputWriter<'a> {
-    stdout: Option<AutoStream<std::io::Stdout>>,
+    stdout: Option<OutputStream>,
     output_file: Option<&'a Path>,
     buffer: Vec<u8>,
+    style: OutputStyle,
+}
+
+/// Whether the output contains terminal styling or already serialized data.
+#[derive(Clone, Copy)]
+enum OutputStyle {
+    Styled,
+    Raw,
+}
+
+enum OutputStream {
+    Styled(AutoStream<std::io::Stdout>),
+    Raw(std::io::Stdout),
 }
 
 impl<'a> OutputWriter<'a> {
     /// Create a new output writer.
-    fn new(include_stdout: bool, output_file: Option<&'a Path>) -> Self {
-        let stdout = include_stdout.then(|| AutoStream::<std::io::Stdout>::auto(stdout()));
+    fn new(include_stdout: bool, output_file: Option<&'a Path>, style: OutputStyle) -> Self {
+        let stdout = include_stdout.then(|| match style {
+            OutputStyle::Styled => OutputStream::Styled(AutoStream::auto(stdout())),
+            OutputStyle::Raw => OutputStream::Raw(stdout()),
+        });
         Self {
             stdout,
             output_file,
             buffer: Vec::new(),
+            style,
         }
     }
 
@@ -508,7 +525,10 @@ impl<'a> OutputWriter<'a> {
             let output_file = fs_err::read_link(output_file)
                 .map(Cow::Owned)
                 .unwrap_or(Cow::Borrowed(output_file));
-            let stream = anstream::adapter::strip_bytes(&self.buffer).into_vec();
+            let stream = match self.style {
+                OutputStyle::Styled => anstream::adapter::strip_bytes(&self.buffer).into_vec(),
+                OutputStyle::Raw => self.buffer,
+            };
             uv_fs::write_atomic(output_file, &stream).await?;
         }
         Ok(())
@@ -525,7 +545,10 @@ impl std::io::Write for OutputWriter<'_> {
 
         // Write to standard output.
         if let Some(stdout) = &mut self.stdout {
-            stdout.write_all(buf)?;
+            match stdout {
+                OutputStream::Styled(stdout) => stdout.write_all(buf)?,
+                OutputStream::Raw(stdout) => stdout.write_all(buf)?,
+            }
         }
 
         Ok(buf.len())
@@ -533,7 +556,10 @@ impl std::io::Write for OutputWriter<'_> {
 
     fn flush(&mut self) -> std::io::Result<()> {
         if let Some(stdout) = &mut self.stdout {
-            stdout.flush()?;
+            match stdout {
+                OutputStream::Styled(stdout) => stdout.flush()?,
+                OutputStream::Raw(stdout) => stdout.flush()?,
+            }
         }
         Ok(())
     }
