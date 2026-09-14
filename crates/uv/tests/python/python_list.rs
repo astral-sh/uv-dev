@@ -709,7 +709,7 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Unable to parse the JSON Python download list at http://[LOCALHOST]/invalid-default
-      Caused by: data did not match any variant of untagged enum Compatible at line 56 column 5
+      cause: data did not match any variant of untagged enum Compatible at line 56 column 5
     ");
 
     uv_snapshot!(context.filters(), context
@@ -719,7 +719,7 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Unable to parse the JSON Python download list at http://[LOCALHOST]/versioned-invalid-default
-      Caused by: data did not match any variant of untagged enum Compatible at line 1 column 13
+      cause: data did not match any variant of untagged enum Compatible at line 1 column 13
     ");
 
     uv_snapshot!(context.filters(), context
@@ -729,7 +729,7 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Unable to parse the JSON Python download list at http://[LOCALHOST]/versioned-invalid-build-variant
-      Caused by: data did not match any variant of untagged enum Compatible at line 1 column 13
+      cause: data did not match any variant of untagged enum Compatible at line 1 column 13
     ");
 
     Ok(())
