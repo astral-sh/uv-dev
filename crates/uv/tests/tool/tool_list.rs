@@ -1,19 +1,22 @@
-use std::process::Output;
+use std::collections::BTreeMap;
+use std::process::{Command, Output};
 use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
-use assert_fs::fixture::PathChild;
+use assert_fs::fixture::{ChildPath, PathChild};
 use fs_err as fs;
+use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use serde_json::Value;
 use uv_static::EnvVars;
 use uv_test::json_schema::JsonSchema;
 use uv_test::jsonl::{JsonlOutput, JsonlResultExpectation};
-use uv_test::uv_snapshot;
+use uv_test::packse::generate_wheel;
+use uv_test::{TestContext, uv_snapshot, venv_bin_path};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{method, path},
+    matchers::{basic_auth, method, path},
 };
 
 static TOOL_LIST_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> = LazyLock::new(|| {
@@ -79,6 +82,51 @@ fn install_local_jsonl_tool(context: &uv_test::TestContext) {
         .arg("--offline")
         .assert()
         .success();
+}
+
+fn tool_list_index_response(version: &str) -> ResponseTemplate {
+    let filename = format!("simple_launcher-{version}-py3-none-any.whl");
+    ResponseTemplate::new(200).set_body_raw(
+        serde_json::json!({
+            "meta": {"api-version": "1.1"},
+            "name": "simple-launcher",
+            "files": [{
+                "filename": filename,
+                "url": filename,
+                "hashes": {},
+                "upload-time": "2024-03-24T00:00:00Z"
+            }]
+        })
+        .to_string(),
+        "application/vnd.pypi.simple.v1+json",
+    )
+}
+
+fn tool_list_outdated_reports(list: impl Fn() -> Command) -> Result<Value> {
+    let json = list()
+        .args([
+            "--outdated",
+            "--output-format",
+            "json",
+            "--preview-features",
+            "json-output",
+        ])
+        .assert()
+        .success();
+    let expected = parse_tool_list(&json.get_output().stdout)?;
+    let jsonl = list()
+        .args([
+            "--outdated",
+            "--output-format",
+            "jsonl",
+            "--preview-features",
+            "jsonl",
+        ])
+        .assert()
+        .success();
+    let (_, report) = parse_tool_list_jsonl(jsonl.get_output())?;
+    assert_eq!(report, expected);
+    Ok(report)
 }
 
 macro_rules! tool_list_json_snapshot {
@@ -315,6 +363,449 @@ async fn tool_list_outdated_respects_configured_index() -> Result<()> {
     - blackd
     ");
 
+    Ok(())
+}
+
+fn install_local_example_tool(context: &TestContext) -> Result<(ChildPath, ChildPath)> {
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let project = context.temp_dir.child("example-tool");
+    let package = project.child("src").child("example_tool");
+
+    fs::create_dir_all(&package)?;
+    fs::write(
+        project.child("pyproject.toml"),
+        indoc! {r#"
+            [project]
+            name = "example-tool"
+            version = "1.0.0"
+            requires-python = ">=3.12"
+
+            [project.scripts]
+            example-tool = "example_tool:main"
+
+            [build-system]
+            requires = ["uv_build>=0.7,<10000"]
+            build-backend = "uv_build"
+        "#},
+    )?;
+    fs::write(
+        package.child("__init__.py"),
+        indoc! {r#"
+            def main():
+                print("example")
+        "#},
+    )?;
+
+    context
+        .tool_install()
+        .arg("--offline")
+        .arg(project.path())
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    Ok((tool_dir, bin_dir))
+}
+
+#[tokio::test]
+async fn tool_list_outdated_respects_configured_no_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filtered_exe_suffix();
+    let (tool_dir, bin_dir) = install_local_example_tool(&context)?;
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/example-tool/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"{
+                "meta": { "api-version": "1.1" },
+                "name": "example-tool",
+                "files": [{
+                    "filename": "example_tool-2.0.0-py3-none-any.whl",
+                    "url": "example_tool-2.0.0-py3-none-any.whl",
+                    "hashes": {},
+                    "upload-time": "2024-03-24T00:00:00Z"
+                }]
+            }"#,
+            "application/vnd.pypi.simple.v1+json",
+        ))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let config = context.temp_dir.child("uv.toml");
+    fs::write(
+        &config,
+        formatdoc! {r#"
+            no-index = true
+
+            [[index]]
+            name = "local"
+            url = "{}/simple"
+            default = true
+        "#, server.uri()},
+    )?;
+
+    uv_snapshot!(context.filters(), context.tool_list()
+        .arg("--outdated")
+        .arg("--config-file")
+        .arg(config.as_os_str())
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_list_outdated_respects_configured_legacy_indexes() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filtered_exe_suffix();
+    let (tool_dir, bin_dir) = install_local_example_tool(&context)?;
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/extra/example-tool/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"{
+                "meta": { "api-version": "1.1" },
+                "name": "example-tool",
+                "files": [{
+                    "filename": "example_tool-2.0.0-py3-none-any.whl",
+                    "url": "example_tool-2.0.0-py3-none-any.whl",
+                    "hashes": {},
+                    "upload-time": "2024-03-24T00:00:00Z"
+                }]
+            }"#,
+            "application/vnd.pypi.simple.v1+json",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/default/example-tool/"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let config = context.temp_dir.child("uv.toml");
+    fs::write(
+        &config,
+        formatdoc! {r#"
+            index-url = "{0}/default"
+            extra-index-url = ["{0}/extra"]
+        "#, server.uri()},
+    )?;
+
+    uv_snapshot!(context.filters(), context.tool_list()
+        .arg("--outdated")
+        .arg("--config-file")
+        .arg(config.as_os_str())
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example-tool v1.0.0 [latest: 2.0.0]
+    - example-tool
+    ");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_list_outdated_reports_respect_configured_no_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    install_local_jsonl_tool(&context);
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/simple-launcher/"))
+        .respond_with(tool_list_index_response("9.0.0"))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let config = context.temp_dir.child("uv.toml");
+    fs::write(
+        &config,
+        formatdoc! {r#"
+            no-index = true
+
+            [[index]]
+            url = "{}/simple"
+            default = true
+        "#, server.uri()},
+    )?;
+
+    let report = tool_list_outdated_reports(|| {
+        let mut command = context.tool_list();
+        command.arg("--config-file").arg(config.as_os_str());
+        command
+    })?;
+    assert_eq!(report["tools"], serde_json::json!([]));
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_list_outdated_reports_respect_configured_find_links() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    install_local_jsonl_tool(&context);
+    let wheels = context.temp_dir.child("wheels");
+    fs::create_dir_all(&wheels)?;
+    let (filename, contents) = generate_wheel(
+        &"simple-launcher".parse()?,
+        &"0.2.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+    );
+    fs::write(wheels.child(filename), contents)?;
+    let find_links = url::Url::from_directory_path(wheels.path())
+        .map_err(|()| anyhow::anyhow!("wheel directory is not absolute"))?;
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/simple-launcher/"))
+        .respond_with(tool_list_index_response("9.0.0"))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let config = context.temp_dir.child("uv.toml");
+    fs::write(
+        &config,
+        formatdoc! {r#"
+            no-index = true
+            find-links = ["{find_links}"]
+
+            [[index]]
+            url = "{}/simple"
+            default = true
+        "#, server.uri()},
+    )?;
+
+    let report = tool_list_outdated_reports(|| {
+        let mut command = context.tool_list();
+        command.arg("--config-file").arg(config.as_os_str());
+        command
+    })?;
+    assert_eq!(report["tools"][0]["name"], "simple-launcher");
+    assert_eq!(report["tools"][0]["latest_version"], "0.2.0");
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_list_outdated_reports_respect_configured_legacy_indexes() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    install_local_jsonl_tool(&context);
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/extra/simple-launcher/"))
+        .respond_with(tool_list_index_response("0.2.0"))
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/default/simple-launcher/"))
+        .respond_with(tool_list_index_response("0.3.0"))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let config = context.temp_dir.child("uv.toml");
+    fs::write(
+        &config,
+        formatdoc! {r#"
+            index-url = "{0}/default"
+            extra-index-url = ["{0}/extra"]
+        "#, server.uri()},
+    )?;
+    let list = || {
+        let mut command = context.tool_list();
+        command.arg("--config-file").arg(config.as_os_str());
+        command
+    };
+
+    let report = tool_list_outdated_reports(list)?;
+    assert_eq!(report["tools"][0]["latest_version"], "0.2.0");
+    server.verify().await;
+    server.reset().await;
+
+    Mock::given(method("GET"))
+        .and(path("/extra/simple-launcher/"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/default/simple-launcher/"))
+        .respond_with(tool_list_index_response("0.3.0"))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let report = tool_list_outdated_reports(list)?;
+    assert_eq!(report["tools"][0]["latest_version"], "0.3.0");
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_list_outdated_reports_respect_configured_index_strategy() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    install_local_jsonl_tool(&context);
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/first/simple-launcher/"))
+        .respond_with(tool_list_index_response("0.2.0"))
+        .expect(4)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/second/simple-launcher/"))
+        .respond_with(tool_list_index_response("0.3.0"))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let config = context.temp_dir.child("uv.toml");
+
+    for (strategy, latest) in [("first-index", "0.2.0"), ("unsafe-best-match", "0.3.0")] {
+        fs::write(
+            &config,
+            formatdoc! {r#"
+                index-strategy = "{strategy}"
+
+                [[index]]
+                url = "{0}/first"
+
+                [[index]]
+                url = "{0}/second"
+                default = true
+            "#, server.uri()},
+        )?;
+        let report = tool_list_outdated_reports(|| {
+            let mut command = context.tool_list();
+            command.arg("--config-file").arg(config.as_os_str());
+            command
+        })?;
+        assert_eq!(report["tools"][0]["latest_version"], latest);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_list_outdated_reports_preserve_receipt_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/receipt/simple-launcher/"))
+        .respond_with(tool_list_index_response("0.2.0"))
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/ambient/simple-launcher/"))
+        .respond_with(tool_list_index_response("9.0.0"))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let receipt_index = format!("{}/receipt", server.uri());
+    context
+        .tool_install()
+        .arg(
+            context
+                .workspace_root
+                .join("test/links/simple_launcher-0.1.0-py3-none-any.whl"),
+        )
+        .args(["--offline", "--index-url", &receipt_index])
+        .assert()
+        .success();
+    let receipt: toml::Value = toml::from_str(&fs::read_to_string(
+        context
+            .temp_dir
+            .child("tools/simple-launcher/uv-receipt.toml"),
+    )?)?;
+    assert_eq!(
+        receipt["tool"]["options"]["index-url"].as_str(),
+        Some(receipt_index.as_str())
+    );
+
+    let config = context.temp_dir.child("uv.toml");
+    fs::write(
+        &config,
+        format!("index-url = \"{}/ambient\"\n", server.uri()),
+    )?;
+    let report = tool_list_outdated_reports(|| {
+        let mut command = context.tool_list();
+        command.arg("--config-file").arg(config.as_os_str());
+        command
+    })?;
+    assert_eq!(report["tools"][0]["latest_version"], "0.2.0");
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_list_outdated_reports_respect_configured_keyring() -> Result<()> {
+    let keyring_context = uv_test::test_context!("3.12");
+    keyring_context
+        .pip_install()
+        .arg(
+            keyring_context
+                .workspace_root
+                .join("test/packages/keyring_test_plugin"),
+        )
+        .assert()
+        .success();
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    install_local_jsonl_tool(&context);
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/simple-launcher/"))
+        .and(basic_auth("reader", "tool-list-keyring-secret"))
+        .respond_with(tool_list_index_response("0.2.0"))
+        .with_priority(1)
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/simple/simple-launcher/"))
+        .respond_with(
+            ResponseTemplate::new(401)
+                .insert_header("WWW-Authenticate", "Basic realm=\"tool-list\""),
+        )
+        .mount(&server)
+        .await;
+
+    let config = context.temp_dir.child("uv.toml");
+    let index = server.uri().replacen("http://", "http://reader@", 1);
+    fs::write(
+        &config,
+        formatdoc! {r#"
+            keyring-provider = "subprocess"
+
+            [[index]]
+            url = "{index}/simple"
+            default = true
+        "#},
+    )?;
+    let credentials = format!(
+        r#"{{"{}": {{"reader": "tool-list-keyring-secret"}}}}"#,
+        server.address()
+    );
+    let path = std::env::join_paths([
+        venv_bin_path(&keyring_context.venv),
+        context.temp_dir.join("bin"),
+    ])?;
+    let report = tool_list_outdated_reports(|| {
+        let mut command = context.tool_list();
+        command
+            .arg("--config-file")
+            .arg(config.as_os_str())
+            .env(EnvVars::KEYRING_TEST_CREDENTIALS, &credentials)
+            .env(EnvVars::PATH, &path)
+            .env(EnvVars::UV_HTTP_RETRIES, "0");
+        command
+    })?;
+    assert_eq!(report["tools"][0]["latest_version"], "0.2.0");
+    assert!(!report.to_string().contains("tool-list-keyring-secret"));
     Ok(())
 }
 
