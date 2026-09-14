@@ -1,5 +1,10 @@
 [
   {
+    "filename": "astral-tl-benchmarks.rs",
+    "url": "https://raw.githubusercontent.com/astral-sh/astral-tl/04bbd94a054e164a3d057160977197ca25194bc5/benches/tl.rs",
+    "sha256": "0b9ea166e8ccf8c05f0fba99f06ecdc8515d88424c0328c07a70e2a8debc1bdd"
+  },
+  {
     "filename": "pufferlib.lock",
     "url": "https://raw.githubusercontent.com/alex-shapiro/PufferLib/21807b34145822e307314dd0e3b503139c6aaa97/uv.lock",
     "sha256": "c165f50499758accadeb4d6d8895cbb5fccd6b231f7fcb7f640a746b2b3ca80c"

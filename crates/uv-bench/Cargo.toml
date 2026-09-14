@@ -109,6 +109,11 @@ path = "benches/conflict_markers.rs"
 harness = false
 
 [[bench]]
+name = "simple_api_html"
+path = "benches/simple_api_html.rs"
+harness = false
+
+[[bench]]
 name = "uv_pypi_types"
 path = "benches/uv_pypi_types.rs"
 harness = false
@@ -144,6 +149,7 @@ uv-version = { workspace = true }
 uv-workspace = { workspace = true }
 
 anyhow = { workspace = true }
+astral-tl = { workspace = true }
 async_zip = { workspace = true }
 clap = { workspace = true }
 criterion = { version = "5.0.1", default-features = false, package = "codspeed-criterion-compat", features = ["async_tokio"] }
