@@ -54,12 +54,18 @@ path = "benches/sdist_extract.rs"
 harness = false
 
 [[bench]]
+name = "package_build"
+path = "benches/package_build.rs"
+harness = false
+
+[[bench]]
 name = "uv_pypi_types"
 path = "benches/uv_pypi_types.rs"
 harness = false
 
 [dev-dependencies]
 uv = { workspace = true }
+uv-build-backend = { workspace = true }
 uv-cache = { workspace = true }
 uv-cli = { workspace = true }
 uv-client = { workspace = true }
@@ -79,6 +85,7 @@ uv-pypi-types = { workspace = true }
 uv-python = { workspace = true }
 uv-resolver = { workspace = true }
 uv-types = { workspace = true }
+uv-version = { workspace = true }
 uv-workspace = { workspace = true }
 
 anyhow = { workspace = true }

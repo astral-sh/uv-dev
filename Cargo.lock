@@ -6071,6 +6071,7 @@ dependencies = [
  "tokio-util",
  "toml",
  "uv",
+ "uv-build-backend",
  "uv-cache",
  "uv-cli",
  "uv-client",
@@ -6090,6 +6091,7 @@ dependencies = [
  "uv-python",
  "uv-resolver",
  "uv-types",
+ "uv-version",
  "uv-workspace",
 ]
 
