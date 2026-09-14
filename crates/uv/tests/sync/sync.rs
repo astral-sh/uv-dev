@@ -11620,12 +11620,13 @@ fn sync_dry_run() -> Result<()> {
      + iniconfig==2.0.0
     ");
 
-    // TMP: Attempt to catch this flake with verbose output
-    // See https://github.com/astral-sh/uv/issues/13744
+    // A repeated dry run must reuse the recreated environment. Retain verbose output to diagnose
+    // an unexpected replacement.
     let output = context.sync().arg("--dry-run").arg("-vv").output()?;
     let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{}", stderr);
     assert!(
-        !stderr.contains("Would replace existing virtual environment"),
+        !stderr.contains("Would replace project environment"),
         "{}",
         stderr
     );
