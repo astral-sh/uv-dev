@@ -223,6 +223,14 @@
             "$ref": "#/definitions/CommandReport"
           }
         },
+        "editable_project_location": {
+          "description": "Local project path recorded for an editable installation, when available.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          ]
+        },
         "extras": {
           "description": "Extras requested for the primary tool package.",
           "type": "array",

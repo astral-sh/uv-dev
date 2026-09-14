@@ -1,14 +1,17 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
 use fs_err as fs;
+use indoc::indoc;
 use serde_json::{Value, json};
 use url::Url;
 
-use uv_fs::Simplified;
+use uv_fs::{PortablePathBuf, Simplified};
 use uv_static::EnvVars;
-use uv_test::{TestContext, site_packages_path, uv_snapshot};
+use uv_test::json_schema::JsonSchema;
+use uv_test::jsonl::{JsonlOutput, JsonlResultExpectation};
+use uv_test::{TestContext, make_project, site_packages_path, uv_snapshot};
 
 fn tool_context() -> TestContext {
     uv_test::test_context_with_versions!(&["3.12"])
@@ -68,6 +71,48 @@ fn write_distribution(
 fn local_source(path: &Path, editable: bool) -> Result<Value> {
     let url = Url::from_file_path(path).map_err(|()| anyhow::anyhow!("invalid fixture path"))?;
     Ok(json!({ "url": url, "dir_info": { "editable": editable } }))
+}
+
+fn tool_list_reports(context: &TestContext) -> Result<Value> {
+    let schema = JsonSchema::new(include_str!(
+        "../../../../docs/reference/internals/tool-list.schema.json"
+    ))?;
+    let jsonl_schema = JsonSchema::new(include_str!(
+        "../../../../docs/reference/internals/tool-list-jsonl.schema.json"
+    ))?;
+
+    let json = context
+        .tool_list()
+        .args([
+            "--output-format",
+            "json",
+            "--preview-features",
+            "json-output",
+        ])
+        .assert()
+        .success();
+    assert!(json.get_output().stderr.is_empty());
+    let report = schema.parse(&json.get_output().stdout)?;
+
+    let jsonl = context
+        .tool_list()
+        .args(["--output-format", "jsonl", "--preview-features", "jsonl"])
+        .assert()
+        .success();
+    assert!(jsonl.get_output().stderr.is_empty());
+    let parsed = JsonlOutput::parse(
+        &jsonl_schema,
+        jsonl.get_output(),
+        JsonlResultExpectation::Required,
+    )?;
+    assert!(parsed.progress.is_empty());
+    let mut jsonl_report = parsed.result.context("missing tool-list result")?;
+    jsonl_report
+        .as_object_mut()
+        .context("tool-list result is not an object")?
+        .remove("type");
+    assert_eq!(jsonl_report, report);
+    Ok(report)
 }
 
 #[test]
@@ -147,6 +192,26 @@ fn tool_list_installed_sources() -> Result<()> {
     remote v3.0
     - remote
     ");
+
+    let report = tool_list_reports(&context)?;
+    let tools = report["tools"].as_array().context("missing tools")?;
+    assert_eq!(tools.len(), 5);
+    for (name, expected) in [
+        ("editable", Some(missing_source.as_path())),
+        ("legacy-tool", Some(legacy_source.as_path())),
+        ("registry", None),
+        ("regular", None),
+        ("remote", None),
+    ] {
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .with_context(|| format!("missing tool `{name}`"))?;
+        let expected = expected
+            .map(|path| serde_json::to_value(PortablePathBuf::from(path)))
+            .transpose()?;
+        assert_eq!(tool.get("editable_project_location"), expected.as_ref());
+    }
 
     Ok(())
 }
@@ -267,6 +332,79 @@ fn tool_list_editable_source_is_single_line() -> Result<()> {
             context.temp_dir.join("source-").simplified_display(),
         )
     );
+
+    let report = tool_list_reports(&context)?;
+    assert_eq!(
+        report["tools"][0]["editable_project_location"],
+        serde_json::to_value(PortablePathBuf::from(source.as_path()))?,
+    );
+
+    Ok(())
+}
+
+#[test]
+fn tool_list_editable_reports_real_install() -> Result<()> {
+    let context = tool_context();
+    let project = context.temp_dir.join("source tree").join("é");
+    make_project(
+        &project,
+        "editable_fixture",
+        indoc! {r#"
+            [project.scripts]
+            editable-fixture = "editable_fixture:main"
+        "#},
+    )?;
+    fs::write(
+        project.join("src/editable_fixture/__init__.py"),
+        "def main():\n    print('editable fixture')\n",
+    )?;
+
+    context
+        .tool_install()
+        .args(["--editable", "--offline"])
+        .arg(&project)
+        .env_remove(EnvVars::UV_NO_BUILD)
+        .assert()
+        .success();
+    context
+        .external_command(
+            context
+                .temp_dir
+                .join("bin")
+                .join(format!("editable-fixture{}", std::env::consts::EXE_SUFFIX)),
+        )
+        .assert()
+        .success()
+        .stdout(predicates::str::is_match("^editable fixture\\r?\\n$")?);
+
+    let site_packages = site_packages_path(
+        &context.temp_dir.join("tools/editable-fixture"),
+        "python3.12",
+    );
+    let direct_url: Value = serde_json::from_slice(&fs::read(
+        site_packages.join("editable_fixture-0.1.0.dist-info/direct_url.json"),
+    )?)?;
+    assert_eq!(direct_url["dir_info"]["editable"], true);
+    let installed_source = Url::parse(direct_url["url"].as_str().context("missing source URL")?)?
+        .to_file_path()
+        .map_err(|()| anyhow::anyhow!("installed source is not a local path"))?;
+    assert_eq!(installed_source.simplified(), project.simplified());
+
+    let report = tool_list_reports(&context)?;
+    assert_eq!(
+        report["tools"].as_array().context("missing tools")?.len(),
+        1
+    );
+    assert_eq!(report["tools"][0]["name"], "editable-fixture");
+    assert_eq!(
+        report["tools"][0]["editable_project_location"],
+        serde_json::to_value(PortablePathBuf::from(installed_source.as_path()))?,
+    );
+
+    // Listing reports the recorded source even when the project has been moved.
+    fs::rename(&project, context.temp_dir.join("moved-source"))?;
+    assert!(!project.exists());
+    assert_eq!(tool_list_reports(&context)?, report);
 
     Ok(())
 }

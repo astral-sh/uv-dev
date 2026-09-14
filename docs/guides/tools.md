@@ -237,6 +237,7 @@ $ uv tool install --with-executables-from ansible-core,ansible-lint ansible
 
 Use `uv tool list` to see installed tools and the commands they provide. Add `--show-paths` to
 include their installation locations, or `--outdated` to show only tools with available updates.
+Editable tools also show the local project path recorded in their installed metadata.
 
 For machine-readable output:
 
@@ -245,7 +246,8 @@ $ uv tool list --output-format json --preview-features json-output
 ```
 
 The JSON report includes each tool's environment, Python interpreter, commands, and recorded
-installation requirements. It includes all details regardless of the `--show-*` flags. The
+installation requirements. It includes all details regardless of the `--show-*` flags. The optional
+`editable_project_location` records a local editable source, even if that path no longer exists. The
 interpreter's `key` uses the same format as `uv python list`. The schema is in preview and may
 change without warning. A [JSON Schema](../reference/internals/tool-list.schema.json) is generated
 from the report's serialization types.

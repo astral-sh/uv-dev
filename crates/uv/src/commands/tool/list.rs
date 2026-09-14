@@ -91,7 +91,8 @@ struct ToolReport {
     #[cfg_attr(feature = "schemars", schemars(with = "String"))]
     version: Version,
     /// Local project path recorded for an editable installation, when available.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[cfg_attr(feature = "schemars", schemars(with = "PortablePathBuf"))]
     editable_project_location: Option<PortablePathBuf>,
     /// Latest available version when `--outdated` is requested, or null otherwise.
     #[cfg_attr(feature = "schemars", schemars(with = "Option<String>"))]
