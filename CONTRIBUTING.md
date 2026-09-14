@@ -114,9 +114,9 @@ follows uv's
 Empty dependency Python ranges are not modeled.
 
 Pass `--lock` to check one universal project lock, its canonical round trip, and a frozen
-requirements export in every selected environment. An unsatisfiable lock is only confirmed when one
-selected environment provides an unsatisfiable witness; successful samples cannot prove the entire
-marker universe is satisfiable.
+requirements export in every selected environment. Without a whole-domain certificate, an
+unsatisfiable lock is only confirmed when one selected environment provides an unsatisfiable
+witness; successful samples cannot prove the entire marker universe is satisfiable.
 
 ```shell
 cargo dev check-scenarios --uv target/debug/uv --lock --python-version 3.12,3.13,3.14 --python-platform linux,macos,windows test/scenarios/fork/basic.toml
@@ -180,14 +180,27 @@ are still checked by the exhaustive oracle.
 cargo dev check-scenarios --uv target/debug/uv --lock --project-selections --satisfiable --seed 0 --cases 100 --python-version 3.12,3.13,3.14 --python-platform linux,macos,windows --output-dir satisfiable-projects
 ```
 
+Use `--witness path/to/scenario.witness.json` with `--lock --project-selections` to re-certify a
+saved assignment against one actual scenario file. The checker recomputes a marker-conditioned
+whole-domain proof; stored certificate fields are not trusted. `--max-witness-work` bounds that
+proof's requirement evaluations. `--satisfiable` uses the same witnessed check for each generated
+graph. A witnessed lock uses a fresh cache and an online, closed-world index for its initial
+resolution. A no-solution result is classified only when its raw derivation has a recognized
+semantic form and every registry package claimed absent has no listed scenario candidates. Printed
+version ranges are lossy, so narrower absence claims about packages that do have candidates remain
+unclassified. Inventories containing local-version candidates are also unclassified because their
+absence leaves can be omitted from the displayed derivation. Transport, build, metadata,
+unsupported-policy, and exhausted proof-budget errors are not resolver counterexamples.
+
 When a generated check fails, the checker also saves the commands, output, and exact served
 distributions in a neighboring `.failure` directory. Lock checks additionally retain the temporary
 project and the lockfile after each command. If uv rejects its freshly written lockfile, the capture
 also refreshes the temporary project, saves the lockfile diff, and checks the refreshed lock. Use
 `--failure-dir` to choose a new directory when replaying an existing fixture. The capture includes
 the uv binary's SHA-256 digest and the advertised distribution hashes; existing evidence directories
-are never overwritten. An unsatisfiable universal lock without a sampled unsatisfiable environment
-is captured but remains unclassified until the target matrix covers the conflict.
+are never overwritten. Witnessed failures also retain the newly computed proof and recognized
+derivation summary. An unsatisfiable universal lock without a sampled unsatisfiable environment or a
+sufficient whole-domain proof is captured but remains unclassified.
 
 Use the same binary and target to reduce a fixed-environment counterexample:
 

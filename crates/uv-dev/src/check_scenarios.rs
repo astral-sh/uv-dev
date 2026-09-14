@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anstream::println;
 use anyhow::{Context, Result, ensure};
+use serde::Deserialize;
 use serde_json::json;
 
 use uv_python::PythonVersion;
@@ -13,13 +14,17 @@ use uv_test::packse::check::{
     LockCheckOptions, LockCheckResult, LockfileMode, ScenarioPlatform, ScenarioTarget,
     check_lock_scenario, check_lock_scenario_with_artifacts, check_project_lock_scenario,
     check_project_lock_scenario_with_artifacts, check_scenario, check_scenario_with_artifacts,
+    check_witnessed_project_lock_scenario, check_witnessed_project_lock_scenario_with_artifacts,
 };
 use uv_test::packse::generate::{
-    SmallGraphOptions, generate_marker_graph, generate_project_graph,
+    SmallGraphOptions, WitnessedProjectGraph, generate_marker_graph, generate_project_graph,
     generate_satisfiable_project_graph, generate_small_graph,
 };
+use uv_test::packse::oracle::Selection;
 use uv_test::packse::project::ScenarioProject;
 use uv_test::packse::scenario::ScenarioDocument;
+
+const DEFAULT_MAX_WITNESS_WORK: usize = 100_000;
 
 #[derive(clap::Args)]
 pub(crate) struct Args {
@@ -52,6 +57,19 @@ pub(crate) struct Args {
     /// Generated graphs include project roots and marker projections over three Python minor lines.
     #[arg(long, requires = "lock")]
     project_selections: bool,
+
+    /// Re-certify the fixed assignment in a saved `.witness.json` when replaying one project.
+    #[arg(
+        long,
+        requires_all = ["lock", "project_selections"],
+        conflicts_with = "seed",
+        value_name = "PATH"
+    )]
+    witness: Option<PathBuf>,
+
+    /// Maximum requirement evaluations in the whole-domain witness proof (defaults to 100,000).
+    #[arg(long, requires_all = ["lock", "project_selections"], value_name = "COUNT")]
+    max_witness_work: Option<usize>,
 
     /// Save failed resolver commands and their served wheels in a new directory.
     #[arg(long, value_name = "DIR")]
@@ -95,6 +113,19 @@ pub(crate) fn main(args: &Args) -> Result<()> {
         args.max_states > 0,
         "--max-states must be greater than zero"
     );
+    ensure!(
+        args.max_witness_work.is_none() || args.satisfiable || args.witness.is_some(),
+        "--max-witness-work requires --satisfiable or --witness"
+    );
+    ensure!(
+        args.max_witness_work.unwrap_or(DEFAULT_MAX_WITNESS_WORK) > 0,
+        "--max-witness-work must be greater than zero"
+    );
+    ensure!(
+        args.witness.is_none() || args.scenarios.len() == 1,
+        "--witness requires exactly one scenario file"
+    );
+    let replay_witness = args.witness.as_deref().map(read_witness).transpose()?;
     let uv = fs_err::canonicalize(&args.uv)
         .with_context(|| format!("failed to find uv executable `{}`", args.uv.display()))?;
     let targets = ScenarioTarget::matrix(&args.python_version, &args.python_platform);
@@ -138,11 +169,12 @@ pub(crate) fn main(args: &Args) -> Result<()> {
             let seed = first_seed
                 .checked_add(u64::try_from(offset)?)
                 .context("the requested seed range overflows u64")?;
-            let (document, witness) = if args.satisfiable {
+            let (document, witness, assignment) = if args.satisfiable {
                 let graph =
                     generate_satisfiable_project_graph(seed, options, &targets, args.max_states)?;
                 let universal_certificate = graph.certify_universal_witness()?;
                 let checked_projections = graph.check_witness(&targets)?;
+                let assignment = graph.assignment.clone();
                 let witness = serde_json::to_string_pretty(&json!({
                     "seed": seed,
                     "assignment": graph.assignment,
@@ -153,20 +185,27 @@ pub(crate) fn main(args: &Args) -> Result<()> {
                     })).collect::<Vec<_>>(),
                     "checked_projections": checked_projections,
                 }))?;
-                (graph.document, Some(format!("{witness}\n")))
+                (
+                    graph.document,
+                    Some(format!("{witness}\n")),
+                    Some(assignment),
+                )
             } else if args.project_selections {
                 (
                     generate_project_graph(seed, options, target, args.max_states)?,
+                    None,
                     None,
                 )
             } else if args.markers {
                 (
                     generate_marker_graph(seed, options, target, args.max_states)?,
                     None,
+                    None,
                 )
             } else {
                 (
                     generate_small_graph(seed, options, target, args.max_states)?,
+                    None,
                     None,
                 )
             };
@@ -176,8 +215,15 @@ pub(crate) fn main(args: &Args) -> Result<()> {
             if let Some(witness) = witness {
                 save_scenario_input(&path.with_extension("witness.json"), &witness)?;
             }
-            let result = check_case(&uv, &interpreter, &document, &targets, args)
-                .with_context(|| format!("generated scenario `{}` failed", path.display()))?;
+            let result = check_case(
+                &uv,
+                &interpreter,
+                &document,
+                &targets,
+                args,
+                assignment.as_ref(),
+            )
+            .with_context(|| format!("generated scenario `{}` failed", path.display()))?;
             satisfiable += result.satisfiable;
             unsatisfiable += result.unsatisfiable;
             export_projections += result.export_projections;
@@ -203,8 +249,15 @@ pub(crate) fn main(args: &Args) -> Result<()> {
     for path in &args.scenarios {
         let document = ScenarioDocument::from_path(path)?;
         let scenario = document.scenario()?;
-        let result = check_case(&uv, &interpreter, &document, &targets, args)
-            .with_context(|| format!("scenario `{}` failed", path.display()))?;
+        let result = check_case(
+            &uv,
+            &interpreter,
+            &document,
+            &targets,
+            args,
+            replay_witness.as_ref(),
+        )
+        .with_context(|| format!("scenario `{}` failed", path.display()))?;
         println!("{}: {}", scenario.name, result.description);
     }
     Ok(())
@@ -217,12 +270,25 @@ struct CaseResult {
     description: String,
 }
 
+#[derive(Deserialize)]
+struct SavedWitness {
+    assignment: Selection,
+}
+
+fn read_witness(path: &Path) -> Result<Selection> {
+    // Stored certificates are evidence only; the actual scenario is certified again by the checker.
+    let witness: SavedWitness = serde_json::from_slice(&fs_err::read(path)?)
+        .with_context(|| format!("failed to read scenario witness `{}`", path.display()))?;
+    Ok(witness.assignment)
+}
+
 fn check_case(
     uv: &Path,
     interpreter: &str,
     document: &ScenarioDocument,
     targets: &[ScenarioTarget],
     args: &Args,
+    witness: Option<&Selection>,
 ) -> Result<CaseResult> {
     let scenario = document.scenario()?;
     if args.lock {
@@ -244,26 +310,59 @@ fn check_case(
             .project_selections
             .then(|| ScenarioProject::new(&scenario).map(|project| project.selection_matrix()))
             .transpose()?;
-        let result = match (selections.as_deref(), failure_dir.as_deref()) {
-            (Some(selections), Some(failure_dir)) => check_project_lock_scenario_with_artifacts(
-                &context,
-                document,
-                targets,
-                selections,
-                options,
-                failure_dir,
-            ),
-            (Some(selections), None) => {
-                check_project_lock_scenario(&context, &scenario, targets, selections, options)
+        let result = if let Some(assignment) = witness {
+            let selections = selections
+                .as_deref()
+                .context("a whole-domain witness requires project selections")?;
+            let graph = WitnessedProjectGraph {
+                document: document.clone(),
+                assignment: assignment.clone(),
+            };
+            let max_witness_work = args.max_witness_work.unwrap_or(DEFAULT_MAX_WITNESS_WORK);
+            if let Some(failure_dir) = failure_dir.as_deref() {
+                check_witnessed_project_lock_scenario_with_artifacts(
+                    &context,
+                    &graph,
+                    targets,
+                    selections,
+                    options,
+                    max_witness_work,
+                    failure_dir,
+                )
+            } else {
+                check_witnessed_project_lock_scenario(
+                    &context,
+                    &graph,
+                    targets,
+                    selections,
+                    options,
+                    max_witness_work,
+                )
             }
-            (None, Some(failure_dir)) => check_lock_scenario_with_artifacts(
-                &context,
-                document,
-                targets,
-                options,
-                failure_dir,
-            ),
-            (None, None) => check_lock_scenario(&context, &scenario, targets, options),
+        } else {
+            match (selections.as_deref(), failure_dir.as_deref()) {
+                (Some(selections), Some(failure_dir)) => {
+                    check_project_lock_scenario_with_artifacts(
+                        &context,
+                        document,
+                        targets,
+                        selections,
+                        options,
+                        failure_dir,
+                    )
+                }
+                (Some(selections), None) => {
+                    check_project_lock_scenario(&context, &scenario, targets, selections, options)
+                }
+                (None, Some(failure_dir)) => check_lock_scenario_with_artifacts(
+                    &context,
+                    document,
+                    targets,
+                    options,
+                    failure_dir,
+                ),
+                (None, None) => check_lock_scenario(&context, &scenario, targets, options),
+            }
         }?;
         let exports = selections
             .as_ref()
@@ -360,4 +459,33 @@ pub(crate) fn save_scenario_input(path: &Path, contents: &str) -> Result<()> {
         Err(error) => return Err(error.into()),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saved_witnesses_supply_only_the_assignment() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("scenario.witness.json");
+        fs_err::write(
+            &path,
+            serde_json::to_vec(&json!({
+                "assignment": {"a": "1.0.0"},
+                "universal_certificate": {"assigned_packages": 999},
+                "checked_projections": 999,
+            }))?,
+        )?;
+        assert_eq!(
+            read_witness(&path)?,
+            [("a".parse()?, "1.0.0".parse()?)].into_iter().collect()
+        );
+        fs_err::write(
+            &path,
+            r#"{"universal_certificate": {"assigned_packages": 1}}"#,
+        )?;
+        assert!(read_witness(&path).is_err());
+        Ok(())
+    }
 }

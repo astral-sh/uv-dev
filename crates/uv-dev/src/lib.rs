@@ -267,6 +267,47 @@ mod tests {
     }
 
     #[test]
+    fn scenario_checker_replays_a_saved_project_witness() {
+        let arguments = [
+            "uv-dev",
+            "check-scenarios",
+            "--uv",
+            "uv",
+            "--witness",
+            "scenario.witness.json",
+            "scenario.toml",
+        ];
+        assert!(Cli::try_parse_from(arguments).is_err());
+        assert!(Cli::try_parse_from(arguments.into_iter().chain(["--lock"])).is_err());
+        assert!(
+            Cli::try_parse_from(arguments.into_iter().chain([
+                "--lock",
+                "--project-selections",
+                "--max-witness-work",
+                "500",
+            ]))
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "uv-dev",
+                "check-scenarios",
+                "--uv",
+                "uv",
+                "--lock",
+                "--project-selections",
+                "--witness",
+                "scenario.witness.json",
+                "--seed",
+                "0",
+                "--output-dir",
+                "cases",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
     fn scenario_checker_accepts_target_matrices() {
         let arguments = [
             "uv-dev",

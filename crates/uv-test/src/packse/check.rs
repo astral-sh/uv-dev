@@ -18,10 +18,13 @@ use uv_static::EnvVars;
 use crate::TestContext;
 
 use super::PackseServer;
+use super::derivation::{SemanticNoSolution, certify_no_solution};
 use super::evidence::{self, LockTrace};
+use super::generate::WitnessedProjectGraph;
 use super::oracle::{ScenarioOracle, SearchResult, Selection};
 use super::project::{ProjectSelection, ScenarioProject, project_name};
 use super::scenario::{Scenario, ScenarioDocument};
+use super::witness::{MarkerWitnessCertificate, certify_project_marker_witness};
 
 /// A representative platform for fixed-environment resolver checks.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -165,11 +168,13 @@ impl std::error::Error for ScenarioFailureKind {}
 
 /// A demonstrated contradiction in a universal lockfile or one of its concrete exports.
 ///
-/// A universal no-solution result without an unsatisfiable sampled environment remains
-/// unclassified: successful samples do not prove that the entire marker universe is satisfiable.
+/// Successful samples do not prove that the entire marker universe is satisfiable. A universal
+/// false-unsatisfiability result additionally requires an independent whole-domain certificate and
+/// a recognized semantic derivation whose empty-version claims agree with the scenario index.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LockScenarioFailureKind {
     FalseSatisfiable,
+    FalseUnsatisfiable,
     InvalidPins,
     InvalidClosure,
     ChangedLockfile,
@@ -187,6 +192,7 @@ impl fmt::Display for LockScenarioFailureKind {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::FalseSatisfiable => "uv locked an unsatisfiable graph",
+            Self::FalseUnsatisfiable => "uv rejected a certified satisfiable lock graph",
             Self::InvalidPins => "uv returned invalid lockfile export pins",
             Self::InvalidClosure => "uv returned an invalid lockfile dependency closure",
             Self::ChangedLockfile => "uv changed a lockfile during a read-only check",
@@ -422,7 +428,7 @@ pub fn check_project_lock_scenario(
     selections: &[ProjectSelection],
     options: LockCheckOptions,
 ) -> Result<LockCheckResult> {
-    check_project_lock_scenario_inner(context, scenario, targets, selections, options, None)
+    check_project_lock_scenario_inner(context, scenario, targets, selections, options, None, None)
 }
 
 /// Check explicit project exports and retain the full command/lockfile trace on a discrepancy.
@@ -441,7 +447,77 @@ pub fn check_project_lock_scenario_with_artifacts(
         targets,
         selections,
         options,
+        None,
         Some((failure_dir, document)),
+    )
+}
+
+/// Check a project lock using a freshly verified whole-domain satisfiability witness.
+///
+/// The proposed assignment is not a preferred resolver result. A failed lock is classified only
+/// when the marker certificate succeeds and its semantic derivation can be checked independently
+/// against the closed-world candidate inventory. Unknown or unavailable-metadata failures remain
+/// unclassified.
+pub fn check_witnessed_project_lock_scenario(
+    context: &TestContext,
+    graph: &WitnessedProjectGraph,
+    targets: &[ScenarioTarget],
+    selections: &[ProjectSelection],
+    options: LockCheckOptions,
+    max_witness_work: usize,
+) -> Result<LockCheckResult> {
+    check_witnessed_project_lock_scenario_inner(
+        context,
+        graph,
+        targets,
+        selections,
+        options,
+        max_witness_work,
+        None,
+    )
+}
+
+/// Check a witnessed project and retain the proof, raw commands, and served files on failure.
+pub fn check_witnessed_project_lock_scenario_with_artifacts(
+    context: &TestContext,
+    graph: &WitnessedProjectGraph,
+    targets: &[ScenarioTarget],
+    selections: &[ProjectSelection],
+    options: LockCheckOptions,
+    max_witness_work: usize,
+    failure_dir: &Path,
+) -> Result<LockCheckResult> {
+    check_witnessed_project_lock_scenario_inner(
+        context,
+        graph,
+        targets,
+        selections,
+        options,
+        max_witness_work,
+        Some(failure_dir),
+    )
+}
+
+fn check_witnessed_project_lock_scenario_inner(
+    context: &TestContext,
+    graph: &WitnessedProjectGraph,
+    targets: &[ScenarioTarget],
+    selections: &[ProjectSelection],
+    options: LockCheckOptions,
+    max_witness_work: usize,
+    failure_dir: Option<&Path>,
+) -> Result<LockCheckResult> {
+    let certificate =
+        certify_project_marker_witness(&graph.document, &graph.assignment, max_witness_work)?;
+    let scenario = graph.document.scenario()?;
+    check_project_lock_scenario_inner(
+        context,
+        &scenario,
+        targets,
+        selections,
+        options,
+        Some(certificate),
+        failure_dir.map(|directory| (directory, &graph.document)),
     )
 }
 
@@ -495,6 +571,7 @@ fn check_lock_scenario_inner(
         &server,
         toml::to_string(&project)?,
         options,
+        None,
     )?;
     let result = check_lock_scenario_run(&mut run, &searches, checked);
     run.finish(result, targets, None, artifacts)
@@ -506,7 +583,7 @@ fn check_lock_scenario_run(
     checked: usize,
 ) -> Result<LockCheckResult> {
     let output = run.resolve()?;
-    if let Some(witness) = check_lock_resolution(&output, searches)? {
+    if let Some(witness) = run.check_resolution(&output, searches)? {
         return Ok(LockCheckResult::Unsatisfiable { witness, checked });
     }
     let lock = run.check_round_trip()?;
@@ -537,6 +614,7 @@ fn check_project_lock_scenario_inner(
     targets: &[ScenarioTarget],
     selections: &[ProjectSelection],
     options: LockCheckOptions,
+    witness: Option<MarkerWitnessCertificate>,
     artifacts: Option<(&Path, &ScenarioDocument)>,
 ) -> Result<LockCheckResult> {
     ensure!(
@@ -556,9 +634,24 @@ fn check_project_lock_scenario_inner(
     let mut checked = 0;
     for target in targets {
         let environment = target_environment(scenario, target)?;
+        if let Some(witness) = &witness {
+            for selection in std::iter::once(&all).chain(selections) {
+                let oracle = project.oracle(&environment, selection)?;
+                let projected = oracle.reachable_selection(witness.assignment()).with_context(|| {
+                    format!("the marker certificate disagrees with the sampled oracle for {target} ({selection})")
+                })?;
+                oracle.validate(&projected).with_context(|| {
+                    format!("the marker certificate disagrees with the sampled oracle for {target} ({selection})")
+                })?;
+            }
+        }
         let search = project
             .oracle(&environment, &all)?
             .find_solution(options.max_states)?;
+        ensure!(
+            witness.is_none() || search.solution.is_some(),
+            "the exhaustive oracle contradicts the marker certificate for {target}"
+        );
         checked += search.checked;
         searches.push(LockProjection {
             target,
@@ -568,7 +661,14 @@ fn check_project_lock_scenario_inner(
     }
 
     let server = PackseServer::from_scenario_without_build_dependencies(scenario);
-    let mut run = LockRun::new(context, scenario, &server, project.pyproject()?, options)?;
+    let mut run = LockRun::new(
+        context,
+        scenario,
+        &server,
+        project.pyproject()?,
+        options,
+        witness,
+    )?;
     let result =
         check_project_lock_scenario_run(&mut run, &project, &searches, selections, checked);
     run.finish(result, targets, Some(selections), artifacts)
@@ -582,7 +682,7 @@ fn check_project_lock_scenario_run(
     checked: usize,
 ) -> Result<LockCheckResult> {
     let output = run.resolve()?;
-    if let Some(witness) = check_lock_resolution(&output, searches)? {
+    if let Some(witness) = run.check_resolution(&output, searches)? {
         return Ok(LockCheckResult::Unsatisfiable { witness, checked });
     }
     let lock = run.check_round_trip()?;
@@ -616,35 +716,6 @@ fn check_project_lock_scenario_run(
     })
 }
 
-/// Check a universal conclusion against sampled lock-wide root sets.
-fn check_lock_resolution(
-    output: &Output,
-    searches: &[LockProjection<'_>],
-) -> Result<Option<ScenarioTarget>> {
-    let unsatisfiable = searches
-        .iter()
-        .find(|projection| projection.search.solution.is_none());
-    if output.status.success() {
-        if let Some(projection) = unsatisfiable {
-            return Err(anyhow::anyhow!(
-                "uv lock succeeded, but its {} projection is unsatisfiable",
-                projection.target
-            )
-            .context(LockScenarioFailureKind::FalseSatisfiable));
-        }
-        return Ok(None);
-    }
-    ensure_no_solution(output, "uv lock")?;
-    if let Some(projection) = unsatisfiable {
-        return Ok(Some(projection.target.clone()));
-    }
-    bail!(
-        "uv lock reported no solution, but the requested projections are satisfiable; \
-         add marker environments to distinguish a resolver defect from an unsampled conflict:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
 struct LockRun<'a> {
     context: &'a TestContext,
     scenario: &'a Scenario,
@@ -654,6 +725,13 @@ struct LockRun<'a> {
     trace: LockTrace,
     canonical_diff: Option<String>,
     options: LockCheckOptions,
+    witness: Option<WitnessedLock>,
+}
+
+struct WitnessedLock {
+    certificate: MarkerWitnessCertificate,
+    cache: tempfile::TempDir,
+    derivation: Option<SemanticNoSolution>,
 }
 
 impl<'a> LockRun<'a> {
@@ -663,6 +741,7 @@ impl<'a> LockRun<'a> {
         server: &'a PackseServer,
         pyproject: String,
         options: LockCheckOptions,
+        witness: Option<MarkerWitnessCertificate>,
     ) -> Result<Self> {
         fs_err::write(context.temp_dir.join("pyproject.toml"), &pyproject)?;
         let lock_path = context.temp_dir.join("uv.lock");
@@ -671,6 +750,24 @@ impl<'a> LockRun<'a> {
         {
             return Err(error.into());
         }
+        let witness = witness
+            .map(|certificate| {
+                let index = url::Url::parse(&server.index_url())?;
+                ensure!(
+                    index.scheme() == "http"
+                        && matches!(index.host_str(), Some("127.0.0.1" | "::1")),
+                    "witnessed locks require a loopback scenario index"
+                );
+                let cache = tempfile::Builder::new()
+                    .prefix("scenario-witness-cache-")
+                    .tempdir_in(context.root.path())?;
+                Ok::<_, anyhow::Error>(WitnessedLock {
+                    certificate,
+                    cache,
+                    derivation: None,
+                })
+            })
+            .transpose()?;
         Ok(Self {
             context,
             scenario,
@@ -680,6 +777,7 @@ impl<'a> LockRun<'a> {
             trace: LockTrace::default(),
             canonical_diff: None,
             options,
+            witness,
         })
     }
 
@@ -688,13 +786,121 @@ impl<'a> LockRun<'a> {
     }
 
     fn resolve(&mut self) -> Result<Output> {
-        self.run_command("lock", self.lock_command())
+        self.run_command("lock", self.resolve_command())
+    }
+
+    fn resolve_command(&self) -> Command {
+        let mut command = self.lock_command();
+        if self.witness.is_some() {
+            command
+                .arg("--no-offline")
+                .env(EnvVars::UV_INTERNAL__SHOW_DERIVATION_TREE, "1");
+        }
+        command
     }
 
     fn lock_command(&self) -> Command {
-        let mut command = lock_command(self.context, self.scenario, self.server);
+        let mut command = lock_command(self.command("lock"), self.scenario, self.server);
         self.options.lockfile.apply(&mut command);
         command
+    }
+
+    fn command(&self, subcommand: &str) -> Command {
+        let mut command = self.context.new_command();
+        command.arg(subcommand);
+        if let Some(witness) = &self.witness {
+            command
+                .arg("--cache-dir")
+                .arg(witness.cache.path())
+                .args(["--color", "never"]);
+            self.context.add_shared_env(&mut command, false);
+            for name in [
+                EnvVars::UV_DEFAULT_INDEX,
+                EnvVars::UV_INDEX,
+                EnvVars::UV_INDEX_URL,
+                EnvVars::UV_EXTRA_INDEX_URL,
+                EnvVars::UV_FIND_LINKS,
+                EnvVars::UV_INDEX_STRATEGY,
+                EnvVars::UV_KEYRING_PROVIDER,
+                EnvVars::UV_OFFLINE,
+                EnvVars::UV_NO_CACHE,
+                EnvVars::UV_CONFIG_FILE,
+                EnvVars::UV_CONSTRAINT,
+                EnvVars::UV_BUILD_CONSTRAINT,
+                EnvVars::UV_OVERRIDE,
+                EnvVars::UV_RESOLUTION,
+                EnvVars::UV_PRERELEASE,
+                EnvVars::UV_FORK_STRATEGY,
+                EnvVars::UV_NO_BINARY,
+                EnvVars::UV_NO_BINARY_PACKAGE,
+                EnvVars::RUST_LOG,
+                EnvVars::ALL_PROXY,
+                EnvVars::HTTP_PROXY,
+                EnvVars::HTTPS_PROXY,
+                "all_proxy",
+                "http_proxy",
+                "https_proxy",
+                "no_proxy",
+                "PIP_INDEX_URL",
+                "PIP_EXTRA_INDEX_URL",
+                "PIP_FIND_LINKS",
+                "PIP_NO_INDEX",
+            ] {
+                command.env_remove(name);
+            }
+            command
+                .env(EnvVars::NO_PROXY, "127.0.0.1,localhost,::1")
+                .env(EnvVars::UV_PYTHON_DOWNLOADS, "never");
+        } else {
+            self.context.add_shared_options(&mut command, false);
+        }
+        command
+    }
+
+    /// Check the initial universal conclusion against independent semantic evidence.
+    fn check_resolution(
+        &mut self,
+        output: &Output,
+        searches: &[LockProjection<'_>],
+    ) -> Result<Option<ScenarioTarget>> {
+        let unsatisfiable = searches
+            .iter()
+            .find(|projection| projection.search.solution.is_none());
+        if output.status.success() {
+            if let Some(projection) = unsatisfiable {
+                return Err(anyhow::anyhow!(
+                    "uv lock succeeded, but its {} projection is unsatisfiable",
+                    projection.target
+                )
+                .context(LockScenarioFailureKind::FalseSatisfiable));
+            }
+            return Ok(None);
+        }
+        ensure_no_solution(output, "uv lock")?;
+        if let Some(projection) = unsatisfiable {
+            return Ok(Some(projection.target.clone()));
+        }
+        if let Some(witness) = &mut self.witness {
+            witness.derivation = Some(
+                certify_no_solution(
+                    self.scenario,
+                    output.status.code(),
+                    &output.stdout,
+                    &output.stderr,
+                )
+                .context("the witnessed lock failure has no certified semantic derivation")?,
+            );
+            return Err(anyhow::anyhow!(
+                "the whole-domain marker witness satisfies the project:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            )
+            .context(LockScenarioFailureKind::FalseUnsatisfiable));
+        }
+        bail!(
+            "uv lock reported no solution, but the requested projections are satisfiable; \
+             add marker environments to distinguish a resolver defect from an unsampled conflict:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     fn check_round_trip(&mut self) -> Result<Vec<u8>> {
@@ -744,7 +950,7 @@ impl<'a> LockRun<'a> {
     }
 
     fn export_command(&self) -> Command {
-        let mut command = self.context.export();
+        let mut command = self.command("export");
         command
             .arg("--no-config")
             .arg("--frozen")
@@ -830,6 +1036,8 @@ impl<'a> LockRun<'a> {
         evidence::create_directory(directory)?;
         fs_err::write(directory.join("scenario.toml"), document.to_toml()?)?;
         fs_err::write(directory.join("pyproject.toml"), &self.pyproject)?;
+        self.trace.write(directory)?;
+        self.server.write_distributions(&directory.join("index"))?;
         fs_err::write(
             directory.join("failure.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
@@ -841,13 +1049,25 @@ impl<'a> LockRun<'a> {
                     "platform": target.platform.as_str(),
                 })).collect::<Vec<_>>(),
                 "project_selections": selections,
+                "witness": self.witness.as_ref().map(|witness| serde_json::json!({
+                    "certificate": witness.certificate,
+                    "derivation": witness.derivation,
+                    "command_policy": {
+                        "fresh_cache": witness.cache.path(),
+                        "index_url": self.server.index_url(),
+                        "online_initial_lock": true,
+                        "external_indexes": false,
+                        "builds": false,
+                        "python_downloads": false,
+                        "proxy_routing": false,
+                        "raw_derivation": true,
+                    },
+                })),
             }))?,
         )?;
-        self.trace.write(directory)?;
         if let Some(diff) = &self.canonical_diff {
             fs_err::write(directory.join("initial-to-refreshed.diff"), diff)?;
         }
-        self.server.write_distributions(&directory.join("index"))?;
         Ok(())
     }
 }
@@ -868,8 +1088,7 @@ fn target_environment(scenario: &Scenario, target: &ScenarioTarget) -> Result<Ma
     Ok(environment)
 }
 
-fn lock_command(context: &TestContext, scenario: &Scenario, server: &PackseServer) -> Command {
-    let mut command = context.lock();
+fn lock_command(mut command: Command, scenario: &Scenario, server: &PackseServer) -> Command {
     command
         .arg("--no-config")
         .arg("--index-url")
@@ -995,7 +1214,97 @@ pub fn parse_pins(contents: &str, environment: &MarkerEnvironment) -> Result<Sel
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
+
     use super::*;
+
+    fn environment<'a>(command: &'a Command, name: &str) -> Result<Option<&'a OsStr>> {
+        command
+            .get_envs()
+            .find(|(key, _)| *key == OsStr::new(name))
+            .map(|(_, value)| value)
+            .with_context(|| format!("missing command environment override for {name}"))
+    }
+
+    #[test]
+    fn witnessed_commands_use_one_fresh_closed_world_cache() -> Result<()> {
+        let context = TestContext::new_with_versions_and_bin(&[], std::env::current_exe()?)
+            .with_env(EnvVars::UV_DEFAULT_INDEX, "http://127.0.0.1:9/simple/")
+            .with_env(EnvVars::UV_EXTRA_INDEX_URL, "http://127.0.0.1:9/simple/")
+            .with_env(EnvVars::UV_OFFLINE, "1")
+            .with_env(EnvVars::UV_NO_CACHE, "1")
+            .with_env(EnvVars::HTTP_PROXY, "http://127.0.0.1:9/")
+            .with_env(EnvVars::RUST_LOG, "trace");
+        let document = ScenarioDocument::from_str(include_str!(
+            "../../../../test/scenarios/fork/non-local-fork-marker-unreachable.toml"
+        ))?;
+        let scenario = document.scenario()?;
+        let assignment = [("a".parse()?, "1.0.0".parse()?)].into_iter().collect();
+        let certificate = certify_project_marker_witness(&document, &assignment, 100)?;
+        let server = PackseServer::from_scenario_without_build_dependencies(&scenario);
+        let run = LockRun::new(
+            &context,
+            &scenario,
+            &server,
+            ScenarioProject::new(&scenario)?.pyproject()?,
+            LockCheckOptions::new(100),
+            Some(certificate),
+        )?;
+        let cache = run.witness.as_ref().expect("witnessed lock").cache.path();
+        assert!(cache.starts_with(context.root.path()));
+        assert_ne!(cache, context.cache_dir.path());
+        assert!(fs_err::read_dir(cache)?.next().is_none());
+
+        let resolve = run.resolve_command();
+        assert!(resolve.get_args().any(|arg| arg == "--no-offline"));
+        assert_eq!(
+            environment(&resolve, EnvVars::UV_INTERNAL__SHOW_DERIVATION_TREE)?,
+            Some(OsStr::new("1"))
+        );
+        for command in [resolve, run.canonical_check_command(), run.export_command()] {
+            let arguments = command.get_args().collect::<Vec<_>>();
+            assert_eq!(
+                arguments
+                    .iter()
+                    .filter(|arg| **arg == "--cache-dir")
+                    .count(),
+                1
+            );
+            assert!(
+                arguments
+                    .windows(2)
+                    .any(|pair| { pair[0] == "--cache-dir" && pair[1] == cache.as_os_str() })
+            );
+            assert!(arguments.contains(&OsStr::new("--no-config")));
+            for name in [
+                EnvVars::UV_DEFAULT_INDEX,
+                EnvVars::UV_EXTRA_INDEX_URL,
+                EnvVars::UV_OFFLINE,
+                EnvVars::UV_NO_CACHE,
+                EnvVars::HTTP_PROXY,
+                EnvVars::RUST_LOG,
+            ] {
+                assert_eq!(environment(&command, name)?, None, "{name}");
+            }
+            assert_eq!(
+                environment(&command, EnvVars::UV_PYTHON_DOWNLOADS)?,
+                Some(OsStr::new("never"))
+            );
+        }
+        let next = LockRun::new(
+            &context,
+            &scenario,
+            &server,
+            ScenarioProject::new(&scenario)?.pyproject()?,
+            LockCheckOptions::new(100),
+            Some(certify_project_marker_witness(&document, &assignment, 100)?),
+        )?;
+        assert_ne!(
+            cache,
+            next.witness.as_ref().expect("witnessed lock").cache.path()
+        );
+        Ok(())
+    }
 
     #[test]
     fn classifies_only_fresh_lock_rejections() {
