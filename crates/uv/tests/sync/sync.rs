@@ -15750,17 +15750,18 @@ fn workspace_editable_conflict() -> Result<()> {
         .child("__init__.py")
         .touch()?;
 
+    // The root sorts before `child2`, whose source omits `editable`.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
         [project]
-        name = "project"
+        name = "a-root"
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = ["child1"]
 
         [tool.uv.workspace]
-        members = ["child1", "child2"]
+        members = ["child*"]
 
         [tool.uv.sources]
         child1 = { workspace = true, editable = true }
@@ -15794,10 +15795,21 @@ fn workspace_editable_conflict() -> Result<()> {
 
         [manifest]
         members = [
+            "a-root",
             "child1",
             "child2",
-            "project",
         ]
+
+        [[package]]
+        name = "a-root"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "child1" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "child1", editable = "child1" }]
 
         [[package]]
         name = "child1"
@@ -15829,17 +15841,6 @@ fn workspace_editable_conflict() -> Result<()> {
         wheels = [
             { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
         ]
-
-        [[package]]
-        name = "project"
-        version = "0.1.0"
-        source = { virtual = "." }
-        dependencies = [
-            { name = "child1" },
-        ]
-
-        [package.metadata]
-        requires-dist = [{ name = "child1", editable = "child1" }]
         "#
         );
     });
@@ -15848,13 +15849,13 @@ fn workspace_editable_conflict() -> Result<()> {
     pyproject_toml.write_str(
         r#"
         [project]
-        name = "project"
+        name = "a-root"
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = ["child1"]
 
         [tool.uv.workspace]
-        members = ["child1", "child2"]
+        members = ["child*"]
 
         [tool.uv.sources]
         child1 = { workspace = true, editable = false }
@@ -15888,10 +15889,21 @@ fn workspace_editable_conflict() -> Result<()> {
 
         [manifest]
         members = [
+            "a-root",
             "child1",
             "child2",
-            "project",
         ]
+
+        [[package]]
+        name = "a-root"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "child1" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "child1", directory = "child1" }]
 
         [[package]]
         name = "child1"
@@ -15923,41 +15935,26 @@ fn workspace_editable_conflict() -> Result<()> {
         wheels = [
             { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
         ]
-
-        [[package]]
-        name = "project"
-        version = "0.1.0"
-        source = { virtual = "." }
-        dependencies = [
-            { name = "child1" },
-        ]
-
-        [package.metadata]
-        requires-dist = [{ name = "child1", directory = "child1" }]
         "#
         );
     });
 
-    let child2 = context.temp_dir.child("child2");
-    let pyproject_toml = child2.child("pyproject.toml");
+    let child3 = context.temp_dir.child("child3");
+    let pyproject_toml = child3.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
         [project]
-        name = "child2"
+        name = "child3"
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = ["child1"]
 
         [tool.uv.sources]
         child1 = { workspace = true, editable = true }
-
-        [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
         "#,
     )?;
 
-    // If the `editable` declarations are conflicting, raise an error.
+    // The omitted value in `child2` must not mask conflicting explicit declarations.
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 2 (failure)
     ----- stderr -----
