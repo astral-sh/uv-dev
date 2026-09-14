@@ -136,8 +136,7 @@ async fn python_install_build_variant() {
         .with_filtered_python_install_bin()
         .with_filtered_python_names()
         .with_filtered_exe_suffix()
-        .with_managed_python_dirs()
-        .with_python_download_cache();
+        .with_managed_python_dirs();
 
     context.python_install().arg("3.13").assert().success();
 
