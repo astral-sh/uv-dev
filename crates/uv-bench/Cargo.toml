@@ -189,6 +189,11 @@ path = "benches/github_metadata.rs"
 harness = false
 
 [[bench]]
+name = "github_revisions"
+path = "benches/github_revisions.rs"
+harness = false
+
+[[bench]]
 name = "uv_pypi_types"
 path = "benches/uv_pypi_types.rs"
 harness = false
