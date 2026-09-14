@@ -50,6 +50,11 @@ commit. Their complete reachable history lets the ordinary Git client fetch bran
 without requiring special handling for a shallow remote. Git workloads use these local repositories
 without fetching live upstream data while timing.
 
+The Git fetch workload uses source-tree size as its main dimension: 12 files in `sampleproject`, 234
+in Flask, and 6,901 in Django. Its cold case starts with an empty uv Git cache; the warm cases reuse
+a populated cache with a precise commit, a full commit-like reference, or an upstream branch/tag.
+These cases do not claim to evict the operating system's filesystem cache.
+
 ## Workload selection
 
 Prefer immutable artifacts and dependency graphs from real projects. Include small, medium, and
