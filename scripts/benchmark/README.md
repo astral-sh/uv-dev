@@ -52,6 +52,10 @@ processes with independent installation directories and one empty archive cache.
 request the same version or distinct versions, exposing cache-publication contention without
 conflating it with installation-directory locking.
 
+Executable-link workloads repeat `uv python install` after installing one, two, or four versions,
+including their real platform-specific links or launchers. Each timed command runs in a fresh uv
+process against an already-populated installation directory.
+
 Pass `--project-caches` to also prepare a separate cache for each frozen environment. Cache
 maintenance workloads copy these caches and reconstruct their environments before timing, retaining
 the real cache layout and links between installed files and cached wheel contents.
