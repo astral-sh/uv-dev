@@ -445,15 +445,11 @@ fn validate_local_string(value: &str) -> Result<(), VersionEncodingError> {
 }
 
 /// Unlike `Option<T>`, this distinguishes a missing field from a present JSON null.
+#[derive(Default)]
 pub(super) enum Field<T> {
+    #[default]
     Missing,
     Present(T),
-}
-
-impl<T> Default for Field<T> {
-    fn default() -> Self {
-        Self::Missing
-    }
 }
 
 impl<'de, T: Deserialize<'de>> Deserialize<'de> for Field<T> {

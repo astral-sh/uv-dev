@@ -282,7 +282,10 @@ mod tests {
     }
 
     fn interval(lower: Value, upper: Value) -> Value {
-        json!({"lower": lower, "upper": upper})
+        Value::Object(serde_json::Map::from_iter([
+            ("lower".to_owned(), lower),
+            ("upper".to_owned(), upper),
+        ]))
     }
 
     fn round_trip(native: &Ranges<Version>, candidates: &[Version]) -> Result<(), Box<dyn Error>> {
