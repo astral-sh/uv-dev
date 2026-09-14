@@ -32,6 +32,21 @@ struct Release {
     api_origin: Option<Url>,
 }
 
+fn apply_download_override(release: &mut Release, download_url: Option<&str>) -> Result<()> {
+    if let Some(download_url) = download_url.filter(|url| !url.is_empty()) {
+        let archive = format!(
+            "{}/{}",
+            download_url.trim_end_matches('/'),
+            release.filename
+        );
+        release.urls = vec![DisplaySafeUrl::parse(&archive)?];
+        release.checksum_url = Some(DisplaySafeUrl::parse(&format!("{archive}.sha256"))?);
+        // The override can contain a separately built distribution, with its own checksum.
+        release.sha256 = None;
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 struct GithubRelease {
     tag_name: String,
@@ -321,7 +336,7 @@ pub(super) async fn self_update(
     let client = client_builder.clone().retries(0).build()?;
     let target = uv_platform::build_target();
     writeln!(printer.stderr(), "Checking for updates...")?;
-    let release = resolve_release(
+    let mut release = resolve_release(
         &receipt.source,
         version.as_deref(),
         &target,
@@ -330,6 +345,11 @@ pub(super) async fn self_update(
         token.as_deref(),
     )
     .await?;
+    let download_url = std::env::var(EnvVars::UV_DOWNLOAD_URL)
+        .ok()
+        .filter(|url| !url.is_empty())
+        .or_else(|| std::env::var("INSTALLER_DOWNLOAD_URL").ok());
+    apply_download_override(&mut release, download_url.as_deref())?;
     if !is_update_needed(&current, &release.version, version.is_some()) {
         writeln!(
             printer.stderr(),
@@ -361,7 +381,9 @@ pub(super) async fn self_update(
             updated.binaries.push((*name).to_owned());
         }
     }
-    installation.install_binaries(&source, &updated.binaries, Some(&updated), Some(&receipt))?;
+    installation
+        .install_binaries(&source, &updated.binaries, Some(&updated), Some(&receipt))
+        .await?;
     writeln!(
         printer.stderr(),
         "Updated uv from {current} to {}",
