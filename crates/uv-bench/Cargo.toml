@@ -149,6 +149,11 @@ path = "benches/s3_signing.rs"
 harness = false
 
 [[bench]]
+name = "osv_audit"
+path = "benches/osv_audit.rs"
+harness = false
+
+[[bench]]
 name = "uv_pypi_types"
 path = "benches/uv_pypi_types.rs"
 harness = false
