@@ -508,7 +508,7 @@ pub(crate) async fn upgrade(
     }
 
     let events = match &result {
-        LockResult::Changed(previous, lock) => {
+        LockResult::Changed { previous, lock, .. } => {
             LockEvent::detect_changes(previous.as_ref(), lock, DryRun::Enabled)
                 .filter(|event| {
                     selected_packages

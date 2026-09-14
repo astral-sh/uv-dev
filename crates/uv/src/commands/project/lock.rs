@@ -67,21 +67,28 @@ pub(crate) enum LockResult {
     /// The lock was unchanged.
     Unchanged(Lock),
     /// The lock was changed.
-    Changed(Option<Lock>, Lock),
+    Changed {
+        /// The previous lock, if its contents were usable for the resolution.
+        previous: Option<Lock>,
+        /// The resolved lock.
+        lock: Lock,
+        /// Whether the initial read found a lockfile, even if it could not be reused.
+        had_existing_lockfile: bool,
+    },
 }
 
 impl LockResult {
     pub(crate) fn lock(&self) -> &Lock {
         match self {
             Self::Unchanged(lock) => lock,
-            Self::Changed(_, lock) => lock,
+            Self::Changed { lock, .. } => lock,
         }
     }
 
     pub(crate) fn into_lock(self) -> Lock {
         match self {
             Self::Unchanged(lock) => lock,
-            Self::Changed(_, lock) => lock,
+            Self::Changed { lock, .. } => lock,
         }
     }
 }
@@ -317,7 +324,7 @@ async fn lock_inner(
 
             if dry_run.enabled() {
                 // In `--dry-run` mode, show all changes.
-                if let LockResult::Changed(previous, lock) = &lock {
+                if let LockResult::Changed { previous, lock, .. } = &lock {
                     let mut changed = false;
                     for event in LockEvent::detect_changes(previous.as_ref(), lock, dry_run) {
                         changed = true;
@@ -336,7 +343,12 @@ async fn lock_inner(
                     )?;
                 }
             } else {
-                if let LockResult::Changed(Some(previous), lock) = &lock {
+                if let LockResult::Changed {
+                    previous: Some(previous),
+                    lock,
+                    ..
+                } = &lock
+                {
                     for event in LockEvent::detect_changes(Some(previous), lock, dry_run) {
                         writeln!(printer.stderr(), "{event}")?;
                     }
@@ -506,6 +518,7 @@ impl<'env> LockOperation<'env> {
                     target,
                     interpreter,
                     Some(existing),
+                    true,
                     self.mode,
                     check_lockfile_contents,
                     self.report,
@@ -524,10 +537,10 @@ impl<'env> LockOperation<'env> {
                 .await?;
 
                 // If the lockfile changed, return an error.
-                if let LockResult::Changed(prev, cur) = result {
+                if let LockResult::Changed { previous, lock, .. } = result {
                     return Err(ProjectError::LockMismatch(
-                        prev.map(Box::new),
-                        Box::new(cur),
+                        previous.map(Box::new),
+                        Box::new(lock),
                         lock_source,
                     ));
                 }
@@ -536,27 +549,24 @@ impl<'env> LockOperation<'env> {
             }
             LockMode::Write(interpreter) | LockMode::DryRun(interpreter) => {
                 // Read the existing lockfile.
-                let (existing, existing_contents) = match target.read_with_contents().await {
+                let (existing, existing_contents, had_existing_lockfile) = match target
+                    .read_with_contents()
+                    .await
+                {
                     Ok(Some((existing, existing_contents))) => {
-                        if let Some(report) = self.report.as_deref_mut() {
-                            report.record_existing_lockfile();
-                        }
-                        (Some(existing), Some(existing_contents))
+                        (Some(existing), Some(existing_contents), true)
                     }
                     Ok(None) => {
                         if let Some(report) = self.report.as_deref_mut() {
                             report.stale(LockReason::new(ReasonCode::MissingLockfile));
                         }
-                        (None, None)
+                        (None, None, false)
                     }
                     Err(ProjectError::Lock(err)) => {
-                        if let Some(report) = self.report.as_deref_mut() {
-                            report.record_existing_lockfile();
-                        }
                         warn_user!(
                             "Failed to read existing lockfile; ignoring locked requirements: {err}"
                         );
-                        (None, None)
+                        (None, None, true)
                     }
                     Err(err) => return Err(err),
                 };
@@ -572,6 +582,7 @@ impl<'env> LockOperation<'env> {
                     target,
                     interpreter,
                     existing,
+                    had_existing_lockfile,
                     self.mode,
                     check_lockfile_contents,
                     self.report,
@@ -591,7 +602,7 @@ impl<'env> LockOperation<'env> {
 
                 // If the lockfile changed, write it to disk.
                 if !matches!(self.mode, LockMode::DryRun(_)) {
-                    if let LockResult::Changed(_, lock) = &result {
+                    if let LockResult::Changed { lock, .. } = &result {
                         target.commit(lock).await?;
                     }
                 }
@@ -607,6 +618,7 @@ async fn do_lock(
     target: LockTarget<'_>,
     interpreter: &Interpreter,
     existing_lock: Option<Lock>,
+    had_existing_lockfile: bool,
     mode: LockMode<'_>,
     check_lockfile_contents: Option<String>,
     mut report: Option<&mut LockReport>,
@@ -1263,7 +1275,11 @@ async fn do_lock(
             if unchanged {
                 Ok(LockResult::Unchanged(lock))
             } else {
-                Ok(LockResult::Changed(previous, lock))
+                Ok(LockResult::Changed {
+                    previous,
+                    lock,
+                    had_existing_lockfile,
+                })
             }
         }
     }

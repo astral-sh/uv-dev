@@ -385,8 +385,14 @@ impl From<(&LockTarget<'_>, &LockMode<'_>, &Outcome)> for LockReport {
                                 LockAction::Check
                             }
                         },
-                        LockResult::Changed(None, ..) => LockAction::Create,
-                        LockResult::Changed(Some(_), ..) => LockAction::Update,
+                        LockResult::Changed {
+                            had_existing_lockfile: false,
+                            ..
+                        } => LockAction::Create,
+                        LockResult::Changed {
+                            had_existing_lockfile: true,
+                            ..
+                        } => LockAction::Update,
                     }
                 }
                 // TODO(zanieb): We don't have a way to report the outcome of the lock yet
