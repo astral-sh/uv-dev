@@ -16,6 +16,10 @@ fn requirements_files(c: &mut Criterion<WallTime>) {
     let mut group = c.benchmark_group("requirements_files");
     for (name, input) in [
         (
+            "trio",
+            include_str!("../../../test/requirements/compiled/trio.txt"),
+        ),
+        (
             "jupyter",
             include_str!("../../../test/requirements/compiled/jupyter.txt"),
         ),

@@ -179,6 +179,11 @@ path = "benches/requirements_files.rs"
 harness = false
 
 [[bench]]
+name = "requirements_directives"
+path = "benches/requirements_directives.rs"
+harness = false
+
+[[bench]]
 name = "python_discovery"
 path = "benches/python_discovery.rs"
 harness = false
