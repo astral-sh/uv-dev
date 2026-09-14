@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use url::Url;
 use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 
 use crate::{HashAlgorithm, Hashes};
@@ -17,6 +18,7 @@ pub enum DirectUrl {
     /// {"url": "file:///home/user/project", "dir_info": {}}
     /// ```
     LocalDirectory {
+        #[serde(serialize_with = "serialize_url")]
         url: String,
         dir_info: DirInfo,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -31,6 +33,7 @@ pub enum DirectUrl {
         ///
         /// For example, for `pip install git+https://github.com/tqdm/tqdm@cc372d09dcd5a5eabdc6ed4cf365bdb0be004d44#subdirectory=.`,
         /// the URL is `https://github.com/tqdm/tqdm`.
+        #[serde(serialize_with = "serialize_url")]
         url: String,
         archive_info: ArchiveInfo,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -41,6 +44,7 @@ pub enum DirectUrl {
     /// {"url": "https://github.com/pallets/flask.git", "vcs_info": {"commit_id": "8d9519df093864ff90ca446d4af2dc8facd3c542", "vcs": "git", "git_lfs": true }}
     /// ```
     VcsUrl {
+        #[serde(serialize_with = "serialize_url")]
         url: String,
         vcs_info: VcsInfo,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -48,6 +52,16 @@ pub enum DirectUrl {
         #[serde(skip_serializing_if = "Option::is_none")]
         path: Option<PathBuf>,
     },
+}
+
+/// Deserialization accepts raw strings so the installed-distribution reader can handle malformed
+/// third-party metadata. Persisted origins must contain a valid, credential-free URL.
+fn serialize_url<S>(url: &str, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let url = Url::parse(url).map_err(serde::ser::Error::custom)?;
+    DisplaySafeUrl::from_url(url).serialize(serializer)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -177,5 +191,34 @@ impl TryFrom<&DirectUrl> for DisplaySafeUrl {
                 Ok(url)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::DirectUrl;
+
+    #[test]
+    fn serialize_direct_url_credentials() -> Result<(), serde_json::Error> {
+        let direct: DirectUrl = serde_json::from_value(json!({
+            "url": "https://user:password@example.com/path:with@revision?sig=signature&keep=%2f",
+            "archive_info": {}
+        }))?;
+        assert_eq!(
+            serde_json::to_value(direct)?,
+            json!({
+                "url": "https://example.com/path:with@revision?keep=%2f",
+                "archive_info": {}
+            })
+        );
+
+        let direct: DirectUrl = serde_json::from_value(json!({
+            "url": "not a URL",
+            "archive_info": {}
+        }))?;
+        insta::assert_snapshot!(serde_json::to_string(&direct).expect_err("invalid URL"), @"relative URL without a base");
+        Ok(())
     }
 }
