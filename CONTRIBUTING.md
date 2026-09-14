@@ -122,6 +122,10 @@ marker universe is satisfiable.
 cargo dev check-scenarios --uv target/debug/uv --lock --python-version 3.12,3.13,3.14 --python-platform linux,macos,windows test/scenarios/fork/basic.toml
 ```
 
+Add `--lock-without-metadata` to exercise the metadata-free lockfile preview. The selected format is
+used for the initial lock, both read-only round trips, frozen exports, and any diagnostic refresh.
+Failure captures record the format and exhaustive-search bound alongside the command trace.
+
 Add `--project-selections` for project optional dependencies and PEP 735 dependency groups. The
 universal lock is checked against all roots together. Frozen exports disable default groups and
 cover the base project, individual and combined extras, individual and combined groups, groups-only

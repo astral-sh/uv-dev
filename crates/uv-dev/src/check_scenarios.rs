@@ -10,8 +10,8 @@ use serde_json::json;
 use uv_python::PythonVersion;
 use uv_test::TestContext;
 use uv_test::packse::check::{
-    LockCheckResult, ScenarioPlatform, ScenarioTarget, check_lock_scenario,
-    check_lock_scenario_with_artifacts, check_project_lock_scenario,
+    LockCheckOptions, LockCheckResult, LockfileMode, ScenarioPlatform, ScenarioTarget,
+    check_lock_scenario, check_lock_scenario_with_artifacts, check_project_lock_scenario,
     check_project_lock_scenario_with_artifacts, check_scenario, check_scenario_with_artifacts,
 };
 use uv_test::packse::generate::{
@@ -42,6 +42,10 @@ pub(crate) struct Args {
     /// Check a universal project lock and its frozen export instead of `pip compile`.
     #[arg(long)]
     lock: bool,
+
+    /// Write and consume metadata-free preview lockfiles throughout the check.
+    #[arg(long, requires = "lock")]
+    lock_without_metadata: bool,
 
     /// Check explicit project-extra and dependency-group exports from the universal lock.
     ///
@@ -222,6 +226,14 @@ fn check_case(
 ) -> Result<CaseResult> {
     let scenario = document.scenario()?;
     if args.lock {
+        let options = LockCheckOptions {
+            max_states: args.max_states,
+            lockfile: if args.lock_without_metadata {
+                LockfileMode::WithoutMetadata
+            } else {
+                LockfileMode::Standard
+            },
+        };
         let context = TestContext::new_with_versions_and_bin(&[interpreter], uv.to_path_buf());
         let failure_dir = args.failure_dir.clone().or_else(|| {
             args.output_dir
@@ -238,24 +250,20 @@ fn check_case(
                 document,
                 targets,
                 selections,
-                args.max_states,
+                options,
                 failure_dir,
             ),
-            (Some(selections), None) => check_project_lock_scenario(
-                &context,
-                &scenario,
-                targets,
-                selections,
-                args.max_states,
-            ),
+            (Some(selections), None) => {
+                check_project_lock_scenario(&context, &scenario, targets, selections, options)
+            }
             (None, Some(failure_dir)) => check_lock_scenario_with_artifacts(
                 &context,
                 document,
                 targets,
-                args.max_states,
+                options,
                 failure_dir,
             ),
-            (None, None) => check_lock_scenario(&context, &scenario, targets, args.max_states),
+            (None, None) => check_lock_scenario(&context, &scenario, targets, options),
         }?;
         let exports = selections
             .as_ref()

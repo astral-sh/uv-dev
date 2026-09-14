@@ -195,6 +195,20 @@ mod tests {
     }
 
     #[test]
+    fn scenario_checker_requires_a_lock_for_metadata_free_checks() {
+        let arguments = [
+            "uv-dev",
+            "check-scenarios",
+            "--uv",
+            "uv",
+            "--lock-without-metadata",
+            "scenario.toml",
+        ];
+        assert!(Cli::try_parse_from(arguments).is_err());
+        assert!(Cli::try_parse_from(arguments.into_iter().chain(["--lock"])).is_ok());
+    }
+
+    #[test]
     fn scenario_checker_generates_project_roots() {
         assert!(
             Cli::try_parse_from([

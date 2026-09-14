@@ -4,9 +4,9 @@ use anyhow::{Context, Result, bail};
 
 use uv_python::PythonVersion;
 use uv_test::packse::check::{
-    LockCheckResult, LockScenarioFailureKind, ScenarioPlatform, ScenarioTarget,
-    check_lock_scenario, check_lock_scenario_with_artifacts, check_project_lock_scenario,
-    check_project_lock_scenario_with_artifacts, check_scenario,
+    LockCheckOptions, LockCheckResult, LockScenarioFailureKind, LockfileMode, ScenarioPlatform,
+    ScenarioTarget, check_lock_scenario, check_lock_scenario_with_artifacts,
+    check_project_lock_scenario, check_project_lock_scenario_with_artifacts, check_scenario,
 };
 use uv_test::packse::generate::{
     SmallGraphOptions, generate_marker_graph, generate_project_graph,
@@ -107,7 +107,12 @@ fn universal_locks_match_their_concrete_projections() -> Result<()> {
     for path in paths {
         let scenario =
             Scenario::from_path(&context.workspace_root.join("test/scenarios").join(path))?;
-        let result = check_lock_scenario(&context, &scenario, &targets, 100_000)?;
+        let result = check_lock_scenario(
+            &context,
+            &scenario,
+            &targets,
+            LockCheckOptions::new(100_000),
+        )?;
         outcomes.push((
             scenario.name,
             matches!(result, LockCheckResult::Satisfiable { .. }),
@@ -141,6 +146,77 @@ fn universal_locks_match_their_concrete_projections() -> Result<()> {
 }
 
 #[test]
+fn metadata_free_locks_match_their_concrete_projections() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let targets = ScenarioTarget::matrix(
+        &["3.12", "3.13", "3.14"]
+            .map(|version| PythonVersion::from_str(version).expect("valid Python version")),
+        &[
+            ScenarioPlatform::Linux,
+            ScenarioPlatform::Macos,
+            ScenarioPlatform::Windows,
+        ],
+    );
+    let options = LockCheckOptions {
+        max_states: 100_000,
+        lockfile: LockfileMode::WithoutMetadata,
+    };
+    let scenario = Scenario::from_path(
+        &context
+            .workspace_root
+            .join("test/scenarios/fork/incomplete-markers.toml"),
+    )?;
+    assert!(matches!(
+        check_lock_scenario(&context, &scenario, &targets, options)?,
+        LockCheckResult::Satisfiable { projections, .. } if projections == targets.len()
+    ));
+    assert_metadata_free_lock(&context.read("uv.lock"))?;
+
+    let project_targets = ScenarioTarget::matrix(
+        &["3.12", "3.13"]
+            .map(|version| PythonVersion::from_str(version).expect("valid Python version")),
+        &[
+            ScenarioPlatform::Linux,
+            ScenarioPlatform::Macos,
+            ScenarioPlatform::Windows,
+        ],
+    );
+    for (path, targets) in [
+        ("fork/empty-extra-lock-roundtrip.toml", targets.as_slice()),
+        (
+            "project/selection-projections.toml",
+            project_targets.as_slice(),
+        ),
+    ] {
+        let context = uv_test::test_context!("3.12");
+        let scenario =
+            Scenario::from_path(&context.workspace_root.join("test/scenarios").join(path))?;
+        let selections = ScenarioProject::new(&scenario)?.selection_matrix();
+        assert!(matches!(
+            check_project_lock_scenario(&context, &scenario, targets, &selections, options)?,
+            LockCheckResult::Satisfiable { projections, .. }
+                if projections == targets.len() * selections.len()
+        ));
+        assert_metadata_free_lock(&context.read("uv.lock"))?;
+    }
+    Ok(())
+}
+
+fn assert_metadata_free_lock(lock: &str) -> Result<()> {
+    let lock: toml::Value = toml::from_str(lock)?;
+    assert_eq!(lock["version"].as_integer(), Some(1));
+    assert_eq!(lock["revision"].as_integer(), Some(4));
+    assert!(
+        lock["package"]
+            .as_array()
+            .expect("lockfile packages")
+            .iter()
+            .all(|package| package.get("metadata").is_none())
+    );
+    Ok(())
+}
+
+#[test]
 fn captures_unsampled_universal_conflicts() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let target = ScenarioTarget {
@@ -157,7 +233,7 @@ fn captures_unsampled_universal_conflicts() -> Result<()> {
         &context,
         &document,
         std::slice::from_ref(&target),
-        100_000,
+        LockCheckOptions::new(100_000),
         &directory,
     )
     .expect_err("the Linux projection does not witness the other platform's conflict");
@@ -168,6 +244,8 @@ fn captures_unsampled_universal_conflicts() -> Result<()> {
         serde_json::from_slice(&fs_err::read(directory.join("failure.json"))?)?;
     assert!(failure["kind"].is_null());
     assert_eq!(failure["targets"][0]["python"], "3.12");
+    assert_eq!(failure["options"]["max_states"], 100_000);
+    assert_eq!(failure["options"]["lockfile"], "standard");
     let command: serde_json::Value = serde_json::from_slice(&fs_err::read(
         directory.join("commands/01-lock/command.json"),
     )?)?;
@@ -189,12 +267,39 @@ fn captures_unsampled_universal_conflicts() -> Result<()> {
         &context,
         &document,
         std::slice::from_ref(&target),
-        100_000,
+        LockCheckOptions::new(100_000),
         &directory,
     )
     .expect_err("evidence directories cannot be replaced");
     assert!(format!("{error:#}").contains("failed to save lock evidence"));
     assert_eq!(fs_err::read(directory.join("scenario.toml"))?, original);
+
+    let directory = context.temp_dir.join("metadata-free-failure");
+    let error = check_lock_scenario_with_artifacts(
+        &context,
+        &document,
+        std::slice::from_ref(&target),
+        LockCheckOptions {
+            max_states: 100_000,
+            lockfile: LockfileMode::WithoutMetadata,
+        },
+        &directory,
+    )
+    .expect_err("the unsampled conflict remains unclassified in metadata-free mode");
+    assert_eq!(LockScenarioFailureKind::from_error(&error), None);
+    let failure: serde_json::Value =
+        serde_json::from_slice(&fs_err::read(directory.join("failure.json"))?)?;
+    assert_eq!(failure["options"]["lockfile"], "without-metadata");
+    let command: serde_json::Value = serde_json::from_slice(&fs_err::read(
+        directory.join("commands/01-lock/command.json"),
+    )?)?;
+    assert!(
+        command["args"]
+            .as_array()
+            .expect("command arguments")
+            .windows(2)
+            .any(|args| args[0] == "--preview-features" && args[1] == "lock-without-metadata")
+    );
 
     let document = ScenarioDocument::from_path(
         &context
@@ -203,7 +308,13 @@ fn captures_unsampled_universal_conflicts() -> Result<()> {
     )?;
     let matched = context.temp_dir.join("matched");
     assert!(matches!(
-        check_lock_scenario_with_artifacts(&context, &document, &[target], 100_000, &matched,)?,
+        check_lock_scenario_with_artifacts(
+            &context,
+            &document,
+            &[target],
+            LockCheckOptions::new(100_000),
+            &matched,
+        )?,
         LockCheckResult::Unsatisfiable { .. }
     ));
     assert!(!matched.exists());
@@ -229,7 +340,13 @@ fn project_locks_match_explicit_root_selections() -> Result<()> {
     );
     let selections = ScenarioProject::new(&scenario)?.selection_matrix();
     assert_eq!(selections.len(), 11);
-    match check_project_lock_scenario(&context, &scenario, &targets, &selections, 100_000)? {
+    match check_project_lock_scenario(
+        &context,
+        &scenario,
+        &targets,
+        &selections,
+        LockCheckOptions::new(100_000),
+    )? {
         LockCheckResult::Satisfiable { projections, .. } => {
             assert_eq!(projections, targets.len() * selections.len());
         }
@@ -289,7 +406,7 @@ fn project_locks_check_unselected_roots() -> Result<()> {
             &document,
             &[target],
             &[ProjectSelection::default()],
-            100_000,
+            LockCheckOptions::new(100_000),
             &directory,
         )?,
         LockCheckResult::Unsatisfiable { .. }
@@ -328,7 +445,7 @@ fn project_locks_reject_unsupported_roots() -> Result<()> {
             &document,
             std::slice::from_ref(&target),
             &[ProjectSelection::default()],
-            100_000,
+            LockCheckOptions::new(100_000),
             &directory,
         )
         .expect_err("the project root is outside the checker contract");
@@ -362,9 +479,13 @@ fn generated_small_graphs_match_the_exhaustive_oracle() -> Result<()> {
             unsatisfiable += 1;
         }
         if seed < 8 {
-            let result =
-                check_lock_scenario(&context, &scenario, std::slice::from_ref(&target), 27)
-                    .with_context(|| format!("generated lock graph seed {seed}"))?;
+            let result = check_lock_scenario(
+                &context,
+                &scenario,
+                std::slice::from_ref(&target),
+                LockCheckOptions::new(27),
+            )
+            .with_context(|| format!("generated lock graph seed {seed}"))?;
             assert_eq!(
                 scenario.expected.satisfiable,
                 matches!(result, LockCheckResult::Satisfiable { .. })
@@ -410,7 +531,7 @@ fn generated_marker_graphs_match_their_concrete_projections() -> Result<()> {
         }
         if seed < 2 {
             let context = uv_test::test_context!("3.12");
-            check_lock_scenario(&context, &scenario, &targets, 27)
+            check_lock_scenario(&context, &scenario, &targets, LockCheckOptions::new(27))
                 .with_context(|| format!("generated marker lock graph seed {seed}"))?;
         }
     }
@@ -441,8 +562,14 @@ fn generated_project_graphs_match_selected_exports() -> Result<()> {
         let scenario = generate_project_graph(seed, options, anchor, 27)?.scenario()?;
         let selections = ScenarioProject::new(&scenario)?.selection_matrix();
         let context = uv_test::test_context!("3.12");
-        let result = check_project_lock_scenario(&context, &scenario, &targets, &selections, 27)
-            .with_context(|| format!("generated project lock graph seed {seed}"))?;
+        let result = check_project_lock_scenario(
+            &context,
+            &scenario,
+            &targets,
+            &selections,
+            LockCheckOptions::new(27),
+        )
+        .with_context(|| format!("generated project lock graph seed {seed}"))?;
         assert_eq!(
             matches!(result, LockCheckResult::Satisfiable { .. }),
             satisfiable
@@ -477,8 +604,14 @@ fn witnessed_project_graphs_match_selected_exports() -> Result<()> {
         let scenario = graph.document.scenario()?;
         let selections = ScenarioProject::new(&scenario)?.selection_matrix();
         let context = uv_test::test_context!("3.12");
-        let result = check_project_lock_scenario(&context, &scenario, &targets, &selections, 27)
-            .with_context(|| format!("witnessed project lock graph seed {seed}"))?;
+        let result = check_project_lock_scenario(
+            &context,
+            &scenario,
+            &targets,
+            &selections,
+            LockCheckOptions::new(27),
+        )
+        .with_context(|| format!("witnessed project lock graph seed {seed}"))?;
         let LockCheckResult::Satisfiable { projections, .. } = result else {
             bail!("witnessed project lock graph seed {seed} must be satisfiable");
         };
