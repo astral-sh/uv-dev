@@ -46,7 +46,9 @@ Network workloads use `serve-fixtures.py` with the pinned Python 3.11 interprete
 prepared wheels, their actual core metadata, and Simple API listings derived from those wheels or an
 immutable lockfile. The server binds an ephemeral loopback port and applies a fixed 20 ms request
 delay to model an ordinary remote index without relying on live service timing. Wheel responses
-support byte ranges; only locally prepared artifact bodies can be downloaded.
+support byte ranges; only locally prepared artifact bodies can be downloaded. Fixtures marked
+`"replay": false` are used only by local-file workloads and do not change the replayed package
+listings.
 
 Run `python3 scripts/benchmark/prepare-git.py` to prepare the Git sources in `git.json` under
 `.cache/bench-git`. These repositories retain upstream commit and tree objects for PyPA's sample

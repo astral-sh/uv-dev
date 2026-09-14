@@ -134,6 +134,11 @@ path = "benches/local_wheel_concurrency.rs"
 harness = false
 
 [[bench]]
+name = "local_wheel_cache"
+path = "benches/local_wheel_cache.rs"
+harness = false
+
+[[bench]]
 name = "multi_index"
 path = "benches/multi_index.rs"
 harness = false
