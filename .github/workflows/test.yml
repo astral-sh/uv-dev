@@ -29,7 +29,7 @@ jobs:
 
   cargo-test-linux:
     timeout-minutes: 10
-    runs-on: depot-ubuntu-24.04-16
+    runs-on: "namespace-profile-ubuntu-24-04-16;container.privileged=true"
     name: "cargo test on linux"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -64,13 +64,13 @@ jobs:
 
       - name: "Install secret service"
         run: |
-          # Try the next configured mirror after the first failed download.
-          cat /etc/apt/apt-mirrors.txt
+          # Bound package download attempts.
           printf '%s\n' \
             'Acquire::Retries "0";' \
             'Acquire::http::Timeout "10";' \
             'Acquire::https::Timeout "10";' \
             | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
+          sudo apt update
           sudo apt install -y --no-install-recommends gnome-keyring
 
       - name: "Start gnome-keyring"
