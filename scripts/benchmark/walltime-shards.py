@@ -8,6 +8,7 @@ import json
 import os
 import re
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 from typing import BinaryIO
 
@@ -31,6 +32,43 @@ def output(root: Path, *command: str) -> str:
     return subprocess.check_output(command, cwd=root, text=True).strip()
 
 
+def cargo_codspeed_version(
+    root: Path,
+    *,
+    cargo: str = "cargo",
+    environment: Mapping[str, str] | None = None,
+) -> str:
+    result = subprocess.run(
+        [cargo, "codspeed", "--version"],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    # cargo-codspeed 5.0.1 sends Clap's display-version result through its error
+    # handler. Other nonzero exits are not version responses.
+    if (
+        result.returncode == 1
+        and result.stdout == ""
+        and result.stderr.rstrip("\r\n") == "cargo-codspeed 5.0.1"
+    ):
+        return "cargo-codspeed 5.0.1"
+    result.check_returncode()
+    version = result.stdout.strip()
+    if (
+        result.stderr
+        or re.fullmatch(
+            r"cargo-codspeed [0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?",
+            version,
+        )
+        is None
+    ):
+        raise ValueError("Unexpected cargo-codspeed version response")
+    return version
+
+
 def source_identity(root: Path) -> dict:
     """Identify tracked source without treating generated fixture files as source edits."""
     difference = subprocess.check_output(
@@ -50,7 +88,7 @@ def source_identity(root: Path) -> dict:
 def producer_metadata(root: Path) -> dict:
     return {
         "rustc": output(root, "rustc", "-Vv"),
-        "cargo_codspeed": output(root, "cargo", "codspeed", "--version"),
+        "cargo_codspeed": cargo_codspeed_version(root),
         "working_tree_status": output(
             root, "git", "status", "--porcelain=v1", "--untracked-files=normal"
         ).splitlines(),

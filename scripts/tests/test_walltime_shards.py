@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location(
     "walltime_shards",
@@ -15,6 +16,83 @@ SPEC = importlib.util.spec_from_file_location(
 assert SPEC is not None and SPEC.loader is not None
 shards = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(shards)
+
+
+class CargoCodspeedVersion(unittest.TestCase):
+    def probe(self, returncode, stdout, stderr):
+        root = Path.cwd()
+        environment = {"PATH": "fixture-tools"}
+        command = ["/fixture/cargo", "codspeed", "--version"]
+        result = subprocess.CompletedProcess(command, returncode, stdout, stderr)
+        with patch.object(shards.subprocess, "run", return_value=result) as run:
+            try:
+                return shards.cargo_codspeed_version(
+                    root, cargo=command[0], environment=environment
+                )
+            finally:
+                run.assert_called_once_with(
+                    command,
+                    cwd=root,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    check=False,
+                )
+
+    def test_successful_version_response(self):
+        for version in ("5.0.1", "5.0.2", "6.0.0-alpha.1+build.2"):
+            with self.subTest(version=version):
+                self.assertEqual(
+                    self.probe(0, f"cargo-codspeed {version}\n", ""),
+                    f"cargo-codspeed {version}",
+                )
+
+    def test_known_display_version_exit(self):
+        self.assertEqual(
+            self.probe(1, "", "cargo-codspeed 5.0.1\n\n"),
+            "cargo-codspeed 5.0.1",
+        )
+
+    def test_ambiguous_or_malformed_success_is_rejected(self):
+        for stdout, stderr in (
+            ("", ""),
+            ("5.0.1\n", ""),
+            ("cargo-codspeed 5.0.1\nextra output\n", ""),
+            ("cargo-codspeed 5.0.1\n", "unexpected warning\n"),
+        ):
+            error = self.assertRaisesRegex(ValueError, "version response")
+            with self.subTest(stdout=stdout, stderr=stderr), error:
+                self.probe(0, stdout, stderr)
+
+    def test_other_failures_remain_errors(self):
+        for returncode, stdout, stderr in (
+            (1, "cargo-codspeed 5.0.1\n", "cargo-codspeed 5.0.1\n\n"),
+            (1, " ", "cargo-codspeed 5.0.1\n\n"),
+            (1, "", "cargo-codspeed 5.0.2\n\n"),
+            (1, "", " cargo-codspeed 5.0.1\n\n"),
+            (1, "", "cargo-codspeed 5.0.1\nfailed to start\n"),
+            (2, "", "cargo-codspeed 5.0.1\n\n"),
+            (1, "", "failed to start\n"),
+        ):
+            error = self.assertRaises(subprocess.CalledProcessError)
+            with self.subTest(returncode=returncode, stdout=stdout, stderr=stderr):
+                with error:
+                    self.probe(returncode, stdout, stderr)
+                self.assertEqual(error.exception.returncode, returncode)
+                self.assertEqual(error.exception.stdout, stdout)
+                self.assertEqual(error.exception.stderr, stderr)
+
+    def test_other_metadata_commands_remain_strict(self):
+        root = Path.cwd()
+        for command in (("cargo", "--version"), ("rustc", "-Vv")):
+            failure = subprocess.CalledProcessError(1, command)
+            patched = patch.object(
+                shards.subprocess, "check_output", side_effect=failure
+            )
+            error = self.assertRaises(subprocess.CalledProcessError)
+            with self.subTest(command=command), patched, error:
+                shards.output(root, *command)
 
 
 class WalltimeShards(unittest.TestCase):
