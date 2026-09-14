@@ -57,6 +57,12 @@ commit. Their complete reachable history lets the ordinary Git client fetch bran
 without requiring special handling for a shallow remote. Git workloads use these local repositories
 without fetching live upstream data while timing.
 
+Run `scripts/benchmark/prepare-sources.py` with Python 3.12.11 or newer after the fixture and Git
+preparation steps to export the project trees in `sources.json` under `.cache/bench-sources`. CI
+uses the pinned managed interpreter so archive link handling is consistent across runners. These
+contain the actual tracked files at pinned commits, including uv's own source tree, without a
+changing checkout or Git object database in the measured directory.
+
 Pass `--git-directory .cache/bench-git` to `serve-fixtures.py` to replay GitHub commit lookups and
 the exact `pyproject.toml` contents stored in these repositories. The private test endpoint
 overrides let source-metadata workloads use the normal GitHub fast path against that loopback
