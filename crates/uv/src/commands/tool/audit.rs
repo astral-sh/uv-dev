@@ -264,12 +264,12 @@ fn render_audits(
             } else {
                 serde_json::to_string_pretty(&report)?
             };
-            writeln!(printer.stdout_important(), "{output}")?;
+            writeln!(printer.stdout_important_raw(), "{output}")?;
         }
         AuditOutputFormat::Sarif => {
             let report = sarif::Report::from_audits(audits);
             writeln!(
-                printer.stdout_important(),
+                printer.stdout_important_raw(),
                 "{}",
                 serde_json::to_string_pretty(&report)?
             )?;

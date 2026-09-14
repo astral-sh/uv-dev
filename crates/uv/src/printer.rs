@@ -1,3 +1,5 @@
+use std::io::{ErrorKind, StdoutLock, Write as _, stdout};
+
 use anstream::{eprint, print};
 use indicatif::ProgressDrawTarget;
 use serde::Serialize;
@@ -136,6 +138,17 @@ impl Printer {
         }
     }
 
+    /// Return unfiltered standard output for serialized data.
+    ///
+    /// The ordinary printer removes terminal control sequences when color is disabled. Machine-
+    /// readable output must retain the serialized bytes regardless of the terminal's color policy.
+    pub(crate) fn stdout_important_raw(self) -> RawStdout {
+        match self.stdout_important() {
+            Stdout::Enabled => RawStdout::Enabled(stdout().lock()),
+            Stdout::Disabled => RawStdout::Disabled,
+        }
+    }
+
     /// Return the [`Stdout`] for this printer.
     pub(crate) fn stdout(self) -> Stdout {
         match self {
@@ -177,6 +190,31 @@ impl Printer {
 pub(crate) enum Stdout {
     Enabled,
     Disabled,
+}
+
+/// Standard output without terminal-control filtering.
+pub(crate) enum RawStdout {
+    Enabled(StdoutLock<'static>),
+    Disabled,
+}
+
+impl std::fmt::Write for RawStdout {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        match self {
+            Self::Enabled(stdout) => {
+                // Consumers can close a pipe before reading the entire result. Other output
+                // failures are fatal, as they are for the ordinary standard-output printer.
+                if let Err(error) = stdout.write_all(s.as_bytes())
+                    && error.kind() != ErrorKind::BrokenPipe
+                {
+                    panic!("failed printing to stdout: {error}");
+                }
+            }
+            Self::Disabled => {}
+        }
+
+        Ok(())
+    }
 }
 
 impl std::fmt::Write for Stdout {

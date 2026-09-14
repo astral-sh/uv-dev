@@ -146,7 +146,7 @@ fn emit_jsonl_progress(printer: Printer, event: &JsonlProgressEvent) {
     if let Ok(event) = serde_json::to_string(&JsonlRecord::<_, ()>::Progress(event))
         && let Ok(_guard) = JSONL_PROGRESS_LOCK.lock()
     {
-        let _ = writeln!(printer.stdout_important(), "{event}");
+        let _ = writeln!(printer.stdout_important_raw(), "{event}");
     }
 }
 
