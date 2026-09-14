@@ -127,7 +127,7 @@ impl PythonInstallation {
     }
 
     /// Find an existing [`PythonInstallation`].
-    pub fn find_existing(
+    fn find_existing(
         request: &PythonRequest,
         environments: EnvironmentPreference,
         preference: PythonPreference,
@@ -554,7 +554,7 @@ impl PythonInstallation {
     ///
     /// Avoids loading the Python download list unless the discovered interpreter could require
     /// the warning.
-    pub async fn download_and_warn_if_outdated_prerelease(
+    async fn download_and_warn_if_outdated_prerelease(
         &self,
         request: &PythonRequest,
         client_builder: &BaseClientBuilder<'_>,
