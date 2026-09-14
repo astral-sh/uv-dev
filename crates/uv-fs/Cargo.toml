@@ -41,7 +41,10 @@ walkdir = { workspace = true }
 rustix = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-linux-raw-sys = { workspace = true }
+linux-raw-sys = { workspace = true, features = ["general"] }
+
+[target.'cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64", target_arch = "loongarch64", target_arch = "powerpc64")))'.dependencies]
+io-uring = { workspace = true }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 libc = { workspace = true }
