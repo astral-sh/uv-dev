@@ -28,6 +28,11 @@ Pass `--project-caches` to also prepare a separate cache for each frozen environ
 maintenance workloads copy these caches and reconstruct their environments before timing, retaining
 the real cache layout and links between installed files and cached wheel contents.
 
+Run `python3 scripts/benchmark/prepare-tools.py` to prime the package cache for the CLI tools in
+`tools.json`. Each tool has its own hashed dependency constraints, refreshed explicitly with
+`--refresh-locks`. Tool workloads reconstruct isolated installations offline and use one, five, or
+fifteen actual tools as their size dimension.
+
 Network workloads use `serve-fixtures.py` with the pinned Python 3.11 interpreter. It serves the
 prepared wheels, their actual core metadata, and Simple API listings derived from those wheels or an
 immutable lockfile. The server binds an ephemeral loopback port and applies a fixed 20 ms request
