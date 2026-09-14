@@ -137,6 +137,48 @@ impl FixtureServer {
         format!("{}{path}", self.base_url)
     }
 
+    /// Copy a frozen project and redirect every registry source and reference to this server.
+    pub fn project(&self, name: &str) -> tempfile::TempDir {
+        fn replace_registries(value: &mut toml::Value, registry: &str) {
+            match value {
+                toml::Value::Table(table) => {
+                    for (key, value) in table {
+                        if key == "registry" && value.is_str() {
+                            *value = toml::Value::String(registry.to_owned());
+                        } else {
+                            replace_registries(value, registry);
+                        }
+                    }
+                }
+                toml::Value::Array(values) => {
+                    for value in values {
+                        replace_registries(value, registry);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let project = tempfile::tempdir().expect("Failed to create project directory");
+        fs_err::copy(
+            fixture_path(&format!("{name}.pyproject.toml")),
+            project.path().join("pyproject.toml"),
+        )
+        .expect("Failed to copy project metadata");
+        let mut lock: toml::Value = toml::from_str(
+            &fs_err::read_to_string(fixture_path(&format!("{name}.lock")))
+                .expect("Failed to read project lockfile"),
+        )
+        .expect("Invalid project lockfile");
+        replace_registries(&mut lock, &self.url("/simple/"));
+        fs_err::write(
+            project.path().join("uv.lock"),
+            toml::to_string(&lock).expect("Failed to serialize project lockfile"),
+        )
+        .expect("Failed to write project lockfile");
+        project
+    }
+
     /// Run uv with an isolated cache and the pinned interpreter, bypassing loopback proxies.
     pub fn command(&self, cache: &Path) -> Command {
         let mut command = uv_command_with_cache(cache);
