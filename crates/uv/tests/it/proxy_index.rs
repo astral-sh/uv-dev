@@ -1041,6 +1041,131 @@ async fn proxy_index_pip_compile_pylock_preserves_canonical_artifact_and_hash() 
 }
 
 #[tokio::test]
+async fn proxy_index_installs_pylock_created_without_a_proxy() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let artifact = fixture(&context, WHEEL_FILENAME)?;
+    let canonical_index = MockServer::start().await;
+    let canonical_artifacts = MockServer::start().await;
+    let physical_index = MockServer::start().await;
+    let physical_artifacts = MockServer::start().await;
+
+    mount_simple(
+        &canonical_index,
+        "basic-package",
+        vec![advertised_file(
+            WHEEL_FILENAME,
+            &format!("{}/packages/{WHEEL_FILENAME}", canonical_artifacts.uri()),
+            Some(WHEEL_HASH),
+        )],
+        1,
+    )
+    .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [[tool.uv.index]]
+            name = "canonical"
+            url = "{}/simple/"
+            default = true
+
+            [[tool.uv.dependency-metadata]]
+            name = "basic-package"
+            version = "0.1.0"
+            requires-dist = []
+            "#, canonical_index.uri()})?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("basic-package==0.1.0")?;
+
+    uv_snapshot!(context.filters(), context
+        .pip_compile()
+        .arg("requirements.txt")
+        .arg("--format")
+        .arg("pylock.toml")
+        .arg("--no-header")
+        .arg("-o")
+        .arg("pylock.toml"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.12.[X]"
+
+    [[packages]]
+    name = "basic-package"
+    version = "0.1.0"
+    index = "http://[LOCALHOST]/simple/"
+    wheels = [{ url = "http://[LOCALHOST]/packages/basic_package-0.1.0-py3-none-any.whl", upload-time = 2024-03-24T00:00:00Z, hashes = { sha256 = "7b6229db79b5800e4e98a351b5628c1c8a944533a2d428aeeaa7275a30d4ea82" } }]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
+
+    let lock = context.read("pylock.toml");
+    let mut legacy: toml::Value = toml::from_str(&lock)?;
+    let package = legacy["packages"][0]
+        .as_table_mut()
+        .context("missing locked package")?;
+    assert_eq!(
+        package
+            .remove("index")
+            .and_then(|value| value.as_str().map(str::to_owned)),
+        Some(format!("{}/simple/", canonical_index.uri()))
+    );
+    context
+        .temp_dir
+        .child("pylock.legacy.toml")
+        .write_str(&toml::to_string(&legacy)?)?;
+    canonical_index.verify().await;
+    canonical_index.reset().await;
+
+    ProxyConfiguration {
+        canonical_index_url: canonical_index.uri(),
+        canonical_artifact_url: canonical_artifacts.uri(),
+        physical_index_url: physical_index.uri(),
+        physical_artifact_url: physical_artifacts.uri(),
+        dependency: "basic-package==0.1.0",
+        dependency_metadata: None,
+    }
+    .write(&context)?;
+    mount_artifact(&physical_artifacts, WHEEL_FILENAME, artifact, 2).await;
+
+    let context = context.with_cache_dir("modern-cache");
+    uv_snapshot!(context.filters(), context
+        .pip_sync()
+        .arg("--preview-features")
+        .arg("pylock,proxy-index")
+        .arg("pylock.toml"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    ");
+    let context = context.with_cache_dir("legacy-cache");
+    uv_snapshot!(context.filters(), context
+        .pip_sync()
+        .arg("--preview-features")
+        .arg("pylock,proxy-index")
+        .arg("--reinstall")
+        .arg("pylock.legacy.toml"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ basic-package==0.1.0
+    ");
+
+    assert_eq!(context.read("pylock.toml"), lock);
+    assert_no_requests(&physical_index, "physical Simple API").await?;
+    assert_no_origin_requests(&canonical_index, &canonical_artifacts).await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn proxy_index_pip_installs_hashless_live_artifact() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let wheel = fixture(&context, WHEEL_FILENAME)?;
@@ -1271,6 +1396,66 @@ async fn proxy_index_rejects_hashless_selected_artifacts() -> Result<()> {
         assert_no_origin_requests(&canonical_index, &canonical_artifacts).await?;
     }
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn proxy_index_only_materializes_selected_versions() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let canonical_index = MockServer::start().await;
+    let canonical_artifacts = MockServer::start().await;
+    let physical_index = MockServer::start().await;
+    let physical_artifacts = MockServer::start().await;
+    let unmapped_artifacts = MockServer::start().await;
+    let prerelease = "basic_package-1.0.0rc1-py3-none-any.whl";
+
+    mount_simple(
+        &physical_index,
+        "basic-package",
+        vec![
+            advertised_file(
+                WHEEL_FILENAME,
+                &format!("{}/files/{WHEEL_FILENAME}", physical_artifacts.uri()),
+                Some(WHEEL_HASH),
+            ),
+            advertised_file(
+                prerelease,
+                &format!("{}/files/{prerelease}", unmapped_artifacts.uri()),
+                Some(WHEEL_HASH),
+            ),
+        ],
+        2,
+    )
+    .await;
+    let write_configuration = |dependency| {
+        ProxyConfiguration {
+            canonical_index_url: canonical_index.uri(),
+            canonical_artifact_url: canonical_artifacts.uri(),
+            physical_index_url: physical_index.uri(),
+            physical_artifact_url: physical_artifacts.uri(),
+            dependency,
+            dependency_metadata: Some(("basic-package", "0.1.0")),
+        }
+        .write(&context)
+    };
+    write_configuration("basic-package")?;
+
+    uv_snapshot!(context.filters(), context.lock(), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    write_configuration("basic-package==1.0.0rc1")?;
+    uv_snapshot!(context.filters(), context.lock().arg("--refresh"), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No proxy artifact URL mapping matches `http://[LOCALHOST]/files/basic_package-1.0.0rc1-py3-none-any.whl`
+    ");
+
+    assert_no_origin_requests(&canonical_index, &canonical_artifacts).await?;
+    assert_no_requests(&physical_artifacts, "configured physical artifact origin").await?;
+    assert_no_requests(&unmapped_artifacts, "unmapped physical artifact origin").await?;
     Ok(())
 }
 

@@ -450,7 +450,6 @@ impl<'lock> PylockToml {
             // Retain the canonical index so a later install can find its configured proxy.
             let index = dist
                 .index()
-                .filter(|index| index_locations.proxy_route_for(index).is_some())
                 .map(|index| index.without_credentials().into_owned());
 
             // Create a `pylock.toml`-style package.
@@ -766,9 +765,10 @@ impl<'lock> PylockToml {
             return Ok(());
         }
 
-        let Some(route) = index_locations.proxy_route_for(index) else {
+        let route = index_locations.route_for(index);
+        if !route.is_proxy() {
             return Ok(());
-        };
+        }
 
         let mut physical = route.effective_url().url().clone();
         physical.remove_credentials();
@@ -1146,6 +1146,7 @@ impl<'lock> PylockToml {
         groups: &[GroupName],
         tags: &Tags,
         build_options: &BuildOptions,
+        index_locations: &IndexLocations,
     ) -> Result<Resolution, PylockTomlError> {
         // Convert the extras and dependency groups specifications to a concrete environment.
         let mut graph =
@@ -1246,6 +1247,7 @@ impl<'lock> PylockToml {
                         install_path,
                         &package.name,
                         package.index.as_ref(),
+                        index_locations,
                     )?],
                     best_wheel_index: 0,
                     sdist: None,
@@ -1266,6 +1268,7 @@ impl<'lock> PylockToml {
                     &package.name,
                     package.version.as_ref(),
                     package.index.as_ref(),
+                    index_locations,
                 )?));
                 let dist = ResolvedDist::Installable {
                     dist: Arc::new(sdist),
@@ -1502,6 +1505,30 @@ impl PylockTomlPackage {
     }
 }
 
+/// Resolve the registry identity of a locked wheel or source distribution.
+fn registry_index(
+    index: Option<&DisplaySafeUrl>,
+    file_url: &UrlString,
+    index_locations: &IndexLocations,
+) -> Result<IndexUrl, PylockTomlErrorKind> {
+    if let Some(index) = index {
+        return Ok(IndexUrl::from(VerbatimUrl::from_url(index.clone())));
+    }
+
+    // PEP 751 permits omitting the index. A configured artifact mapping can recover its identity
+    // without contacting the upstream registry or changing the lockfile.
+    let mut url = file_url.to_url().map_err(PylockTomlErrorKind::ToUrl)?;
+    if let Some(index) = index_locations.canonical_index_for_artifact(&url)? {
+        return Ok(index.clone());
+    }
+
+    // Without an explicit index or matching proxy, use the artifact directory as its cache key.
+    url.path_segments_mut()
+        .map_err(|()| PylockTomlErrorKind::InvalidArtifactUrl(file_url.clone()))?
+        .pop();
+    Ok(IndexUrl::from(VerbatimUrl::from_url(url)))
+}
+
 impl PylockTomlWheel {
     /// Return the [`WheelFilename`] for this wheel.
     fn filename(&self, name: &PackageName) -> Result<Cow<'_, WheelFilename>, PylockTomlErrorKind> {
@@ -1532,6 +1559,7 @@ impl PylockTomlWheel {
         install_path: &Path,
         name: &PackageName,
         index: Option<&DisplaySafeUrl>,
+        index_locations: &IndexLocations,
     ) -> Result<RegistryBuiltWheel, PylockTomlErrorKind> {
         let filename = self.filename(name)?.into_owned();
 
@@ -1547,20 +1575,7 @@ impl PylockTomlWheel {
             return Err(PylockTomlErrorKind::WheelMissingPathUrl(name.clone()));
         };
 
-        let index = if let Some(index) = index {
-            IndexUrl::from(VerbatimUrl::from_url(index.clone()))
-        } else {
-            // Including the index is only a SHOULD in PEP 751. If it's omitted, we treat the
-            // URL (less the filename) as the index. This isn't correct, but it's the best we can
-            // do. In practice, the only effect here should be that we cache the wheel under a hash
-            // of this URL (since we cache under the hash of the index).
-            let mut index = file_url.to_url().map_err(PylockTomlErrorKind::ToUrl)?;
-            index
-                .path_segments_mut()
-                .map_err(|()| PylockTomlErrorKind::InvalidArtifactUrl(file_url.clone()))?
-                .pop();
-            IndexUrl::from(VerbatimUrl::from_url(index))
-        };
+        let index = registry_index(index, &file_url, index_locations)?;
 
         let file = Box::new(uv_distribution_types::File {
             dist_info_metadata: false,
@@ -1569,7 +1584,7 @@ impl PylockTomlWheel {
             requires_python: None,
             size: self.size,
             upload_time_utc_ms: self.upload_time.map(Timestamp::as_millisecond),
-            url: CanonicalArtifactUrl::from_location(FileLocation::AbsoluteUrl(file_url)),
+            url: CanonicalArtifactUrl::from_lockfile(FileLocation::AbsoluteUrl(file_url)),
             yanked: None,
             zstd: None,
         });
@@ -1688,6 +1703,7 @@ impl PylockTomlSdist {
         name: &PackageName,
         version: Option<&Version>,
         index: Option<&DisplaySafeUrl>,
+        index_locations: &IndexLocations,
     ) -> Result<RegistrySourceDist, PylockTomlErrorKind> {
         let filename = self.filename(name)?.into_owned();
         let ext = SourceDistExtension::from_path(filename.as_ref())?;
@@ -1711,20 +1727,7 @@ impl PylockTomlSdist {
             return Err(PylockTomlErrorKind::SdistMissingPathUrl(name.clone()));
         };
 
-        let index = if let Some(index) = index {
-            IndexUrl::from(VerbatimUrl::from_url(index.clone()))
-        } else {
-            // Including the index is only a SHOULD in PEP 751. If it's omitted, we treat the
-            // URL (less the filename) as the index. This isn't correct, but it's the best we can
-            // do. In practice, the only effect here should be that we cache the sdist under a hash
-            // of this URL (since we cache under the hash of the index).
-            let mut index = file_url.to_url().map_err(PylockTomlErrorKind::ToUrl)?;
-            index
-                .path_segments_mut()
-                .map_err(|()| PylockTomlErrorKind::InvalidArtifactUrl(file_url.clone()))?
-                .pop();
-            IndexUrl::from(VerbatimUrl::from_url(index))
-        };
+        let index = registry_index(index, &file_url, index_locations)?;
 
         let file = Box::new(uv_distribution_types::File {
             dist_info_metadata: false,
@@ -1733,7 +1736,7 @@ impl PylockTomlSdist {
             requires_python: None,
             size: self.size,
             upload_time_utc_ms: self.upload_time.map(Timestamp::as_millisecond),
-            url: CanonicalArtifactUrl::from_location(FileLocation::AbsoluteUrl(file_url)),
+            url: CanonicalArtifactUrl::from_lockfile(FileLocation::AbsoluteUrl(file_url)),
             yanked: None,
             zstd: None,
         });

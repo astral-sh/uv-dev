@@ -431,6 +431,7 @@ pub(crate) async fn pip_sync(
             &extras,
             &groups,
             &build_options,
+            &index_locations,
             hash_checking,
         )?
     } else {

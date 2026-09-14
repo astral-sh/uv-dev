@@ -8,7 +8,7 @@ use tracing::info_span;
 
 use uv_client::BaseClientBuilder;
 use uv_configuration::{BuildOptions, HashCheckingMode, TargetTriple};
-use uv_distribution_types::Resolution;
+use uv_distribution_types::{IndexLocations, Resolution};
 use uv_fs::Simplified;
 use uv_normalize::{ExtraName, GroupName};
 use uv_python::{Interpreter, PythonVersion};
@@ -66,6 +66,7 @@ pub(crate) fn resolve_pylock_toml(
     extras: &[ExtraName],
     groups: &[GroupName],
     build_options: &BuildOptions,
+    index_locations: &IndexLocations,
     hash_checking: Option<HashCheckingMode>,
 ) -> anyhow::Result<(Resolution, HashStrategy)> {
     if let Some(requires_python) = lock.requires_python.as_ref() {
@@ -88,6 +89,7 @@ pub(crate) fn resolve_pylock_toml(
         groups,
         &tags,
         build_options,
+        index_locations,
     )?;
     let hasher = if let Some(hash_checking) = hash_checking {
         HashStrategy::from_resolution(&resolution, hash_checking)?

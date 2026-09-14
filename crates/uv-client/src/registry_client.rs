@@ -175,7 +175,7 @@ impl<'a> RegistryClientBuilder<'a> {
             .known_indexes()
             .chain(self.index_locations.proxy_indexes())
         {
-            if self.index_locations.proxy_route_for(index.url()).is_some() {
+            if self.index_locations.route_for(index.url()).is_proxy() {
                 continue;
             }
 
@@ -393,7 +393,7 @@ impl RegistryClient {
                             match self
                                 .simple_detail_single_index(
                                     package_name,
-                                    self.indexes.effective_url(index.url),
+                                    self.indexes.route_for(index.url).effective_url(),
                                     capabilities,
                                     &status_code_strategy,
                                 )
@@ -439,7 +439,7 @@ impl RegistryClient {
                                 let metadata = match self
                                     .simple_detail_single_index(
                                         package_name,
-                                        self.indexes.effective_url(index.url),
+                                        self.indexes.route_for(index.url).effective_url(),
                                         capabilities,
                                         &status_code_strategy,
                                     )
@@ -919,13 +919,11 @@ impl RegistryClient {
 
                 let wheel = wheels.best_wheel();
 
-                let url = if let Some(route) = self.indexes.proxy_route_for(&wheel.index) {
-                    route
-                        .artifact_url_for_request(&wheel.file.url)
-                        .map_err(ErrorKind::ProxyIndex)?
-                } else {
-                    wheel.file.url.to_url().map_err(ErrorKind::InvalidUrl)?
-                };
+                let url = self
+                    .indexes
+                    .route_for(&wheel.index)
+                    .artifact_url_for_request(&wheel.file.url)
+                    .map_err(ErrorKind::ProxyIndex)?;
                 let location = if url.scheme() == "file" {
                     let path = url
                         .to_file_path()
@@ -1060,7 +1058,8 @@ impl RegistryClient {
             index,
             ..
         } = wheel;
-        let effective_index = self.indexes.effective_url(index);
+        let route = self.indexes.route_for(index);
+        let effective_index = route.effective_url();
 
         // If the metadata file is available at its own url (PEP 658), download it from there.
         if file.dist_info_metadata {
@@ -1645,6 +1644,17 @@ pub struct SimpleDetailMetadatum {
     pub metadata: Option<Box<ResolutionMetadata>>,
 }
 
+impl ArchivedSimpleDetailMetadatum {
+    /// Read file upload times without deserializing the release metadata.
+    pub fn upload_times(&self) -> impl Iterator<Item = Option<i64>> {
+        self.files
+            .wheels
+            .iter()
+            .chain(self.files.source_dists.iter())
+            .map(ArchivedCachedFile::upload_time_utc_ms)
+    }
+}
+
 impl SimpleDetailMetadata {
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = &SimpleDetailMetadatum> {
         self.versions.iter()
@@ -2157,12 +2167,11 @@ mod tests {
             let client = RegistryClientBuilder::new(BaseClientBuilder::default(), Cache::temp()?)
                 .index_locations(locations)
                 .build()?;
-            let route = client
-                .index_locations()
-                .proxy_route_for(&canonical)
-                .ok_or("missing proxy route")?;
-            let physical_artifact = route
-                .artifact_url_for_request(&CanonicalArtifactUrl::from_url(canonical_artifact))?;
+            let route = client.index_locations().route_for(&canonical);
+            let physical_artifact =
+                route.artifact_url_for_request(&CanonicalArtifactUrl::from_lockfile(
+                    FileLocation::AbsoluteUrl(canonical_artifact.into()),
+                ))?;
 
             let response = client
                 .uncached_client(&physical_artifact)

@@ -127,14 +127,15 @@ impl Indexes {
         self.0
             .iter()
             .filter(|index| index.is_prefix_for(url))
-            // Overlapping index roots may have different authentication policies. Prefer the
-            // longest matching root, then a matching index path. Break ties consistently so
-            // selection does not depend on hash-set iteration order.
+            // Overlapping index roots may have different authentication policies.
             .max_by_key(|index| {
                 (
+                    // Prefer the longest matching root.
                     index.root_url.path().len(),
+                    // Then prefer a matching index path.
                     is_path_prefix(index.url.path(), url.path()),
                     index.url.path().len(),
+                    // Break remaining ties consistently, independent of hash-set iteration order.
                     index.url.as_str(),
                     index.auth_policy,
                 )

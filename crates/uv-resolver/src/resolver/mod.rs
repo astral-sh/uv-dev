@@ -13,7 +13,7 @@ use either::Either;
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use papaya::{HashMap, ResizeMode};
-use pubgrub::{Id, IncompId, Incompatibility, Kind, Ranges, State, Term};
+use pubgrub::{Id, IncompId, Incompatibility, Kind, State, Term};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::sync::oneshot;
@@ -1357,9 +1357,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             index,
             env,
             self.tags.as_ref(),
-        );
-
-        VersionMap::check_proxy_mapping_errors(version_maps)?;
+        )?;
 
         let Some(candidate) = candidate else {
             // Short circuit: we couldn't find _any_ versions for a package.
@@ -1579,8 +1577,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             index,
             env,
             self.tags.as_ref(),
-        );
-        VersionMap::check_proxy_mapping_errors(version_maps)?;
+        )?;
 
         let Some(base_candidate) = base_candidate else {
             return Ok(None);
@@ -2663,8 +2660,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     None,
                     &env,
                     self.tags.as_ref(),
-                );
-                VersionMap::check_proxy_mapping_errors(version_map)?;
+                )?;
 
                 let Some(candidate) = candidate else {
                     return Ok(None);
@@ -2859,7 +2855,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                             .entry(name.clone())
                             .or_insert_with(BTreeSet::new);
 
-                        for (version, dists) in version_map.iter(&Ranges::full()) {
+                        for version in version_map.versions() {
                             // Included versions are those that survive the effective
                             // `exclude-newer` filter used during resolution. Files with
                             // missing upload times are treated as excluded (matching
@@ -2870,11 +2866,8 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                 else {
                                     return false;
                                 };
-                                let Some(prioritized_dist) = dists.prioritized_dist() else {
-                                    return true;
-                                };
-                                prioritized_dist.files().all(|file| {
-                                    file.upload_time_utc_ms.is_none_or(|upload_time| {
+                                version_map.upload_times(version).all(|upload_time| {
+                                    upload_time.is_none_or(|upload_time| {
                                         upload_time >= included_version_cutoff.as_millisecond()
                                     })
                                 })
@@ -2893,11 +2886,12 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                 let Some(ref exclude_newer) = available_version_cutoff else {
                                     return false;
                                 };
-                                let Some(prioritized_dist) = dists.prioritized_dist() else {
+                                let mut upload_times = version_map.upload_times(version).peekable();
+                                if upload_times.peek().is_none() {
                                     return false;
-                                };
-                                prioritized_dist.files().all(|file| {
-                                    file.upload_time_utc_ms.is_some_and(|upload_time| {
+                                }
+                                upload_times.all(|upload_time| {
+                                    upload_time.is_some_and(|upload_time| {
                                         upload_time >= exclude_newer.as_millisecond()
                                     })
                                 })

@@ -1051,7 +1051,8 @@ impl Lock {
             });
 
             if let Some(index) = dist.index()
-                && let Some(route) = index_locations.proxy_route_for(index)
+                && let route = index_locations.route_for(index)
+                && route.is_proxy()
                 && let Some(filename) = package
                     .wheels
                     .iter()
@@ -4315,7 +4316,7 @@ impl Package {
                     requires_python: None,
                     size: sdist.size(),
                     upload_time_utc_ms: sdist.upload_time().map(Timestamp::as_millisecond),
-                    url: CanonicalArtifactUrl::from_location(FileLocation::AbsoluteUrl(
+                    url: CanonicalArtifactUrl::from_lockfile(FileLocation::AbsoluteUrl(
                         file_url.clone(),
                     )),
                     yanked: None,
@@ -4393,7 +4394,7 @@ impl Package {
                     requires_python: None,
                     size: sdist.size(),
                     upload_time_utc_ms: sdist.upload_time().map(Timestamp::as_millisecond),
-                    url: CanonicalArtifactUrl::from_location(file_url),
+                    url: CanonicalArtifactUrl::from_lockfile(file_url),
                     yanked: None,
                     zstd: None,
                 });
@@ -6171,7 +6172,7 @@ impl Wheel {
                     requires_python: None,
                     size: self.size,
                     upload_time_utc_ms: self.upload_time.map(Timestamp::as_millisecond),
-                    url: CanonicalArtifactUrl::from_location(file_location),
+                    url: CanonicalArtifactUrl::from_lockfile(file_location),
                     yanked: None,
                     zstd: None,
                 });
@@ -6215,7 +6216,7 @@ impl Wheel {
                     requires_python: None,
                     size: self.size,
                     upload_time_utc_ms: self.upload_time.map(Timestamp::as_millisecond),
-                    url: CanonicalArtifactUrl::from_location(file_location),
+                    url: CanonicalArtifactUrl::from_lockfile(file_location),
                     yanked: None,
                     zstd: None,
                 });

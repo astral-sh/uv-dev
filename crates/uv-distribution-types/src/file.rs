@@ -69,7 +69,7 @@ impl File<FileLocation> {
 
 impl<Url> File<Url> {
     /// Replace the file URL while preserving the artifact metadata.
-    pub fn map_url<Mapped>(self, map: impl FnOnce(Url) -> Mapped) -> File<Mapped> {
+    pub(crate) fn map_url<Mapped>(self, map: impl FnOnce(Url) -> Mapped) -> File<Mapped> {
         File {
             dist_info_metadata: self.dist_info_metadata,
             filename: self.filename,
@@ -89,13 +89,21 @@ impl<Url> File<Url> {
 pub struct CanonicalArtifactUrl(FileLocation);
 
 impl CanonicalArtifactUrl {
-    /// Mark an artifact location from a canonical source, such as a lockfile or direct index.
-    pub fn from_location(location: FileLocation) -> Self {
+    /// Import an artifact location from a lockfile's canonical registry namespace.
+    ///
+    /// This is a trusted-input boundary, not URL validation. Live Simple API responses must be
+    /// converted through [`crate::IndexRoute::canonicalize_file`] instead.
+    pub fn from_lockfile(location: FileLocation) -> Self {
+        Self(location)
+    }
+
+    /// Mark an artifact location after its registry namespace has been established.
+    pub(crate) fn from_location(location: FileLocation) -> Self {
         Self(location)
     }
 
     /// Store a parsed canonical artifact URL as an absolute location.
-    pub fn from_url(url: DisplaySafeUrl) -> Self {
+    pub(crate) fn from_url(url: DisplaySafeUrl) -> Self {
         Self(FileLocation::AbsoluteUrl(url.into()))
     }
 
@@ -118,6 +126,15 @@ impl Display for CanonicalArtifactUrl {
 
 /// A registry file whose URL is in the canonical registry namespace.
 pub type RegistryFile = File<CanonicalArtifactUrl>;
+
+impl RegistryFile {
+    /// Import a file from a flat index, whose artifact locations are already canonical.
+    ///
+    /// Flat indexes are not proxyable. Simple API responses must instead use their index route.
+    pub fn from_flat_index(file: File) -> Self {
+        file.map_url(CanonicalArtifactUrl::from_location)
+    }
+}
 
 /// While a registry file is generally a remote URL, it can also be a file if it comes from a directory flat indexes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]

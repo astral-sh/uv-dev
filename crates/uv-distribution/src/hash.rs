@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use uv_distribution_types::{HashPolicy, Hashed};
+use uv_distribution_types::{HashPolicy, Hashed, IndexRoute, RegistryFile};
 use uv_pypi_types::{HashAlgorithm, HashDigest};
 
 use crate::Error;
@@ -20,6 +20,24 @@ impl<'a> ArtifactHashPolicy<'a> {
             required,
             cache_verification,
         }
+    }
+
+    /// Verify proxy-served bytes against the canonical artifact's advertised hashes.
+    pub(crate) fn for_registry(
+        required: HashPolicy<'a>,
+        route: &IndexRoute,
+        file: &'a RegistryFile,
+    ) -> Self {
+        let cache_verification = if route.is_proxy() {
+            if file.hashes.is_empty() {
+                required
+            } else {
+                HashPolicy::Any(file.hashes.as_slice())
+            }
+        } else {
+            HashPolicy::None
+        };
+        Self::new(required, cache_verification)
     }
 
     pub(crate) fn algorithms(self) -> Vec<HashAlgorithm> {

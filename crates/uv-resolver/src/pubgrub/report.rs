@@ -1071,14 +1071,7 @@ impl PubGrubReportFormatter<'_> {
 
         let publish_date = version_maps
             .iter()
-            .filter_map(|version_map| {
-                version_map.get(&version).and_then(|prioritized| {
-                    prioritized
-                        .files()
-                        .filter_map(|file| file.upload_time_utc_ms)
-                        .min()
-                })
-            })
+            .flat_map(|version_map| version_map.upload_times(&version).flatten())
             .min()
             .and_then(|upload_time| {
                 Some(
@@ -1118,7 +1111,11 @@ impl PubGrubReportFormatter<'_> {
             return None;
         };
 
-        let candidate = selector.select_no_preference(name, set, version_maps, env)?;
+        // This is an optional hint for an existing resolution failure. An invalid, unselected
+        // artifact must not replace that failure or prevent the rest of the report from rendering.
+        let candidate = selector
+            .select_no_preference(name, set, version_maps, env)
+            .ok()??;
 
         let prioritized = candidate.prioritized()?;
 
@@ -1335,7 +1332,12 @@ impl PubGrubReportFormatter<'_> {
 
         for index in index_locations.allowed_indexes() {
             indexes
-                .entry(index_locations.effective_url(&index.url).clone())
+                .entry(
+                    index_locations
+                        .route_for(&index.url)
+                        .effective_url()
+                        .clone(),
+                )
                 .or_default();
         }
         for route in index_locations.proxy_routes() {
@@ -1344,7 +1346,7 @@ impl PubGrubReportFormatter<'_> {
 
         for canonical in available_indexes.values().flatten() {
             if let Some(any_successful_response) =
-                indexes.get_mut(index_locations.effective_url(canonical))
+                indexes.get_mut(index_locations.route_for(canonical).effective_url())
             {
                 *any_successful_response = true;
             }
@@ -2926,9 +2928,14 @@ mod tests {
         )?;
 
         assert_eq!(index_locations.proxy_routes().count(), 2);
-        assert_eq!(index_locations.effective_url(&first_canonical), &physical);
         assert_eq!(
-            index_locations.effective_url(&redacted_second_canonical),
+            index_locations.route_for(&first_canonical).effective_url(),
+            &physical
+        );
+        assert_eq!(
+            index_locations
+                .route_for(&redacted_second_canonical)
+                .effective_url(),
             &physical
         );
 

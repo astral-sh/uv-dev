@@ -5,7 +5,7 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::indoc;
 use insta::assert_snapshot;
-use predicates::prelude::predicate;
+use predicates::prelude::{PredicateBooleanExt, predicate};
 use serde_json::json;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -1649,6 +1649,147 @@ async fn mount_simple_launcher_index(server: &MockServer, hash: &str, wheel: &[u
         .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel.to_vec()))
         .mount(server)
         .await;
+}
+
+/// An unchanged proxy in user configuration and a tool receipt is one declaration, not two.
+#[tokio::test]
+async fn tool_upgrade_reconciles_proxy_receipt() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    let upstream = MockServer::start().await;
+    let proxy = MockServer::start().await;
+    let wheel = fs_err::read(
+        context
+            .workspace_root
+            .join("test/links/simple_launcher-0.1.0-py3-none-any.whl"),
+    )?;
+    mount_simple_launcher_index(
+        &proxy,
+        "5327e0bb67cdb46800999de6dcf034bf0a5335702883494af0d8b7f6ca48cee4",
+        &wheel,
+    )
+    .await;
+    let authenticated_proxy = proxy.uri().replacen("http://", "http://user:secret@", 1);
+    let proxy_config = format!(
+        indoc! {r#"
+            [[index]]
+            name = "proxy"
+            url = "{authenticated_proxy}/simple/"
+            artifact-base-url = "{authenticated_proxy}/files/"
+            proxy-for = "upstream"
+        "#},
+        authenticated_proxy = authenticated_proxy
+    );
+    let configuration = format!(
+        indoc! {r#"
+            preview-features = ["proxy-index"]
+
+            [[index]]
+            name = "upstream"
+            url = "{}/simple/"
+            artifact-base-url = "{}/files/"
+            default = true
+
+            {proxy_config}
+        "#},
+        upstream.uri(),
+        upstream.uri(),
+        proxy_config = proxy_config,
+    );
+    let config = context.temp_dir.child("uv.toml");
+    config.write_str(&configuration)?;
+
+    context
+        .tool_install()
+        .arg("simple-launcher")
+        .arg("--config-file")
+        .arg(config.path())
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+    assert!(
+        !context
+            .read("tools/simple-launcher/uv-receipt.toml")
+            .contains("secret")
+    );
+
+    // Exercise a second upgrade too: the rewritten receipt must not accumulate definitions.
+    for _ in 0..2 {
+        context
+            .tool_upgrade()
+            .arg("simple-launcher")
+            .arg("--config-file")
+            .arg(config.path())
+            .arg("--reinstall")
+            .arg("--no-cache")
+            .env_remove(EnvVars::UV_DEFAULT_INDEX)
+            .env(EnvVars::PATH, bin_dir.as_os_str())
+            .assert()
+            .success();
+    }
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+    for request in proxy.received_requests().await.unwrap() {
+        assert_eq!(
+            request
+                .headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok()),
+            Some("Basic dXNlcjpzZWNyZXQ=")
+        );
+    }
+
+    // If the credentials disappear, the receipt still requires authentication. This must not
+    // turn the otherwise unchanged configuration into a duplicate-proxy error.
+    config.write_str(&configuration.replace("user:secret@", ""))?;
+    context
+        .tool_upgrade()
+        .arg("simple-launcher")
+        .arg("--config-file")
+        .arg(config.path())
+        .arg("--reinstall")
+        .arg("--no-cache")
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("credentials"))
+        .stderr(predicate::str::contains("Each index can have only one proxy").not());
+
+    // A changed proxy remains a conflict with the stored declaration.
+    config.write_str(&configuration.replace(
+        &format!("{authenticated_proxy}/files/"),
+        &format!("{authenticated_proxy}/other-files/"),
+    ))?;
+    context
+        .tool_upgrade()
+        .arg("simple-launcher")
+        .arg("--config-file")
+        .arg(config.path())
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Each index can have only one proxy",
+        ));
+
+    // Reconciliation must not hide duplicate declarations in the current configuration.
+    config.write_str(&format!("{configuration}\n{proxy_config}"))?;
+    context
+        .tool_upgrade()
+        .arg("simple-launcher")
+        .arg("--config-file")
+        .arg(config.path())
+        .env_remove(EnvVars::UV_DEFAULT_INDEX)
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Each index can have only one proxy",
+        ));
+
+    Ok(())
 }
 
 /// Ensure that `tool upgrade` verifies distributions against its newly generated tool lock.

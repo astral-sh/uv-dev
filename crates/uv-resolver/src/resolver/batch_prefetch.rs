@@ -10,7 +10,6 @@ use tracing::{debug, trace};
 use crate::candidate_selector::CandidateSelector;
 use crate::pubgrub::{PubGrubPackage, PubGrubPackageInner, Range};
 use crate::resolver::Request;
-use crate::version_map::VersionMap;
 use crate::{
     InMemoryIndex, PythonRequirement, ResolveError, ResolverEnvironment, VersionsResponse,
 };
@@ -230,8 +229,7 @@ impl BatchPrefetcherRunner {
                     previous,
                 } => {
                     let candidate =
-                        selector.select_no_preference(name, &compatible, version_map, env);
-                    VersionMap::check_proxy_mapping_errors(version_map)?;
+                        selector.select_no_preference(name, &compatible, version_map, env)?;
 
                     if let Some(candidate) = candidate {
                         let compatible =
@@ -265,8 +263,8 @@ impl BatchPrefetcherRunner {
                             }
                         };
                     }
-                    let candidate = selector.select_no_preference(name, &range, version_map, env);
-                    VersionMap::check_proxy_mapping_errors(version_map)?;
+                    let candidate =
+                        selector.select_no_preference(name, &range, version_map, env)?;
 
                     if let Some(candidate) = candidate {
                         phase = BatchPrefetchStrategy::InOrder {

@@ -424,7 +424,7 @@ impl ResolverOutput {
                 version,
                 preferences,
                 in_memory,
-            );
+            )?;
 
             // Extract the metadata.
             let metadata = {
@@ -483,7 +483,7 @@ impl ResolverOutput {
                 version,
                 preferences,
                 in_memory,
-            );
+            )?;
 
             // Extract the metadata.
             let metadata = {
@@ -513,11 +513,11 @@ impl ResolverOutput {
         version: &Version,
         preferences: &Preferences,
         in_memory: &InMemoryIndex,
-    ) -> HashDigests {
+    ) -> Result<HashDigests, ResolveError> {
         // 1. Look for hashes from the lockfile.
         if let Some(digests) = preferences.match_hashes(name, version) {
             if !digests.is_empty() {
-                return HashDigests::from(digests);
+                return Ok(HashDigests::from(digests));
             }
         }
 
@@ -527,7 +527,7 @@ impl ResolverOutput {
                 let mut digests = archive.hashes.clone();
                 digests.sort_unstable();
                 if !digests.is_empty() {
-                    return digests;
+                    return Ok(digests);
                 }
             }
         }
@@ -536,51 +536,39 @@ impl ResolverOutput {
         if url.is_none() {
             // Query the implicit and explicit indexes (lazily) for the hashes.
             let implicit_response = in_memory.implicit().get(name);
-            let mut explicit_response = None;
+            let explicit_response =
+                index.and_then(|index| in_memory.explicit().get(&(name.clone(), index.clone())));
 
-            // Search in the implicit indexes.
-            let hashes = implicit_response
-                .as_ref()
-                .and_then(|response| {
-                    if let VersionsResponse::Found(version_maps) = &**response {
-                        Some(version_maps)
-                    } else {
-                        None
+            let hashes = 'search: {
+                // Search the implicit indexes before the explicit indexes.
+                for response in [implicit_response.as_deref(), explicit_response.as_deref()]
+                    .into_iter()
+                    .flatten()
+                {
+                    let VersionsResponse::Found(version_maps) = response else {
+                        continue;
+                    };
+                    for version_map in version_maps {
+                        if version_map.index() == index
+                            && let Some(hashes) = version_map.hashes(version)?
+                        {
+                            break 'search Some(hashes);
+                        }
                     }
-                })
-                .into_iter()
-                .flatten()
-                .filter(|version_map| version_map.index() == index)
-                .find_map(|version_map| version_map.hashes(version))
-                .or_else(|| {
-                    // Search in the explicit indexes.
-                    explicit_response = index
-                        .and_then(|index| in_memory.explicit().get(&(name.clone(), index.clone())));
-                    explicit_response
-                        .as_ref()
-                        .and_then(|response| {
-                            if let VersionsResponse::Found(version_maps) = &**response {
-                                Some(version_maps)
-                            } else {
-                                None
-                            }
-                        })
-                        .into_iter()
-                        .flatten()
-                        .filter(|version_map| version_map.index() == index)
-                        .find_map(|version_map| version_map.hashes(version))
-                });
+                }
+                None
+            };
 
             if let Some(hashes) = hashes {
                 let mut digests = HashDigests::from(hashes);
                 digests.sort_unstable();
                 if !digests.is_empty() {
-                    return digests;
+                    return Ok(digests);
                 }
             }
         }
 
-        HashDigests::empty()
+        Ok(HashDigests::empty())
     }
 
     /// Returns an iterator over the distinct packages in the graph.

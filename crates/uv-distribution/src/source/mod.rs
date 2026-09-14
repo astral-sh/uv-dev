@@ -267,11 +267,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
     ) -> Result<BuiltWheelMetadata, Error> {
         let built_wheel_metadata = match &source {
             BuildableSource::Dist(SourceDist::Registry(dist)) => {
-                let route = client
-                    .unmanaged
-                    .index_locations()
-                    .proxy_route_for(&dist.index);
-                let index = route.map_or(&dist.index, |route| route.effective_url());
+                let route = client.unmanaged.index_locations().route_for(&dist.index);
+                let index = route.effective_url();
 
                 // For registry source distributions, shard by package, then version, for
                 // convenience in debugging.
@@ -282,13 +279,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                         .join(dist.version.to_string()),
                 );
 
-                let url = if let Some(route) = route {
-                    route
-                        .artifact_url_for_request(&dist.file.url)
-                        .map_err(|err| Error::Client(ClientErrorKind::ProxyIndex(err).into()))?
-                } else {
-                    dist.file.url.to_url()?
-                };
+                let url = route
+                    .artifact_url_for_request(&dist.file.url)
+                    .map_err(|err| Error::Client(ClientErrorKind::ProxyIndex(err).into()))?;
 
                 // If the URL is a file URL, use the local path directly.
                 if url.scheme() == "file" {
@@ -319,14 +312,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     None,
                     dist.ext,
                     tags,
-                    ArtifactHashPolicy::new(
-                        hashes,
-                        if route.is_some() && !dist.file.hashes.is_empty() {
-                            HashPolicy::Any(dist.file.hashes.as_slice())
-                        } else {
-                            HashPolicy::None
-                        },
-                    ),
+                    ArtifactHashPolicy::for_registry(hashes, &route, &dist.file),
                     client,
                 )
                 .boxed_local()
@@ -450,11 +436,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
     ) -> Result<ArchiveMetadata, Error> {
         let metadata = match &source {
             BuildableSource::Dist(SourceDist::Registry(dist)) => {
-                let route = client
-                    .unmanaged
-                    .index_locations()
-                    .proxy_route_for(&dist.index);
-                let index = route.map_or(&dist.index, |route| route.effective_url());
+                let route = client.unmanaged.index_locations().route_for(&dist.index);
+                let index = route.effective_url();
 
                 // For registry source distributions, shard by package, then version.
                 let cache_shard = self.build_context.cache().shard(
@@ -464,13 +447,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                         .join(dist.version.to_string()),
                 );
 
-                let url = if let Some(route) = route {
-                    route
-                        .artifact_url_for_request(&dist.file.url)
-                        .map_err(|err| Error::Client(ClientErrorKind::ProxyIndex(err).into()))?
-                } else {
-                    dist.file.url.to_url()?
-                };
+                let url = route
+                    .artifact_url_for_request(&dist.file.url)
+                    .map_err(|err| Error::Client(ClientErrorKind::ProxyIndex(err).into()))?;
 
                 // If the URL is a file URL, use the local path directly.
                 if url.scheme() == "file" {
@@ -499,14 +478,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     &cache_shard,
                     None,
                     dist.ext,
-                    ArtifactHashPolicy::new(
-                        hashes,
-                        if route.is_some() && !dist.file.hashes.is_empty() {
-                            HashPolicy::Any(dist.file.hashes.as_slice())
-                        } else {
-                            HashPolicy::None
-                        },
-                    ),
+                    ArtifactHashPolicy::for_registry(hashes, &route, &dist.file),
                     client,
                 )
                 .boxed_local()
