@@ -646,6 +646,34 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
         .mount(&server)
         .await;
 
+    Mock::given(method("GET"))
+        .and(path("/invalid-default"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            remote_json.replace(r#""default": false"#, r#""default": "false""#),
+            "application/json",
+        ))
+        .mount(&server)
+        .await;
+
+    let versioned_json = format!(r#"{{"version": 1, "downloads": {remote_json}}}"#);
+    Mock::given(method("GET"))
+        .and(path("/versioned-invalid-default"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            versioned_json.replace(r#""default": false"#, r#""default": "false""#),
+            "application/json",
+        ))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/versioned-invalid-build-variant"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            versioned_json.replace(r#""build_variant": "custom""#, r#""build_variant": 42"#),
+            "application/json",
+        ))
+        .mount(&server)
+        .await;
+
     // Test showing all interpreters from the remote JSON URL
     uv_snapshot!(context
         .python_list()
@@ -694,6 +722,37 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     ----- stderr -----
     error: Unable to parse the JSON Python download list at http://[LOCALHOST]/invalid-hash
       cause: Invalid hash digest length (expected 64 hexadecimal characters, found 5) at line 16 column 29
+    ");
+
+    // Invalid build metadata must not fall back to legacy records that lose the build identity.
+    uv_snapshot!(context.filters(), context
+        .python_list()
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .arg("--python-downloads-json-url").arg(format!("{}/invalid-default", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Unable to parse the JSON Python download list at http://[LOCALHOST]/invalid-default
+      Caused by: data did not match any variant of untagged enum Compatible at line 56 column 5
+    ");
+
+    uv_snapshot!(context.filters(), context
+        .python_list()
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .arg("--python-downloads-json-url").arg(format!("{}/versioned-invalid-default", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Unable to parse the JSON Python download list at http://[LOCALHOST]/versioned-invalid-default
+      Caused by: data did not match any variant of untagged enum Compatible at line 1 column 13
+    ");
+
+    uv_snapshot!(context.filters(), context
+        .python_list()
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .arg("--python-downloads-json-url").arg(format!("{}/versioned-invalid-build-variant", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Unable to parse the JSON Python download list at http://[LOCALHOST]/versioned-invalid-build-variant
+      Caused by: data did not match any variant of untagged enum Compatible at line 1 column 13
     ");
 
     Ok(())
