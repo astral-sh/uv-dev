@@ -1512,6 +1512,7 @@ fn run_with_copied_virtualenv_uses_matching_base_interpreter() {
     Command::new(newer_python)
         .arg("-c")
         .arg(indoc! {r#"
+            import json
             import pathlib
             import subprocess
             import sys
@@ -1540,11 +1541,36 @@ fn run_with_copied_virtualenv_uses_matching_base_interpreter() {
                 str(environment),
             ])
 
-            library = sysconfig.get_config_var("LDLIBRARY")
-            if library:
-                source = library_directory / library
-                if source.exists():
-                    (environment / "lib" / library).symlink_to(source)
+            # The runtime SONAME can differ from the linker-facing library name on Linux.
+            for variable in ("LDLIBRARY", "INSTSONAME"):
+                library = sysconfig.get_config_var(variable)
+                if library:
+                    source = library_directory / library
+                    destination = environment / "lib" / library
+                    if source.exists() and not destination.exists():
+                        destination.symlink_to(source)
+
+            # An unrunnable copied interpreter can be skipped during Python discovery.
+            query = subprocess.check_output([
+                str(environment / "bin" / "python"),
+                "-I",
+                "-c",
+                "import json, sys; print(json.dumps([sys.implementation.name, "
+                "list(sys.version_info[:3]), sys.executable, sys._base_executable]))",
+            ], text=True)
+            assert json.loads(query) == [
+                sys.implementation.name,
+                list(sys.version_info[:3]),
+                str(environment / "bin" / "python"),
+                str(scripts / "python"),
+            ], query
+            configuration = {
+                key.strip(): value.strip()
+                for line in (environment / "pyvenv.cfg").read_text().splitlines()
+                if "=" in line
+                for key, value in [line.split("=", 1)]
+            }
+            assert configuration["home"] == str(scripts), configuration
             "#})
         .arg(base.path())
         .arg(older_python)
