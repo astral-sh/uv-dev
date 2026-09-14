@@ -296,7 +296,7 @@ fn print_metadata(
     printer: Printer,
 ) -> Result<ExitStatus> {
     if printer.stdout_important() == Stdout::Enabled {
-        let mut stdout = BufWriter::new(anstream::stdout().lock());
+        let mut stdout = BufWriter::new(std::io::stdout().lock());
         match output_format {
             MetadataOutputFormat::Json => export.write_json(&mut stdout)?,
             MetadataOutputFormat::Jsonl => write!(stdout, "{}", jsonl_result(export)?)?,

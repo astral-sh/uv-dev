@@ -112,6 +112,6 @@ pub(crate) async fn helper(preview: Preview, printer: Printer) -> Result<ExitSta
             .unwrap_or_else(|| Ok(BazelCredentialResponse::default()))?,
     )
     .context("Failed to serialize response as JSON")?;
-    writeln!(printer.stdout_important(), "{response}")?;
+    writeln!(printer.stdout_important_raw(), "{response}")?;
     Ok(ExitStatus::Success)
 }

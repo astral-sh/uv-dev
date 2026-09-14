@@ -95,14 +95,14 @@ impl Report {
             PipCheckFormat::Text => self.render_text(printer),
             PipCheckFormat::Json => {
                 writeln!(
-                    printer.stdout_important(),
+                    printer.stdout_important_raw(),
                     "{}",
                     serde_json::to_string_pretty(self)?
                 )?;
                 Ok(())
             }
             PipCheckFormat::Jsonl => {
-                writeln!(printer.stdout_important(), "{}", jsonl_result(self)?)?;
+                writeln!(printer.stdout_important_raw(), "{}", jsonl_result(self)?)?;
                 Ok(())
             }
         }

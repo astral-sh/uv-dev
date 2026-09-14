@@ -579,7 +579,7 @@ impl AuditResults {
         } else {
             serde_json::to_string_pretty(&report)?
         };
-        writeln!(self.printer.stdout_important(), "{output}")?;
+        writeln!(self.printer.stdout_important_raw(), "{output}")?;
 
         Ok(self.exit_status())
     }
@@ -589,7 +589,7 @@ impl AuditResults {
         let report = sarif::Report::from_findings(&vulnerabilities, &statuses, &self.artifact_uri);
 
         writeln!(
-            self.printer.stdout_important(),
+            self.printer.stdout_important_raw(),
             "{}",
             serde_json::to_string_pretty(&report)?
         )?;

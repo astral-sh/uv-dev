@@ -199,7 +199,7 @@ pub(crate) async fn pip_list(
                 })
                 .collect_vec();
             let output = serde_json::to_string(&rows)?;
-            writeln!(printer.stdout_important(), "{output}")?;
+            writeln!(printer.stdout_important_raw(), "{output}")?;
         }
         ListFormat::Columns if results.is_empty() => {}
         ListFormat::Columns => {

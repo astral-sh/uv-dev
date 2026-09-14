@@ -64,7 +64,7 @@ pub(crate) fn self_version(
             } else {
                 serde_json::to_string_pretty(&version_info)?
             };
-            writeln!(printer.stdout_important(), "{string}")?;
+            writeln!(printer.stdout_important_raw(), "{string}")?;
         }
     }
 
@@ -745,7 +745,7 @@ fn print_version(
             } else {
                 serde_json::to_string_pretty(&final_version)?
             };
-            writeln!(printer.stdout_important(), "{string}")?;
+            writeln!(printer.stdout_important_raw(), "{string}")?;
         }
     }
     Ok(())
