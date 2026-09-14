@@ -281,7 +281,7 @@ pub(crate) async fn list(
             } else {
                 serde_json::to_string(&data)?
             };
-            writeln!(printer.stdout_important(), "{output}")?;
+            writeln!(printer.stdout_important_raw(), "{output}")?;
         }
         PythonListFormat::Text => {
             // Compute the width of the first column.

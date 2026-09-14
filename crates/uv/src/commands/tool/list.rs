@@ -146,14 +146,14 @@ impl ToolListReport {
             ToolListFormat::Text => self.render_text(output, printer),
             ToolListFormat::Json => {
                 writeln!(
-                    printer.stdout_important(),
+                    printer.stdout_important_raw(),
                     "{}",
                     serde_json::to_string_pretty(self)?
                 )?;
                 Ok(())
             }
             ToolListFormat::Jsonl => {
-                writeln!(printer.stdout_important(), "{}", jsonl_result(self)?)?;
+                writeln!(printer.stdout_important_raw(), "{}", jsonl_result(self)?)?;
                 Ok(())
             }
         }

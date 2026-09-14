@@ -158,7 +158,7 @@ pub(crate) async fn lock(
         } else {
             serde_json::to_string_pretty(&report)?
         };
-        writeln!(printer.stdout_important(), "{output}")?;
+        writeln!(printer.stdout_important_raw(), "{output}")?;
     }
     result
 }

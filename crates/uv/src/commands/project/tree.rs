@@ -311,7 +311,7 @@ pub(crate) async fn tree(
     match format {
         TreeFormat::Text => print!("{tree}"),
         TreeFormat::Json => writeln!(
-            printer.stdout_important(),
+            printer.stdout_important_raw(),
             "{}",
             tree.to_json(match target {
                 LockTarget::Workspace(workspace) => {

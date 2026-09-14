@@ -1228,7 +1228,7 @@ fn write_sync_report(
     let report = Report::new(target, environment, changelog, lock, dry_run);
 
     if let Some(output) = report.format(output_format) {
-        writeln!(printer.stdout_important(), "{output}")?;
+        writeln!(printer.stdout_important_raw(), "{output}")?;
     }
 
     Ok(())
