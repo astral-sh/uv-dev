@@ -2212,30 +2212,39 @@ impl PythonRequest {
                 if is_same_executable(interpreter.sys_executable(), file) {
                     return true;
                 }
-                // ...or if it is the base interpreter the venv was created from.
-                if interpreter
-                    .sys_base_executable()
-                    .is_some_and(|sys_base_executable| {
-                        is_same_executable(sys_base_executable, file)
-                    })
-                {
+                // ...or if it is the base interpreter the venv was created from. A copied
+                // executable can report a base from a different Python installation, so file
+                // identity alone is insufficient for this relation.
+                let matches_base =
+                    interpreter
+                        .sys_base_executable()
+                        .is_some_and(|sys_base_executable| {
+                            is_same_executable(sys_base_executable, file)
+                        });
+                if !matches_base && !cfg!(windows) {
+                    return false;
+                }
+                let Ok(file_interpreter) = Interpreter::query(file, cache) else {
+                    return false;
+                };
+                if !interpreter.matches_interpreter(&file_interpreter) {
+                    return false;
+                }
+                if matches_base {
                     return true;
                 }
                 // ...or, on Windows, if both interpreters have the same base executable. On
                 // Windows, interpreters are copied rather than symlinked, so a virtual environment
                 // created from within a virtual environment will _not_ evaluate to the same
                 // `sys.executable`, but will have the same `sys._base_executable`.
-                if cfg!(windows) {
-                    if let Ok(file_interpreter) = Interpreter::query(file, cache) {
-                        if let (Some(file_base), Some(interpreter_base)) = (
-                            file_interpreter.sys_base_executable(),
-                            interpreter.sys_base_executable(),
-                        ) {
-                            if is_same_executable(file_base, interpreter_base) {
-                                return true;
-                            }
-                        }
-                    }
+                if cfg!(windows)
+                    && let (Some(file_base), Some(interpreter_base)) = (
+                        file_interpreter.sys_base_executable(),
+                        interpreter.sys_base_executable(),
+                    )
+                    && is_same_executable(file_base, interpreter_base)
+                {
+                    return true;
                 }
                 false
             }
