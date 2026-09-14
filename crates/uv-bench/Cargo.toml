@@ -179,6 +179,11 @@ path = "benches/python_uninstall.rs"
 harness = false
 
 [[bench]]
+name = "python_concurrent_install"
+path = "benches/python_concurrent_install.rs"
+harness = false
+
+[[bench]]
 name = "conflict_markers"
 path = "benches/conflict_markers.rs"
 harness = false
