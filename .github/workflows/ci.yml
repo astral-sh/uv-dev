@@ -1,4 +1,4 @@
-name: Linux runner differentials
+name: Linux runner kernel profiles
 
 on:
   workflow_dispatch:
@@ -121,15 +121,16 @@ jobs:
           set -o pipefail
           mkdir -p runner-diagnostics
           mkdir -p "$HOME/code/tmp/uv-runner-tests"
-          TMPDIR="$HOME/code/tmp/uv-runner-tests" python3 -m unittest discover -s .github/runner-experiments -p 'test_*.py'
           if sudo apt install -y --no-install-recommends linux-tools-6.8.0-136 2>&1 | tee runner-diagnostics/perf-install.log; then
             perf_binary="$(dpkg -L linux-tools-6.8.0-136 | awk '/\/perf$/ { print; exit }')"
             if test -x "$perf_binary"; then
               echo "RCA_PERF=$perf_binary" >> "$GITHUB_ENV"
+              export RCA_PERF="$perf_binary"
             fi
           fi
+          TMPDIR="$HOME/code/tmp/uv-runner-tests" python3 -m unittest discover -s .github/runner-experiments -p 'test_*.py'
 
-      - name: "Measure cache and runner differentials"
+      - name: "Measure kernel execution profiles"
         env:
           # Retry more than default to reduce flakes in CI
           UV_HTTP_RETRIES: 5
@@ -144,7 +145,7 @@ jobs:
           INSTA_UPDATE: new
           INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
         run: |
-          PYTHONPATH="$GITHUB_WORKSPACE/.github/runner-experiments" python3 .github/runner-experiments/differentials.py
+          PYTHONPATH="$GITHUB_WORKSPACE/.github/runner-experiments" python3 .github/runner-experiments/kernel_profiles.py
 
       - name: "Upload runner diagnostics"
         if: always()
