@@ -250,8 +250,7 @@ async fn python_build_variant_catalog_selection() -> anyhow::Result<()> {
         .with_filtered_python_install_bin()
         .with_filtered_python_names()
         .with_filtered_latest_python_versions()
-        .with_managed_python_dirs()
-        .with_python_download_cache();
+        .with_managed_python_dirs();
     context.python_install().arg("3.13").assert().success();
     let managed_dir = context.temp_dir.child("managed");
     let installations = ManagedPythonInstallations::from_settings(Some(managed_dir.to_path_buf()))?;
