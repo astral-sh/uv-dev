@@ -297,12 +297,33 @@ fn tool_list_preserves_environment_scan_errors() -> Result<()> {
     let installed = create_tool(&context, "fixture", r#"[{ name = "fixture" }]"#)?;
     write_distribution(&installed, "fixture", "1.0", None)?;
     let broken = write_distribution(&installed, "broken", "1.0", None)?;
-    fs::write(broken.join("direct_url.json"), "{")?;
+    // Read errors remain fatal even when malformed optional metadata can be ignored.
+    fs::create_dir(broken.join("uv_cache.json"))?;
 
     uv_snapshot!(context.filters(), context.tool_list(), @"
     exit_code: 0 (success)
     ----- stderr -----
     Failed to read tool environment packages at `[TEMP_DIR]/tools/fixture`: Failed to read metadata from: `[TEMP_DIR]/tools/fixture/[PYTHON-LIB]/site-packages/broken-1.0.dist-info`
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn tool_list_ignores_invalid_direct_url() -> Result<()> {
+    let context = tool_context();
+    let installed = create_tool(&context, "fixture", r#"[{ name = "fixture" }]"#)?;
+    let distribution = write_distribution(&installed, "fixture", "1.0", None)?;
+    fs::write(distribution.join("direct_url.json"), "{")?;
+
+    uv_snapshot!(context.filters(), context.tool_list(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    fixture v1.0
+    - fixture
+
+    ----- stderr -----
+    warning: Ignoring invalid `direct_url.json` for `fixture`: EOF while parsing an object at line 1 column 1
     ");
 
     Ok(())
