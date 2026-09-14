@@ -102,6 +102,8 @@ pub(crate) mod reporters;
 mod self_install;
 #[cfg(feature = "self-update")]
 mod self_update;
+#[cfg(feature = "self-update")]
+mod self_update_native;
 mod tool;
 mod update_shell;
 mod venv;
