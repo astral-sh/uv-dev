@@ -59,7 +59,7 @@ pub enum DisplaySafeUrlError {
 /// assert_eq!(url.username(), "");
 /// assert_eq!(url.password(), None);
 /// ```
-#[derive(Clone, Eq, PartialEq, PartialOrd, Ord, Hash, Serialize, Deserialize, RefCast)]
+#[derive(Clone, Eq, PartialEq, PartialOrd, Ord, Hash, Serialize, RefCast)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schemars", schemars(transparent))]
 #[repr(transparent)]
@@ -168,6 +168,17 @@ impl DisplaySafeUrl {
         Self(url)
     }
 
+    /// Deserialize an already-validated or request-derived URL without the ambiguity heuristic.
+    ///
+    /// Use ordinary [`Deserialize`] for human-provided URLs. This escape hatch is for protocols
+    /// that permit arbitrary valid URL paths, such as server responses and credential requests.
+    pub fn deserialize_from_url<'de, D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Url::deserialize(deserializer).map(Self::from_url)
+    }
+
     /// Cast a `&Url` to a `&DisplaySafeUrl` using ref-cast.
     #[inline]
     pub fn ref_cast(url: &Url) -> &Self {
@@ -180,7 +191,9 @@ impl DisplaySafeUrl {
         Ok(Self(self.0.join(input)?))
     }
 
-    /// Serialize with Serde using the internal representation of the `Url` struct.
+    /// Serialize the lossless internal representation of the [`Url`] struct.
+    ///
+    /// This retains credentials and is intended for internal caches, not portable metadata.
     #[inline]
     pub fn serialize_internal<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -189,7 +202,9 @@ impl DisplaySafeUrl {
         self.0.serialize_internal(serializer)
     }
 
-    /// Serialize with Serde using the internal representation of the `Url` struct.
+    /// Deserialize the lossless internal representation of the [`Url`] struct.
+    ///
+    /// This retains credentials and does not apply the human-input ambiguity heuristic.
     #[inline]
     pub fn deserialize_internal<'de, D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -321,6 +336,16 @@ impl FromStr for DisplaySafeUrl {
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         Self::parse(input)
+    }
+}
+
+impl<'de> Deserialize<'de> for DisplaySafeUrl {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let input = String::deserialize(deserializer)?;
+        Self::parse(&input).map_err(serde::de::Error::custom)
     }
 }
 
@@ -710,6 +735,51 @@ mod tests {
                 DisplaySafeUrlError::AmbiguousAuthority("https:***@domain/a/b/c".to_owned()),
             );
         }
+    }
+
+    #[test]
+    fn deserialize_url() -> Result<(), Box<dyn std::error::Error>> {
+        for input in [
+            "https://user:password@example.com/simple?sig=signature",
+            "https://user%2Fname:password@example.com/simple",
+            "https://user:password@example.com/path:with@revision",
+            "git+https://proxy.example.com/https://github.com/org/repo@main",
+            "git+file:///C:/Users/ferris/repo.git@v1.0",
+        ] {
+            let deserializer =
+                serde::de::value::StrDeserializer::<serde::de::value::Error>::new(input);
+            assert_eq!(
+                DisplaySafeUrl::deserialize(deserializer)?,
+                DisplaySafeUrl::parse(input)?
+            );
+        }
+
+        for input in [
+            "https://user/name:password@domain/a/b/c",
+            "https://user\\name:password@domain/a/b/c",
+            "https://user#name:password@domain/a/b/c",
+        ] {
+            let deserializer =
+                serde::de::value::StrDeserializer::<serde::de::value::Error>::new(input);
+            assert_eq!(
+                DisplaySafeUrl::deserialize(deserializer)
+                    .expect_err("ambiguous URL")
+                    .to_string(),
+                "ambiguous user/pass authority in URL (not percent-encoded?): https:***@domain/a/b/c",
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_request_url() -> Result<(), Box<dyn std::error::Error>> {
+        let input = "https://example.com/path:with@revision?sig=signature";
+        let deserializer = serde::de::value::StrDeserializer::<serde::de::value::Error>::new(input);
+        assert_eq!(
+            DisplaySafeUrl::deserialize_from_url(deserializer)?.as_str(),
+            input
+        );
+        Ok(())
     }
 
     #[test]

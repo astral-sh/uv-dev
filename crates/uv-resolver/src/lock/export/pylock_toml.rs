@@ -442,7 +442,11 @@ struct PylockTomlVcs {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct PylockTomlArchive {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_artifact_url"
+    )]
     url: Option<DisplaySafeUrl>,
     #[serde(skip_serializing_if = "Option::is_none")]
     path: Option<PortablePathBuf>,
@@ -466,7 +470,11 @@ struct PylockTomlArchive {
 struct PylockTomlSdist {
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<SmallString>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_artifact_url"
+    )]
     url: Option<DisplaySafeUrl>,
     #[serde(skip_serializing_if = "Option::is_none")]
     path: Option<PortablePathBuf>,
@@ -488,7 +496,11 @@ struct PylockTomlSdist {
 struct PylockTomlWheel {
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<WheelFilename>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_artifact_url"
+    )]
     url: Option<DisplaySafeUrl>,
     #[serde(skip_serializing_if = "Option::is_none")]
     path: Option<PortablePathBuf>,
@@ -509,6 +521,14 @@ struct PylockTomlWheel {
 #[serde(rename_all = "kebab-case")]
 struct PylockTomlAttestationIdentity {
     kind: String,
+}
+
+/// Artifact links can originate in an index response and can contain arbitrary valid URL paths.
+fn deserialize_artifact_url<'de, D>(deserializer: D) -> Result<Option<DisplaySafeUrl>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<Url>::deserialize(deserializer).map(|url| url.map(DisplaySafeUrl::from_url))
 }
 
 impl<'lock> PylockToml {
