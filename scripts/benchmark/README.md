@@ -13,6 +13,12 @@ runs. The saved plan is checked against the extracted benchmark binaries before 
 missing or stale artifact cannot silently reduce coverage. Each shard retains its own CodSpeed
 profile for main-branch baseline imports.
 
+Whole-command workloads also need `cargo build --locked --profile profiling --bin uv`. Run
+`python3 scripts/benchmark/prepare-environments.py` to install the pinned CPython interpreter under
+`.cache/bench-python` and prime the package cache with Prefect's frozen runtime dependencies. The
+temporary environment is discarded; measured workloads reconstruct their own environments offline
+from the same lockfile and cached package artifacts.
+
 ## Getting Started
 
 From the `scripts/benchmark` directory:
