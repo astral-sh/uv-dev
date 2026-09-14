@@ -1,46 +1,40 @@
-//! Whole-process commands against an already synchronized Prefect environment.
+//! Whole-process commands against synchronized projects of different sizes.
 
 mod common;
 
 use std::process::Command;
 
-use criterion::{BatchSize, Criterion, criterion_group, criterion_main, measurement::WallTime};
-use uv_bench::{PreparedEnvironment, is_codspeed_simulation, run_command};
+use criterion::{
+    BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main, measurement::WallTime,
+};
+use uv_bench::{PreparedEnvironment, environment_fixtures, is_codspeed_simulation, run_command};
 
 fn project_noop(c: &mut Criterion<WallTime>) {
     if is_codspeed_simulation() {
         return;
     }
-    let environment = PreparedEnvironment::prefect();
     let mut group = c.benchmark_group("project_noop");
-    for (name, arguments) in [
-        (
-            "sync_frozen",
-            &[
-                "sync",
-                "--frozen",
-                "--no-default-groups",
-                "--no-install-project",
-            ][..],
-        ),
-        (
-            "run_no_sync",
-            &["run", "--no-sync", "python", "-c", "pass"][..],
-        ),
-    ] {
-        let command = || {
-            let mut command = environment.command();
-            command.args(arguments);
-            command
-        };
-        run_command(&mut command());
-        group.bench_function(name, |b| {
-            b.iter_batched(
-                command,
-                |mut command: Command| run_command(&mut command),
-                BatchSize::PerIteration,
-            );
-        });
+    for fixture in environment_fixtures() {
+        let environment = PreparedEnvironment::from_fixture(&fixture);
+        for name in ["sync_frozen", "run_no_sync"] {
+            let command = || {
+                if name == "sync_frozen" {
+                    environment.sync_command()
+                } else {
+                    let mut command = environment.command();
+                    command.args(["run", "--no-sync", "python", "-c", "pass"]);
+                    command
+                }
+            };
+            run_command(&mut command());
+            group.bench_function(BenchmarkId::new(name, &fixture.name), |b| {
+                b.iter_batched(
+                    command,
+                    |mut command: Command| run_command(&mut command),
+                    BatchSize::PerIteration,
+                );
+            });
+        }
     }
     group.finish();
 }
