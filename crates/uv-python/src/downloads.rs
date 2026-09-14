@@ -601,6 +601,12 @@ impl PythonDownloadRequest {
             return false;
         }
 
+        if let Some(variants) = self.version.as_ref().and_then(VersionRequest::variants)
+            && !variants.allows_build_variant(download.key(), download.is_default())
+        {
+            return false;
+        }
+
         // Then check the build if specified
         if let Some(ref requested_build) = self.build {
             let Some(download_build) = download.build() else {
@@ -1022,6 +1028,86 @@ impl ManagedPythonDownloadList {
             .filter(move |download| request.satisfied_by_download(download))
     }
 
+    /// Whether an installed build satisfies the request and the catalog's selection policy.
+    ///
+    /// Installations absent from the catalog can still be requested explicitly. Legacy untagged
+    /// installations remain usable when the catalog has no entries for their version and platform.
+    pub fn matches_installation(
+        &self,
+        request: &PythonDownloadRequest,
+        key: &PythonInstallationKey,
+    ) -> bool {
+        if !request.satisfied_by_key(key) {
+            return false;
+        }
+        self.allows_installed_build(request, key)
+    }
+
+    /// Apply build selection to an installation whose version, runtime and platform already match.
+    pub(crate) fn allows_installed_build(
+        &self,
+        request: &PythonDownloadRequest,
+        key: &PythonInstallationKey,
+    ) -> bool {
+        let variants = request
+            .version
+            .as_ref()
+            .and_then(VersionRequest::variants)
+            .unwrap_or_default();
+        let default = self
+            .iter_all()
+            .find(|download| download.is_default() && download.key().same_build_group(key));
+        if variants.build().is_none() {
+            if let Some(default) = default {
+                return default.key() == key;
+            }
+            if self
+                .iter_all()
+                .any(|download| download.key().same_build_group(key))
+            {
+                return false;
+            }
+        }
+        variants.allows_build_variant(key, default.is_some_and(|download| download.key() == key))
+    }
+
+    /// Apply provider-tag matching while listing installed builds, including non-default optimizations.
+    pub fn allows_listed_build(
+        &self,
+        request: &PythonDownloadRequest,
+        key: &PythonInstallationKey,
+    ) -> bool {
+        request
+            .version
+            .as_ref()
+            .and_then(VersionRequest::variants)
+            .is_none_or(|variants| {
+                let default = self
+                    .iter_all()
+                    .any(|download| download.key() == key && download.is_default());
+                variants.allows_build_variant(key, default)
+            })
+    }
+
+    /// Compare installed builds in discovery order, preferring the catalog default within a group.
+    pub fn compare_installations(
+        &self,
+        left: &PythonInstallationKey,
+        right: &PythonInstallationKey,
+    ) -> std::cmp::Ordering {
+        if left.same_build_group(right) {
+            let is_default = |key| {
+                self.iter_all()
+                    .any(|download| download.key() == key && download.is_default())
+            };
+            is_default(right)
+                .cmp(&is_default(left))
+                .then_with(|| right.cmp(left))
+        } else {
+            right.cmp(left)
+        }
+    }
+
     /// Return the first [`ManagedPythonDownload`] matching a request, if any.
     ///
     /// If there is no stable version matching the request, a compatible pre-release version will
@@ -1104,13 +1190,33 @@ impl ManagedPythonDownloadList {
                         .build()
                         .map_err(|err| Error::ClientBuild(Box::new(err)))?,
                 );
-                fetch_downloads_from_url(&client, cache, url)
-                    .await
-                    .map_err(|e| match e {
-                        e @ (Error::InvalidPythonDownloadsJSON(..)
-                        | Error::UnsupportedPythonDownloadsJSON(..)) => e,
-                        e => Error::FetchingPythonDownloadsJSONError(url.to_string(), Box::new(e)),
-                    })?
+                let response = fetch_downloads_from_url(&client, cache, url).await;
+                // If the server is unavailable, retain the cached catalog's selection policy.
+                // Invalid catalogs must still fail instead of silently using older metadata.
+                let response = match response {
+                    Err(
+                        error @ (Error::RemotePythonDownloadsJSONClient(_)
+                        | Error::NetworkError(..)
+                        | Error::NetworkErrorWithRetries { .. }),
+                    ) if client_builder.connectivity.is_online() => {
+                        let offline_client = CachedClient::new(
+                            client_builder
+                                .clone()
+                                .connectivity(Connectivity::Offline)
+                                .build()
+                                .map_err(|err| Error::ClientBuild(Box::new(err)))?,
+                        );
+                        fetch_downloads_from_url(&offline_client, cache, url)
+                            .await
+                            .or(Err(error))
+                    }
+                    response => response,
+                };
+                response.map_err(|e| match e {
+                    e @ (Error::InvalidPythonDownloadsJSON(..)
+                    | Error::UnsupportedPythonDownloadsJSON(..)) => e,
+                    e => Error::FetchingPythonDownloadsJSONError(url.to_string(), Box::new(e)),
+                })?
             }
         };
 
@@ -1761,7 +1867,16 @@ fn parse_json_downloads(
                 default: entry.default.unwrap_or(true),
             })
         })
-        .sorted_by(|a, b| Ord::cmp(&b.key, &a.key))
+        .sorted_by(|left, right| {
+            if left.key.same_build_group(&right.key) {
+                right
+                    .default
+                    .cmp(&left.default)
+                    .then_with(|| right.key.cmp(&left.key))
+            } else {
+                right.key.cmp(&left.key)
+            }
+        })
         .collect()
 }
 
@@ -2073,6 +2188,64 @@ mod tests {
         let request = PythonDownloadRequest::default()
             .with_version(VersionRequest::from_str("3.13+custom")?);
         assert_eq!(downloads.find(&request)?.key(), &custom_key);
+
+        let mut newer = entry("custom", false);
+        newer.minor = 14;
+        let mut freethreaded = entry("custom", true);
+        freethreaded.variant = Some("freethreaded".to_string());
+        for custom_default in [false, true] {
+            let mut stock = entry("stock", !custom_default);
+            stock.build_variant = None;
+            let downloads = ManagedPythonDownloadList {
+                downloads: parse_json_downloads(HashMap::from([
+                    ("stock".to_string(), stock),
+                    ("custom".to_string(), entry("custom", custom_default)),
+                    ("other".to_string(), entry("other", false)),
+                    ("newer".to_string(), newer.clone()),
+                    ("freethreaded".to_string(), freethreaded.clone()),
+                ])),
+            };
+            for (request, expected) in [
+                (
+                    "3.13",
+                    if custom_default { Some("custom") } else { None },
+                ),
+                ("3.13+custom", Some("custom")),
+                ("3.13+other", Some("other")),
+                ("3.13+freethreaded", Some("custom")),
+                ("3.13+freethreaded+custom", Some("custom")),
+                ("3.13+custom+freethreaded", Some("custom")),
+            ] {
+                let request = PythonDownloadRequest::default()
+                    .with_version(VersionRequest::from_str(request).expect("Valid request"));
+                let download = downloads.find(&request).expect("Matching download");
+                assert_eq!(
+                    download.key().build_variant().map(ToString::to_string),
+                    expected.map(ToString::to_string),
+                );
+            }
+            for request in [
+                "3.13+custom_internal",
+                "3.13+freethreaded+other",
+            ] {
+                let request = PythonDownloadRequest::default()
+                    .with_version(VersionRequest::from_str(request).expect("Valid request"));
+                assert!(
+                    downloads.iter_matching(&request).next().is_none(),
+                    "{request:?}"
+                );
+            }
+            let request = PythonDownloadRequest::default()
+                .with_version(VersionRequest::from_str("3+custom").expect("Valid request"));
+            assert_eq!(
+                downloads
+                    .find(&request)
+                    .expect("Matching download")
+                    .key()
+                    .minor(),
+                14
+            );
+        }
         Ok(())
     }
 
