@@ -338,6 +338,8 @@ pub enum PreviewFeature {
     /// Exclude `exclude-newer-package` entries from the lockfile when not included in the
     /// project's resolved dependencies.
     MissingExcludeNewerPackageLock,
+    /// Allows `--output-format jsonl` to stream progress and final JSON output.
+    Jsonl,
 }
 
 impl Display for PreviewFeature {
