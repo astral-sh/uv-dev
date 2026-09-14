@@ -176,12 +176,26 @@ impl ResolverEnvironment {
         }
     }
 
-    /// Returns `false` only when this environment is a fork and it is disjoint
-    /// with the given marker.
-    pub(crate) fn included_by_marker(&self, marker: MarkerTree) -> bool {
+    /// Returns whether the given marker is not ruled out by the current fork.
+    ///
+    /// This is an overlap check, not a containment check. For specific resolutions, marker
+    /// evaluation is handled separately and this always returns `true`. To check whether multiple
+    /// markers can hold together, use [`ResolverEnvironment::markers_overlap`].
+    pub(crate) fn may_include_marker(&self, marker: MarkerTree) -> bool {
         match self.kind {
             Kind::Specific { .. } => true,
             Kind::Universal { ref markers, .. } => !markers.is_disjoint(marker),
+        }
+    }
+
+    /// Returns whether two markers can hold together within the current fork.
+    ///
+    /// For specific resolutions, this checks the markers against each other without evaluating
+    /// them against the concrete marker environment.
+    pub(crate) fn markers_overlap(&self, left: MarkerTree, right: MarkerTree) -> bool {
+        match self.kind {
+            Kind::Specific { .. } => !left.is_disjoint(right),
+            Kind::Universal { markers, .. } => !markers.and(left).is_disjoint(right),
         }
     }
 
@@ -540,7 +554,7 @@ pub(crate) enum ForkingPossibility<'d> {
 impl<'d> ForkingPossibility<'d> {
     pub(crate) fn new(env: &ResolverEnvironment, dep: &'d PubGrubDependency) -> Self {
         let marker = dep.package.marker();
-        if !env.included_by_marker(marker) {
+        if !env.may_include_marker(marker) {
             ForkingPossibility::DependencyAlwaysExcluded
         } else if marker.is_true() {
             ForkingPossibility::NoForkingPossible
@@ -573,7 +587,7 @@ impl Forker<'_> {
         &self,
         env: &ResolverEnvironment,
     ) -> Option<(Self, Vec<ResolverEnvironment>)> {
-        if !env.included_by_marker(self.marker) {
+        if !env.may_include_marker(self.marker) {
             return None;
         }
 
@@ -609,9 +623,9 @@ impl Forker<'_> {
 
     /// Returns true if the dependency represented by this forker may be
     /// included in the given resolver environment.
-    pub(crate) fn included(&self, env: &ResolverEnvironment) -> bool {
+    pub(crate) fn included(&self, env: &ResolverEnvironment, python_marker: MarkerTree) -> bool {
         let marker = self.package.marker();
-        env.included_by_marker(marker)
+        env.markers_overlap(python_marker, marker)
     }
 }
 
@@ -756,6 +770,60 @@ mod tests {
     fn python_requirement(python_version_greater_than_equal: &str) -> PythonRequirement {
         let requires_python = requires_python_lower(python_version_greater_than_equal);
         PythonRequirement::from_marker_environment(&MARKER_ENV, requires_python)
+    }
+
+    #[test]
+    fn may_include_marker_specific() {
+        let resolver_env =
+            ResolverEnvironment::specific(ResolverMarkerEnvironment::from(MARKER_ENV.clone()));
+
+        assert!(resolver_env.may_include_marker(MarkerTree::FALSE));
+        assert!(resolver_env.may_include_marker(marker("sys_platform == 'linux'")));
+    }
+
+    #[test]
+    fn markers_overlap_specific() {
+        let resolver_env =
+            ResolverEnvironment::specific(ResolverMarkerEnvironment::from(MARKER_ENV.clone()));
+        let linux = marker("sys_platform == 'linux'");
+        let windows = marker("sys_platform == 'win32'");
+
+        assert!(resolver_env.markers_overlap(linux, linux));
+        assert!(!resolver_env.markers_overlap(linux, windows));
+        assert!(!resolver_env.markers_overlap(MarkerTree::FALSE, MarkerTree::TRUE));
+    }
+
+    #[test]
+    fn markers_overlap_in_python_fork() {
+        let resolver_env = ResolverEnvironment::universal(vec![])
+            .narrow_environment(marker("python_version >= '3.13'"));
+        let linux = marker("sys_platform == 'linux'");
+        let coverage = marker(
+            "(python_version == '3.12' and sys_platform == 'linux') or \
+             (python_version == '3.13' and sys_platform == 'win32')",
+        );
+
+        assert!(resolver_env.may_include_marker(linux));
+        assert!(resolver_env.may_include_marker(coverage));
+        assert!(!linux.is_disjoint(coverage));
+        assert!(!resolver_env.markers_overlap(linux, coverage));
+        assert!(!resolver_env.markers_overlap(coverage, linux));
+        assert!(resolver_env.markers_overlap(linux, MarkerTree::TRUE));
+    }
+
+    #[test]
+    fn markers_overlap_with_requires_python() {
+        let resolver_env = ResolverEnvironment::universal(vec![])
+            .narrow_environment(marker("sys_platform == 'linux'"));
+        let requires_python = marker("python_version >= '3.12'");
+        let dependency = marker(
+            "(python_version < '3.12' and sys_platform == 'linux') or \
+             (python_version >= '3.12' and sys_platform == 'win32')",
+        );
+
+        assert!(resolver_env.may_include_marker(dependency));
+        assert!(!requires_python.is_disjoint(dependency));
+        assert!(!resolver_env.markers_overlap(requires_python, dependency));
     }
 
     /// Tests that narrowing a Python requirement when resolving for a
