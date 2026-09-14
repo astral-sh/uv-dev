@@ -1282,6 +1282,11 @@ impl EnvVars {
     #[attr_added_in("0.7.15")]
     pub const UV_GITHUB_FAST_PATH_URL: &'static str = "UV_GITHUB_FAST_PATH_URL";
 
+    /// Used to set the GitHub raw-content URL for tests.
+    #[attr_hidden]
+    #[attr_added_in("0.12.14")]
+    pub const UV_GITHUB_RAW_URL: &'static str = "UV_GITHUB_RAW_URL";
+
     /// Hide progress messages with non-deterministic order in tests.
     #[attr_hidden]
     #[attr_added_in("0.5.29")]

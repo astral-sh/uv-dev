@@ -50,6 +50,11 @@ commit. Their complete reachable history lets the ordinary Git client fetch bran
 without requiring special handling for a shallow remote. Git workloads use these local repositories
 without fetching live upstream data while timing.
 
+Pass `--git-directory .cache/bench-git` to `serve-fixtures.py` to replay GitHub commit lookups and
+the exact `pyproject.toml` contents stored in these repositories. The private test endpoint
+overrides let source-metadata workloads use the normal GitHub fast path against that loopback
+server.
+
 The Git fetch workload uses source-tree size as its main dimension: 12 files in `sampleproject`, 234
 in Flask, and 6,901 in Django. Its cold case starts with an empty uv Git cache; the warm cases reuse
 a populated cache with a precise commit, a full commit-like reference, or an upstream branch/tag.

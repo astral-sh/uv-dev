@@ -2251,6 +2251,53 @@ fn compile_git_https_dependency() -> Result<()> {
     Ok(())
 }
 
+/// Resolve static GitHub metadata without cloning the repository.
+#[tokio::test]
+#[cfg(feature = "test-git")]
+async fn compile_git_static_metadata_from_github() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let requirements_in = context.temp_dir.child("requirements.in");
+    requirements_in.write_str("sampleproject @ git+https://github.com/pypa/sampleproject@main")?;
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/pypa/sampleproject/commits/main"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string("621e4974ca25ce531773def586ba3ed8e736b3fc"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/raw/pypa/sampleproject/621e4974ca25ce531773def586ba3ed8e736b3fc/pyproject.toml",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_string(indoc! {r#"
+            [project]
+            name = "sampleproject"
+            version = "4.0.0"
+            requires-python = ">=3.9"
+        "#}))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.pip_compile()
+        .args(["--no-index", "--no-build", "--no-deps", "--no-header", "--no-annotate"])
+        .arg("requirements.in")
+        .env(EnvVars::UV_GITHUB_FAST_PATH_URL, format!("{}/repos", server.uri()))
+        .env(EnvVars::UV_GITHUB_RAW_URL, format!("{}/raw", server.uri())), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    sampleproject @ git+https://github.com/pypa/sampleproject@621e4974ca25ce531773def586ba3ed8e736b3fc
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    Ok(())
+}
+
 /// Resolve a specific branch via a Git HTTPS dependency.
 #[test]
 #[cfg(feature = "test-git")]
