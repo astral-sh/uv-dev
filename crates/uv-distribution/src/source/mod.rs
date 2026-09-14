@@ -3217,18 +3217,22 @@ pub fn prune(cache: &Cache) -> Result<Removal, Error> {
 
     let bucket = cache.bucket(CacheBucket::SourceDistributions);
     if bucket.is_dir() {
-        for entry in walkdir::WalkDir::new(bucket) {
+        let mut entries = walkdir::WalkDir::new(bucket).into_iter();
+        while let Some(entry) = entries.next() {
             let entry = entry.map_err(Error::CacheWalk)?;
 
             if !entry.file_type().is_dir() {
                 continue;
             }
 
+            let mut has_revision = false;
+
             // If we find a `revision.http` file, read the pointer, and remove any extraneous
             // directories.
             let revision = entry.path().join("revision.http");
             if revision.is_file() {
                 if let Ok(Some(pointer)) = HttpRevisionPointer::read_from(revision) {
+                    has_revision = true;
                     // Remove all sibling directories that are not referenced by the pointer.
                     for sibling in entry.path().read_dir().map_err(Error::CacheRead)? {
                         let sibling = sibling.map_err(Error::CacheRead)?;
@@ -3253,6 +3257,7 @@ pub fn prune(cache: &Cache) -> Result<Removal, Error> {
             let revision = entry.path().join("revision.rev");
             if revision.is_file() {
                 if let Ok(Some(pointer)) = LocalRevisionPointer::read_from(revision) {
+                    has_revision = true;
                     // Remove all sibling directories that are not referenced by the pointer.
                     for sibling in entry.path().read_dir().map_err(Error::CacheRead)? {
                         let sibling = sibling.map_err(Error::CacheRead)?;
@@ -3270,6 +3275,11 @@ pub fn prune(cache: &Cache) -> Result<Removal, Error> {
                         }
                     }
                 }
+            }
+
+            if has_revision {
+                // Revisions contain source and build artifacts, not further revision roots.
+                entries.skip_current_dir();
             }
         }
     }
