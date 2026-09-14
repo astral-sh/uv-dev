@@ -1,0 +1,26 @@
+[
+  {
+    "name": "packse",
+    "project": "packse",
+    "size": "small",
+    "python": "3.12.11",
+    "sync-args": [],
+    "installed-requirement": "hatchling==1.25.0"
+  },
+  {
+    "name": "uv_docs",
+    "project": "uv",
+    "size": "medium",
+    "python": "3.12.11",
+    "sync-args": ["--only-group", "docs"],
+    "installed-requirement": "mkdocs-material==9.7.6"
+  },
+  {
+    "name": "prefect",
+    "project": "prefect",
+    "size": "large",
+    "python": "3.12.11",
+    "sync-args": [],
+    "installed-requirement": "pydocket==0.23.1"
+  }
+]
