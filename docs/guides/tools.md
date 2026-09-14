@@ -253,7 +253,9 @@ from the report's serialization types.
 Use `--output-format jsonl --preview-features jsonl` to consume the same report as a single-line
 `"type": "result"` record. With `--outdated`, version lookups emit `"type": "progress"` records
 before the result. Pass `--no-progress` or `--quiet` to emit only the result. JSONL is a separate
-preview format and may change without warning.
+preview format and may change without warning. The
+[JSONL record schema](../reference/internals/tool-list-jsonl.schema.json) describes both kinds of
+record.
 
 ## Upgrading tools
 

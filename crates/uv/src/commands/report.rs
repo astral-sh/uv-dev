@@ -6,6 +6,20 @@ use uv_fs::PortablePathBuf;
 use uv_python::PythonEnvironment;
 use uv_resolver::PythonReport;
 
+/// Generate a per-record schema for an object-valued preview JSONL command.
+#[cfg(feature = "schemars")]
+pub(crate) fn jsonl_object_schema<T: schemars::JsonSchema>(title: &str) -> schemars::Schema {
+    use crate::commands::reporters::JsonlProgressEvent;
+    use crate::printer::{JsonlRecord, JsonlResult};
+
+    let mut schema = schemars::generate::SchemaSettings::draft07()
+        .for_serialize()
+        .into_generator()
+        .into_root_schema_for::<JsonlRecord<JsonlProgressEvent, JsonlResult<T>>>();
+    schema.insert("title".to_owned(), title.into());
+    schema
+}
+
 #[derive(Serialize, Debug, Default)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]

@@ -2,35 +2,57 @@ use anstream::{eprint, print};
 use indicatif::ProgressDrawTarget;
 use serde::Serialize;
 
+/// A single record in a command's preview JSONL stream.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub(crate) enum JsonlRecord<P, R> {
+    Progress(P),
+    Result(R),
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+enum ResultType {
+    Result,
+}
+
+/// An object-valued command result with the JSONL discriminator.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub(crate) struct JsonlResult<T> {
+    /// Distinguishes the final command result from progress updates.
+    #[serde(rename = "type")]
+    event_type: ResultType,
+    #[serde(flatten)]
+    result: T,
+}
+
+/// An array-valued command result with the JSONL discriminator.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+struct JsonlResultData<T> {
+    /// Distinguishes the final command result from progress updates.
+    #[serde(rename = "type")]
+    event_type: ResultType,
+    data: T,
+}
+
 /// Serialize an object-valued command result as a JSONL event.
 pub(crate) fn jsonl_result<T: Serialize>(result: &T) -> serde_json::Result<String> {
-    #[derive(Serialize)]
-    struct ResultEvent<'a, T> {
-        #[serde(rename = "type")]
-        event_type: &'static str,
-        #[serde(flatten)]
-        result: &'a T,
-    }
-
-    serde_json::to_string(&ResultEvent {
-        event_type: "result",
+    serde_json::to_string(&JsonlRecord::<(), _>::Result(JsonlResult {
+        event_type: ResultType::Result,
         result,
-    })
+    }))
 }
 
 /// Serialize an array-valued command result as a JSONL event.
 pub(crate) fn jsonl_result_data<T: Serialize>(result: &T) -> serde_json::Result<String> {
-    #[derive(Serialize)]
-    struct ResultEvent<'a, T> {
-        #[serde(rename = "type")]
-        event_type: &'static str,
-        data: &'a T,
-    }
-
-    serde_json::to_string(&ResultEvent {
-        event_type: "result",
+    serde_json::to_string(&JsonlRecord::<(), _>::Result(JsonlResultData {
+        event_type: ResultType::Result,
         data: result,
-    })
+    }))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,6 +207,36 @@ impl std::fmt::Write for Stderr {
             Self::Disabled => {}
         }
 
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::Serialize;
+
+    use super::{jsonl_result, jsonl_result_data};
+
+    #[test]
+    fn jsonl_result_envelopes_keep_record_shape() -> serde_json::Result<()> {
+        #[derive(Serialize)]
+        struct Report<'a> {
+            message: &'a str,
+            values: &'a [u8],
+        }
+
+        let report = Report {
+            message: "first\nsecond",
+            values: &[1, 2],
+        };
+        assert_eq!(
+            jsonl_result(&report)?,
+            r#"{"type":"result","message":"first\nsecond","values":[1,2]}"#
+        );
+        assert_eq!(
+            jsonl_result_data(&[report])?,
+            r#"{"type":"result","data":[{"message":"first\nsecond","values":[1,2]}]}"#
+        );
         Ok(())
     }
 }

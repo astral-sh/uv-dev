@@ -200,6 +200,11 @@ from the serialization types with `cargo dev generate-json-schema --target works
 the command itself, the schema can change while the format is in preview; publishing it does not
 establish a stable interface.
 
+With `--output-format jsonl`, the [JSONL record schema](metadata-jsonl.schema.json) describes the
+progress records and final metadata result. Generate it with
+`cargo dev generate-json-schema --target workspace-metadata-jsonl`. A valid record alone does not
+establish that the stream or command completed successfully.
+
 Here is a human-readable annotated example:
 
 ```js

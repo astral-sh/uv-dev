@@ -1,0 +1,386 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "uv pip check JSONL (preview)",
+  "description": "A single record in a command's preview JSONL stream.",
+  "anyOf": [
+    {
+      "$ref": "#/definitions/JsonlProgressEvent"
+    },
+    {
+      "$ref": "#/definitions/JsonlResult"
+    }
+  ],
+  "definitions": {
+    "CheckTargetReport": {
+      "description": "The target used to check the installed distributions.",
+      "type": "object",
+      "properties": {
+        "python_platform": {
+          "description": "Explicit platform override, or null when using the installed interpreter's platform.",
+          "type": ["string", "null"]
+        },
+        "python_version": {
+          "description": "Normalized, release-only full Python version used for compatibility and marker checks.",
+          "type": "string"
+        }
+      },
+      "required": ["python_version", "python_platform"]
+    },
+    "DiagnosticReport": {
+      "type": "object",
+      "properties": {
+        "package": {
+          "description": "Normalized name of the package with the incompatibility.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PackageName"
+            }
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "duplicate_package"
+            },
+            "paths": {
+              "description": "Portable paths to the installed metadata locations, sorted lexicographically.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": ["kind", "paths"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "installed_version": {
+              "description": "Version of the dependency installed in the inspected environment.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "incompatible_dependency"
+            },
+            "requirement": {
+              "description": "Normalized PEP 508 requirement with credential-safe URLs.",
+              "type": "string"
+            }
+          },
+          "required": ["kind", "requirement", "installed_version"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "incompatible_platform"
+            }
+          },
+          "required": ["kind"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "installed_version": {
+              "description": "Python version installed in the inspected environment.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "incompatible_python_version"
+            },
+            "requires_python": {
+              "description": "Python versions required by the package.",
+              "type": "string"
+            }
+          },
+          "required": ["kind", "requires_python", "installed_version"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "metadata_unavailable"
+            },
+            "path": {
+              "description": "Portable path to the installed distribution's metadata location.",
+              "type": "string"
+            }
+          },
+          "required": ["kind", "path"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "missing_dependency"
+            },
+            "requirement": {
+              "description": "Normalized PEP 508 requirement with credential-safe URLs.",
+              "type": "string"
+            }
+          },
+          "required": ["kind", "requirement"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "tags_unavailable"
+            },
+            "path": {
+              "description": "Portable path to the installed distribution's metadata location.",
+              "type": "string"
+            }
+          },
+          "required": ["kind", "path"]
+        }
+      ],
+      "required": ["package"]
+    },
+    "EnvironmentReport": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "The path to the environment.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          ]
+        },
+        "python": {
+          "description": "The Python interpreter for the environment.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PythonReport"
+            }
+          ]
+        }
+      },
+      "required": ["path", "python"]
+    },
+    "JsonlProgressEvent": {
+      "title": "uv JSONL progress (preview)",
+      "description": "A progress update emitted before a command's final JSONL result.\n\nConcurrent operations are correlated using their process-wide `id`. Top-level\nphases omit `id`, since only one instance of each phase is active at a time.\nOperations can complete without an intermediate update.",
+      "type": "object",
+      "properties": {
+        "completed": {
+          "description": "Completed bytes for transfers, or completed packages for package phases.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "id": {
+          "description": "A process-wide identifier shared by all events for one concurrent operation.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "name": {
+          "description": "The package, distribution, or source currently being processed.",
+          "type": "string"
+        },
+        "phase": {
+          "description": "The operation being reported, such as `download`, `build`, or `install`.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProgressPhase"
+            }
+          ]
+        },
+        "revision": {
+          "description": "The Git revision associated with a checkout operation.",
+          "type": "string"
+        },
+        "status": {
+          "description": "The operation's current lifecycle state.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProgressStatus"
+            }
+          ]
+        },
+        "total": {
+          "description": "The fixed total bytes or packages for this operation, when known.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "type": {
+          "description": "Distinguishes progress updates from the final command result.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProgressType"
+            }
+          ]
+        },
+        "url": {
+          "description": "The source URL associated with a resolution or checkout operation.",
+          "type": "string"
+        },
+        "version": {
+          "description": "The selected package version, when available.",
+          "type": "string"
+        }
+      },
+      "required": ["type", "phase", "status"]
+    },
+    "JsonlResult": {
+      "title": "uv pip check (preview)",
+      "description": "An object-valued command result with the JSONL discriminator.",
+      "type": "object",
+      "properties": {
+        "diagnostics": {
+          "description": "Compatibility diagnostics, sorted by package, kind, and normalized details.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DiagnosticReport"
+          }
+        },
+        "environment": {
+          "description": "The installed environment being inspected.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/EnvironmentReport"
+            }
+          ]
+        },
+        "packages_checked": {
+          "description": "Number of installed distributions examined, including duplicate distributions.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "schema": {
+          "description": "Format information.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SchemaReport"
+            }
+          ]
+        },
+        "target": {
+          "description": "The target against which the environment was checked.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CheckTargetReport"
+            }
+          ]
+        },
+        "type": {
+          "description": "Distinguishes the final command result from progress updates.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResultType"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "schema",
+        "environment",
+        "target",
+        "packages_checked",
+        "diagnostics"
+      ]
+    },
+    "PackageName": {
+      "description": "The normalized name of a package.\n\nConverts the name to lowercase and collapses runs of `-`, `_`, and `.` down to a single `-`.\nFor example, `---`, `.`, and `__` are all converted to a single `-`.\n\nSee: <https://packaging.python.org/en/latest/specifications/name-normalization/>",
+      "type": "string"
+    },
+    "PortablePathBuf": {
+      "type": "string"
+    },
+    "ProgressPhase": {
+      "description": "An operation reported by the preview JSONL interface.",
+      "type": "string",
+      "enum": [
+        "audit",
+        "build",
+        "checkout",
+        "download",
+        "extract",
+        "hash",
+        "install",
+        "latest_version",
+        "prepare",
+        "resolve",
+        "upload"
+      ]
+    },
+    "ProgressStatus": {
+      "description": "The lifecycle of an operation: started, optionally updated, then completed.",
+      "type": "string",
+      "enum": ["started", "updated", "completed"]
+    },
+    "ProgressType": {
+      "type": "string",
+      "enum": ["progress"]
+    },
+    "PythonReport": {
+      "description": "Information about the Python interpreter in an existing environment.",
+      "type": "object",
+      "properties": {
+        "implementation": {
+          "description": "Python implementation name.",
+          "type": "string"
+        },
+        "key": {
+          "description": "Interpreter installation key, as used by `uv python list`.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Absolute path to the Python executable.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          ]
+        },
+        "version": {
+          "description": "Full Python version.",
+          "type": "string"
+        }
+      },
+      "required": ["path", "version", "implementation", "key"]
+    },
+    "ResultType": {
+      "type": "string",
+      "enum": ["result"]
+    },
+    "SchemaReport": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "description": "The version of the schema.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SchemaVersion"
+            }
+          ]
+        }
+      },
+      "required": ["version"]
+    },
+    "SchemaVersion": {
+      "oneOf": [
+        {
+          "description": "An unstable, experimental schema.",
+          "type": "string",
+          "const": "preview"
+        }
+      ]
+    }
+  }
+}

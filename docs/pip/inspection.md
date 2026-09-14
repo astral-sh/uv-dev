@@ -55,4 +55,6 @@ URLs, and diagnostics are sorted by package and kind. The format is experimental
 Use `--output-format jsonl --preview-features jsonl` for a single-line `"type": "result"` record
 containing the same report. A completed check still exits with status `0` or `1`; a setup failure,
 such as a missing interpreter, retains its usual error status without emitting a report. JSONL is a
-separate preview format and may change without warning.
+separate preview format and may change without warning. Its
+[record schema](../reference/internals/pip-check-jsonl.schema.json) includes the result
+discriminator.

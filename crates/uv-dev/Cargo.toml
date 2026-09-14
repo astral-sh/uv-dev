@@ -71,6 +71,8 @@ uv-performance-memory-allocator = { path = "../uv-performance-memory-allocator",
 walkdir = { workspace = true }
 
 [dev-dependencies]
+uv-test = { workspace = true, features = ["jsonschema"] }
+
 insta = { workspace = true }
 
 [lib]

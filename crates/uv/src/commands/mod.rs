@@ -24,6 +24,8 @@ pub(crate) use help::help;
 pub(crate) use pip::check::pip_check;
 #[cfg(feature = "schemars")]
 pub use pip::check_report::json_schema as pip_check_json_schema;
+#[cfg(feature = "schemars")]
+pub use pip::check_report::jsonl_schema as pip_check_jsonl_schema;
 pub(crate) use pip::compile::pip_compile;
 pub(crate) use pip::freeze::pip_freeze;
 pub(crate) use pip::install::pip_install;
@@ -42,11 +44,15 @@ pub(crate) use project::init::{InitKind, InitProjectKind, init};
 pub(crate) use project::lock::lock;
 #[cfg(feature = "schemars")]
 pub use project::lock_json_schema;
+#[cfg(feature = "schemars")]
+pub use project::lock_jsonl_schema;
 pub(crate) use project::remove::remove;
 pub(crate) use project::run::{ParsedRunCommand, RunCommand, run};
 pub(crate) use project::sync::sync;
 #[cfg(feature = "schemars")]
 pub use project::sync_json_schema;
+#[cfg(feature = "schemars")]
+pub use project::sync_jsonl_schema;
 pub(crate) use project::tree::tree;
 pub(crate) use project::upgrade::upgrade;
 pub(crate) use project::version::{project_version, self_version};
@@ -70,6 +76,8 @@ pub(crate) use tool::install::install as tool_install;
 pub(crate) use tool::list::ToolListOutput;
 #[cfg(feature = "schemars")]
 pub use tool::list::json_schema as tool_list_json_schema;
+#[cfg(feature = "schemars")]
+pub use tool::list::jsonl_schema as tool_list_jsonl_schema;
 pub(crate) use tool::list::list as tool_list;
 pub(crate) use tool::run::ToolRunCommand;
 pub(crate) use tool::run::run as tool_run;
@@ -86,6 +94,8 @@ use uv_scripts::Pep723Script;
 pub(crate) use venv::venv;
 pub(crate) use workspace::dir::dir;
 pub(crate) use workspace::list::list;
+#[cfg(feature = "schemars")]
+pub use workspace::metadata::jsonl_schema as workspace_metadata_jsonl_schema;
 pub(crate) use workspace::metadata::metadata;
 
 use crate::commands::pip::operations::ChangedDist;

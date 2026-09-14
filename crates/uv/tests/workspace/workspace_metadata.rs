@@ -22,12 +22,30 @@ static METADATA_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> = Lazy
     .map_err(|error| error.to_string())
 });
 
+static METADATA_JSONL_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> =
+    LazyLock::new(|| {
+        JsonSchema::new(include_str!(
+            "../../../../docs/reference/internals/metadata-jsonl.schema.json"
+        ))
+        .map_err(|error| error.to_string())
+    });
+
 fn parse_metadata(contents: &[u8]) -> Result<serde_json::Value> {
     METADATA_SCHEMA
         .as_ref()
         .map_err(|error| anyhow::anyhow!("invalid workspace metadata schema: {error}"))?
         .parse(contents)
         .context("workspace metadata schema mismatch")
+}
+
+fn parse_metadata_jsonl_records(contents: &[u8]) -> Result<Vec<serde_json::Value>> {
+    let schema = METADATA_JSONL_SCHEMA
+        .as_ref()
+        .map_err(|error| anyhow!("invalid JSONL workspace metadata schema: {error}"))?;
+    std::str::from_utf8(contents)?
+        .lines()
+        .map(|line| schema.parse(line.as_bytes()))
+        .collect()
 }
 
 macro_rules! metadata_snapshot {
@@ -341,13 +359,13 @@ fn workspace_metadata_extra_quiet() {
 }
 
 #[test]
-fn workspace_metadata_jsonl() {
+fn workspace_metadata_jsonl() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context.init().arg("foo").assert().success();
 
     let workspace = context.temp_dir.child("foo");
 
-    uv_snapshot!(context.filters(), context.workspace_metadata()
+    let output = uv_snapshot!(context.filters(), context.workspace_metadata()
         .current_dir(&workspace)
         .arg("--output-format").arg("jsonl")
         .arg("--preview-features").arg("workspace-metadata,jsonl"), @r#"
@@ -363,6 +381,8 @@ fn workspace_metadata_jsonl() {
     Resolved 1 package in [TIME]
     "#
     );
+    parse_metadata_jsonl_records(&output.stdout)?;
+    Ok(())
 }
 
 /// Internal workspace synchronization must stream its otherwise-silenced progress.
@@ -389,11 +409,7 @@ fn workspace_metadata_jsonl_sync_progress() -> Result<()> {
         .output()?;
     assert!(output.status.success());
 
-    let stdout = String::from_utf8(output.stdout)?;
-    let items = stdout
-        .lines()
-        .map(serde_json::from_str::<serde_json::Value>)
-        .collect::<Result<Vec<_>, _>>()?;
+    let items = parse_metadata_jsonl_records(&output.stdout)?;
     let Some((metadata, progress)) = items.split_last() else {
         anyhow::bail!("expected JSONL progress and a final metadata report");
     };

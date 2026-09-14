@@ -21,6 +21,14 @@ static TOOL_LIST_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> = Laz
     .map_err(|error| error.to_string())
 });
 
+static TOOL_LIST_JSONL_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> =
+    LazyLock::new(|| {
+        JsonSchema::new(include_str!(
+            "../../../../docs/reference/internals/tool-list-jsonl.schema.json"
+        ))
+        .map_err(|error| error.to_string())
+    });
+
 static JSONL_PROGRESS_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> =
     LazyLock::new(|| {
         JsonSchema::new(include_str!(
@@ -42,10 +50,13 @@ fn parse_tool_list_jsonl(contents: &[u8]) -> Result<(Vec<Value>, Value)> {
         contents.ends_with(b"\n"),
         "incomplete JSONL tool-list record"
     );
+    let schema = TOOL_LIST_JSONL_SCHEMA
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!("invalid JSONL tool-list schema: {error}"))?;
     let mut events = std::str::from_utf8(contents)?
         .lines()
-        .map(serde_json::from_str::<Value>)
-        .collect::<serde_json::Result<Vec<_>>>()?;
+        .map(|line| schema.parse(line.as_bytes()))
+        .collect::<Result<Vec<_>>>()?;
     let mut report = events
         .pop()
         .context("missing final JSONL tool-list report")?;
