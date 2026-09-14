@@ -93,7 +93,7 @@ impl<'a> InstallRequest<'a> {
     fn from_installation(
         installation: &ManagedPythonInstallation,
         download_list: &'a ManagedPythonDownloadList,
-    ) -> Result<Self> {
+    ) -> Result<Self, downloads::Error> {
         let request = PythonDownloadRequest::from(installation);
         let download_request = request.clone().fill()?;
         let download = download_list
@@ -439,12 +439,21 @@ async fn perform_install(
                 is_default_install = true;
                 if reinstall {
                     // On bare `--reinstall`, reinstall all Python versions
-                    existing_installations
-                        .iter()
-                        .map(|installation| {
-                            InstallRequest::from_installation(installation, &download_list)
-                        })
-                        .collect()
+                    let mut requests = Vec::with_capacity(existing_installations.len());
+                    for installation in &existing_installations {
+                        match InstallRequest::from_installation(installation, &download_list) {
+                            Ok(request) => requests.push(request),
+                            Err(err @ downloads::Error::NoDownloadFound(_)) => {
+                                // An installed build may no longer be in the download catalog.
+                                warn_user!(
+                                    "Failed to create reinstall request for existing installation `{}`: {err}",
+                                    installation.key().green()
+                                );
+                            }
+                            Err(err) => return Err(err.into()),
+                        }
+                    }
+                    Ok(requests)
                 } else {
                     Ok(vec![InstallRequest::new(
                         PythonRequest::Default,
@@ -516,6 +525,13 @@ async fn perform_install(
             Vec::with_capacity(existing_installations.len() + requests.len());
 
         for request in &requests {
+            if is_default_install {
+                // Bare reinstall requests already identify exact installed builds.
+                changelog.existing.insert(request.download.key().clone());
+                unsatisfied.push(Cow::Borrowed(request));
+                continue;
+            }
+
             let mut matching_installations = existing_installations
                 .iter()
                 .filter(|installation| request.matches_installation(installation))
