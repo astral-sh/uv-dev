@@ -20,9 +20,9 @@ use uv_configuration::IndexStrategy;
 use uv_configuration::KeyringProviderType;
 use uv_distribution_filename::{DistFilename, WheelFilename};
 use uv_distribution_types::{
-    BuiltDist, File, FileLocation, IndexCapabilities, IndexFormat, IndexLocations,
-    IndexMetadataRef, IndexStatusCodeDecision, IndexStatusCodeStrategy, IndexUrl, Name,
-    RegistryBuiltWheel, Zstd,
+    ArtifactRequestUrl, BuiltDist, File, FileLocation, IndexCapabilities, IndexFormat,
+    IndexLocations, IndexMetadataRef, IndexStatusCodeDecision, IndexStatusCodeStrategy, IndexUrl,
+    Name, RegistryBuiltWheel, Zstd,
 };
 use uv_git::{GIT_LFS, GitError, GitHttpSettings, GitResolver, Reporter};
 use uv_metadata::{read_metadata_async_seek, read_metadata_async_stream};
@@ -914,7 +914,7 @@ impl RegistryClient {
                     /// A local file path.
                     Path(PathBuf),
                     /// A remote URL.
-                    Url(DisplaySafeUrl),
+                    Url(ArtifactRequestUrl),
                 }
 
                 let wheel = wheels.best_wheel();
@@ -924,10 +924,11 @@ impl RegistryClient {
                     .route_for(&wheel.index)
                     .artifact_url_for_request(&wheel.file.url)
                     .map_err(ErrorKind::ProxyIndex)?;
-                let location = if url.scheme() == "file" {
+                let location = if url.as_url().scheme() == "file" {
                     let path = url
+                        .as_url()
                         .to_file_path()
-                        .map_err(|()| ErrorKind::NonFileUrl(url.clone()))?;
+                        .map_err(|()| ErrorKind::NonFileUrl(url.into_url()))?;
                     WheelLocation::Path(path)
                 } else {
                     WheelLocation::Url(url)
@@ -1043,13 +1044,11 @@ impl RegistryClient {
         Ok(metadata)
     }
 
-    /// Fetch registry wheel metadata from the request URL prepared by [`Self::wheel_metadata`].
-    ///
-    /// The URL has already been parsed and routed through the configured proxy, if any.
+    /// Fetch registry wheel metadata from a routed artifact request URL.
     async fn wheel_metadata_registry(
         &self,
         wheel: &RegistryBuiltWheel,
-        url: DisplaySafeUrl,
+        url: ArtifactRequestUrl,
         capabilities: &IndexCapabilities,
     ) -> Result<ResolutionMetadata, Error> {
         let RegistryBuiltWheel {
@@ -1060,6 +1059,7 @@ impl RegistryClient {
         } = wheel;
         let route = self.indexes.route_for(index);
         let effective_index = route.effective_url();
+        let url = url.into_url();
 
         // If the metadata file is available at its own url (PEP 658), download it from there.
         if file.dist_info_metadata {
@@ -2168,10 +2168,11 @@ mod tests {
                 .index_locations(locations)
                 .build()?;
             let route = client.index_locations().route_for(&canonical);
-            let physical_artifact =
-                route.artifact_url_for_request(&CanonicalArtifactUrl::from_lockfile(
+            let physical_artifact = route
+                .artifact_url_for_request(&CanonicalArtifactUrl::from_lockfile(
                     FileLocation::AbsoluteUrl(canonical_artifact.into()),
-                ))?;
+                ))?
+                .into_url();
 
             let response = client
                 .uncached_client(&physical_artifact)

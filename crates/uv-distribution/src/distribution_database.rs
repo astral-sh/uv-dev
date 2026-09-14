@@ -236,7 +236,8 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 let hashes = ArtifactHashPolicy::for_registry(hashes, &route, &wheel.file);
                 let url = route
                     .artifact_url_for_request(&wheel.file.url)
-                    .map_err(|error| Error::Client(ClientErrorKind::ProxyIndex(error).into()))?;
+                    .map_err(|error| Error::Client(ClientErrorKind::ProxyIndex(error).into()))?
+                    .into_url();
 
                 // Create a cache entry for the wheel.
                 let wheel_entry = self.build_context.cache().entry(

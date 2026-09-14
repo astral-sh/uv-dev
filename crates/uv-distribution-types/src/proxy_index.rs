@@ -340,6 +340,25 @@ impl From<&Index> for IndexRequestPolicy {
     }
 }
 
+/// An absolute artifact URL produced by a validated [`IndexRoute`].
+///
+/// The URL is in the namespace used for requests, including any configured proxy mapping.
+/// Obtain one through [`IndexRoute::artifact_url_for_request`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactRequestUrl(DisplaySafeUrl);
+
+impl ArtifactRequestUrl {
+    /// Borrow the URL used for requests.
+    pub fn as_url(&self) -> &DisplaySafeUrl {
+        &self.0
+    }
+
+    /// Consume the routed URL at a request boundary.
+    pub fn into_url(self) -> DisplaySafeUrl {
+        self.0
+    }
+}
+
 /// A validated route from a canonical package index to the index used for requests.
 ///
 /// Without a configured proxy, requests use the canonical index.
@@ -372,12 +391,13 @@ impl IndexRoute {
     pub fn artifact_url_for_request(
         &self,
         canonical_url: &CanonicalArtifactUrl,
-    ) -> Result<DisplaySafeUrl, ProxyIndexError> {
-        if let Some(proxy) = &self.proxy {
-            proxy.artifact_url_for_request(canonical_url)
+    ) -> Result<ArtifactRequestUrl, ProxyIndexError> {
+        let url = if let Some(proxy) = &self.proxy {
+            proxy.artifact_url_for_request(canonical_url)?
         } else {
-            Ok(canonical_url.to_url()?)
-        }
+            canonical_url.to_url()?
+        };
+        Ok(ArtifactRequestUrl(url))
     }
 
     /// Resolve a Simple API file into the canonical namespace used for identity and persistence.
@@ -674,9 +694,11 @@ mod tests {
             &index_url("https://proxy.example.com/simple/")?
         );
         assert_eq!(
-            route.artifact_url_for_request(&as_canonical(url(
-                "https://files.pythonhosted.org/packages/package.whl",
-            )?))?,
+            route
+                .artifact_url_for_request(&as_canonical(url(
+                    "https://files.pythonhosted.org/packages/package.whl",
+                )?))?
+                .into_url(),
             url("https://proxy.example.com/files/package.whl")?
         );
         let borrowed = locations
@@ -837,7 +859,10 @@ mod tests {
         let artifact = url("https://flat.example.com/packages/package.whl?download=1#sha256=abc")?;
         let file = route.canonicalize_file(response_file(artifact.clone()))?;
         assert_eq!(file.url.to_url()?, artifact);
-        assert_eq!(route.artifact_url_for_request(&file.url)?, artifact);
+        assert_eq!(
+            route.artifact_url_for_request(&file.url)?.into_url(),
+            artifact
+        );
         Ok(())
     }
 

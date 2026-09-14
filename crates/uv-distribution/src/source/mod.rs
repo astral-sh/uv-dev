@@ -281,7 +281,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
                 let url = route
                     .artifact_url_for_request(&dist.file.url)
-                    .map_err(|err| Error::Client(ClientErrorKind::ProxyIndex(err).into()))?;
+                    .map_err(|err| Error::Client(ClientErrorKind::ProxyIndex(err).into()))?
+                    .into_url();
 
                 // If the URL is a file URL, use the local path directly.
                 if url.scheme() == "file" {
@@ -449,7 +450,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
                 let url = route
                     .artifact_url_for_request(&dist.file.url)
-                    .map_err(|err| Error::Client(ClientErrorKind::ProxyIndex(err).into()))?;
+                    .map_err(|err| Error::Client(ClientErrorKind::ProxyIndex(err).into()))?
+                    .into_url();
 
                 // If the URL is a file URL, use the local path directly.
                 if url.scheme() == "file" {
