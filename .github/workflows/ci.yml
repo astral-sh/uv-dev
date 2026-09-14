@@ -144,7 +144,7 @@ jobs:
           INSTA_UPDATE: new
           INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
         run: |
-          python3 .github/runner-experiments/differentials.py
+          PYTHONPATH="$GITHUB_WORKSPACE/.github/runner-experiments" python3 .github/runner-experiments/differentials.py
 
       - name: "Upload runner diagnostics"
         if: always()
