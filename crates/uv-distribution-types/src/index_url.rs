@@ -273,30 +273,13 @@ impl Deref for IndexUrl {
 ///
 /// This type merges the legacy `--index-url`, `--extra-index-url`, and `--find-links` options,
 /// along with the uv-specific `--index` and `--default-index`.
-#[derive(Default, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(
-    rename_all = "kebab-case",
-    deny_unknown_fields,
-    try_from = "IndexLocationsWire"
-)]
+#[derive(Default, Clone, PartialEq, Eq)]
 pub struct IndexLocations {
     indexes: Vec<Index>,
     flat_index: Vec<Index>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     proxies: Vec<Index>,
     no_index: bool,
-    #[serde(skip)]
     pub(crate) routes: Vec<Arc<ProxyRoute>>,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-struct IndexLocationsWire {
-    indexes: Vec<Index>,
-    flat_index: Vec<Index>,
-    #[serde(default)]
-    proxies: Vec<Index>,
-    no_index: bool,
 }
 
 #[expect(
@@ -314,18 +297,6 @@ impl std::fmt::Debug for IndexLocations {
             .field("flat_index", &self.flat_index)
             .field("no_index", &self.no_index)
             .finish()
-    }
-}
-
-impl TryFrom<IndexLocationsWire> for IndexLocations {
-    type Error = ProxyIndexConfigError;
-
-    fn try_from(wire: IndexLocationsWire) -> Result<Self, Self::Error> {
-        Self::new(
-            wire.indexes.into_iter().chain(wire.proxies).collect(),
-            wire.flat_index,
-            wire.no_index,
-        )
     }
 }
 
@@ -842,28 +813,6 @@ mod tests {
             ]
         );
         assert_eq!(locations.proxy_routes().count(), 2);
-
-        let serialized = serde_json::to_value(&locations)?;
-        assert_eq!(serialized["indexes"].as_array().map(Vec::len), Some(3));
-        assert_eq!(serialized["proxies"].as_array().map(Vec::len), Some(2));
-        let restored = serde_json::from_value::<IndexLocations>(serialized)?;
-        assert_eq!(restored, locations);
-        Ok(())
-    }
-
-    #[test]
-    fn index_locations_without_proxies_keep_the_serialized_format() -> Result<(), Box<dyn Error>> {
-        let serialized = serde_json::json!({
-            "indexes": [Index::from_str("upstream=https://upstream.example.com/simple/")?],
-            "flat-index": [],
-            "no-index": false,
-        });
-        let locations = serde_json::from_value::<IndexLocations>(serialized.clone())?;
-
-        assert_eq!(locations.configured_indexes().count(), 1);
-        assert!(locations.proxies.is_empty());
-        assert!(locations.routes.is_empty());
-        assert_eq!(serde_json::to_value(locations)?, serialized);
         Ok(())
     }
 
