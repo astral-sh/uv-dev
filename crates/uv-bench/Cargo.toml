@@ -154,6 +154,11 @@ path = "benches/osv_audit.rs"
 harness = false
 
 [[bench]]
+name = "tls_handshake"
+path = "benches/tls_handshake.rs"
+harness = false
+
+[[bench]]
 name = "uv_pypi_types"
 path = "benches/uv_pypi_types.rs"
 harness = false
@@ -203,8 +208,10 @@ flate2 = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 jiff = { workspace = true }
+rcgen = { workspace = true }
 reqwest = { workspace = true }
 reqwest-middleware = { workspace = true }
+rustls = { workspace = true }
 sha2 = { workspace = true }
 tar-codec = { workspace = true }
 tokio = { workspace = true }
