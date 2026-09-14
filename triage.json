@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 11636,
+        "title": "`uv pip install -r requirements.txt` flakiness with `datashader` and `llvmlite` packages",
+        "url": "https://github.com/astral-sh/uv/issues/11636",
+        "state": "open",
+        "reason": "Closest error-path match: non-PyPI proxy resolution intermittently reports an invalid package and `Failed to read from zip file`; a maintainer identified missing async ZIP-reader retry handling. Its intermittent Nexus behavior does not confirm the same CDN/large-wheel mechanism."
+      },
+      {
+        "kind": "issue",
+        "number": 21349,
+        "title": "uv resorts to downloading full wheels even though range requests work",
+        "url": "https://github.com/astral-sh/uv/issues/21349",
+        "state": "open",
+        "reason": "Closest range-path match: uv abandons remote metadata reads and streams wheels despite working range requests. It does not report a ZIP failure, and astral-sh/uv#21668 tested ranged HEAD rather than ranged GET through CloudFront."
+      },
+      {
+        "kind": "issue",
+        "number": 14395,
+        "title": "uv pip install -f(--find-links) doesn't work, cause 'error decoding response body.'",
+        "url": "https://github.com/astral-sh/uv/issues/14395",
+        "state": "open",
+        "reason": "Related deterministic large-wheel transport failure: uv's ZIP reader times out through an alternate mirror while curl, wget, and a browser succeed. It uses `--find-links` and exposes a timeout rather than the generic resolver warning."
+      },
+      {
+        "kind": "pull_request",
+        "number": 15626,
+        "title": "Add error trace to invalid package format",
+        "url": "https://github.com/astral-sh/uv/pull/15626",
+        "state": "merged",
+        "reason": "Directly addresses the diagnostic request by retaining underlying errors when resolution reports an invalid package format. It predates uv 0.9.17, so a complete current trace is needed to determine why only the ZIP wrapper appeared."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and all pull-request states for exact ZIP-read, range-warning, streaming-wheel, UnexpectedEof, and upstream-reader errors; then CloudFront/S3, large-wheel metadata, HEAD versus ranged GET, retries, redirects, and full-download fallbacks. Followed range history through astral-sh/uv#18998, astral-sh/uv#21347, and astral-sh/uv#21349; retry/diagnostic history through astral-sh/uv#9246, astral-sh/uv#9253, astral-sh/uv#4402, astral-sh/uv#11636, and astral-sh/uv#15626; and fallback history through astral-sh/uv#1792, astral-sh/uv#18620, and astral-sh/uv#18688. Ruled out astral-sh/uv#17847 because its CloudFront-related 404 was fixed by its index, and astral-sh/uv#18688 because it covers direct-URL installation rather than registry metadata resolution. No item confirms the combined CloudFront, 1.56 GB, streaming-ZIP failure."
+  },
+  "type": "bug",
+  "type_reason": "uv 0.9.17 turns an endpoint-dependent remote metadata read failure into an invalid-package and unsatisfiable-dependency result, while the origin path can read the metadata. That is incorrect resolver behavior if reproducible. The exact cause and current-version status remain unconfirmed, and the closest open issues cover only separate parts of the symptom, so this is not a confirmed duplicate or regression.",
+  "summary": "No existing item matches the complete failure. astral-sh/uv#11636 is the closest ZIP-error case, astral-sh/uv#21349 the closest range-fallback case, astral-sh/uv#14395 an adjacent large-wheel transport case, and astral-sh/uv#15626 the relevant diagnostic improvement.",
+  "draft_response": "The log establishes that uv 0.9.17 abandoned ranged metadata access and then failed while reading the sequential wheel stream; it does not establish whether the CDN response, ZIP streaming, or another network error caused that failure. This overlaps astral-sh/uv#11636 and astral-sh/uv#21349, but neither covers the combined behavior. Could you retry a package-only dry run with current uv, a fresh cache, and `-vvv`, and include the complete error chain around the failed wheel? Please also test a ranged GET—not only HEAD—against the CloudFront URL and report the status, `Content-Range`, and `Content-Length`."
+}
