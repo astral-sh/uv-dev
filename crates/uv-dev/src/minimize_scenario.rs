@@ -9,8 +9,8 @@ use anyhow::{Context, Result, ensure};
 use uv_python::PythonVersion;
 use uv_test::TestContext;
 use uv_test::packse::check::{
-    ScenarioPlatform, ScenarioTarget, check_lock_scenario, check_project_lock_scenario,
-    check_scenario,
+    LockCheckOptions, ScenarioPlatform, ScenarioTarget, check_lock_scenario,
+    check_project_lock_scenario, check_scenario,
 };
 use uv_test::packse::minimize::{
     InterruptedReduction, MinimizedScenario, minimize_lock_scenario,
@@ -117,7 +117,7 @@ fn minimize(args: &Args) -> Result<()> {
                         scenario,
                         &targets,
                         &selections,
-                        args.max_states,
+                        LockCheckOptions::new(args.max_states),
                     )
                 },
             )?
@@ -130,7 +130,12 @@ fn minimize(args: &Args) -> Result<()> {
                 |scenario| {
                     let context =
                         TestContext::new_with_versions_and_bin(&[&interpreter], uv.clone());
-                    check_lock_scenario(&context, scenario, &targets, args.max_states)
+                    check_lock_scenario(
+                        &context,
+                        scenario,
+                        &targets,
+                        LockCheckOptions::new(args.max_states),
+                    )
                 },
             )?
         };

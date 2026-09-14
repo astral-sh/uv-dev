@@ -7,6 +7,7 @@ use std::process::{Command, Output};
 use std::str::FromStr;
 
 use anyhow::{Context, Result, bail, ensure};
+use serde::Serialize;
 
 use uv_configuration::TargetTriple;
 use uv_pep440::Operator;
@@ -208,6 +209,49 @@ pub enum LockCheckResult {
     },
 }
 
+/// The lockfile representation used throughout a universal scenario check.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LockfileMode {
+    /// Write the standard lockfile, including package declaration metadata.
+    #[default]
+    Standard,
+    /// Exercise the metadata-free lockfile preview.
+    WithoutMetadata,
+}
+
+impl LockfileMode {
+    fn apply(self, command: &mut Command) {
+        match self {
+            Self::Standard => {}
+            Self::WithoutMetadata => {
+                command
+                    .arg("--preview-features")
+                    .arg("lock-without-metadata");
+            }
+        }
+    }
+}
+
+/// Policy shared by the oracle, lock construction, round trips, and frozen exports.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct LockCheckOptions {
+    /// Maximum complete selections examined in any one oracle projection.
+    pub max_states: usize,
+    /// Representation used by every command in the lockfile trace.
+    pub lockfile: LockfileMode,
+}
+
+impl LockCheckOptions {
+    /// Check a standard lockfile within the given exhaustive-search bound.
+    pub const fn new(max_states: usize) -> Self {
+        Self {
+            max_states,
+            lockfile: LockfileMode::Standard,
+        }
+    }
+}
+
 /// Run a fixed-environment `uv pip compile` and compare it with the finite-domain oracle.
 ///
 /// The caller supplies a test context with a real uv binary and an available CPython interpreter.
@@ -341,9 +385,9 @@ pub fn check_lock_scenario(
     context: &TestContext,
     scenario: &Scenario,
     targets: &[ScenarioTarget],
-    max_states: usize,
+    options: LockCheckOptions,
 ) -> Result<LockCheckResult> {
-    check_lock_scenario_inner(context, scenario, targets, max_states, None)
+    check_lock_scenario_inner(context, scenario, targets, options, None)
 }
 
 /// Check a universal lock and retain every command, resulting lockfile, and served distribution
@@ -352,7 +396,7 @@ pub fn check_lock_scenario_with_artifacts(
     context: &TestContext,
     document: &ScenarioDocument,
     targets: &[ScenarioTarget],
-    max_states: usize,
+    options: LockCheckOptions,
     failure_dir: &Path,
 ) -> Result<LockCheckResult> {
     let scenario = document.scenario()?;
@@ -360,7 +404,7 @@ pub fn check_lock_scenario_with_artifacts(
         context,
         &scenario,
         targets,
-        max_states,
+        options,
         Some((failure_dir, document)),
     )
 }
@@ -376,9 +420,9 @@ pub fn check_project_lock_scenario(
     scenario: &Scenario,
     targets: &[ScenarioTarget],
     selections: &[ProjectSelection],
-    max_states: usize,
+    options: LockCheckOptions,
 ) -> Result<LockCheckResult> {
-    check_project_lock_scenario_inner(context, scenario, targets, selections, max_states, None)
+    check_project_lock_scenario_inner(context, scenario, targets, selections, options, None)
 }
 
 /// Check explicit project exports and retain the full command/lockfile trace on a discrepancy.
@@ -387,7 +431,7 @@ pub fn check_project_lock_scenario_with_artifacts(
     document: &ScenarioDocument,
     targets: &[ScenarioTarget],
     selections: &[ProjectSelection],
-    max_states: usize,
+    options: LockCheckOptions,
     failure_dir: &Path,
 ) -> Result<LockCheckResult> {
     let scenario = document.scenario()?;
@@ -396,7 +440,7 @@ pub fn check_project_lock_scenario_with_artifacts(
         &scenario,
         targets,
         selections,
-        max_states,
+        options,
         Some((failure_dir, document)),
     )
 }
@@ -411,7 +455,7 @@ fn check_lock_scenario_inner(
     context: &TestContext,
     scenario: &Scenario,
     targets: &[ScenarioTarget],
-    max_states: usize,
+    options: LockCheckOptions,
     artifacts: Option<(&Path, &ScenarioDocument)>,
 ) -> Result<LockCheckResult> {
     ensure!(
@@ -426,7 +470,7 @@ fn check_lock_scenario_inner(
     for target in targets {
         let environment = target_environment(scenario, target)?;
         let oracle = ScenarioOracle::new(scenario, &environment)?;
-        let search = oracle.find_solution(max_states)?;
+        let search = oracle.find_solution(options.max_states)?;
         checked += search.checked;
         searches.push(LockProjection {
             target,
@@ -445,7 +489,13 @@ fn check_lock_scenario_inner(
             "dependencies": scenario.root.requires.iter().map(ToString::to_string).collect::<Vec<_>>(),
         }
     });
-    let mut run = LockRun::new(context, scenario, &server, toml::to_string(&project)?)?;
+    let mut run = LockRun::new(
+        context,
+        scenario,
+        &server,
+        toml::to_string(&project)?,
+        options,
+    )?;
     let result = check_lock_scenario_run(&mut run, &searches, checked);
     run.finish(result, targets, None, artifacts)
 }
@@ -486,7 +536,7 @@ fn check_project_lock_scenario_inner(
     scenario: &Scenario,
     targets: &[ScenarioTarget],
     selections: &[ProjectSelection],
-    max_states: usize,
+    options: LockCheckOptions,
     artifacts: Option<(&Path, &ScenarioDocument)>,
 ) -> Result<LockCheckResult> {
     ensure!(
@@ -508,7 +558,7 @@ fn check_project_lock_scenario_inner(
         let environment = target_environment(scenario, target)?;
         let search = project
             .oracle(&environment, &all)?
-            .find_solution(max_states)?;
+            .find_solution(options.max_states)?;
         checked += search.checked;
         searches.push(LockProjection {
             target,
@@ -518,7 +568,7 @@ fn check_project_lock_scenario_inner(
     }
 
     let server = PackseServer::from_scenario_without_build_dependencies(scenario);
-    let mut run = LockRun::new(context, scenario, &server, project.pyproject()?)?;
+    let mut run = LockRun::new(context, scenario, &server, project.pyproject()?, options)?;
     let result =
         check_project_lock_scenario_run(&mut run, &project, &searches, selections, checked);
     run.finish(result, targets, Some(selections), artifacts)
@@ -603,6 +653,7 @@ struct LockRun<'a> {
     lock_path: PathBuf,
     trace: LockTrace,
     canonical_diff: Option<String>,
+    options: LockCheckOptions,
 }
 
 impl<'a> LockRun<'a> {
@@ -611,6 +662,7 @@ impl<'a> LockRun<'a> {
         scenario: &'a Scenario,
         server: &'a PackseServer,
         pyproject: String,
+        options: LockCheckOptions,
     ) -> Result<Self> {
         fs_err::write(context.temp_dir.join("pyproject.toml"), &pyproject)?;
         let lock_path = context.temp_dir.join("uv.lock");
@@ -627,6 +679,7 @@ impl<'a> LockRun<'a> {
             lock_path,
             trace: LockTrace::default(),
             canonical_diff: None,
+            options,
         })
     }
 
@@ -635,15 +688,18 @@ impl<'a> LockRun<'a> {
     }
 
     fn resolve(&mut self) -> Result<Output> {
-        self.run_command(
-            "lock",
-            lock_command(self.context, self.scenario, self.server),
-        )
+        self.run_command("lock", self.lock_command())
+    }
+
+    fn lock_command(&self) -> Command {
+        let mut command = lock_command(self.context, self.scenario, self.server);
+        self.options.lockfile.apply(&mut command);
+        command
     }
 
     fn check_round_trip(&mut self) -> Result<Vec<u8>> {
         let lock = fs_err::read(&self.lock_path)?;
-        let mut command = lock_command(self.context, self.scenario, self.server);
+        let mut command = self.lock_command();
         command.arg("--locked").arg("--offline");
         let output = self.run_command("locked-offline", command)?;
         ensure_success(&output, "uv lock --locked --offline")?;
@@ -656,7 +712,7 @@ impl<'a> LockRun<'a> {
     }
 
     fn canonical_check_command(&self) -> Command {
-        let mut command = lock_command(self.context, self.scenario, self.server);
+        let mut command = self.lock_command();
         command
             .arg("--check")
             .arg("--refresh")
@@ -668,7 +724,7 @@ impl<'a> LockRun<'a> {
     /// Retain the lockfile uv would write after rejecting the freshly written one.
     fn capture_canonical_refresh(&mut self) -> Result<()> {
         let original = fs_err::read_to_string(&self.lock_path)?;
-        let mut command = lock_command(self.context, self.scenario, self.server);
+        let mut command = self.lock_command();
         command
             .arg("--refresh")
             .arg("--preview-features")
@@ -698,6 +754,7 @@ impl<'a> LockRun<'a> {
             .arg("--no-header")
             .arg("--no-annotate")
             .env_remove(EnvVars::UV_EXCLUDE_NEWER);
+        self.options.lockfile.apply(&mut command);
         command
     }
 
@@ -778,6 +835,7 @@ impl<'a> LockRun<'a> {
             serde_json::to_vec_pretty(&serde_json::json!({
                 "kind": LockScenarioFailureKind::from_error(error).map(|kind| kind.to_string()),
                 "error": format!("{error:#}"),
+                "options": self.options,
                 "targets": targets.iter().map(|target| serde_json::json!({
                     "python": target.python.to_string(),
                     "platform": target.platform.as_str(),
