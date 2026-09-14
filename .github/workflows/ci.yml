@@ -1,4 +1,4 @@
-name: Linux runner samples
+name: Linux runner differentials
 
 on:
   workflow_dispatch:
@@ -7,12 +7,12 @@ on:
         description: "Sample indices as a JSON array"
         required: true
         type: string
-        default: "[0]"
+        default: "[1,2]"
       save-rust-cache:
         description: "Save the normal Rust cache"
         required: true
         type: string
-        default: "true"
+        default: "false"
 
 permissions:
   contents: read
@@ -28,12 +28,12 @@ env:
 
 jobs:
   cargo-test-linux:
-    timeout-minutes: 10
+    timeout-minutes: 30
     runs-on: ${{ matrix.provider.runner }}
     name: "${{ matrix.provider.name }} / sample ${{ matrix.sample }}"
     strategy:
       fail-fast: false
-      max-parallel: 10
+      max-parallel: 4
       matrix:
         sample: ${{ fromJSON(inputs.samples) }}
         provider:
@@ -58,7 +58,7 @@ jobs:
           prefix-key: v1-rust-workspace
           key: ${{ hashFiles('Cargo.toml') }}
           cache-workspace-crates: "true"
-          save-if: ${{ inputs.save-rust-cache == 'true' }}
+          save-if: "false"
 
       - name: "Record Cargo cache freshness"
         if: ${{ inputs.save-rust-cache == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
@@ -116,12 +116,26 @@ jobs:
           sudo mount -o loop /tmp/ext4.img /ext4
           sudo chown "$(id -u):$(id -g)" /ext4
 
-      - name: "Cargo test"
+      - name: "Prepare diagnostic tools"
+        run: |
+          set -o pipefail
+          mkdir -p runner-diagnostics
+          mkdir -p "$HOME/code/tmp/uv-runner-tests"
+          TMPDIR="$HOME/code/tmp/uv-runner-tests" python3 -m unittest discover -s .github/runner-experiments -p 'test_*.py'
+          if sudo apt install -y --no-install-recommends linux-tools-6.8.0-136 2>&1 | tee runner-diagnostics/perf-install.log; then
+            perf_binary="$(dpkg -L linux-tools-6.8.0-136 | awk '/\/perf$/ { print; exit }')"
+            if test -x "$perf_binary"; then
+              echo "RCA_PERF=$perf_binary" >> "$GITHUB_ENV"
+            fi
+          fi
+
+      - name: "Measure cache and runner differentials"
         env:
           # Retry more than default to reduce flakes in CI
           UV_HTTP_RETRIES: 5
           RUST_BACKTRACE: 1
-          CARGO_UNSTABLE_MTIME_ON_USE: ${{ inputs.save-rust-cache == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
+          CARGO_UNSTABLE_MTIME_ON_USE: "false"
+          RCA_REPLICA: ${{ matrix.sample }}
           UV_INTERNAL__TEST_COW_FS: /btrfs
           UV_INTERNAL__TEST_NOCOW_FS: /tmpfs
           UV_INTERNAL__TEST_ALT_FS: /tmpfs
@@ -130,13 +144,16 @@ jobs:
           INSTA_UPDATE: new
           INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
         run: |
-          uv run --only-dev cargo nextest run \
-            --cargo-profile fast-build-nightly \
-            -Z panic-abort-tests \
-            -Z checksum-freshness \
-            --features test-python-patch,test-universal,native-auth,secret-service \
-            --workspace \
-            --profile ci-linux
+          python3 .github/runner-experiments/differentials.py
+
+      - name: "Upload runner diagnostics"
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runner-diagnostics-${{ matrix.provider.name }}-${{ matrix.sample }}
+          path: runner-diagnostics/
+          if-no-files-found: error
+          retention-days: 14
 
       - name: "Prune superseded workspace artifacts"
         if: ${{ inputs.save-rust-cache == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
@@ -146,7 +163,7 @@ jobs:
         if: ${{ failure() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: pending-snapshots-linux
+          name: pending-snapshots-linux-${{ matrix.provider.name }}-${{ matrix.sample }}
           path: pending-snapshots/
           if-no-files-found: ignore
           include-hidden-files: true
@@ -156,7 +173,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: junit-results-linux
+          name: junit-results-linux-${{ matrix.provider.name }}-${{ matrix.sample }}
           path: target/nextest/ci*/junit.xml
           if-no-files-found: ignore
           retention-days: 14
