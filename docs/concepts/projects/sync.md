@@ -81,6 +81,12 @@ The [JSON Schema](../../reference/internals/lock.schema.json) is generated from 
 with `cargo dev generate-json-schema --target lock`. The format is in preview and may change without
 warning. Pass `--preview-features json-output` to suppress the preview warning.
 
+Use `--output-format jsonl` to stream progress records before the same lock report. The final record
+adds `"type": "result"`; earlier records have `"type": "progress"`. A failed lock operation still
+emits its report when command setup has completed, and retains its usual nonzero exit status. Pass
+`--no-progress` or `--quiet` to emit only the final record. JSONL is a separate preview;
+`--preview-features jsonl` suppresses its warning.
+
 ## Syncing the environment
 
 While the environment is synced [automatically](#automatic-lock-and-sync), it may also be explicitly
