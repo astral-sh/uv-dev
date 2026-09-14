@@ -41404,12 +41404,12 @@ fn lock_sync_abi3t_across_python_variants() -> Result<()> {
         command.arg("--quiet").arg("--no-sync")
             .arg("--python").arg(python)
             .env(EnvVars::UV_PROJECT_ENVIRONMENT, environment.path())
-            .arg("python").arg("-c").arg(indoc! {r#"
+            .arg("python").arg("-c").arg(indoc! {r"
                 from importlib.metadata import distribution
                 for name in ('versioned', 'stable', 'combined'):
                     wheel = distribution(name).read_text('WHEEL')
                     print(name, next(line for line in wheel.splitlines() if line.startswith('Tag: ')))
-            "#});
+            "});
         if python == "3.15t" {
             uv_snapshot!(context.filters(), command, @"
             exit_code: 0 (success)
