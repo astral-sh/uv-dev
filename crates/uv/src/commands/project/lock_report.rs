@@ -89,6 +89,12 @@ pub fn json_schema() -> schemars::Schema {
         .into_root_schema_for::<LockReport>()
 }
 
+/// Generate the preview `uv lock` JSONL record schema for repository development tools.
+#[cfg(feature = "schemars")]
+pub fn jsonl_schema() -> schemars::Schema {
+    crate::commands::report::jsonl_object_schema::<LockReport>("uv lock JSONL (preview)")
+}
+
 impl LockReport {
     pub(super) fn new(
         lock_check: LockCheck,

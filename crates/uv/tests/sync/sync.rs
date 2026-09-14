@@ -28,6 +28,13 @@ static SYNC_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> = LazyLock
     .map_err(|error| error.to_string())
 });
 
+static SYNC_JSONL_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> = LazyLock::new(|| {
+    JsonSchema::new(include_str!(
+        "../../../../docs/reference/internals/sync-jsonl.schema.json"
+    ))
+    .map_err(|error| error.to_string())
+});
+
 static JSONL_PROGRESS_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> =
     LazyLock::new(|| {
         JsonSchema::new(include_str!(
@@ -56,6 +63,16 @@ fn parse_sync_report(contents: &[u8]) -> Result<Value> {
         .context("sync schema mismatch")
 }
 
+fn parse_sync_jsonl_records(contents: &[u8]) -> Result<Vec<Value>> {
+    let schema = SYNC_JSONL_SCHEMA
+        .as_ref()
+        .map_err(|error| anyhow!("invalid JSONL sync schema: {error}"))?;
+    std::str::from_utf8(contents)?
+        .lines()
+        .map(|line| schema.parse(line.as_bytes()))
+        .collect()
+}
+
 macro_rules! sync_json_snapshot {
     ($($args:tt)*) => {{
         let output = uv_snapshot!($($args)*);
@@ -63,6 +80,17 @@ macro_rules! sync_json_snapshot {
         if !output.stdout.is_empty() {
             let result = parse_sync_report(&output.stdout);
             assert!(result.is_ok(), "sync schema mismatch: {result:?}");
+        }
+        output
+    }};
+}
+
+macro_rules! sync_jsonl_snapshot {
+    ($($args:tt)*) => {{
+        let output = uv_snapshot!($($args)*);
+        if !output.stdout.is_empty() {
+            let result = parse_sync_jsonl_records(&output.stdout);
+            assert!(result.is_ok(), "JSONL sync schema mismatch: {result:?}");
         }
         output
     }};
@@ -1315,7 +1343,7 @@ fn sync_jsonl() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.sync()
+    sync_jsonl_snapshot!(context.filters(), context.sync()
         .arg("--output-format").arg("jsonl")
         .arg("--preview-features").arg("jsonl"), @r#"
     exit_code: 0 (success)
@@ -1343,7 +1371,7 @@ fn sync_jsonl() -> Result<()> {
     "#
     );
 
-    uv_snapshot!(context.filters(), context.sync()
+    sync_jsonl_snapshot!(context.filters(), context.sync()
         .arg("--frozen")
         .arg("--output-format").arg("jsonl"), @r#"
     exit_code: 0 (success)
@@ -1356,7 +1384,7 @@ fn sync_jsonl() -> Result<()> {
     "#
     );
 
-    uv_snapshot!(context.filters(), context.sync()
+    sync_jsonl_snapshot!(context.filters(), context.sync()
         .arg("--quiet")
         .arg("--frozen")
         .arg("--output-format").arg("jsonl")
@@ -1367,7 +1395,7 @@ fn sync_jsonl() -> Result<()> {
     "#
     );
 
-    uv_snapshot!(context.filters(), context.sync()
+    sync_jsonl_snapshot!(context.filters(), context.sync()
         .arg("--no-progress")
         .arg("--frozen")
         .arg("--output-format").arg("jsonl")
@@ -1408,11 +1436,7 @@ fn sync_jsonl_concurrent_download_and_install_events() -> Result<()> {
         .output()?;
     assert!(output.status.success());
 
-    let stdout = String::from_utf8(output.stdout)?;
-    let items = stdout
-        .lines()
-        .map(serde_json::from_str::<serde_json::Value>)
-        .collect::<Result<Vec<_>, _>>()?;
+    let items = parse_sync_jsonl_records(&output.stdout)?;
     let Some((report, progress)) = items.split_last() else {
         anyhow::bail!("expected JSONL progress and a final sync report");
     };
@@ -1574,11 +1598,7 @@ fn sync_jsonl_git_checkout_and_build_events() -> Result<()> {
         .output()?;
     assert!(output.status.success());
 
-    let stdout = String::from_utf8(output.stdout)?;
-    let events = stdout
-        .lines()
-        .map(serde_json::from_str::<serde_json::Value>)
-        .collect::<Result<Vec<_>, _>>()?;
+    let events = parse_sync_jsonl_records(&output.stdout)?;
     let Some((report, progress)) = events.split_last() else {
         anyhow::bail!("expected JSONL progress and a final sync report");
     };

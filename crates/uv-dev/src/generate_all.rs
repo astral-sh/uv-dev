@@ -36,6 +36,11 @@ pub(crate) async fn main(args: &Args) -> Result<()> {
         generate_json_schema::Target::Sync,
         generate_json_schema::Target::PipCheck,
         generate_json_schema::Target::JsonlProgress,
+        generate_json_schema::Target::WorkspaceMetadataJsonl,
+        generate_json_schema::Target::ToolListJsonl,
+        generate_json_schema::Target::LockJsonl,
+        generate_json_schema::Target::SyncJsonl,
+        generate_json_schema::Target::PipCheckJsonl,
     ] {
         generate_json_schema::main(&generate_json_schema::Args {
             mode: args.mode,

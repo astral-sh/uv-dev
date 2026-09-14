@@ -56,6 +56,12 @@ pub fn json_schema() -> schemars::Schema {
         .into_root_schema_for::<Report>()
 }
 
+/// Generate the preview `uv pip check` JSONL record schema for repository development tools.
+#[cfg(feature = "schemars")]
+pub fn jsonl_schema() -> schemars::Schema {
+    crate::commands::report::jsonl_object_schema::<Report>("uv pip check JSONL (preview)")
+}
+
 impl Report {
     pub(super) fn new(
         environment: &PythonEnvironment,

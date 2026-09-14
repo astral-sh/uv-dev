@@ -88,7 +88,9 @@ emits its report when command setup has completed, and retains its usual nonzero
 `--preview-features jsonl` suppresses its warning. The shared
 [progress schema](../../reference/internals/jsonl-progress.schema.json) describes the progress
 records. It is generated from their serialization type with
-`cargo dev generate-json-schema --target jsonl-progress`.
+`cargo dev generate-json-schema --target jsonl-progress`. The
+[lock JSONL schema](../../reference/internals/lock-jsonl.schema.json) describes either kind of
+record; it does not replace checking the process exit status.
 
 ## Syncing the environment
 
@@ -111,6 +113,11 @@ environment or lockfile.
 The [JSON Schema](../../reference/internals/sync.schema.json) is generated from the report types
 with `cargo dev generate-json-schema --target sync`. The format is in preview and may change without
 warning. Pass `--preview-features json-output` to suppress the preview warning.
+
+Use `--output-format jsonl --preview-features jsonl` to receive progress followed by the same report
+with `"type": "result"`. The [sync JSONL schema](../../reference/internals/sync-jsonl.schema.json)
+describes each complete record. The process exit status still determines whether the operation
+succeeded.
 
 ### Editable installation
 

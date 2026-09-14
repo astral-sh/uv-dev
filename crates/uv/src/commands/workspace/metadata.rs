@@ -29,6 +29,14 @@ use crate::settings::{FrozenSource, LockCheck, ResolverSettings};
 
 use super::environment::collect_environment;
 
+/// Generate the preview `uv workspace metadata` JSONL record schema for development tools.
+#[cfg(feature = "schemars")]
+pub fn jsonl_schema() -> schemars::Schema {
+    crate::commands::report::jsonl_object_schema::<Metadata>(
+        "uv workspace metadata JSONL (preview)",
+    )
+}
+
 /// Display metadata about the workspace.
 pub(crate) async fn metadata(
     project_dir: &Path,

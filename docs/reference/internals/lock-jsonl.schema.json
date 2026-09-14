@@ -1,0 +1,368 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "uv lock JSONL (preview)",
+  "description": "A single record in a command's preview JSONL stream.",
+  "anyOf": [
+    {
+      "$ref": "#/definitions/JsonlProgressEvent"
+    },
+    {
+      "$ref": "#/definitions/JsonlResult"
+    }
+  ],
+  "definitions": {
+    "Action": {
+      "type": "string",
+      "enum": ["use", "check", "update", "create"]
+    },
+    "ErrorCode": {
+      "type": "string",
+      "enum": [
+        "evaluation_failed",
+        "metadata_unavailable",
+        "offline_cache_miss",
+        "authentication",
+        "access_denied",
+        "http",
+        "network"
+      ]
+    },
+    "ErrorReport": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "A machine-readable classification of the failure.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ErrorCode"
+            }
+          ]
+        },
+        "http_status": {
+          "description": "The HTTP status code, when the failure came from an HTTP response.",
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "message": {
+          "description": "A fixed description that does not include unparsed input or source text.",
+          "type": "string"
+        },
+        "package": {
+          "description": "The affected package, when it can be identified.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PackageName"
+            }
+          ]
+        }
+      },
+      "required": ["code", "message"]
+    },
+    "JsonlProgressEvent": {
+      "title": "uv JSONL progress (preview)",
+      "description": "A progress update emitted before a command's final JSONL result.\n\nConcurrent operations are correlated using their process-wide `id`. Top-level\nphases omit `id`, since only one instance of each phase is active at a time.\nOperations can complete without an intermediate update.",
+      "type": "object",
+      "properties": {
+        "completed": {
+          "description": "Completed bytes for transfers, or completed packages for package phases.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "id": {
+          "description": "A process-wide identifier shared by all events for one concurrent operation.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "name": {
+          "description": "The package, distribution, or source currently being processed.",
+          "type": "string"
+        },
+        "phase": {
+          "description": "The operation being reported, such as `download`, `build`, or `install`.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProgressPhase"
+            }
+          ]
+        },
+        "revision": {
+          "description": "The Git revision associated with a checkout operation.",
+          "type": "string"
+        },
+        "status": {
+          "description": "The operation's current lifecycle state.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProgressStatus"
+            }
+          ]
+        },
+        "total": {
+          "description": "The fixed total bytes or packages for this operation, when known.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "type": {
+          "description": "Distinguishes progress updates from the final command result.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProgressType"
+            }
+          ]
+        },
+        "url": {
+          "description": "The source URL associated with a resolution or checkout operation.",
+          "type": "string"
+        },
+        "version": {
+          "description": "The selected package version, when available.",
+          "type": "string"
+        }
+      },
+      "required": ["type", "phase", "status"]
+    },
+    "JsonlResult": {
+      "title": "uv lock (preview)",
+      "description": "An object-valued command result with the JSONL discriminator.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "description": "The lockfile action; create and update are proposed actions in a dry run.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Action"
+            }
+          ]
+        },
+        "dry_run": {
+          "description": "Whether the operation reports proposed changes without writing the lockfile.",
+          "type": "boolean"
+        },
+        "error": {
+          "description": "The error that prevented the operation from completing.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ErrorReport"
+            }
+          ]
+        },
+        "path": {
+          "description": "The lockfile path, once the project or script has been discovered.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortablePathBuf"
+            }
+          ]
+        },
+        "reason": {
+          "description": "Why the previous lock could not be reused, if known.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/LockReason"
+            }
+          ]
+        },
+        "schema": {
+          "description": "Format information.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SchemaReport"
+            }
+          ]
+        },
+        "status": {
+          "description": "The lockfile's freshness after the operation.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Status"
+            }
+          ]
+        },
+        "type": {
+          "description": "Distinguishes the final command result from progress updates.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResultType"
+            }
+          ]
+        },
+        "validation_error": {
+          "description": "A failed check of the previous lock, even if a later resolution also fails.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ErrorReport"
+            }
+          ]
+        }
+      },
+      "required": ["type", "schema", "status", "dry_run"]
+    },
+    "LockReason": {
+      "type": "object",
+      "properties": {
+        "actual": {
+          "description": "The values recorded in the existing lockfile.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "code": {
+          "description": "The mismatch that prevents reuse of the previous lock.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasonCode"
+            }
+          ]
+        },
+        "expected": {
+          "description": "The values required by the current inputs.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "message": {
+          "description": "Additional details about the mismatch.",
+          "type": "string"
+        },
+        "package": {
+          "description": "The affected package, when the mismatch is package-specific.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PackageName"
+            }
+          ]
+        }
+      },
+      "required": ["code"]
+    },
+    "PackageName": {
+      "description": "The normalized name of a package.\n\nConverts the name to lowercase and collapses runs of `-`, `_`, and `.` down to a single `-`.\nFor example, `---`, `.`, and `__` are all converted to a single `-`.\n\nSee: <https://packaging.python.org/en/latest/specifications/name-normalization/>",
+      "type": "string"
+    },
+    "PortablePathBuf": {
+      "type": "string"
+    },
+    "ProgressPhase": {
+      "description": "An operation reported by the preview JSONL interface.",
+      "type": "string",
+      "enum": [
+        "audit",
+        "build",
+        "checkout",
+        "download",
+        "extract",
+        "hash",
+        "install",
+        "latest_version",
+        "prepare",
+        "resolve",
+        "upload"
+      ]
+    },
+    "ProgressStatus": {
+      "description": "The lifecycle of an operation: started, optionally updated, then completed.",
+      "type": "string",
+      "enum": ["started", "updated", "completed"]
+    },
+    "ProgressType": {
+      "type": "string",
+      "enum": ["progress"]
+    },
+    "ReasonCode": {
+      "type": "string",
+      "enum": [
+        "missing_lockfile",
+        "non_canonical_formatting",
+        "lock_changed",
+        "resolution_mode_changed",
+        "fork_strategy_changed",
+        "exclude_newer_changed",
+        "marker_coverage_changed",
+        "python_coverage_changed",
+        "environments_changed",
+        "required_environments_changed",
+        "conflicts_changed",
+        "requires_python_changed",
+        "prerelease_changed",
+        "hash_algorithms_changed",
+        "members_changed",
+        "editable_changed",
+        "virtual_changed",
+        "dynamic_changed",
+        "version_changed",
+        "requirements_changed",
+        "constraints_changed",
+        "overrides_changed",
+        "excludes_changed",
+        "build_constraints_changed",
+        "dependency_groups_changed",
+        "static_metadata_changed",
+        "missing_root",
+        "missing_remote_index",
+        "missing_local_index",
+        "package_requirements_changed",
+        "package_dependencies_changed",
+        "package_dependency_groups_changed",
+        "package_extras_changed",
+        "missing_version"
+      ]
+    },
+    "ResultType": {
+      "type": "string",
+      "enum": ["result"]
+    },
+    "SchemaReport": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "description": "The version of the schema.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SchemaVersion"
+            }
+          ]
+        }
+      },
+      "required": ["version"]
+    },
+    "SchemaVersion": {
+      "oneOf": [
+        {
+          "description": "An unstable, experimental schema.",
+          "type": "string",
+          "const": "preview"
+        }
+      ]
+    },
+    "Status": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": ["indeterminate"]
+        },
+        {
+          "description": "The lockfile on disk is up-to-date after the operation.",
+          "type": "string",
+          "const": "fresh"
+        },
+        {
+          "description": "The lockfile on disk is missing or needs changes.",
+          "type": "string",
+          "const": "stale"
+        },
+        {
+          "description": "Freshness was deliberately not checked.",
+          "type": "string",
+          "const": "not_checked"
+        }
+      ]
+    }
+  }
+}

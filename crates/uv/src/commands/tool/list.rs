@@ -125,6 +125,12 @@ pub fn json_schema() -> schemars::Schema {
         .into_root_schema_for::<ToolListReport>()
 }
 
+/// Generate the preview `uv tool list` JSONL record schema for repository development tools.
+#[cfg(feature = "schemars")]
+pub fn jsonl_schema() -> schemars::Schema {
+    crate::commands::report::jsonl_object_schema::<ToolListReport>("uv tool list JSONL (preview)")
+}
+
 impl ToolListReport {
     fn render(
         &self,

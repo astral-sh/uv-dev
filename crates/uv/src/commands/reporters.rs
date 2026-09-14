@@ -12,7 +12,7 @@ use rustc_hash::FxHashMap;
 use serde::Serialize;
 
 use crate::commands::human_readable_bytes;
-use crate::printer::Printer;
+use crate::printer::{JsonlRecord, Printer};
 use uv_cache::Removal;
 use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{
@@ -143,7 +143,7 @@ fn emit_jsonl_progress(printer: Printer, event: &JsonlProgressEvent) {
         return;
     }
 
-    if let Ok(event) = serde_json::to_string(event)
+    if let Ok(event) = serde_json::to_string(&JsonlRecord::<_, ()>::Progress(event))
         && let Ok(_guard) = JSONL_PROGRESS_LOCK.lock()
     {
         let _ = writeln!(printer.stdout_important(), "{event}");

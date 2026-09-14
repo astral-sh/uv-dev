@@ -111,6 +111,12 @@ pub fn json_schema() -> schemars::Schema {
         .into_root_schema_for::<Report>()
 }
 
+/// Generate the preview `uv sync` JSONL record schema for repository development tools.
+#[cfg(feature = "schemars")]
+pub fn jsonl_schema() -> schemars::Schema {
+    crate::commands::report::jsonl_object_schema::<Report>("uv sync JSONL (preview)")
+}
+
 /// The kind of target
 #[derive(Debug, Serialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
