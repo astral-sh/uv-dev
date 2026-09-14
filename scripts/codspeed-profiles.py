@@ -40,14 +40,17 @@ MAX_WALLTIME_SHARDS = 8
 WALLTIME_SHARDS = tuple(
     f"walltime-{index}" for index in range(1, MAX_WALLTIME_SHARDS + 1)
 )
-EXECUTORS = {"simulation": "valgrind", "walltime": "walltime"} | {
-    mode: "walltime" for mode in WALLTIME_SHARDS
-}
+EXECUTORS = {
+    "simulation": "valgrind",
+    "walltime": "walltime",
+    "walltime-macos": "walltime",
+} | {mode: "walltime" for mode in WALLTIME_SHARDS}
 ARTIFACTS = {mode: f"codspeed-profiles-{mode}" for mode in EXECUTORS}
 REQUIRED_MODES = {"simulation", "walltime"}
 SOURCE_JOBS = {
     "simulation": "bench / simulated",
     "walltime": "bench / walltime on aarch64 linux",
+    "walltime-macos": "bench / walltime on macos",
 }
 
 
