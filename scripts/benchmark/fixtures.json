@@ -1,5 +1,35 @@
 [
   {
+    "filename": "homeassistant-requirements.txt",
+    "url": "https://raw.githubusercontent.com/home-assistant/core/0cda883b56c7ba4021b1a907eb08886e70ba38a4/requirements.txt",
+    "sha256": "6ce04f0c628094e953cc1d84c37440b2178cb19342529e89365ef19e9cd48d14",
+    "requirements-path": "requirements.txt"
+  },
+  {
+    "filename": "homeassistant-requirements_test.txt",
+    "url": "https://raw.githubusercontent.com/home-assistant/core/0cda883b56c7ba4021b1a907eb08886e70ba38a4/requirements_test.txt",
+    "sha256": "c93fbf742ab616930bb05f8de24f695e706254365d59caa7689f5fb7687591c9",
+    "requirements-path": "requirements_test.txt"
+  },
+  {
+    "filename": "homeassistant-requirements_test_all.txt",
+    "url": "https://raw.githubusercontent.com/home-assistant/core/0cda883b56c7ba4021b1a907eb08886e70ba38a4/requirements_test_all.txt",
+    "sha256": "d814c601cd5c1553bf709b9d4662fbd12db50901c3accc59d9612871e0171e8d",
+    "requirements-path": "requirements_test_all.txt"
+  },
+  {
+    "filename": "homeassistant-requirements_test_pre_commit.txt",
+    "url": "https://raw.githubusercontent.com/home-assistant/core/0cda883b56c7ba4021b1a907eb08886e70ba38a4/requirements_test_pre_commit.txt",
+    "sha256": "2a26557f9ede957689bce1676db424c462e3e5769932daedf853f1a430d1c195",
+    "requirements-path": "requirements_test_pre_commit.txt"
+  },
+  {
+    "filename": "homeassistant-homeassistant-package_constraints.txt",
+    "url": "https://raw.githubusercontent.com/home-assistant/core/0cda883b56c7ba4021b1a907eb08886e70ba38a4/homeassistant/package_constraints.txt",
+    "sha256": "15783ac2f0816482a40e4d53c616298062f940b5e3b35164ff97056785f46405",
+    "requirements-path": "homeassistant/package_constraints.txt"
+  },
+  {
     "filename": "packaging-source.tar.gz",
     "url": "https://codeload.github.com/pypa/packaging/tar.gz/f58537628042c7f29780b9d33f31597e7fc9d664",
     "sha256": "8f0606147c38fefad972f9653586c3f0e46d8a056d27499e4a5ed952e712d953"
