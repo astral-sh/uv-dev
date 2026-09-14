@@ -1577,6 +1577,68 @@ async fn python_reinstall_build_variant() -> anyhow::Result<()> {
 }
 
 #[test]
+fn python_reinstall_missing_build_variant() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_exe_suffix()
+        .with_managed_python_dirs()
+        .with_python_download_cache();
+
+    context.python_install().arg("3.13.7").assert().success();
+
+    let platform = platform_key_from_env()?;
+    let stock_key = format!("cpython-3.13.7-{platform}");
+    let stock = context.temp_dir.child("managed").child(&stock_key);
+    let stock_marker = stock.child("marker");
+    stock_marker.touch()?;
+
+    // This installed build is absent from the download catalog.
+    let custom = context
+        .temp_dir
+        .child("managed")
+        .child(format!("cpython-3.13.7+custom-{platform}"));
+    custom.create_dir_all()?;
+    let custom_marker = custom.child("marker");
+    custom_marker.touch()?;
+
+    // Skip the unavailable build and reinstall the available build.
+    uv_snapshot!(context.filters(), context.python_install().arg("--reinstall"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Failed to create reinstall request for existing installation `cpython-3.13.7+custom-[PLATFORM]`: No download found for request: cpython-3.13.7+custom-[PLATFORM]
+    Installed Python 3.13.7 in [TIME]
+     ~ cpython-3.13.7-[PLATFORM] (python3.13)
+    ");
+    stock.assert(predicate::path::exists());
+    stock_marker.assert(predicate::path::missing());
+    custom_marker.assert(predicate::path::exists());
+
+    // An explicit request for the unavailable build must still fail.
+    uv_snapshot!(context.filters(), context.python_install().arg("--reinstall").arg("3.13.7+custom"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No download found for request: cpython-3.13.7+custom-[PLATFORM]
+    ");
+    custom_marker.assert(predicate::path::exists());
+
+    context
+        .python_uninstall()
+        .arg(&stock_key)
+        .assert()
+        .success();
+
+    // If every installed build is unavailable, warn and leave them installed.
+    uv_snapshot!(context.filters(), context.python_install().arg("--reinstall"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Failed to create reinstall request for existing installation `cpython-3.13.7+custom-[PLATFORM]`: No download found for request: cpython-3.13.7+custom-[PLATFORM]
+    ");
+    custom_marker.assert(predicate::path::exists());
+
+    Ok(())
+}
+
+#[test]
 fn python_reinstall() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
