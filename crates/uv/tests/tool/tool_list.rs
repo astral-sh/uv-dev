@@ -29,6 +29,53 @@ fn parse_tool_list(contents: &[u8]) -> Result<Value> {
         .context("tool-list schema mismatch")
 }
 
+fn parse_tool_list_jsonl(contents: &[u8]) -> Result<(Vec<Value>, Value)> {
+    anyhow::ensure!(
+        contents.ends_with(b"\n"),
+        "incomplete JSONL tool-list record"
+    );
+    let mut events = std::str::from_utf8(contents)?
+        .lines()
+        .map(serde_json::from_str::<Value>)
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    let mut report = events
+        .pop()
+        .context("missing final JSONL tool-list report")?;
+    anyhow::ensure!(
+        events.iter().all(|event| event["type"] == "progress"),
+        "unexpected event before final JSONL tool-list report: {events:?}"
+    );
+    let event_type = report
+        .as_object_mut()
+        .context("JSONL tool-list report is not an object")?
+        .remove("type");
+    anyhow::ensure!(
+        event_type == Some(Value::String("result".to_owned())),
+        "final JSONL event is not a result"
+    );
+    let report = parse_tool_list(&serde_json::to_vec(&report)?)?;
+    Ok((events, report))
+}
+
+fn tool_list_jsonl(context: &uv_test::TestContext) -> std::process::Command {
+    let mut command = context.tool_list();
+    command.args(["--output-format", "jsonl", "--preview-features", "jsonl"]);
+    command
+}
+
+fn install_local_jsonl_tool(context: &uv_test::TestContext) {
+    context
+        .tool_install()
+        .arg(
+            context
+                .workspace_root
+                .join("test/links/simple_launcher-0.1.0-py3-none-any.whl"),
+        )
+        .arg("--offline")
+        .assert()
+        .success();
+}
+
 macro_rules! tool_list_json_snapshot {
     ($($args:tt)*) => {{
         let output = uv_snapshot!($($args)*);
@@ -874,6 +921,269 @@ fn tool_list_json_quiet() -> Result<()> {
     check()?;
     fs::create_dir_all(context.temp_dir.child("tools"))?;
     check()?;
+    Ok(())
+}
+
+#[test]
+fn tool_list_jsonl_empty_modes() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_tool_dirs();
+    for initialized in [false, true] {
+        if initialized {
+            fs::create_dir_all(context.temp_dir.child("tools"))?;
+        }
+        for arguments in [
+            &[][..],
+            &["--no-progress"][..],
+            &["--quiet"][..],
+            &["--outdated"][..],
+        ] {
+            let output = tool_list_jsonl(&context)
+                .arg("--offline")
+                .args(arguments)
+                .assert()
+                .success();
+            let (progress, report) = parse_tool_list_jsonl(&output.get_output().stdout)?;
+            assert!(progress.is_empty());
+            assert_eq!(
+                report,
+                serde_json::json!({"schema": {"version": "preview"}, "tools": []})
+            );
+        }
+        tool_list_jsonl(&context)
+            .args(["--offline", "-qq"])
+            .assert()
+            .success()
+            .stdout("");
+    }
+    Ok(())
+}
+
+#[test]
+fn tool_list_jsonl_installed() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    install_local_jsonl_tool(&context);
+    let json = context
+        .tool_list()
+        .args([
+            "--offline",
+            "--output-format",
+            "json",
+            "--preview-features",
+            "json-output",
+        ])
+        .assert()
+        .success();
+    let expected = parse_tool_list(&json.get_output().stdout)?;
+    assert_eq!(expected["tools"][0]["name"], "simple-launcher");
+    assert_eq!(expected["tools"][0]["version"], "0.1.0");
+    assert_eq!(
+        expected["tools"][0]["commands"][0]["name"],
+        "simple_launcher"
+    );
+
+    for arguments in [
+        &[][..],
+        &["--no-progress"][..],
+        &["--quiet"][..],
+        &[
+            "--show-paths",
+            "--show-version-specifiers",
+            "--show-with",
+            "--show-extras",
+            "--show-python",
+        ][..],
+    ] {
+        let output = tool_list_jsonl(&context)
+            .arg("--offline")
+            .args(arguments)
+            .assert()
+            .success();
+        let (progress, report) = parse_tool_list_jsonl(&output.get_output().stdout)?;
+        assert!(progress.is_empty());
+        assert_eq!(report, expected);
+    }
+    tool_list_jsonl(&context)
+        .args(["--offline", "-qq"])
+        .assert()
+        .success()
+        .stdout("");
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_list_jsonl_outdated_progress() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    install_local_jsonl_tool(&context);
+    let server = MockServer::start().await;
+    let config = context.temp_dir.child("uv.toml");
+    fs::write(
+        &config,
+        format!(
+            "[[index]]\nname = \"ordinary\"\nurl = \"{}/simple\"\ndefault = true\n",
+            server.uri()
+        ),
+    )?;
+    Mock::given(method("GET"))
+        .and(path("/simple/simple-launcher/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"{
+                "meta": { "api-version": "1.1" },
+                "name": "simple-launcher",
+                "files": [{
+                    "filename": "simple_launcher-0.2.0-py3-none-any.whl",
+                    "url": "simple_launcher-0.2.0-py3-none-any.whl",
+                    "hashes": {},
+                    "upload-time": "2024-03-24T00:00:00Z"
+                }]
+            }"#,
+            "application/vnd.pypi.simple.v1+json",
+        ))
+        .mount(&server)
+        .await;
+
+    let list = || {
+        let mut command = context.tool_list();
+        command
+            .args(["--outdated", "--config-file"])
+            .arg(config.as_os_str());
+        command
+    };
+    let json = list()
+        .args([
+            "--output-format",
+            "json",
+            "--preview-features",
+            "json-output",
+        ])
+        .assert()
+        .success();
+    let expected = parse_tool_list(&json.get_output().stdout)?;
+    assert_eq!(expected["tools"][0]["latest_version"], "0.2.0");
+    let output = list()
+        .args(["--output-format", "jsonl", "--preview-features", "jsonl"])
+        .assert()
+        .success();
+    let (progress, report) = parse_tool_list_jsonl(&output.get_output().stdout)?;
+    assert_eq!(report, expected);
+    assert_eq!(
+        Value::Array(progress),
+        serde_json::json!([
+            {"type":"progress","phase":"latest_version","status":"started","total":1},
+            {"type":"progress","phase":"latest_version","status":"updated","name":"simple-launcher","version":"0.2.0","completed":1,"total":1},
+            {"type":"progress","phase":"latest_version","status":"completed","completed":1,"total":1}
+        ])
+    );
+
+    for argument in ["--no-progress", "--quiet"] {
+        let output = list()
+            .args([
+                "--output-format",
+                "jsonl",
+                "--preview-features",
+                "jsonl",
+                argument,
+            ])
+            .assert()
+            .success();
+        let (progress, report) = parse_tool_list_jsonl(&output.get_output().stdout)?;
+        assert!(progress.is_empty());
+        assert_eq!(report, expected);
+    }
+
+    server.reset().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/simple-launcher/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"{"meta":{"api-version":"1.1"},"name":"simple-launcher","files":[]}"#,
+            "application/vnd.pypi.simple.v1+json",
+        ))
+        .mount(&server)
+        .await;
+    let output = list()
+        .args(["--output-format", "jsonl", "--preview-features", "jsonl"])
+        .assert()
+        .success();
+    let (progress, report) = parse_tool_list_jsonl(&output.get_output().stdout)?;
+    assert_eq!(report["tools"], serde_json::json!([]));
+    assert_eq!(
+        Value::Array(progress),
+        serde_json::json!([
+            {"type":"progress","phase":"latest_version","status":"started","total":1},
+            {"type":"progress","phase":"latest_version","status":"updated","completed":1,"total":1},
+            {"type":"progress","phase":"latest_version","status":"completed","completed":1,"total":1}
+        ])
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_list_jsonl_index_failure() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    install_local_jsonl_tool(&context);
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/simple-launcher/"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    let config = context.temp_dir.child("uv.toml");
+    let index = server
+        .uri()
+        .replace("http://", "http://user:tool-list-jsonl-canary@");
+    fs::write(
+        &config,
+        format!("[[index]]\nurl = \"{index}/simple\"\ndefault = true\n"),
+    )?;
+    let output = tool_list_jsonl(&context)
+        .args(["--outdated", "--config-file"])
+        .arg(config.as_os_str())
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .assert()
+        .code(2);
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+    assert!(!stdout.contains("tool-list-jsonl-canary"));
+    let events = stdout
+        .lines()
+        .map(serde_json::from_str::<Value>)
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    assert_eq!(
+        Value::Array(events),
+        serde_json::json!([
+            {"type":"progress","phase":"latest_version","status":"started","total":1}
+        ])
+    );
+    assert!(String::from_utf8_lossy(&output.get_output().stderr).contains("500"));
+    Ok(())
+}
+
+#[test]
+fn tool_list_jsonl_preview_warning() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_tool_dirs();
+    let unacknowledged = context
+        .tool_list()
+        .args(["--offline", "--output-format", "jsonl"])
+        .assert()
+        .success();
+    let stderr = String::from_utf8_lossy(&unacknowledged.get_output().stderr);
+    assert_eq!(
+        stderr
+            .matches("The JSONL output format is experimental")
+            .count(),
+        1
+    );
+    assert!(!stderr.contains("The `--output-format json` option is experimental"));
+    let acknowledged = tool_list_jsonl(&context)
+        .arg("--offline")
+        .assert()
+        .success();
+    assert_eq!(
+        parse_tool_list_jsonl(&unacknowledged.get_output().stdout)?,
+        parse_tool_list_jsonl(&acknowledged.get_output().stdout)?
+    );
+    assert!(
+        !String::from_utf8_lossy(&acknowledged.get_output().stderr)
+            .contains("The JSONL output format is experimental")
+    );
     Ok(())
 }
 

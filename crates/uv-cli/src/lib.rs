@@ -71,6 +71,8 @@ pub enum ToolListFormat {
     Text,
     /// JSON (for computers).
     Json,
+    /// Newline-delimited JSON, including progress updates.
+    Jsonl,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -211,6 +213,9 @@ impl Cli {
             Commands::Workspace(WorkspaceNamespace {
                 command: WorkspaceCommand::Metadata(args),
             }) => matches!(args.output_format, MetadataOutputFormat::Jsonl),
+            Commands::Tool(ToolNamespace {
+                command: ToolCommand::List(args),
+            }) => matches!(args.output_format, ToolListFormat::Jsonl),
             Commands::Tool(ToolNamespace {
                 command: ToolCommand::Audit(args),
             }) => matches!(args.audit.output_format, AuditOutputFormat::Jsonl),
@@ -6038,8 +6043,8 @@ pub struct ToolListArgs {
 
     /// Select the output format.
     ///
-    /// JSON output includes all tool details, regardless of the display flags. The JSON schema is
-    /// in preview and may change without warning.
+    /// JSON and JSONL output include all tool details, regardless of the display flags. Both
+    /// formats are in preview and may change without warning.
     #[arg(long, value_enum, default_value_t = ToolListFormat::default())]
     pub output_format: ToolListFormat,
 }
