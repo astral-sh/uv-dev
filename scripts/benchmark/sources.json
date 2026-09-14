@@ -4,6 +4,11 @@
   { "name": "django", "git": "django" },
   { "name": "pip-test-package", "git": "pip-test-package" },
   {
+    "name": "prefect",
+    "archive": "prefect-source.tar.gz",
+    "prefix": "prefect-c85deeb5f305c307181bd0001972f291ea3fd465"
+  },
+  {
     "name": "packaging",
     "archive": "packaging-source.tar.gz",
     "prefix": "packaging-f58537628042c7f29780b9d33f31597e7fc9d664"
