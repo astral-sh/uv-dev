@@ -16,6 +16,7 @@ use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::sync::{Outcome, SyncEnvironment, SyncTarget};
 use crate::commands::project::{ProjectEnvironment, ScriptEnvironment};
 use crate::commands::report::{EnvironmentReport, SchemaReport};
+use crate::printer::jsonl_result;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -264,7 +265,7 @@ impl SyncReport {
     pub(super) fn format(&self, output_format: SyncFormat) -> Option<String> {
         match output_format {
             // This is an intermediate report, when using JSON, it's only rendered at the end
-            SyncFormat::Json => None,
+            SyncFormat::Json | SyncFormat::Jsonl => None,
             SyncFormat::Text => self.to_human_readable_string(),
         }
     }
@@ -406,7 +407,7 @@ impl From<(&LockTarget<'_>, &LockMode<'_>, &Outcome)> for LockReport {
 impl LockReport {
     pub(super) fn format(&self, output_format: SyncFormat) -> Option<String> {
         match output_format {
-            SyncFormat::Json => None,
+            SyncFormat::Json | SyncFormat::Jsonl => None,
             SyncFormat::Text => self.to_human_readable_string(),
         }
     }
@@ -460,6 +461,7 @@ impl Report {
     pub(super) fn format(&self, output_format: SyncFormat) -> Option<String> {
         match output_format {
             SyncFormat::Json => serde_json::to_string_pretty(self).ok(),
+            SyncFormat::Jsonl => jsonl_result(self).ok(),
             SyncFormat::Text => None,
         }
     }

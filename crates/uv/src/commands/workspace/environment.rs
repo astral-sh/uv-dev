@@ -58,6 +58,7 @@ pub(crate) async fn collect_environment(
     preview: Preview,
     malware_settings: &MalwareCheckSettings,
     sync: Option<Modifications>,
+    printer: Printer,
 ) -> Result<CollectedEnvironment> {
     let (extras, groups) = target_selection(target);
     let package_ids = selected_package_ids(target, venv, &extras, &groups, settings)?;
@@ -101,7 +102,11 @@ pub(crate) async fn collect_environment(
             cache,
             workspace_cache,
             DryRun::Disabled,
-            Printer::Silent,
+            if printer.emits_jsonl_progress() {
+                printer
+            } else {
+                Printer::Silent
+            },
             preview,
             malware_settings,
         )
