@@ -580,8 +580,7 @@ async fn tool_audit_json() {
 
 #[tokio::test]
 async fn tool_audit_jsonl() {
-    let context = uv_test::test_context!("3.12");
-    let tool_dir = context.temp_dir.child("tools");
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
     install_tool(&context, "simple-launcher", true);
 
     let server = MockServer::start().await;
@@ -593,8 +592,7 @@ async fn tool_audit_jsonl() {
         .arg("jsonl")
         .arg("--service-url")
         .arg(server.uri())
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks,jsonl")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @r#"
+        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks,jsonl"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {"type":"progress","phase":"audit","status":"started"}
