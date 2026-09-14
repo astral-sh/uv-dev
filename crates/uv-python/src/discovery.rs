@@ -3838,7 +3838,9 @@ impl fmt::Display for VersionRequest {
                     variant.display_suffix()
                 )
             }
-            Self::Range(specifiers, _) => write!(f, "{specifiers}"),
+            Self::Range(specifiers, variant) => {
+                write!(f, "{specifiers}{}", variant.display_suffix())
+            }
         }
     }
 }
