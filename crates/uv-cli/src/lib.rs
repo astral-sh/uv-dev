@@ -100,6 +100,8 @@ pub enum LockFormat {
     Text,
     /// Display the lock operation result as JSON.
     Json,
+    /// Stream progress updates and the lock operation result as newline-delimited JSON.
+    Jsonl,
 }
 
 #[derive(Debug, Default, Clone, Copy, clap::ValueEnum)]
@@ -197,6 +199,7 @@ impl Cli {
         match &*self.command {
             Commands::Project(command) => match &**command {
                 ProjectCommand::Sync(args) => matches!(args.output_format, SyncFormat::Jsonl),
+                ProjectCommand::Lock(args) => matches!(args.output_format, LockFormat::Jsonl),
                 ProjectCommand::Version(args) => {
                     matches!(args.output_format, VersionFormat::Jsonl)
                 }
@@ -4177,7 +4180,7 @@ pub struct LockArgs {
 
     /// Select the output format.
     ///
-    /// The JSON schema is experimental and may change without warning.
+    /// The JSON and JSONL formats are experimental and may change without warning.
     #[arg(long, value_enum, default_value_t = LockFormat::default())]
     pub output_format: LockFormat,
 

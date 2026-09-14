@@ -57,7 +57,7 @@ use crate::commands::project::{
 };
 use crate::commands::reporters::{PythonDownloadReporter, ResolverReporter};
 use crate::commands::{ExitStatus, ScriptPath, UvError, pip};
-use crate::printer::Printer;
+use crate::printer::{Printer, jsonl_result};
 use crate::settings::{FrozenSource, LockCheck, LockedSource, ResolverSettings};
 
 /// The result of running a lock operation.
@@ -117,8 +117,10 @@ pub(crate) async fn lock(
 ) -> anyhow::Result<ExitStatus> {
     let mut report = match output_format {
         LockFormat::Text => None,
-        LockFormat::Json => {
-            if !preview.is_enabled(PreviewFeature::JsonOutput) {
+        LockFormat::Json | LockFormat::Jsonl => {
+            if matches!(output_format, LockFormat::Json)
+                && !preview.is_enabled(PreviewFeature::JsonOutput)
+            {
                 warn_user!(
                     "The `--output-format json` option is experimental and the schema may change without warning. Pass `--preview-features {}` to disable this warning.",
                     PreviewFeature::JsonOutput
@@ -151,11 +153,12 @@ pub(crate) async fn lock(
     .await;
     if let Some(mut report) = report {
         report.finish(&result);
-        writeln!(
-            printer.stdout_important(),
-            "{}",
+        let output = if matches!(output_format, LockFormat::Jsonl) {
+            jsonl_result(&report)?
+        } else {
             serde_json::to_string_pretty(&report)?
-        )?;
+        };
+        writeln!(printer.stdout_important(), "{output}")?;
     }
     result
 }

@@ -27,6 +27,45 @@ fn parse_report(contents: &[u8]) -> Result<Value> {
         .context("lock report schema mismatch")
 }
 
+fn lock_json(context: &uv_test::TestContext) -> std::process::Command {
+    let mut command = context.lock();
+    command.args([
+        "--output-format",
+        "json",
+        "--preview-features",
+        "json-output",
+    ]);
+    command
+}
+
+fn lock_jsonl(context: &uv_test::TestContext) -> std::process::Command {
+    let mut command = context.lock();
+    command.args(["--output-format", "jsonl", "--preview-features", "jsonl"]);
+    command
+}
+
+fn parse_jsonl_report(contents: &[u8]) -> Result<(Vec<Value>, Value)> {
+    let mut events = std::str::from_utf8(contents)?
+        .lines()
+        .map(serde_json::from_str::<Value>)
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    let mut report = events.pop().context("missing final JSONL lock report")?;
+    anyhow::ensure!(
+        events.iter().all(|event| event["type"] == "progress"),
+        "unexpected event before final JSONL lock report: {events:?}"
+    );
+    let event_type = report
+        .as_object_mut()
+        .context("JSONL lock report is not an object")?
+        .remove("type");
+    anyhow::ensure!(
+        event_type == Some(Value::String("result".to_owned())),
+        "final JSONL event is not a result"
+    );
+    let report = parse_report(&serde_json::to_vec(&report)?)?;
+    Ok((events, report))
+}
+
 fn assert_rejects_null_fields(report: &Value, object_pointer: &str, fields: &[&str]) -> Result<()> {
     for &field in fields {
         let mut invalid = report.clone();
@@ -40,6 +79,230 @@ fn assert_rejects_null_fields(report: &Value, object_pointer: &str, fields: &[&s
             "lock schema accepted null for {object_pointer}/{field}"
         );
     }
+    Ok(())
+}
+
+#[test]
+fn lock_jsonl_lifecycle() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let manifest = context.temp_dir.child("pyproject.toml");
+    manifest.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+
+    let missing = lock_jsonl(&context)
+        .args(["--check", "--offline"])
+        .assert()
+        .code(1);
+    let (progress, report) = parse_jsonl_report(&missing.get_output().stdout)?;
+    assert!(progress.is_empty());
+    assert_eq!(report["status"], "stale");
+    assert_eq!(report["action"], "check");
+    assert_eq!(report["reason"]["code"], "missing_lockfile");
+    assert!(!context.temp_dir.child("uv.lock").exists());
+
+    let expected = lock_json(&context)
+        .args(["--dry-run", "--offline"])
+        .assert()
+        .success();
+    let proposed = lock_jsonl(&context)
+        .args(["--dry-run", "--offline"])
+        .assert()
+        .success();
+    let (progress, report) = parse_jsonl_report(&proposed.get_output().stdout)?;
+    assert_eq!(report, parse_report(&expected.get_output().stdout)?);
+    assert!(
+        progress
+            .iter()
+            .any(|event| event["phase"] == "resolve" && event["status"] == "started")
+    );
+    assert!(
+        progress
+            .iter()
+            .any(|event| event["phase"] == "resolve" && event["status"] == "completed")
+    );
+    assert!(!context.temp_dir.child("uv.lock").exists());
+
+    let created = lock_jsonl(&context).arg("--offline").assert().success();
+    let (_, report) = parse_jsonl_report(&created.get_output().stdout)?;
+    assert_eq!(report["status"], "fresh");
+    assert_eq!(report["action"], "create");
+    assert_eq!(report["dry_run"], false);
+    let original = context.read("uv.lock");
+
+    for stale in [false, true] {
+        if stale {
+            manifest.write_str(&context.read("pyproject.toml").replace("0.1.0", "0.2.0"))?;
+        }
+        let expected = lock_json(&context)
+            .args(["--check", "--offline"])
+            .assert()
+            .code(i32::from(stale));
+        let checked = lock_jsonl(&context)
+            .args(["--check", "--offline"])
+            .assert()
+            .code(i32::from(stale));
+        let (_, report) = parse_jsonl_report(&checked.get_output().stdout)?;
+        assert_eq!(report, parse_report(&expected.get_output().stdout)?);
+        assert_eq!(context.read("uv.lock"), original);
+    }
+
+    context.lock().arg("--offline").assert().success();
+    for flag in ["--quiet", "--no-progress"] {
+        let output = lock_jsonl(&context)
+            .args([flag, "--check", "--offline"])
+            .assert()
+            .success();
+        let (progress, report) = parse_jsonl_report(&output.get_output().stdout)?;
+        assert!(progress.is_empty(), "{flag} emitted progress");
+        assert_eq!(report["status"], "fresh");
+        assert_eq!(report["action"], "check");
+    }
+    lock_jsonl(&context)
+        .args(["--quiet", "--quiet", "--check", "--offline"])
+        .assert()
+        .success()
+        .stdout("");
+    Ok(())
+}
+
+#[tokio::test]
+async fn lock_jsonl_failed_create() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let unauthorized = MockServer::start().await;
+    Mock::given(path("/a-1.0.0-py3-none-any.whl"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&unauthorized)
+        .await;
+    let wheel_url = format!(
+        "{}/a-1.0.0-py3-none-any.whl",
+        unauthorized
+            .uri()
+            .replacen("http://", "http://probe:jsonl-lock-secret-canary@", 1)
+    );
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a @ {wheel_url}"]
+    "#})?;
+
+    let expected = lock_json(&context)
+        .args(["--no-cache", "--no-index"])
+        .assert()
+        .code(2);
+    let output = lock_jsonl(&context)
+        .args(["--no-cache", "--no-index"])
+        .assert()
+        .code(2);
+    let (_, report) = parse_jsonl_report(&output.get_output().stdout)?;
+    assert_eq!(report, parse_report(&expected.get_output().stdout)?);
+    assert_eq!(report["status"], "stale");
+    assert!(report.get("action").is_none());
+    assert_eq!(report["error"]["code"], "authentication");
+    assert!(
+        !String::from_utf8_lossy(&output.get_output().stdout).contains("jsonl-lock-secret-canary")
+    );
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    Ok(())
+}
+
+#[test]
+fn lock_jsonl_script() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+    "#})?;
+    let proposed = lock_jsonl(&context)
+        .args(["--script", "script.py", "--dry-run", "--offline"])
+        .assert()
+        .success();
+    let (_, report) = parse_jsonl_report(&proposed.get_output().stdout)?;
+    assert_eq!(report["status"], "stale");
+    assert_eq!(report["action"], "create");
+    assert_eq!(report["dry_run"], true);
+    assert!(
+        report["path"]
+            .as_str()
+            .context("missing path")?
+            .ends_with("script.py.lock")
+    );
+    assert!(!context.temp_dir.child("script.py.lock").exists());
+
+    let created = lock_jsonl(&context)
+        .args(["--script", "script.py", "--offline"])
+        .assert()
+        .success();
+    let (_, report) = parse_jsonl_report(&created.get_output().stdout)?;
+    assert_eq!(report["status"], "fresh");
+    assert_eq!(report["action"], "create");
+    let original = context.read("script.py.lock");
+
+    let expected = lock_json(&context)
+        .args(["--script", "script.py", "--check-exists", "--offline"])
+        .assert()
+        .success();
+    let frozen = lock_jsonl(&context)
+        .args(["--script", "script.py", "--check-exists", "--offline"])
+        .assert()
+        .success();
+    let (_, report) = parse_jsonl_report(&frozen.get_output().stdout)?;
+    assert_eq!(report, parse_report(&expected.get_output().stdout)?);
+    assert_eq!(report["status"], "not_checked");
+    assert_eq!(report["action"], "use");
+    assert_eq!(context.read("script.py.lock"), original);
+    Ok(())
+}
+
+#[test]
+fn lock_jsonl_preview_warning() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+    let unacknowledged = context
+        .lock()
+        .args(["--check", "--offline", "--output-format", "jsonl"])
+        .assert()
+        .success();
+    let stderr = String::from_utf8_lossy(&unacknowledged.get_output().stderr);
+    assert_eq!(
+        stderr
+            .matches("The JSONL output format is experimental")
+            .count(),
+        1
+    );
+    assert!(!stderr.contains("The `--output-format json` option is experimental"));
+
+    let acknowledged = lock_jsonl(&context)
+        .args(["--check", "--offline"])
+        .assert()
+        .success();
+    assert_eq!(
+        parse_jsonl_report(&unacknowledged.get_output().stdout)?.1,
+        parse_jsonl_report(&acknowledged.get_output().stdout)?.1
+    );
+    assert!(
+        !String::from_utf8_lossy(&acknowledged.get_output().stderr)
+            .contains("The JSONL output format is experimental")
+    );
     Ok(())
 }
 
