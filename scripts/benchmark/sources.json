@@ -4,6 +4,11 @@
   { "name": "django", "git": "django" },
   { "name": "pip-test-package", "git": "pip-test-package" },
   {
+    "name": "packaging",
+    "archive": "packaging-source.tar.gz",
+    "prefix": "packaging-f58537628042c7f29780b9d33f31597e7fc9d664"
+  },
+  {
     "name": "uv",
     "archive": "uv-source.tar.gz",
     "prefix": "uv-c7db143b6a64b9ef73ab5cd39a3241a24c8807bc"

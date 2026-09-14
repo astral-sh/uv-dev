@@ -89,6 +89,11 @@ path = "benches/source_git_cache_keys.rs"
 harness = false
 
 [[bench]]
+name = "source_build_reuse"
+path = "benches/source_build_reuse.rs"
+harness = false
+
+[[bench]]
 name = "core_metadata"
 path = "benches/core_metadata.rs"
 harness = false

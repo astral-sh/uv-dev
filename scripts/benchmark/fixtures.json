@@ -1,5 +1,10 @@
 [
   {
+    "filename": "packaging-source.tar.gz",
+    "url": "https://codeload.github.com/pypa/packaging/tar.gz/f58537628042c7f29780b9d33f31597e7fc9d664",
+    "sha256": "8f0606147c38fefad972f9653586c3f0e46d8a056d27499e4a5ed952e712d953"
+  },
+  {
     "filename": "uv-source.tar.gz",
     "url": "https://codeload.github.com/astral-sh/uv/tar.gz/c7db143b6a64b9ef73ab5cd39a3241a24c8807bc",
     "sha256": "2b25ecfcc581557df4e4ae5751b8de0b160333817c467dfee4ec19ea5af031ee"
