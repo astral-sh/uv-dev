@@ -3,13 +3,71 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import subprocess
 from pathlib import Path
+from typing import BinaryIO
 
 MAX_SHARDS = 8
+PLAN_VERSION = 2
+
+
+def stream_digest(stream: BinaryIO) -> str:
+    hasher = hashlib.sha256()
+    while chunk := stream.read(1024 * 1024):
+        hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def digest(path: Path) -> str:
+    with path.open("rb") as stream:
+        return stream_digest(stream)
+
+
+def output(root: Path, *command: str) -> str:
+    return subprocess.check_output(command, cwd=root, text=True).strip()
+
+
+def source_identity(root: Path) -> dict:
+    """Identify tracked source without treating generated fixture files as source edits."""
+    difference = subprocess.check_output(
+        ["git", "diff", "--binary", "--no-ext-diff", "--no-textconv", "HEAD", "--"],
+        cwd=root,
+    )
+    return {
+        "commit": output(root, "git", "rev-parse", "HEAD"),
+        "tree": output(root, "git", "rev-parse", "HEAD^{tree}"),
+        "tracked_working_tree_dirty": bool(difference),
+        "tracked_diff_sha256": hashlib.sha256(difference).hexdigest(),
+        "cargo_lock_sha256": digest(root / "Cargo.lock"),
+        "rust_toolchain_sha256": digest(root / "rust-toolchain.toml"),
+    }
+
+
+def producer_metadata(root: Path) -> dict:
+    return {
+        "rustc": output(root, "rustc", "-Vv"),
+        "cargo_codspeed": output(root, "cargo", "codspeed", "--version"),
+        "working_tree_status": output(
+            root, "git", "status", "--porcelain=v1", "--untracked-files=normal"
+        ).splitlines(),
+        "github": {
+            key: os.environ[key]
+            for key in (
+                "GITHUB_REPOSITORY",
+                "GITHUB_SHA",
+                "GITHUB_RUN_ID",
+                "GITHUB_RUN_ATTEMPT",
+                "GITHUB_JOB",
+                "GITHUB_WORKFLOW_REF",
+                "GITHUB_WORKFLOW_SHA",
+            )
+            if key in os.environ
+        },
+    }
 
 
 def partition(names: list[str]) -> list[dict]:
@@ -25,7 +83,7 @@ def partition(names: list[str]) -> list[dict]:
     ]
 
 
-def built_suites(root: Path) -> list[str]:
+def built_artifacts(root: Path) -> dict[str, Path]:
     metadata = json.loads(
         subprocess.check_output(
             [
@@ -45,10 +103,55 @@ def built_suites(root: Path) -> list[str]:
         target["name"] for target in package["targets"] if "bench" in target["kind"]
     }
     directory = Path(metadata["target_directory"]) / "codspeed/walltime/uv-bench"
-    names = sorted(path.name for path in directory.iterdir() if path.is_file())
-    if unknown := set(names) - declared:
+    artifacts = {
+        path.name: path for path in sorted(directory.iterdir()) if path.is_file()
+    }
+    if unknown := set(artifacts) - declared:
         raise ValueError(f"Unexpected walltime build artifacts: {sorted(unknown)}")
-    return names
+    return artifacts
+
+
+def artifact_identity(path: Path) -> dict:
+    with path.open("rb") as stream:
+        return {
+            "sha256": stream_digest(stream),
+            "size": os.fstat(stream.fileno()).st_size,
+        }
+
+
+def prepare_plan(source: dict, producer: dict, artifacts: dict[str, Path]) -> dict:
+    return {
+        "version": PLAN_VERSION,
+        "source": source,
+        "producer": producer,
+        "artifacts": {
+            name: artifact_identity(path) for name, path in sorted(artifacts.items())
+        },
+        "shards": partition(list(artifacts)),
+    }
+
+
+def verify_plan(
+    plan: dict, source: dict, artifacts: dict[str, Path], shard: int
+) -> dict:
+    expected = partition(list(artifacts))
+    if plan.get("version") != PLAN_VERSION or plan.get("shards") != expected:
+        raise ValueError("The walltime shard plan does not match the built suites")
+    if plan.get("source") != source:
+        raise ValueError("The walltime shard plan belongs to different tracked source")
+    if set(plan.get("artifacts", {})) != set(artifacts):
+        raise ValueError("The walltime shard plan has a different artifact inventory")
+    if not 1 <= shard <= len(expected):
+        raise ValueError("Shard index is outside the prepared plan")
+    selected = expected[shard - 1]
+    # Other shards verify their own binaries; hashing the whole build in every job
+    # would add unrelated filesystem work before each measurement.
+    for name in selected["benches"]:
+        if plan["artifacts"][name] != artifact_identity(artifacts[name]):
+            raise ValueError(
+                f"Walltime benchmark artifact does not match its plan: {name}"
+            )
+    return selected
 
 
 def main() -> None:
@@ -60,8 +163,10 @@ def main() -> None:
     run.add_argument("shard", type=int)
     args = parser.parse_args()
     plan = root / ".cache/bench-walltime-shards.json"
-    expected = {"version": 1, "shards": partition(built_suites(root))}
+    artifacts = built_artifacts(root)
+    source = source_identity(root)
     if args.command == "plan":
+        expected = prepare_plan(source, producer_metadata(root), artifacts)
         plan.parent.mkdir(parents=True, exist_ok=True)
         plan.write_text(json.dumps(expected, indent=2) + "\n")
         matrix = {
@@ -77,11 +182,7 @@ def main() -> None:
                 )
         print(json.dumps(expected, indent=2))
         return
-    if json.loads(plan.read_text()) != expected:
-        raise ValueError("The walltime shard plan does not match the built suites")
-    if not 1 <= args.shard <= len(expected["shards"]):
-        parser.error("Shard index is outside the prepared plan")
-    selected = expected["shards"][args.shard - 1]
+    selected = verify_plan(json.loads(plan.read_text()), source, artifacts, args.shard)
     print(
         f"Running walltime shard {args.shard}/{selected['total']}: {', '.join(selected['benches'])}",
         flush=True,
