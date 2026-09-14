@@ -644,14 +644,21 @@ impl PythonInstallationKey {
     }
 
     /// Return a registry tag that distinguishes runtime and build variants.
-    #[cfg(windows)]
+    #[cfg(any(windows, test))]
     pub(crate) fn registry_tag(&self) -> String {
-        format!(
+        // Preserve the runtime suffix used by older uv versions so registry cleanup recognizes
+        // their registrations as belonging to installations that are still present.
+        let mut tag = format!(
             "{}{}{}",
             self.implementation().pretty(),
             self.version(),
-            self.display_variant_suffix(),
-        )
+            self.variant.executable_suffix(),
+        );
+        if let Some(build_variant) = &self.build_variant {
+            tag.push('+');
+            tag.push_str(&build_variant.to_string());
+        }
+        tag
     }
 
     pub fn major(&self) -> u8 {
@@ -974,6 +981,34 @@ impl From<PythonInstallationKey> for PythonInstallationMinorVersionKey {
 mod tests {
     use super::*;
     use uv_platform::ArchVariant;
+
+    #[test]
+    fn test_python_installation_key_registry_tag() -> Result<(), PythonInstallationKeyError> {
+        // Keep the registry names written by older uv versions, including when build variants
+        // are added alongside existing installations.
+        for (variants, expected) in [
+            ("", "CPython3.13.7"),
+            ("+gil", "CPython3.13.7"),
+            ("+debug", "CPython3.13.7d"),
+            ("+gil+debug", "CPython3.13.7d"),
+            ("+freethreaded", "CPython3.13.7t"),
+            ("+freethreaded+debug", "CPython3.13.7td"),
+            ("+custom", "CPython3.13.7+custom"),
+            ("+gil+custom", "CPython3.13.7+custom"),
+            ("+debug+custom", "CPython3.13.7d+custom"),
+            ("+gil+debug+custom", "CPython3.13.7d+custom"),
+            ("+freethreaded+custom", "CPython3.13.7t+custom"),
+            ("+freethreaded+debug+custom", "CPython3.13.7td+custom"),
+            ("+pgo+lto", "CPython3.13.7+pgo+lto"),
+            ("+freethreaded+pgo+lto", "CPython3.13.7t+pgo+lto"),
+        ] {
+            let key = PythonInstallationKey::from_str(&format!(
+                "cpython-3.13.7{variants}-windows-x86_64-none"
+            ))?;
+            assert_eq!(key.registry_tag(), expected);
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_python_installation_key_from_str() {
