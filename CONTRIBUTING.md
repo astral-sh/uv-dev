@@ -196,7 +196,9 @@ cargo dev minimize-scenario --uv target/debug/uv --output reduced.toml scenario.
 ```
 
 For a universal lockfile counterexample, pass `--lock` and the same target matrix used by the
-checker. Add `--project-selections` to reduce optional dependencies and dependency groups too:
+checker. Add `--project-selections` to reduce optional dependencies and dependency groups too. If
+the failure used the metadata-free preview, also pass `--lock-without-metadata`; every candidate and
+the final confirmation use the selected lockfile representation:
 
 ```shell
 cargo dev minimize-scenario --uv target/debug/uv --lock --project-selections --python-version 3.12,3.13,3.14 --python-platform linux,macos,windows --output reduced.toml scenario.toml

@@ -330,4 +330,20 @@ mod tests {
         assert!(Cli::try_parse_from(arguments).is_err());
         assert!(Cli::try_parse_from(arguments.into_iter().chain(["--lock"])).is_ok());
     }
+
+    #[test]
+    fn scenario_reducer_requires_a_lock_for_metadata_free_checks() {
+        let arguments = [
+            "uv-dev",
+            "minimize-scenario",
+            "--uv",
+            "uv",
+            "--output",
+            "reduced.toml",
+            "--lock-without-metadata",
+            "scenario.toml",
+        ];
+        assert!(Cli::try_parse_from(arguments).is_err());
+        assert!(Cli::try_parse_from(arguments.into_iter().chain(["--lock"])).is_ok());
+    }
 }

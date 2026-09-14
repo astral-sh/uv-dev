@@ -9,7 +9,7 @@ use anyhow::{Context, Result, ensure};
 use uv_python::PythonVersion;
 use uv_test::TestContext;
 use uv_test::packse::check::{
-    LockCheckOptions, ScenarioPlatform, ScenarioTarget, check_lock_scenario,
+    LockCheckOptions, LockfileMode, ScenarioPlatform, ScenarioTarget, check_lock_scenario,
     check_project_lock_scenario, check_scenario,
 };
 use uv_test::packse::minimize::{
@@ -39,6 +39,10 @@ pub(crate) struct Args {
     #[arg(long)]
     lock: bool,
 
+    /// Reproduce the mismatch using metadata-free preview lockfiles.
+    #[arg(long, requires = "lock")]
+    lock_without_metadata: bool,
+
     /// Include explicit project-extra and dependency-group exports.
     #[arg(long, requires = "lock")]
     project_selections: bool,
@@ -58,6 +62,19 @@ pub(crate) struct Args {
     /// The Packse fixture that reproduces a resolver or lockfile mismatch.
     #[arg(value_name = "SCENARIO")]
     scenario: PathBuf,
+}
+
+impl Args {
+    fn lock_options(&self) -> LockCheckOptions {
+        LockCheckOptions {
+            max_states: self.max_states,
+            lockfile: if self.lock_without_metadata {
+                LockfileMode::WithoutMetadata
+            } else {
+                LockfileMode::Standard
+            },
+        }
+    }
 }
 
 pub(crate) fn main(args: &Args) -> Result<()> {
@@ -102,6 +119,7 @@ fn minimize(args: &Args) -> Result<()> {
     let document = ScenarioDocument::from_path(&args.scenario)?;
     let interpreter = format!("{}.{}", target.python.major(), target.python.minor());
     if args.lock {
+        let options = args.lock_options();
         let result = if args.project_selections {
             minimize_project_lock_scenario(
                 &document,
@@ -112,13 +130,7 @@ fn minimize(args: &Args) -> Result<()> {
                     let selections = ScenarioProject::new(scenario)?.selection_matrix();
                     let context =
                         TestContext::new_with_versions_and_bin(&[&interpreter], uv.clone());
-                    check_project_lock_scenario(
-                        &context,
-                        scenario,
-                        &targets,
-                        &selections,
-                        LockCheckOptions::new(args.max_states),
-                    )
+                    check_project_lock_scenario(&context, scenario, &targets, &selections, options)
                 },
             )?
         } else {
@@ -130,12 +142,7 @@ fn minimize(args: &Args) -> Result<()> {
                 |scenario| {
                     let context =
                         TestContext::new_with_versions_and_bin(&[&interpreter], uv.clone());
-                    check_lock_scenario(
-                        &context,
-                        scenario,
-                        &targets,
-                        LockCheckOptions::new(args.max_states),
-                    )
+                    check_lock_scenario(&context, scenario, &targets, options)
                 },
             )?
         };
@@ -209,6 +216,7 @@ fn write_interruption(
             "source_scenario": args.scenario,
             "uv": args.uv,
             "lock": args.lock,
+            "lock_options": args.lock.then_some(args.lock_options()),
             "project_selections": args.project_selections,
             "max_states": args.max_states,
             "targets": ScenarioTarget::matrix(&args.python_version, &args.python_platform)
@@ -230,11 +238,12 @@ mod tests {
     #[test]
     fn retains_interrupted_inputs_without_overwriting_evidence() -> Result<()> {
         let directory = tempfile::tempdir()?;
-        let args = Args {
+        let mut args = Args {
             uv: PathBuf::from("uv"),
             python_version: vec!["3.12".parse().expect("valid Python version")],
             python_platform: vec![ScenarioPlatform::Linux],
             lock: true,
+            lock_without_metadata: true,
             project_selections: true,
             max_states: 27,
             max_attempts: 10,
@@ -285,11 +294,27 @@ satisfiable = true
         assert_eq!(failure["candidate_checks"], 3);
         assert_eq!(failure["accepted_deletions"], 1);
         assert_eq!(failure["project_selections"], true);
+        assert_eq!(failure["lock_options"]["max_states"], 27);
+        assert_eq!(failure["lock_options"]["lockfile"], "without-metadata");
         assert!(write_interruption(&args, &evidence, interrupted, &error).is_err());
         assert_eq!(
             fs_err::read_to_string(evidence.join("candidate.toml"))?,
             candidate_toml
         );
+
+        args.lock_without_metadata = false;
+        let standard = directory.path().join("standard");
+        write_interruption(&args, &standard, interrupted, &error)?;
+        let failure: serde_json::Value =
+            serde_json::from_slice(&fs_err::read(standard.join("failure.json"))?)?;
+        assert_eq!(failure["lock_options"]["lockfile"], "standard");
+
+        args.lock = false;
+        let fixed = directory.path().join("fixed");
+        write_interruption(&args, &fixed, interrupted, &error)?;
+        let failure: serde_json::Value =
+            serde_json::from_slice(&fs_err::read(fixed.join("failure.json"))?)?;
+        assert!(failure["lock_options"].is_null());
         Ok(())
     }
 }
