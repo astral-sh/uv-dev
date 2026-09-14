@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 20060,
+        "title": "Expose `UV_PROJECT_ENVIRONMENT` as flag to `uv sync`",
+        "url": "https://github.com/astral-sh/uv/issues/20060",
+        "state": "open",
+        "reason": "The closest scenario match: mixed-architecture Slurm jobs, shared-environment races, and conditionally selecting distinct paths with UV_PROJECT_ENVIRONMENT."
+      },
+      {
+        "kind": "issue",
+        "number": 15672,
+        "title": "How to manage two uv environments under one project?",
+        "url": "https://github.com/astral-sh/uv/issues/15672",
+        "state": "open",
+        "reason": "Covers the same core multi-environment question; a maintainer confirms uv does not automatically manage two project environments."
+      },
+      {
+        "kind": "issue",
+        "number": 9906,
+        "title": "How to handle named environments with different python versions?",
+        "url": "https://github.com/astral-sh/uv/issues/9906",
+        "state": "open",
+        "reason": "Uses a different trigger but documents the applicable workaround: set UV_PROJECT_ENVIRONMENT to a different path for each sync configuration."
+      },
+      {
+        "kind": "issue",
+        "number": 20247,
+        "title": "Feature: Named, shared environments independent of a project directory",
+        "url": "https://github.com/astral-sh/uv/issues/20247",
+        "state": "open",
+        "reason": "The broader enhancement explicitly includes several environments for one project when dependency sets cannot coexist."
+      },
+      {
+        "kind": "pull_request",
+        "number": 2818,
+        "title": "Document that uv is safe to run concurrently",
+        "url": "https://github.com/astral-sh/uv/pull/2818",
+        "state": "merged",
+        "reason": "Establishes that uv locks an environment during installation, while clarifying that one environment still cannot represent two mutually exclusive sync states."
+      }
+    ],
+    "search_scope": "Literal searches covered the title, multiple project environments, UV_PROJECT_ENVIRONMENT, triton-rocm and JAX/ROCm identifiers, hybrid GPU and Slurm wording, and concurrent uv sync. Conceptual searches covered named environments, dependency universes, accelerator-dependent dependencies, mutually exclusive extras, architecture-specific environments, conditional indexes, and HPC workflows. Fix-oriented searches covered closed issues and merged pull requests for concurrency and centralized environment storage. astral-sh/uv#18844 and astral-sh/uv#11418 were ruled out because they concern ROCm/index resolution and incompatible wheels. astral-sh/uv#1495 and astral-sh/uv#18214 were ruled out because centralized storage remains one environment per project/interpreter and is not keyed by accelerator or selected extras."
+  },
+  "type": "duplicate",
+  "type_reason": "The CUDA-versus-ROCm condition is a specific instance of the mixed-architecture Slurm and multi-environment needs already tracked by astral-sh/uv#20060 and astral-sh/uv#15672. No incorrect uv behavior is established: sync reconciles the selected environment to the requested extras, and concurrent writers are serialized.",
+  "summary": "astral-sh/uv#20060 is the closest match; astral-sh/uv#15672 covers the general limitation, and astral-sh/uv#9906 documents the current workaround.",
+  "draft_response": "This is the same underlying mixed-environment use case discussed in astral-sh/uv#20060 and, more generally, astral-sh/uv#15672. uv does not currently manage multiple named project environments automatically, and one environment cannot simultaneously contain the mutually exclusive CUDA and ROCm sync results.\n\nFor now, select a distinct path with each extra, for example `UV_PROJECT_ENVIRONMENT=.venv-cuda uv sync --extra cuda` and `UV_PROJECT_ENVIRONMENT=.venv-rocm uv sync --extra rocm`. Keep that variable set for `uv run`, or invoke the corresponding environment’s Python directly. Pre-creating both environments before submitting jobs avoids changing them during startup. Concurrent uv operations are protected by an environment lock, as documented by astral-sh/uv#2818, but separate paths remain necessary because the sync commands request different package sets."
+}
