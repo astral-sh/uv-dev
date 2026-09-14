@@ -129,6 +129,11 @@ path = "benches/concurrent_downloads.rs"
 harness = false
 
 [[bench]]
+name = "multi_index"
+path = "benches/multi_index.rs"
+harness = false
+
+[[bench]]
 name = "uv_pypi_types"
 path = "benches/uv_pypi_types.rs"
 harness = false
