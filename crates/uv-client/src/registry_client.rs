@@ -1043,9 +1043,13 @@ impl RegistryClient {
         Ok(metadata)
     }
 
-    /// Fetch registry wheel metadata from the request URL prepared by [`Self::wheel_metadata`].
+    /// Fetch metadata for a registry wheel.
     ///
-    /// The URL has already been parsed and routed through the configured proxy, if any.
+    /// The given URL must be the absolute request URL returned by
+    /// [`IndexRoute::artifact_url_for_request`](uv_distribution_types::IndexRoute::artifact_url_for_request).
+    /// That operation resolves the canonical artifact location with
+    /// [`CanonicalArtifactUrl::to_url`](uv_distribution_types::CanonicalArtifactUrl::to_url) and,
+    /// when a proxy is configured, rewrites the canonical artifact prefix to the proxy prefix.
     async fn wheel_metadata_registry(
         &self,
         wheel: &RegistryBuiltWheel,
