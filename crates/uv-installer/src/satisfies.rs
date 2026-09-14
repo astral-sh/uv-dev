@@ -18,6 +18,7 @@ use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_platform_tags::{AbiTag, IncompatibleTag, TagCompatibility, Tags};
 use uv_pypi_types::{DirInfo, DirectUrl, VcsInfo, VcsKind};
+use uv_redacted::DisplaySafeUrl;
 
 use crate::InstallationStrategy;
 
@@ -130,8 +131,15 @@ impl RequirementSatisfaction {
                     return Self::Mismatch;
                 }
 
-                if !CanonicalUrl::parse(installed_url).is_ok_and(|installed_url| {
-                    installed_url == CanonicalUrl::new(requested_url.clone())
+                // Installed origins omit authentication, including signed-query credentials.
+                // Compare the same credential-free identity without changing request or cache URLs.
+                if !Url::parse(installed_url).is_ok_and(|installed_url| {
+                    let installed_url = DisplaySafeUrl::from_url(installed_url);
+                    CanonicalUrl::new(DisplaySafeUrl::from_url(
+                        installed_url.without_sensitive_parts().into_owned(),
+                    )) == CanonicalUrl::new(DisplaySafeUrl::from_url(
+                        requested_url.without_sensitive_parts().into_owned(),
+                    ))
                 }) {
                     return Self::Mismatch;
                 }
