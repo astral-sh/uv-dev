@@ -4,6 +4,7 @@ import select
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -63,7 +64,9 @@ class DifferentialTests(unittest.TestCase):
             root = Path(temporary)
             with patch.object(kernel_profiles, "RESULTS", root):
                 with kernel_profiles.KernelProfile("smoke") as profile:
-                    for _ in range(10000):
+                    # Keep the probe active across multiple sampling intervals.
+                    deadline = time.monotonic() + 0.5
+                    while time.monotonic() < deadline:
                         os.stat("/proc/self/stat")
                 capture = json.loads((root / "smoke.capture.json").read_text())
                 self.assertEqual(capture["returncode"], 0)

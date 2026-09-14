@@ -1,5 +1,6 @@
 """Sample kernel execution on disposable CI runners without exporting raw traces."""
 
+import json
 import os
 import select
 import signal
@@ -167,7 +168,7 @@ class KernelProfile:
             if self.process.returncode or any(
                 report["returncode"] for report in capture["reports"].values()
             ):
-                raise RuntimeError("Kernel capture failed; see capture.json")
+                raise RuntimeError(f"Kernel capture failed: {json.dumps(capture)}")
         finally:
             # Raw perf records include process mapping metadata. Export only
             # aggregate kernel symbols and kernel call graphs, never perf.data.
