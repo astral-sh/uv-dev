@@ -28,6 +28,10 @@ pub struct MarkerWitnessCertificate {
 }
 
 impl MarkerWitnessCertificate {
+    pub(super) fn assignment(&self) -> &Selection {
+        &self.assignment
+    }
+
     /// The number of package versions in the proposed fixed assignment.
     pub fn assigned_packages(&self) -> usize {
         self.assignment.len()

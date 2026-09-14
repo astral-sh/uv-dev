@@ -7,11 +7,13 @@ use uv_test::packse::check::{
     LockCheckOptions, LockCheckResult, LockScenarioFailureKind, LockfileMode, ScenarioPlatform,
     ScenarioTarget, check_lock_scenario, check_lock_scenario_with_artifacts,
     check_project_lock_scenario, check_project_lock_scenario_with_artifacts, check_scenario,
+    check_witnessed_project_lock_scenario, check_witnessed_project_lock_scenario_with_artifacts,
 };
 use uv_test::packse::generate::{
-    SmallGraphOptions, generate_marker_graph, generate_project_graph,
+    SmallGraphOptions, WitnessedProjectGraph, generate_marker_graph, generate_project_graph,
     generate_satisfiable_project_graph, generate_small_graph,
 };
+use uv_test::packse::oracle::Selection;
 use uv_test::packse::project::{ProjectSelection, ScenarioProject};
 use uv_test::packse::scenario::{Scenario, ScenarioDocument};
 
@@ -604,18 +606,106 @@ fn witnessed_project_graphs_match_selected_exports() -> Result<()> {
         let scenario = graph.document.scenario()?;
         let selections = ScenarioProject::new(&scenario)?.selection_matrix();
         let context = uv_test::test_context!("3.12");
-        let result = check_project_lock_scenario(
+        let result = check_witnessed_project_lock_scenario(
             &context,
-            &scenario,
+            &graph,
             &targets,
             &selections,
             LockCheckOptions::new(27),
+            100_000,
         )
         .with_context(|| format!("witnessed project lock graph seed {seed}"))?;
         let LockCheckResult::Satisfiable { projections, .. } = result else {
             bail!("witnessed project lock graph seed {seed} must be satisfiable");
         };
         assert_eq!(projections, targets.len() * selections.len());
+    }
+    Ok(())
+}
+
+#[test]
+fn certified_project_locks_match_their_concrete_projections() -> Result<()> {
+    let targets = ScenarioTarget::matrix(
+        &["3.12", "3.13", "3.14"]
+            .map(|version| PythonVersion::from_str(version).expect("valid Python version")),
+        &[
+            ScenarioPlatform::Linux,
+            ScenarioPlatform::Macos,
+            ScenarioPlatform::Windows,
+        ],
+    );
+    for lockfile in [LockfileMode::Standard, LockfileMode::WithoutMetadata] {
+        let context = uv_test::test_context!("3.12");
+        let graph = WitnessedProjectGraph {
+            document: ScenarioDocument::from_path(
+                &context
+                    .workspace_root
+                    .join("test/scenarios/fork/non-local-fork-marker-unreachable.toml"),
+            )?,
+            assignment: [("a".parse()?, "1.0.0".parse()?)].into_iter().collect(),
+        };
+        let scenario = graph.document.scenario()?;
+        let selections = ScenarioProject::new(&scenario)?.selection_matrix();
+        let result = check_witnessed_project_lock_scenario(
+            &context,
+            &graph,
+            &targets,
+            &selections,
+            LockCheckOptions {
+                max_states: 100_000,
+                lockfile,
+            },
+            100_000,
+        )?;
+        assert!(matches!(
+            result,
+            LockCheckResult::Satisfiable { projections, .. }
+                if projections == targets.len() * selections.len()
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn certified_project_locks_reject_invalid_proofs_before_running_uv() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let target = ScenarioTarget {
+        python: PythonVersion::from_str("3.12").expect("valid Python version"),
+        platform: ScenarioPlatform::Linux,
+    };
+    let document = ScenarioDocument::from_path(
+        &context
+            .workspace_root
+            .join("test/scenarios/fork/non-local-fork-marker-unreachable.toml"),
+    )?;
+    let assignment = [("a".parse()?, "1.0.0".parse()?)].into_iter().collect();
+    for (assignment, max_work, expected) in [
+        (
+            Selection::new(),
+            100_000,
+            "must assign every scenario package",
+        ),
+        (assignment, 1, "marker witness work exceeds 1 requirements"),
+    ] {
+        let graph = WitnessedProjectGraph {
+            document: document.clone(),
+            assignment,
+        };
+        let directory = context.temp_dir.join("failure");
+        let error = check_witnessed_project_lock_scenario_with_artifacts(
+            &context,
+            &graph,
+            std::slice::from_ref(&target),
+            &[ProjectSelection::default()],
+            LockCheckOptions::new(100_000),
+            max_work,
+            &directory,
+        )
+        .expect_err("the proposed proof cannot classify a resolver result");
+        assert!(format!("{error:#}").contains(expected));
+        assert_eq!(LockScenarioFailureKind::from_error(&error), None);
+        assert!(!context.temp_dir.join("pyproject.toml").exists());
+        assert!(!directory.exists());
     }
     Ok(())
 }
