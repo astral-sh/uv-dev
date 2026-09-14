@@ -598,7 +598,17 @@ impl PythonDownloadRequest {
     /// Whether this request names a complete managed installation identity.
     pub fn is_exact_installation_key(&self) -> bool {
         self.implementation.is_some()
-            && self.version.as_ref().is_some_and(VersionRequest::has_patch)
+            && self.version.as_ref().is_some_and(|version| match version {
+                // A prerelease without an explicit patch selects patch zero.
+                VersionRequest::MajorMinorPatch(..)
+                | VersionRequest::MajorMinorPrerelease(..)
+                | VersionRequest::MajorMinorPatchPrerelease(..) => true,
+                VersionRequest::Any
+                | VersionRequest::Default
+                | VersionRequest::Major(..)
+                | VersionRequest::MajorMinor(..)
+                | VersionRequest::Range(..) => false,
+            })
             && matches!(self.arch, Some(ArchRequest::Explicit(_)))
             && self.os.is_some()
             && self.libc.is_some()
