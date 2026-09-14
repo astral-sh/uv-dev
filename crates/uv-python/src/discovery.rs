@@ -233,9 +233,17 @@ impl VariantRequest {
     }
 
     fn matches_build_variant(&self, key: &PythonInstallationKey) -> bool {
-        self.build
-            .as_ref()
-            .is_none_or(|build| Some(build) == key.build_variant())
+        self.build.as_ref().is_none_or(|requested| {
+            key.build_variant().is_some_and(|available| {
+                // A request may omit additional build tags, e.g., `custom` matches `custom+pgo+lto`.
+                requested.as_str().split('+').all(|tag| {
+                    available
+                        .as_str()
+                        .split('+')
+                        .any(|available_tag| available_tag == tag)
+                })
+            })
+        })
     }
 
     pub(crate) fn matches_download_key(&self, key: &PythonInstallationKey) -> bool {
@@ -3744,6 +3752,26 @@ impl FromStr for PythonVariant {
     }
 }
 
+impl PythonBuildVariant {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::NoOpt => "noopt",
+            Self::Pgo => "pgo",
+            Self::Lto => "lto",
+            Self::PgoLto => "pgo+lto",
+        }
+    }
+}
+
+impl LenientPythonBuildVariant {
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Unknown(variant) => variant,
+            Self::Known(variant) => variant.as_str(),
+        }
+    }
+}
+
 impl FromStr for PythonBuildVariant {
     type Err = ();
 
@@ -3803,21 +3831,13 @@ impl fmt::Display for PythonVariant {
 
 impl fmt::Display for LenientPythonBuildVariant {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unknown(variant) => f.write_str(variant),
-            Self::Known(variant) => fmt::Display::fmt(variant, f),
-        }
+        f.write_str(self.as_str())
     }
 }
 
 impl fmt::Display for PythonBuildVariant {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NoOpt => f.write_str("noopt"),
-            Self::Pgo => f.write_str("pgo"),
-            Self::Lto => f.write_str("lto"),
-            Self::PgoLto => f.write_str("pgo+lto"),
-        }
+        f.write_str(self.as_str())
     }
 }
 
@@ -4085,6 +4105,7 @@ mod tests {
     use uv_pep440::{Prerelease, PrereleaseKind, Version, VersionSpecifiers};
 
     use crate::{
+        PythonInstallationKey,
         discovery::{PythonRequest, VersionRequest},
         downloads::{ArchRequest, PythonDownloadRequest},
         implementation::ImplementationName,
@@ -4559,6 +4580,42 @@ mod tests {
             LenientPythonBuildVariant::from_str("custom"),
             Ok(LenientPythonBuildVariant::Unknown("custom".to_string()))
         );
+    }
+
+    #[test]
+    fn variant_request_matches_build_tags() {
+        for (request, available, expected) in [
+            ("custom", "custom+pgo+lto", true),
+            ("custom+lto", "custom+pgo+lto", true),
+            ("custom+pgo+lto", "custom+pgo+lto", true),
+            ("lto+custom+pgo", "custom+pgo+lto", true),
+            ("pgo", "pgo+lto", true),
+            ("lto", "custom+pgo+lto", true),
+            ("pgo+lto", "lto+pgo", true),
+            ("custom", "custompython+pgo+lto", false),
+            ("other", "custom+pgo+lto", false),
+            ("custom+noopt", "custom+pgo+lto", false),
+            ("custom+pgo+lto", "custom+pgo", false),
+            ("pgo+lto", "pgo", false),
+            ("custom", "", false),
+            ("", "custom+pgo+lto", true),
+            ("freethreaded+custom", "freethreaded+custom+pgo+lto", true),
+            ("freethreaded+custom", "custom+pgo+lto", false),
+            ("custom", "freethreaded+custom+pgo+lto", false),
+        ] {
+            let key = if available.is_empty() {
+                "cpython-3.13.7-linux-x86_64-gnu".to_string()
+            } else {
+                format!("cpython-3.13.7+{available}-linux-x86_64-gnu")
+            };
+            let key = PythonInstallationKey::from_str(&key).expect("Valid installation key");
+            let request = VariantRequest::from_str(request).expect("Valid variant request");
+            assert_eq!(
+                request.matches_download_key(&key),
+                expected,
+                "{request:?}, {key}"
+            );
+        }
     }
 
     #[test]

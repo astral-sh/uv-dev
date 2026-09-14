@@ -220,6 +220,25 @@ async fn python_install_build_variant() {
     ----- stdout -----
     [TEMP_DIR]/managed/cpython-3.13+custom-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
+
+    // Discover a composite build using only a subset of its build tags.
+    let optimized_name = format!("{version}+custom+pgo+lto-{platform}");
+    let optimized_path = managed_dir.join(&optimized_name);
+    fs_err::rename(&custom_path, &optimized_path)
+        .expect("Failed to move the installation to a composite build variant");
+    let context = context.with_filtered_latest_python_versions();
+
+    uv_snapshot!(context.filters(), context.python_find().arg("3.13+custom"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    ");
+
+    uv_snapshot!(context.filters(), context.python_find().arg("3.13+custom+lto"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    ");
 }
 
 #[test]
