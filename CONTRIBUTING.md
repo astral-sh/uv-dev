@@ -217,6 +217,17 @@ the final confirmation use the selected lockfile representation:
 cargo dev minimize-scenario --uv target/debug/uv --lock --project-selections --python-version 3.12,3.13,3.14 --python-platform linux,macos,windows --output reduced.toml scenario.toml
 ```
 
+For a witnessed project counterexample, also pass `--witness scenario.witness.json`. The reducer
+retains the original fixed versions, removing assignment entries only when their packages are
+deleted. Every candidate must pass a fresh whole-domain certificate before uv runs;
+`--max-witness-work` bounds each proof. A rejected or budget-exhausted proof is not an
+unsatisfiability claim. The final TOML is checked again and receives a neighboring `.witness.json`
+with its restricted assignment and recomputed certificate. Interrupted witnessed reductions also
+save independent witness files for the candidate and last reproducer. These files can be replayed
+with `check-scenarios --witness` without trusting any stored certificate fields. Deletion minimality
+is relative to that fixed assignment and the configured proof budget; the reducer does not search
+for alternative witnesses.
+
 The reducer removes root requirements, packages, versions, extras, and dependency edges while
 retaining the original kind of semantic mismatch. Each candidate uses a fresh cache. Unrelated
 command failures stop the reduction, and `--max-attempts` bounds the number of candidate checks. If

@@ -13,6 +13,7 @@ use uv_test::packse::generate::{
     SmallGraphOptions, WitnessedProjectGraph, generate_marker_graph, generate_project_graph,
     generate_satisfiable_project_graph, generate_small_graph,
 };
+use uv_test::packse::minimize::minimize_witnessed_project_lock_scenario;
 use uv_test::packse::oracle::Selection;
 use uv_test::packse::project::{ProjectSelection, ScenarioProject};
 use uv_test::packse::scenario::{Scenario, ScenarioDocument};
@@ -662,6 +663,54 @@ fn certified_project_locks_match_their_concrete_projections() -> Result<()> {
             LockCheckResult::Satisfiable { projections, .. }
                 if projections == targets.len() * selections.len()
         ));
+    }
+    Ok(())
+}
+
+#[test]
+fn witnessed_reduction_requires_a_reproducing_lock_failure() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let graph = WitnessedProjectGraph {
+        document: ScenarioDocument::from_path(
+            &context
+                .workspace_root
+                .join("test/scenarios/fork/non-local-fork-marker-unreachable.toml"),
+        )?,
+        assignment: [("a".parse()?, "1.0.0".parse()?)].into_iter().collect(),
+    };
+    let targets = ScenarioTarget::matrix(
+        &[PythonVersion::from_str("3.12").expect("valid Python version")],
+        &[ScenarioPlatform::Linux, ScenarioPlatform::Windows],
+    );
+    for lockfile in [LockfileMode::Standard, LockfileMode::WithoutMetadata] {
+        let error = minimize_witnessed_project_lock_scenario(
+            &graph,
+            &targets,
+            100_000,
+            10,
+            100_000,
+            |candidate| {
+                let context = uv_test::test_context!("3.12");
+                let scenario = candidate.document.scenario()?;
+                let selections = ScenarioProject::new(&scenario)?.selection_matrix();
+                check_witnessed_project_lock_scenario(
+                    &context,
+                    candidate,
+                    &targets,
+                    &selections,
+                    LockCheckOptions {
+                        max_states: 100_000,
+                        lockfile,
+                    },
+                    100_000,
+                )
+            },
+        )
+        .expect_err("the real resolver accepts this certified satisfiable graph");
+        assert_eq!(LockScenarioFailureKind::from_error(&error), None);
+        insta::allow_duplicates! {
+            insta::assert_snapshot!(error, @"the input does not reproduce a lockfile mismatch");
+        }
     }
     Ok(())
 }
