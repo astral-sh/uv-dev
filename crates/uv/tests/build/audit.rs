@@ -231,8 +231,9 @@ async fn audit_jsonl_no_vulnerabilities() {
         .arg(server.uri()), @r#"
     exit_code: 0 (success)
     ----- stdout -----
-    {"type":"progress","phase":"audit","status":"started"}
-    {"type":"progress","phase":"audit","status":"completed"}
+    {"type":"progress","phase":"audit","status":"started","total":1}
+    {"type":"progress","phase":"audit","status":"updated","name":"iniconfig","version":"2.0.0","completed":1,"total":1}
+    {"type":"progress","phase":"audit","status":"completed","completed":1,"total":1}
     {"type":"result","schema":{"version":"preview"},"summary":{"audited_packages":1,"vulnerabilities":0,"adverse_statuses":0},"vulnerabilities":[],"adverse_statuses":[]}
     "#
     );
