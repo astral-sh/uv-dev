@@ -12,6 +12,8 @@ The terminal error chain is `error decoding response body` -> `request or respon
 
 This is the same user-visible behavior already tracked by open issue astral-sh/uv#13717: a source distribution fails at an archive member during streamed extraction because the HTTP response body ends with a transport error. The low-level transport message differs (`broken pipe` there, `connection reset` here), but the command path, artifact type, extraction stage, error chain, and retry/robustness problem match.
 
+As of 2026-09-14, a maintainer was unable to reproduce the wxPython failure and asked whether antivirus software could be involved. No details about the maintainer's test environment were provided, and antivirus interference remains an unconfirmed hypothesis. Establishing whether the reporter has antivirus, endpoint-security, proxy, or other network-inspection software—and whether the behavior changes when such software is safely bypassed—would help distinguish an environment-specific connection reset from a generally reproducible PyPI download failure.
+
 ## Draft response
 
 This is the same streamed source-distribution download failure tracked in astral-sh/uv#13717. The final causes show that the PyPI response is being interrupted by a connection reset while uv is unpacking it; the changing member path and successful install from the local tarball indicate that the tar file itself is not the problem.
@@ -50,3 +52,7 @@ The current source-distribution path in `SourceDistributionBuilder::download_arc
 Literal searches across open and closed issues and open, closed, and merged pull requests found astral-sh/uv#13717, astral-sh/uv#12359, and astral-sh/uv#14171 from the exact error fragments. Conceptual and fix-oriented searches covered large source distributions, streamed archive extraction, transient body failures, retry exhaustion, partial downloads, and HTTP range resumption, leading to astral-sh/uv#13281, astral-sh/uv#16934, and astral-sh/uv#21570.
 
 The reporter-suggested astral-sh/uv#14171 was inspected but ruled out as the canonical tracker because it is specific to managed Python downloads. The recent astral-sh/uv#21570 was also ruled out as a fix for this report because its partial-resumption path is wheel-specific. Open astral-sh/uv#15896 shares response-body wording but concerns an Artifactory simple-index TLS/server behavior, not sdist extraction; astral-sh/uv#2138 concerns Azure Artifacts index behavior and is not a close match.
+
+### Follow-up investigation status
+
+A maintainer reported that they could not reproduce astral-sh/uv#21641 and asked about antivirus software. This narrows neither the affected environment nor the mechanism by itself: there is not yet a maintainer environment description, a reporter answer, or an antivirus-enabled/disabled comparison. Treat antivirus or endpoint-security interference as a diagnostic lead, not an established cause.
