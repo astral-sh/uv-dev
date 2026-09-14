@@ -60,6 +60,8 @@ pub(crate) use python::list::list as python_list;
 pub(crate) use python::pin::pin as python_pin;
 pub(crate) use python::uninstall::uninstall as python_uninstall;
 pub(crate) use python::update_shell::update_shell as python_update_shell;
+#[cfg(feature = "schemars")]
+pub use reporters::json_schema as jsonl_progress_json_schema;
 #[cfg(feature = "self-update")]
 pub(crate) use self_update::self_update;
 pub(crate) use tool::audit::audit as tool_audit;

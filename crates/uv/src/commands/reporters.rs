@@ -31,9 +31,35 @@ static HAS_UV_TEST_NO_CLI_PROGRESS: LazyLock<bool> =
 static JSONL_PROGRESS_LOCK: Mutex<()> = Mutex::new(());
 static NEXT_PROGRESS_ID: AtomicUsize = AtomicUsize::new(1);
 
-/// The lifecycle of an operation: started, optionally updated, then completed.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+enum ProgressType {
+    Progress,
+}
+
+/// An operation reported by the preview JSONL interface.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+enum ProgressPhase {
+    Audit,
+    Build,
+    Checkout,
+    Download,
+    Extract,
+    Hash,
+    Install,
+    LatestVersion,
+    Prepare,
+    Resolve,
+    Upload,
+}
+
+/// The lifecycle of an operation: started, optionally updated, then completed.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 enum ProgressStatus {
     Started,
     Updated,
@@ -46,41 +72,50 @@ enum ProgressStatus {
 /// phases omit `id`, since only one instance of each phase is active at a time.
 /// Operations can complete without an intermediate update.
 #[derive(Debug, Serialize)]
-struct JsonlProgressEvent {
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schemars", schemars(title = "uv JSONL progress (preview)"))]
+pub(crate) struct JsonlProgressEvent {
     /// Distinguishes progress updates from the final command result.
     #[serde(rename = "type")]
-    event_type: &'static str,
+    event_type: ProgressType,
     /// The operation being reported, such as `download`, `build`, or `install`.
-    phase: &'static str,
+    phase: ProgressPhase,
     /// The operation's current lifecycle state.
     status: ProgressStatus,
     /// A process-wide identifier shared by all events for one concurrent operation.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "usize"))]
     id: Option<usize>,
     /// The package, distribution, or source currently being processed.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "String"))]
     name: Option<String>,
     /// The selected package version, when available.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "String"))]
     version: Option<String>,
     /// The source URL associated with a resolution or checkout operation.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "String"))]
     url: Option<String>,
     /// The Git revision associated with a checkout operation.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "String"))]
     revision: Option<String>,
     /// Completed bytes for transfers, or completed packages for package phases.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "u64"))]
     completed: Option<u64>,
     /// The fixed total bytes or packages for this operation, when known.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "u64"))]
     total: Option<u64>,
 }
 
 impl JsonlProgressEvent {
-    fn new(phase: &'static str, status: ProgressStatus) -> Self {
+    fn new(phase: ProgressPhase, status: ProgressStatus) -> Self {
         Self {
-            event_type: "progress",
+            event_type: ProgressType::Progress,
             phase,
             status,
             id: None,
@@ -92,6 +127,15 @@ impl JsonlProgressEvent {
             total: None,
         }
     }
+}
+
+/// Generate the preview JSONL progress schema for repository development tools.
+#[cfg(feature = "schemars")]
+pub fn json_schema() -> schemars::Schema {
+    schemars::generate::SchemaSettings::draft07()
+        .for_serialize()
+        .into_generator()
+        .into_root_schema_for::<JsonlProgressEvent>()
 }
 
 fn emit_jsonl_progress(printer: Printer, event: &JsonlProgressEvent) {
@@ -199,12 +243,12 @@ impl Direction {
         }
     }
 
-    fn phase(self) -> &'static str {
+    fn phase(self) -> ProgressPhase {
         match self {
-            Self::Download => "download",
-            Self::Upload => "upload",
-            Self::Extract => "extract",
-            Self::Hash => "hash",
+            Self::Download => ProgressPhase::Download,
+            Self::Upload => ProgressPhase::Upload,
+            Self::Extract => ProgressPhase::Extract,
+            Self::Hash => ProgressPhase::Hash,
         }
     }
 }
@@ -275,7 +319,7 @@ impl ProgressReporter {
         state.headers += 1;
         state.bars.insert(id, ProgressBarKind::Spinner { progress });
         if self.printer.emits_jsonl_progress() {
-            let mut event = JsonlProgressEvent::new("build", ProgressStatus::Started);
+            let mut event = JsonlProgressEvent::new(ProgressPhase::Build, ProgressStatus::Started);
             event.id = Some(id);
             event.name = Some(source.to_string());
             self.emit_progress(&event);
@@ -307,7 +351,8 @@ impl ProgressReporter {
             let _ = writeln!(self.printer.stderr(), "{message}");
         }
         if self.printer.emits_jsonl_progress() {
-            let mut event = JsonlProgressEvent::new("build", ProgressStatus::Completed);
+            let mut event =
+                JsonlProgressEvent::new(ProgressPhase::Build, ProgressStatus::Completed);
             event.id = Some(id);
             event.name = Some(source.to_string());
             self.emit_progress(&event);
@@ -544,7 +589,8 @@ impl ProgressReporter {
         state.headers += 1;
         state.bars.insert(id, ProgressBarKind::Spinner { progress });
         if self.printer.emits_jsonl_progress() {
-            let mut event = JsonlProgressEvent::new("checkout", ProgressStatus::Started);
+            let mut event =
+                JsonlProgressEvent::new(ProgressPhase::Checkout, ProgressStatus::Started);
             event.id = Some(id);
             event.url = Some(url.to_string());
             event.revision = Some(rev.to_string());
@@ -578,7 +624,8 @@ impl ProgressReporter {
             let _ = writeln!(self.printer.stderr(), "{message}");
         }
         if self.printer.emits_jsonl_progress() {
-            let mut event = JsonlProgressEvent::new("checkout", ProgressStatus::Completed);
+            let mut event =
+                JsonlProgressEvent::new(ProgressPhase::Checkout, ProgressStatus::Completed);
             event.id = Some(id);
             event.url = Some(url.to_string());
             event.revision = Some(rev.to_string());
@@ -614,7 +661,7 @@ impl PrepareReporter {
     #[must_use]
     pub(crate) fn with_length(self, length: u64) -> Self {
         self.reporter.root.set_length(length);
-        let mut event = JsonlProgressEvent::new("prepare", ProgressStatus::Started);
+        let mut event = JsonlProgressEvent::new(ProgressPhase::Prepare, ProgressStatus::Started);
         event.total = Some(length);
         self.reporter.emit_progress(&event);
         self
@@ -625,7 +672,8 @@ impl uv_installer::PrepareReporter for PrepareReporter {
     fn on_progress(&self, dist: &CachedDist) {
         self.reporter.root.inc(1);
         if self.reporter.printer.emits_jsonl_progress() {
-            let mut event = JsonlProgressEvent::new("prepare", ProgressStatus::Updated);
+            let mut event =
+                JsonlProgressEvent::new(ProgressPhase::Prepare, ProgressStatus::Updated);
             event.name = Some(dist.to_string());
             event.completed = Some(self.reporter.root.position());
             event.total = self.reporter.root.length();
@@ -638,7 +686,8 @@ impl uv_installer::PrepareReporter for PrepareReporter {
         // in Jupyter notebooks.
         self.reporter.root.set_message("");
         if self.reporter.printer.emits_jsonl_progress() {
-            let mut event = JsonlProgressEvent::new("prepare", ProgressStatus::Completed);
+            let mut event =
+                JsonlProgressEvent::new(ProgressPhase::Prepare, ProgressStatus::Completed);
             event.completed = Some(self.reporter.root.position());
             event.total = self.reporter.root.length();
             self.reporter.emit_progress(&event);
@@ -686,8 +735,10 @@ impl ResolverReporter {
         if self.reporter.printer.emits_jsonl_progress()
             && !self.started.swap(true, Ordering::Relaxed)
         {
-            self.reporter
-                .emit_progress(&JsonlProgressEvent::new("resolve", ProgressStatus::Started));
+            self.reporter.emit_progress(&JsonlProgressEvent::new(
+                ProgressPhase::Resolve,
+                ProgressStatus::Started,
+            ));
         }
     }
 
@@ -695,7 +746,7 @@ impl ResolverReporter {
     pub(crate) fn with_length(self, length: u64) -> Self {
         self.reporter.root.set_length(length);
         self.start();
-        let mut event = JsonlProgressEvent::new("resolve", ProgressStatus::Updated);
+        let mut event = JsonlProgressEvent::new(ProgressPhase::Resolve, ProgressStatus::Updated);
         event.total = Some(length);
         self.reporter.emit_progress(&event);
         self
@@ -734,7 +785,8 @@ impl uv_resolver::ResolverReporter for ResolverReporter {
         }
 
         if self.reporter.printer.emits_jsonl_progress() {
-            let mut event = JsonlProgressEvent::new("resolve", ProgressStatus::Updated);
+            let mut event =
+                JsonlProgressEvent::new(ProgressPhase::Resolve, ProgressStatus::Updated);
             event.name = Some(name.to_string());
             match version_or_url {
                 VersionOrUrlRef::Version(version) => event.version = Some(version.to_string()),
@@ -748,7 +800,7 @@ impl uv_resolver::ResolverReporter for ResolverReporter {
         self.start();
         self.reporter.root.set_message("");
         self.reporter.emit_progress(&JsonlProgressEvent::new(
-            "resolve",
+            ProgressPhase::Resolve,
             ProgressStatus::Completed,
         ));
         self.reporter.root.finish_and_clear();
@@ -834,7 +886,7 @@ impl InstallReporter {
     #[must_use]
     pub(crate) fn with_length(self, length: u64) -> Self {
         self.progress.set_length(length);
-        let mut event = JsonlProgressEvent::new("install", ProgressStatus::Started);
+        let mut event = JsonlProgressEvent::new(ProgressPhase::Install, ProgressStatus::Started);
         event.total = Some(length);
         emit_jsonl_progress(self.printer, &event);
         self
@@ -846,7 +898,8 @@ impl uv_installer::InstallReporter for InstallReporter {
         self.progress.set_message(format!("{wheel}"));
         self.progress.inc(1);
         if self.printer.emits_jsonl_progress() {
-            let mut event = JsonlProgressEvent::new("install", ProgressStatus::Updated);
+            let mut event =
+                JsonlProgressEvent::new(ProgressPhase::Install, ProgressStatus::Updated);
             event.name = Some(wheel.to_string());
             event.completed = Some(self.progress.position());
             event.total = self.progress.length();
@@ -857,7 +910,8 @@ impl uv_installer::InstallReporter for InstallReporter {
     fn on_install_complete(&self) {
         self.progress.set_message("");
         if self.printer.emits_jsonl_progress() {
-            let mut event = JsonlProgressEvent::new("install", ProgressStatus::Completed);
+            let mut event =
+                JsonlProgressEvent::new(ProgressPhase::Install, ProgressStatus::Completed);
             event.completed = Some(self.progress.position());
             event.total = self.progress.length();
             emit_jsonl_progress(self.printer, &event);
@@ -1007,7 +1061,8 @@ impl LatestVersionReporter {
     #[must_use]
     pub(crate) fn with_length(self, length: u64) -> Self {
         self.progress.set_length(length);
-        let mut event = JsonlProgressEvent::new("latest_version", ProgressStatus::Started);
+        let mut event =
+            JsonlProgressEvent::new(ProgressPhase::LatestVersion, ProgressStatus::Started);
         event.total = Some(length);
         emit_jsonl_progress(self.printer, &event);
         self
@@ -1026,7 +1081,8 @@ impl LatestVersionReporter {
 
     fn emit_update(&self, name: Option<&PackageName>, version: Option<&Version>) {
         if self.printer.emits_jsonl_progress() {
-            let mut event = JsonlProgressEvent::new("latest_version", ProgressStatus::Updated);
+            let mut event =
+                JsonlProgressEvent::new(ProgressPhase::LatestVersion, ProgressStatus::Updated);
             event.name = name.map(ToString::to_string);
             event.version = version.map(ToString::to_string);
             event.completed = Some(self.progress.position());
@@ -1037,7 +1093,8 @@ impl LatestVersionReporter {
 
     pub(crate) fn on_fetch_complete(&self) {
         self.progress.set_message("");
-        let mut event = JsonlProgressEvent::new("latest_version", ProgressStatus::Completed);
+        let mut event =
+            JsonlProgressEvent::new(ProgressPhase::LatestVersion, ProgressStatus::Completed);
         event.completed = Some(self.progress.position());
         event.total = self.progress.length();
         emit_jsonl_progress(self.printer, &event);
@@ -1069,7 +1126,7 @@ impl AuditReporter {
     #[must_use]
     pub(crate) fn with_length(self, length: u64) -> Self {
         self.progress.set_length(length);
-        let mut event = JsonlProgressEvent::new("audit", ProgressStatus::Started);
+        let mut event = JsonlProgressEvent::new(ProgressPhase::Audit, ProgressStatus::Started);
         event.total = Some(length);
         emit_jsonl_progress(self.printer, &event);
         self
@@ -1080,7 +1137,7 @@ impl AuditReporter {
         self.progress.inc(1);
 
         if self.printer.emits_jsonl_progress() {
-            let mut event = JsonlProgressEvent::new("audit", ProgressStatus::Updated);
+            let mut event = JsonlProgressEvent::new(ProgressPhase::Audit, ProgressStatus::Updated);
             event.name = Some(name.to_string());
             event.version = Some(version.to_string());
             event.completed = Some(self.progress.position());
@@ -1091,7 +1148,7 @@ impl AuditReporter {
 
     pub(crate) fn on_audit_complete(&self) {
         self.progress.set_message("");
-        let mut event = JsonlProgressEvent::new("audit", ProgressStatus::Completed);
+        let mut event = JsonlProgressEvent::new(ProgressPhase::Audit, ProgressStatus::Completed);
         event.completed = Some(self.progress.position());
         event.total = self.progress.length();
         emit_jsonl_progress(self.printer, &event);
@@ -1207,5 +1264,116 @@ impl uv_bin_install::Reporter for BinaryDownloadReporter {
 
     fn on_download_complete(&self, id: usize) {
         self.reporter.on_request_complete(Direction::Download, id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+    use uv_test::json_schema::JsonSchema;
+
+    use super::{JsonlProgressEvent, ProgressPhase, ProgressStatus};
+
+    fn progress_schema() -> anyhow::Result<JsonSchema> {
+        JsonSchema::new(include_str!(
+            "../../../../docs/reference/internals/jsonl-progress.schema.json"
+        ))
+    }
+
+    #[test]
+    fn jsonl_progress_serializes_exact_wire_values() -> anyhow::Result<()> {
+        let schema = progress_schema()?;
+        for (phase, phase_name) in [
+            (ProgressPhase::Audit, "audit"),
+            (ProgressPhase::Build, "build"),
+            (ProgressPhase::Checkout, "checkout"),
+            (ProgressPhase::Download, "download"),
+            (ProgressPhase::Extract, "extract"),
+            (ProgressPhase::Hash, "hash"),
+            (ProgressPhase::Install, "install"),
+            (ProgressPhase::LatestVersion, "latest_version"),
+            (ProgressPhase::Prepare, "prepare"),
+            (ProgressPhase::Resolve, "resolve"),
+            (ProgressPhase::Upload, "upload"),
+        ] {
+            for (status, status_name) in [
+                (ProgressStatus::Started, "started"),
+                (ProgressStatus::Updated, "updated"),
+                (ProgressStatus::Completed, "completed"),
+            ] {
+                let event = serde_json::to_vec(&JsonlProgressEvent::new(phase, status))?;
+                assert_eq!(
+                    schema.parse(&event)?,
+                    json!({"type": "progress", "phase": phase_name, "status": status_name})
+                );
+            }
+        }
+
+        let mut event = JsonlProgressEvent::new(ProgressPhase::Checkout, ProgressStatus::Updated);
+        event.id = Some(7);
+        event.name = Some("example".to_owned());
+        event.version = Some("1.0".to_owned());
+        event.url = Some("https://example.com/repository".to_owned());
+        event.revision = Some("main".to_owned());
+        event.completed = Some(1);
+        event.total = Some(2);
+        assert_eq!(
+            schema.parse(&serde_json::to_vec(&event)?)?,
+            json!({
+                "type": "progress",
+                "phase": "checkout",
+                "status": "updated",
+                "id": 7,
+                "name": "example",
+                "version": "1.0",
+                "url": "https://example.com/repository",
+                "revision": "main",
+                "completed": 1,
+                "total": 2,
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn jsonl_progress_schema_rejects_invalid_events() -> anyhow::Result<()> {
+        let schema = progress_schema()?;
+        let event = json!({"type": "progress", "phase": "resolve", "status": "started"});
+        schema.parse(&serde_json::to_vec(&event)?)?;
+
+        for field in ["type", "phase", "status"] {
+            let mut invalid = event.clone();
+            invalid
+                .as_object_mut()
+                .expect("progress object")
+                .remove(field);
+            assert!(schema.parse(&serde_json::to_vec(&invalid)?).is_err());
+            invalid[field] = json!("unknown");
+            assert!(schema.parse(&serde_json::to_vec(&invalid)?).is_err());
+        }
+        for field in [
+            "id",
+            "name",
+            "version",
+            "url",
+            "revision",
+            "completed",
+            "total",
+        ] {
+            let mut invalid = event.clone();
+            invalid[field] = Value::Null;
+            assert!(
+                schema.parse(&serde_json::to_vec(&invalid)?).is_err(),
+                "progress schema accepted null for {field}"
+            );
+        }
+        for field in ["id", "completed", "total"] {
+            for value in [json!(-1), json!(1.5), json!("1")] {
+                let mut invalid = event.clone();
+                invalid[field] = value;
+                assert!(schema.parse(&serde_json::to_vec(&invalid)?).is_err());
+            }
+        }
+        Ok(())
     }
 }

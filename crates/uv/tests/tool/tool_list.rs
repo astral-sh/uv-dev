@@ -21,6 +21,14 @@ static TOOL_LIST_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> = Laz
     .map_err(|error| error.to_string())
 });
 
+static JSONL_PROGRESS_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> =
+    LazyLock::new(|| {
+        JsonSchema::new(include_str!(
+            "../../../../docs/reference/internals/jsonl-progress.schema.json"
+        ))
+        .map_err(|error| error.to_string())
+    });
+
 fn parse_tool_list(contents: &[u8]) -> Result<Value> {
     TOOL_LIST_SCHEMA
         .as_ref()
@@ -41,10 +49,14 @@ fn parse_tool_list_jsonl(contents: &[u8]) -> Result<(Vec<Value>, Value)> {
     let mut report = events
         .pop()
         .context("missing final JSONL tool-list report")?;
-    anyhow::ensure!(
-        events.iter().all(|event| event["type"] == "progress"),
-        "unexpected event before final JSONL tool-list report: {events:?}"
-    );
+    let progress_schema = JSONL_PROGRESS_SCHEMA
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!("invalid JSONL progress schema: {error}"))?;
+    for event in &events {
+        progress_schema
+            .parse(&serde_json::to_vec(event)?)
+            .context("JSONL progress schema mismatch")?;
+    }
     let event_type = report
         .as_object_mut()
         .context("JSONL tool-list report is not an object")?
