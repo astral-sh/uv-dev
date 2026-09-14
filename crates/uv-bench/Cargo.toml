@@ -144,6 +144,11 @@ path = "benches/outdated_tree.rs"
 harness = false
 
 [[bench]]
+name = "s3_signing"
+path = "benches/s3_signing.rs"
+harness = false
+
+[[bench]]
 name = "uv_pypi_types"
 path = "benches/uv_pypi_types.rs"
 harness = false

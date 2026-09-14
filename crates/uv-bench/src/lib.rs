@@ -89,6 +89,15 @@ pub struct FixtureServer {
 impl FixtureServer {
     /// Start the replay server, optionally adding package records from immutable lockfiles.
     pub fn start(lockfiles: &[&str]) -> Self {
+        Self::start_inner(lockfiles, false)
+    }
+
+    /// Start a replay server that accepts only AWS Signature Version 4 requests.
+    pub fn start_s3(lockfiles: &[&str]) -> Self {
+        Self::start_inner(lockfiles, true)
+    }
+
+    fn start_inner(lockfiles: &[&str], require_s3: bool) -> Self {
         let python_directory = std::path::absolute("../../.cache/bench-python")
             .expect("Failed to locate benchmark Python directory");
         let output = uv_command()
@@ -111,6 +120,9 @@ impl FixtureServer {
             std::path::absolute("../../scripts/benchmark/serve-fixtures.py")
                 .expect("Failed to locate fixture server"),
         );
+        if require_s3 {
+            command.arg("--require-s3");
+        }
         for lockfile in lockfiles {
             command.arg("--lockfile").arg(
                 std::path::absolute(fixture_path(lockfile)).expect("Failed to locate lockfile"),

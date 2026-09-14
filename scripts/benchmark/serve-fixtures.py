@@ -100,10 +100,11 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
     request_queue_size = 128
 
-    def __init__(self, fixtures: Fixtures, delay: float) -> None:
+    def __init__(self, fixtures: Fixtures, delay: float, require_s3: bool) -> None:
         super().__init__(("127.0.0.1", 0), Handler)
         self.fixtures = fixtures
         self.delay = delay
+        self.require_s3 = require_s3
         self.counts: Counter[str] = Counter()
         self.counts_lock = threading.Lock()
 
@@ -136,11 +137,23 @@ class Handler(BaseHTTPRequestHandler):
                 body = json.dumps(self.server.counts).encode()
             self.respond(body, "application/json", head=head)
             return
+        if self.server.require_s3 and not (
+            self.headers.get("Authorization", "").startswith("AWS4-HMAC-SHA256 ")
+            and self.headers.get("x-amz-date")
+        ):
+            self.send_error(403, "An S3-signed request is required")
+            return
         with self.server.counts_lock:
             self.server.counts[f"{self.command} {path}"] += 1
         time.sleep(self.server.delay)
         parts = path.strip("/").split("/")
-        if len(parts) == 2 and parts[0] in {"simple", "simple-a", "simple-b"}:
+        if len(parts) == 2 and parts[0] in {
+            "simple",
+            "simple-a",
+            "simple-b",
+            "simple-c",
+            "simple-d",
+        }:
             body = self.server.fixtures.simple.get(normalize(parts[1]))
             if body is not None:
                 self.respond(body, "application/vnd.pypi.simple.v1+json", head=head)
@@ -222,11 +235,14 @@ def main() -> None:
     )
     parser.add_argument("--lockfile", type=Path, action="append", default=[])
     parser.add_argument("--delay-ms", type=float, default=20)
+    parser.add_argument("--require-s3", action="store_true")
     args = parser.parse_args()
     if args.delay_ms < 0:
         parser.error("--delay-ms must be nonnegative")
     server = Server(
-        Fixtures(args.directory, args.manifest, args.lockfile), args.delay_ms / 1000
+        Fixtures(args.directory, args.manifest, args.lockfile),
+        args.delay_ms / 1000,
+        args.require_s3,
     )
     print(f"http://127.0.0.1:{server.server_port}", flush=True)
     server.serve_forever()
