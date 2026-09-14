@@ -1,0 +1,550 @@
+// A bounded, benchmark-only Linux small-file reader.
+//
+// Every file is opened with `OPENAT`, read with `READ` until an EOF completion, and closed by its
+// owned descriptor. There is no ordinary-I/O fallback: an unavailable or retired ring cannot be
+// mistaken for an active backend in a benchmark result.
+
+use std::cell::UnsafeCell;
+use std::ffi::CString;
+use std::io;
+use std::mem;
+use std::num::NonZeroU32;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
+
+#[cfg(test)]
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use io_uring::{EnterFlags, IoUring, Probe, opcode, squeue, types};
+use rustix::fs::{CWD, OFlags};
+use rustix::io::Errno;
+
+const READ_SIZE: usize = 8 * 1024;
+const MAX_QUEUE_DEPTH: u32 = 256;
+const MAX_STALLED_ATTEMPTS: usize = 64;
+
+type ReadResult = io::Result<Option<Vec<u8>>>;
+pub(super) type ReadResults = Vec<ReadResult>;
+type ReadBuffer = Box<UnsafeCell<[u8; READ_SIZE]>>;
+
+pub(super) struct Reader {
+    ring: Option<IoUring>,
+    capacity: usize,
+    buffers: Vec<ReadBuffer>,
+    pending: Option<PendingBatch>,
+    has_completed_io: bool,
+    #[cfg(test)]
+    drain_observer: Option<std::sync::mpsc::SyncSender<()>>,
+}
+
+impl Reader {
+    pub(super) fn new(queue_depth: NonZeroU32) -> io::Result<Self> {
+        if queue_depth.get() > MAX_QUEUE_DEPTH {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "io_uring read queue depth exceeds the bounded experiment",
+            ));
+        }
+        let ring: IoUring = IoUring::builder().dontfork().build(queue_depth.get())?;
+        let mut probe = Probe::new();
+        ring.submitter().register_probe(&mut probe)?;
+        if !probe.is_supported(opcode::OpenAt::CODE) || !probe.is_supported(opcode::Read::CODE) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "io_uring openat/read is unavailable",
+            ));
+        }
+        let capacity = usize::try_from(queue_depth.get().min(ring.params().sq_entries()))
+            .map_err(|_| invalid_completion())?;
+        if capacity == 0 {
+            return Err(invalid_completion());
+        }
+        Ok(Self {
+            ring: Some(ring),
+            capacity,
+            buffers: (0..capacity).map(|_| new_buffer()).collect(),
+            pending: None,
+            has_completed_io: false,
+            #[cfg(test)]
+            drain_observer: None,
+        })
+    }
+
+    pub(super) fn read(&mut self, paths: &[PathBuf]) -> io::Result<ReadResults> {
+        self.read_with(paths, &mut IoUring::submit_and_wait)
+    }
+
+    /// Read the submitting task's effective io-wq limits after an actual request.
+    pub(super) fn worker_limits(&self) -> io::Result<Option<[u32; 2]>> {
+        if !self.has_completed_io || self.pending.is_some() {
+            return Err(invalid_completion());
+        }
+        let ring = self.ring.as_ref().ok_or_else(invalid_completion)?;
+        // Zero leaves the current bounded and unbounded worker limits unchanged.
+        let mut previous = [0; 2];
+        match ring.submitter().register_iowq_max_workers(&mut previous) {
+            Ok(()) => Ok(Some(previous)),
+            Err(error) if unavailable_worker_registration(&error) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn read_with(
+        &mut self,
+        paths: &[PathBuf],
+        submit: &mut impl FnMut(&IoUring, usize) -> io::Result<usize>,
+    ) -> io::Result<ReadResults> {
+        if self.pending.is_some() {
+            self.retire();
+            return Err(invalid_completion());
+        }
+        if self.ring.is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "io_uring small-file reader was retired",
+            ));
+        }
+
+        let mut results = Vec::with_capacity(paths.len());
+        for paths in paths.chunks(self.capacity) {
+            let unused = self
+                .buffers
+                .len()
+                .checked_sub(paths.len())
+                .ok_or_else(invalid_completion)?;
+            let buffers = self.buffers.split_off(unused);
+            self.pending = Some(PendingBatch::new(paths, buffers)?);
+            if let Err(error) = self.complete_batch(submit) {
+                self.retire();
+                return Err(error);
+            }
+            let mut batch = self.pending.take().ok_or_else(invalid_completion)?;
+            self.has_completed_io |= batch.completed != 0;
+            results.extend(batch.take_results()?);
+            batch.return_buffers(&mut self.buffers)?;
+        }
+        Ok(results)
+    }
+
+    fn complete_batch(
+        &mut self,
+        submit: &mut impl FnMut(&IoUring, usize) -> io::Result<usize>,
+    ) -> io::Result<()> {
+        loop {
+            let batch = self.pending.as_ref().ok_or_else(invalid_completion)?;
+            if batch
+                .requests
+                .iter()
+                .all(|request| request.result.is_some())
+            {
+                return Ok(());
+            }
+            self.queue()?;
+            self.finish_queued(submit)?;
+        }
+    }
+
+    #[expect(unsafe_code)]
+    fn queue(&mut self) -> io::Result<()> {
+        let (Some(ring), Some(batch)) = (&mut self.ring, &mut self.pending) else {
+            return Err(invalid_completion());
+        };
+        if batch.queued != batch.completed {
+            return Err(invalid_completion());
+        }
+        let mut submissions = ring.submission();
+        if !submissions.is_empty() {
+            return Err(invalid_completion());
+        }
+        for (index, request) in batch.requests.iter_mut().enumerate() {
+            if request.result.is_some() {
+                continue;
+            }
+            if request.in_flight.is_some() {
+                return Err(invalid_completion());
+            }
+            let user_data = u64::try_from(batch.queued)
+                .ok()
+                .and_then(|sequence| sequence.checked_mul(u64::from(MAX_QUEUE_DEPTH)))
+                .and_then(|sequence| sequence.checked_add(u64::try_from(index).ok()?))
+                .ok_or_else(invalid_completion)?;
+            let (operation, entry) = request.entry(user_data)?;
+            // SAFETY: The pending batch owns every pathname, buffer, and file descriptor. Its
+            // boxed buffers have stable addresses, and none of this storage is reclaimed until
+            // all submitted completions are accounted for, including on a control failure.
+            unsafe { submissions.push(&entry) }.map_err(|_| invalid_completion())?;
+            request.in_flight = Some(Queued {
+                operation,
+                user_data,
+            });
+            batch.queued += 1;
+        }
+        Ok(())
+    }
+
+    fn finish_queued(
+        &mut self,
+        submit: &mut impl FnMut(&IoUring, usize) -> io::Result<usize>,
+    ) -> io::Result<()> {
+        let mut progress = Progress::default();
+        loop {
+            self.reap()?;
+            let (Some(ring), Some(batch)) = (&mut self.ring, &self.pending) else {
+                return Err(invalid_completion());
+            };
+            if batch.completed == batch.queued {
+                return Ok(());
+            }
+            progress.observe(batch.completed, ring.submission().len())?;
+            match submit(ring, 1) {
+                Ok(_) => {}
+                Err(error) if retryable_control_error(&error) => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    fn reap(&mut self) -> io::Result<()> {
+        let (Some(ring), Some(batch)) = (&mut self.ring, &mut self.pending) else {
+            return Err(invalid_completion());
+        };
+        for completion in ring.completion() {
+            let index = usize::try_from(completion.user_data() % u64::from(MAX_QUEUE_DEPTH))
+                .map_err(|_| invalid_completion())?;
+            let Some(request) = batch.requests.get_mut(index) else {
+                batch.valid_completions = false;
+                return Err(invalid_completion());
+            };
+            let Some(queued) = request.in_flight else {
+                batch.valid_completions = false;
+                return Err(invalid_completion());
+            };
+            if queued.user_data != completion.user_data() {
+                batch.valid_completions = false;
+                return Err(invalid_completion());
+            }
+            request.in_flight = None;
+            batch.completed += 1;
+            if let Err(error) = request.complete(queued.operation, completion.result()) {
+                batch.valid_completions = false;
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    fn retire(&mut self) {
+        let drained = self.drain_submitted();
+        self.retire_after_drain(&drained);
+    }
+
+    fn retire_after_drain(&mut self, drained: &io::Result<()>) {
+        if drained.is_err()
+            && let Some(mut batch) = self.pending.take()
+        {
+            // Ring shutdown can cancel asynchronously on supported kernels. If the submitted
+            // CQEs cannot be observed, retain this single bounded batch until process exit so a
+            // late open/read cannot access freed storage or a recycled descriptor. The reader
+            // stays retired, so another call cannot accumulate more retained batches.
+            batch.discard_results();
+            mem::forget(batch);
+        }
+        // Without SQPOLL, closing the ring also discards entries never submitted to the kernel.
+        // Submitted operations have either completed or kept all of their storage alive above.
+        drop(self.ring.take());
+        drop(self.pending.take());
+    }
+
+    #[expect(unsafe_code)]
+    fn drain_submitted(&mut self) -> io::Result<()> {
+        let mut progress = Progress::default();
+        loop {
+            self.reap()?;
+            let (Some(ring), Some(batch)) = (&mut self.ring, &self.pending) else {
+                return Err(invalid_completion());
+            };
+            if !batch.valid_completions {
+                return Err(invalid_completion());
+            }
+            let unsubmitted = ring.submission().len();
+            match batch.queued.checked_sub(unsubmitted) {
+                Some(submitted) if batch.completed == submitted => return Ok(()),
+                Some(submitted) if batch.completed < submitted => {}
+                _ => return Err(invalid_completion()),
+            }
+            progress.observe(batch.completed, unsubmitted)?;
+            #[cfg(test)]
+            if let Some(observer) = self.drain_observer.take() {
+                let _ = observer.send(());
+            }
+            // SAFETY: GETEVENTS is called without a signal mask or extended arguments. Passing
+            // zero submissions leaves unsubmitted SQEs untouched while the batch continues to
+            // own every kernel-accessed pathname, buffer, and descriptor.
+            match unsafe {
+                ring.submitter()
+                    .enter::<()>(0, 1, EnterFlags::GETEVENTS.bits(), None)
+            } {
+                Ok(_) => {}
+                Err(error) if retryable_control_error(&error) => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+}
+
+impl Drop for Reader {
+    fn drop(&mut self) {
+        if self.pending.is_some() {
+            self.retire();
+        }
+    }
+}
+
+struct PendingBatch {
+    requests: Box<[Request]>,
+    queued: usize,
+    completed: usize,
+    valid_completions: bool,
+    #[cfg(test)]
+    drop_counter: Option<Arc<AtomicUsize>>,
+}
+
+impl PendingBatch {
+    fn new(paths: &[PathBuf], buffers: Vec<ReadBuffer>) -> io::Result<Self> {
+        if paths.len() != buffers.len() {
+            return Err(invalid_completion());
+        }
+        Ok(Self {
+            requests: paths
+                .iter()
+                .zip(buffers)
+                .map(|(path, buffer)| Request::new(path, buffer))
+                .collect(),
+            queued: 0,
+            completed: 0,
+            valid_completions: true,
+            #[cfg(test)]
+            drop_counter: None,
+        })
+    }
+
+    fn take_results(&mut self) -> io::Result<ReadResults> {
+        self.requests
+            .iter_mut()
+            .map(|request| request.result.take().ok_or_else(invalid_completion))
+            .collect()
+    }
+
+    fn return_buffers(&mut self, buffers: &mut Vec<ReadBuffer>) -> io::Result<()> {
+        for request in &mut self.requests {
+            buffers.push(request.buffer.take().ok_or_else(invalid_completion)?);
+        }
+        Ok(())
+    }
+
+    fn discard_results(&mut self) {
+        for request in &mut self.requests {
+            // Accumulated and completed file contents are never kernel-accessed. Only the fixed
+            // read buffer, pathname, and descriptor must outlive an unobserved completion.
+            drop(mem::take(&mut request.contents));
+            drop(request.result.take());
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for PendingBatch {
+    fn drop(&mut self) {
+        if let Some(counter) = &self.drop_counter {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Operation {
+    Open,
+    Read,
+}
+
+#[derive(Clone, Copy)]
+struct Queued {
+    operation: Operation,
+    user_data: u64,
+}
+
+struct Request {
+    path: Option<CString>,
+    file: Option<OwnedFd>,
+    buffer: Option<ReadBuffer>,
+    contents: Vec<u8>,
+    in_flight: Option<Queued>,
+    result: Option<ReadResult>,
+}
+
+impl Request {
+    fn new(path: &Path, buffer: ReadBuffer) -> Self {
+        let (path, result) = match CString::new(path.as_os_str().as_bytes()) {
+            Ok(path) => (Some(path), None),
+            Err(error) => (
+                None,
+                Some(Err(io::Error::new(io::ErrorKind::InvalidInput, error))),
+            ),
+        };
+        Self {
+            path,
+            file: None,
+            buffer: Some(buffer),
+            contents: Vec::new(),
+            in_flight: None,
+            result,
+        }
+    }
+
+    fn entry(&self, user_data: u64) -> io::Result<(Operation, squeue::Entry)> {
+        let (operation, entry) = if let Some(file) = &self.file {
+            let buffer = self.buffer.as_ref().ok_or_else(invalid_completion)?;
+            (
+                Operation::Read,
+                opcode::Read::new(
+                    types::Fd(file.as_raw_fd()),
+                    buffer.get().cast::<u8>(),
+                    u32::try_from(READ_SIZE).map_err(|_| invalid_completion())?,
+                )
+                // Each descriptor has at most one in-flight read. Advancing its current offset
+                // matches ordinary `read`, including descriptors that do not support seeking.
+                .offset(u64::MAX)
+                .build(),
+            )
+        } else {
+            let path = self.path.as_ref().ok_or_else(invalid_completion)?;
+            (
+                Operation::Open,
+                opcode::OpenAt::new(types::Fd(CWD.as_raw_fd()), path.as_ptr())
+                    .flags((OFlags::RDONLY | OFlags::CLOEXEC).bits().cast_signed())
+                    .build(),
+            )
+        };
+        Ok((operation, entry.user_data(user_data)))
+    }
+
+    fn complete(&mut self, operation: Operation, result: i32) -> io::Result<()> {
+        match (operation, self.file.is_some()) {
+            (Operation::Open, false) | (Operation::Read, true) => {}
+            (Operation::Open, true) | (Operation::Read, false) => {
+                return Err(invalid_completion());
+            }
+        }
+        if result < 0 {
+            let error =
+                io::Error::from_raw_os_error(result.checked_neg().ok_or_else(invalid_completion)?);
+            if error.kind() != io::ErrorKind::Interrupted {
+                let result = match operation {
+                    Operation::Open if error.kind() == io::ErrorKind::NotFound => Ok(None),
+                    Operation::Open | Operation::Read => Err(error),
+                };
+                self.finish(result);
+            }
+            return Ok(());
+        }
+        match operation {
+            Operation::Open => self.complete_open(result),
+            Operation::Read => self.complete_read(result),
+        }
+    }
+
+    #[expect(unsafe_code)]
+    fn complete_open(&mut self, descriptor: i32) -> io::Result<()> {
+        if descriptor < 0 || self.file.is_some() {
+            return Err(invalid_completion());
+        }
+        // SAFETY: A successful OPENAT CQE returns a newly owned process descriptor. The matching
+        // completion is consumed exactly once before the descriptor is transferred into OwnedFd.
+        self.file = Some(unsafe { OwnedFd::from_raw_fd(descriptor) });
+        Ok(())
+    }
+
+    #[expect(unsafe_code)]
+    fn complete_read(&mut self, result: i32) -> io::Result<()> {
+        let length = usize::try_from(result).map_err(|_| invalid_completion())?;
+        if length > READ_SIZE {
+            return Err(invalid_completion());
+        }
+        if length == 0 {
+            let contents = mem::take(&mut self.contents);
+            self.finish(Ok(Some(contents)));
+        } else {
+            let buffer = self.buffer.as_ref().ok_or_else(invalid_completion)?;
+            // SAFETY: The matching READ CQE has completed this buffer's only in-flight request.
+            // The array was initialized on allocation, and no new read is queued until this
+            // completion has been consumed. A short positive read is not EOF.
+            let bytes = unsafe { &*buffer.get() };
+            self.contents.extend_from_slice(&bytes[..length]);
+        }
+        Ok(())
+    }
+
+    fn finish(&mut self, result: ReadResult) {
+        self.result = Some(result);
+        drop(self.file.take());
+    }
+}
+
+fn new_buffer() -> ReadBuffer {
+    Box::new(UnsafeCell::new([0; READ_SIZE]))
+}
+
+fn retryable_control_error(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::Interrupted
+        || error.kind() == io::ErrorKind::WouldBlock
+        || error.raw_os_error() == Some(Errno::BUSY.raw_os_error())
+}
+
+fn unavailable_worker_registration(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::Unsupported
+        || error.raw_os_error().is_some_and(|code| {
+            code == Errno::NOSYS.raw_os_error()
+                || code == Errno::OPNOTSUPP.raw_os_error()
+                || code == Errno::INVAL.raw_os_error()
+        })
+}
+
+#[derive(Default)]
+struct Progress {
+    previous: Option<(usize, usize)>,
+    stalled: usize,
+}
+
+impl Progress {
+    fn observe(&mut self, completed: usize, unsubmitted: usize) -> io::Result<()> {
+        if let Some((previous_completed, previous_unsubmitted)) = self.previous
+            && (completed < previous_completed || unsubmitted > previous_unsubmitted)
+        {
+            return Err(invalid_completion());
+        }
+        let current = Some((completed, unsubmitted));
+        if self.previous == current {
+            self.stalled += 1;
+            if self.stalled >= MAX_STALLED_ATTEMPTS {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "io_uring small-file requests made no progress",
+                ));
+            }
+        } else {
+            self.previous = current;
+            self.stalled = 0;
+        }
+        Ok(())
+    }
+}
+
+fn invalid_completion() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        "invalid io_uring small-file completion",
+    )
+}
