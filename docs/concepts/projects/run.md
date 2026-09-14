@@ -64,6 +64,21 @@ print([(k, v["title"]) for k, v in data.items()][:10])
 The invocation `uv run example.py` would run _isolated_ from the project with only the given
 dependencies listed.
 
+## Profiling scripts and modules
+
+On CPython 3.15 or later, `--profile` runs a Python script or module with the standard library's
+[sampling profiler](https://docs.python.org/3.15/library/profiling.sampling.html):
+
+```console
+$ uv run --profile example.py
+$ uv run --profile --profile-output profile.html -m mypackage
+```
+
+The original target determines the environment, including any inline script dependencies. The
+profiler uses that same interpreter and writes an HTML flame graph. Profiling requires permission
+to inspect the child process's memory. The command returns the profiler's exit status, which may
+differ from the target program's exit status.
+
 ## Legacy scripts on Windows
 
 Support is provided for
