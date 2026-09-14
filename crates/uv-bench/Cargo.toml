@@ -29,6 +29,11 @@ path = "benches/workspace_discovery.rs"
 harness = false
 
 [[bench]]
+name = "workspace_scripts"
+path = "benches/workspace_scripts.rs"
+harness = false
+
+[[bench]]
 name = "uv_pep440"
 path = "benches/uv_pep440.rs"
 harness = false
@@ -219,6 +224,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 toml = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+rustix = { workspace = true }
+walkdir = { workspace = true }
 
 [dev-dependencies]
 uv = { workspace = true }
