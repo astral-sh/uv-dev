@@ -49,6 +49,8 @@ pub(crate) enum Target {
     Sync,
     /// The preview `uv pip check` JSON output format.
     PipCheck,
+    /// Shared progress records in the preview JSONL output format.
+    JsonlProgress,
 }
 
 impl Target {
@@ -60,6 +62,7 @@ impl Target {
             Self::Lock => "docs/reference/internals/lock.schema.json",
             Self::Sync => "docs/reference/internals/sync.schema.json",
             Self::PipCheck => "docs/reference/internals/pip-check.schema.json",
+            Self::JsonlProgress => "docs/reference/internals/jsonl-progress.schema.json",
         }
     }
 
@@ -71,6 +74,7 @@ impl Target {
             Self::Lock => "cargo dev generate-json-schema --target lock",
             Self::Sync => "cargo dev generate-json-schema --target sync",
             Self::PipCheck => "cargo dev generate-json-schema --target pip-check",
+            Self::JsonlProgress => "cargo dev generate-json-schema --target jsonl-progress",
         }
     }
 }
@@ -146,6 +150,7 @@ fn schema(target: Target) -> schemars::Schema {
         Target::Lock => uv::commands::lock_json_schema(),
         Target::Sync => uv::commands::sync_json_schema(),
         Target::PipCheck => uv::commands::pip_check_json_schema(),
+        Target::JsonlProgress => uv::commands::jsonl_progress_json_schema(),
     }
 }
 
@@ -197,6 +202,49 @@ fn generate(target: Target) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{Target, schema};
+
+    #[test]
+    fn jsonl_progress_schema_describes_serialized_values() -> anyhow::Result<()> {
+        let schema = serde_json::to_value(schema(Target::JsonlProgress))?;
+        let definitions = &schema["definitions"];
+        assert_eq!(schema["title"], "uv JSONL progress (preview)");
+        assert_eq!(
+            schema["required"],
+            serde_json::json!(["type", "phase", "status"])
+        );
+        assert_eq!(
+            definitions["ProgressType"]["enum"],
+            serde_json::json!(["progress"])
+        );
+        assert_eq!(
+            definitions["ProgressStatus"]["enum"],
+            serde_json::json!(["started", "updated", "completed"])
+        );
+        assert_eq!(
+            definitions["ProgressPhase"]["enum"],
+            serde_json::json!([
+                "audit",
+                "build",
+                "checkout",
+                "download",
+                "extract",
+                "hash",
+                "install",
+                "latest_version",
+                "prepare",
+                "resolve",
+                "upload"
+            ])
+        );
+        for field in ["name", "version", "url", "revision"] {
+            assert_eq!(schema["properties"][field]["type"], "string");
+        }
+        for field in ["id", "completed", "total"] {
+            assert_eq!(schema["properties"][field]["type"], "integer");
+            assert_eq!(schema["properties"][field]["minimum"], 0);
+        }
+        Ok(())
+    }
 
     #[test]
     fn workspace_metadata_schema_describes_serialized_values() -> anyhow::Result<()> {

@@ -35,6 +35,7 @@ pub(crate) async fn main(args: &Args) -> Result<()> {
         generate_json_schema::Target::Lock,
         generate_json_schema::Target::Sync,
         generate_json_schema::Target::PipCheck,
+        generate_json_schema::Target::JsonlProgress,
     ] {
         generate_json_schema::main(&generate_json_schema::Args {
             mode: args.mode,

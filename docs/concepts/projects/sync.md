@@ -85,7 +85,10 @@ Use `--output-format jsonl` to stream progress records before the same lock repo
 adds `"type": "result"`; earlier records have `"type": "progress"`. A failed lock operation still
 emits its report when command setup has completed, and retains its usual nonzero exit status. Pass
 `--no-progress` or `--quiet` to emit only the final record. JSONL is a separate preview;
-`--preview-features jsonl` suppresses its warning.
+`--preview-features jsonl` suppresses its warning. The shared
+[progress schema](../../reference/internals/jsonl-progress.schema.json) describes the progress
+records. It is generated from their serialization type with
+`cargo dev generate-json-schema --target jsonl-progress`.
 
 ## Syncing the environment
 

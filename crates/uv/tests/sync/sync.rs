@@ -28,6 +28,26 @@ static SYNC_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> = LazyLock
     .map_err(|error| error.to_string())
 });
 
+static JSONL_PROGRESS_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> =
+    LazyLock::new(|| {
+        JsonSchema::new(include_str!(
+            "../../../../docs/reference/internals/jsonl-progress.schema.json"
+        ))
+        .map_err(|error| error.to_string())
+    });
+
+fn validate_progress_events(events: &[Value]) -> Result<()> {
+    let schema = JSONL_PROGRESS_SCHEMA
+        .as_ref()
+        .map_err(|error| anyhow!("invalid JSONL progress schema: {error}"))?;
+    for event in events {
+        schema
+            .parse(&serde_json::to_vec(event)?)
+            .context("JSONL progress schema mismatch")?;
+    }
+    Ok(())
+}
+
 fn parse_sync_report(contents: &[u8]) -> Result<Value> {
     SYNC_SCHEMA
         .as_ref()
@@ -1396,6 +1416,7 @@ fn sync_jsonl_concurrent_download_and_install_events() -> Result<()> {
     let Some((report, progress)) = items.split_last() else {
         anyhow::bail!("expected JSONL progress and a final sync report");
     };
+    validate_progress_events(progress)?;
 
     let mut downloads = progress
         .iter()
@@ -1558,7 +1579,12 @@ fn sync_jsonl_git_checkout_and_build_events() -> Result<()> {
         .lines()
         .map(serde_json::from_str::<serde_json::Value>)
         .collect::<Result<Vec<_>, _>>()?;
-    let mut operations = events
+    let Some((report, progress)) = events.split_last() else {
+        anyhow::bail!("expected JSONL progress and a final sync report");
+    };
+    assert_eq!(report["type"], "result");
+    validate_progress_events(progress)?;
+    let mut operations = progress
         .iter()
         .filter(|event| event["phase"] == "checkout" || event["phase"] == "build")
         .map(|event| {
