@@ -46,6 +46,11 @@ on:
         required: true
         default: dry-run
         type: string
+      native-installers:
+        description: Use and verify the native bootstrap installers
+        required: false
+        default: false
+        type: boolean
 
 env:
   # Release actions must not consume shared GitHub Actions caches.
@@ -212,7 +217,7 @@ jobs:
       - name: "Install uv"
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.5" # Get all the local artifacts for the global tasks to use (for e.g. checksums)
+          version: "0.12.12" # Get all the local artifacts for the global tasks to use (for e.g. checksums)
       - name: Fetch release archives and manifests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -222,8 +227,15 @@ jobs:
       - id: cargo-dist
         shell: bash
         run: |
-          uv run --only-dev dist build ${DIST_TAG_FLAG} --output-format=json "--artifacts=global" > dist-manifest.json
-          echo "dist ran successfully"
+          if [[ "$NATIVE_INSTALLERS" == true ]]; then
+            uv run --locked --script scripts/generate-native-installers.py --plan target/distrib/plan-dist-manifest.json --artifacts-dir target/distrib > dist-manifest.json
+          else
+            tag_args=()
+            if [[ -n "$DIST_TAG_FLAG" ]]; then
+              tag_args=("$DIST_TAG_FLAG")
+            fi
+            uv run --only-dev dist build "${tag_args[@]}" --output-format=json "--artifacts=global" > dist-manifest.json
+          fi
 
           # Parse out what we just built and upload it to scratch storage
           echo "paths<<EOF" >> "$GITHUB_OUTPUT"
@@ -233,6 +245,7 @@ jobs:
           cp dist-manifest.json "$BUILD_MANIFEST_NAME"
         env:
           DIST_TAG_FLAG: ${{ needs.plan.outputs.tag-flag }}
+          NATIVE_INSTALLERS: ${{ inputs.native-installers }}
       - name: "Check planned GitHub release files"
         shell: bash
         run: |
@@ -255,6 +268,18 @@ jobs:
         with:
           name: dist-manifest-global-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.BUILD_MANIFEST_NAME }}
+  verify-native-installers:
+    needs:
+      - assemble-release-artifacts
+      - build-global-dist-artifacts
+    if: ${{ inputs.native-installers }}
+    uses: $/.github/workflows/check-native-installers.yml
+    permissions:
+      contents: read
+    with:
+      archives-artifact: ${{ needs.assemble-release-artifacts.outputs.github-archives }}
+      installers-artifact: ${{ needs.build-global-dist-artifacts.outputs.artifacts }}
+
   # Finalize the cargo-dist manifest before publication
   finalize-dist-manifest:
     needs:
@@ -264,8 +289,9 @@ jobs:
       - build-global-dist-artifacts
       - generate-local-dist-manifest
       - assemble-release-artifacts
+      - verify-native-installers
     # Only run if we're publishing and the required builds and signing succeeded (skipped builds are fine).
-    if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.publishing == 'true' && needs.assemble-release-artifacts.result == 'success' && (needs.build-global-dist-artifacts.result == 'skipped' || needs.build-global-dist-artifacts.result == 'success') && (needs.build-release-artifacts.result == 'skipped' || needs.build-release-artifacts.result == 'success') && (needs.build-docker.result == 'skipped' || needs.build-docker.result == 'success') }}
+    if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.publishing == 'true' && needs.assemble-release-artifacts.result == 'success' && (!inputs.native-installers || needs.verify-native-installers.result == 'success') && (needs.build-global-dist-artifacts.result == 'skipped' || needs.build-global-dist-artifacts.result == 'success') && (needs.build-release-artifacts.result == 'skipped' || needs.build-release-artifacts.result == 'success') && (needs.build-docker.result == 'skipped' || needs.build-docker.result == 'success') }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     runs-on: "depot-ubuntu-latest-4"
