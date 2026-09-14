@@ -7,6 +7,7 @@ use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::path::Path;
 use uv_python_discovery::PYTHON_VERSION_FILENAME;
 use uv_static::EnvVars;
@@ -1991,7 +1992,14 @@ fn run_with_overlay_interpreter() -> Result<()> {
 
 #[test]
 fn run_with_overlay_startup_files() -> Result<()> {
-    let context = uv_test::test_context!("3.15");
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    context.python_install().arg("3.15").assert().success();
+    context
+        .venv()
+        .arg("--python")
+        .arg("3.15")
+        .assert()
+        .success();
     context
         .temp_dir
         .child("pyproject.toml")
@@ -2006,7 +2014,7 @@ fn run_with_overlay_startup_files() -> Result<()> {
         .child("project_only.py")
         .write_str("TOKEN = 'project path'\n")?;
     fs_err::write(
-        context.site_packages().join("project_path.pth"),
+        uv_test::site_packages_path(&context.venv, "python3.15").join("project_path.pth"),
         source.path().as_os_str().as_encoded_bytes(),
     )?;
 
@@ -2014,13 +2022,13 @@ fn run_with_overlay_startup_files() -> Result<()> {
         &"overlay-hooks".parse()?,
         &"1.0.0".parse()?,
         &[],
-        &Default::default(),
+        &BTreeMap::default(),
         None,
         "py3-none-any",
         &[
             (
                 "overlay_hooks/startup.py",
-                indoc! {r#"
+                indoc! {r"
                 import sys
 
                 def apply():
@@ -2028,7 +2036,7 @@ fn run_with_overlay_startup_files() -> Result<()> {
                     events = getattr(sys, '_uv_overlay_events', [])
                     events.append(TOKEN)
                     sys._uv_overlay_events = events
-            "#},
+            "},
             ),
             (
                 "overlay_hooks.pth",
