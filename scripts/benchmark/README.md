@@ -9,9 +9,10 @@ SHA-256, including files already present. CI prepares these inputs before timing
 in the walltime runner artifact, so the measured workloads do not download fixtures.
 
 `walltime-shards.py` assigns every built walltime suite to exactly one of up to eight independent
-runs. The saved plan is checked against the extracted benchmark binaries before execution, so a
-missing or stale artifact cannot silently reduce coverage. Each shard retains its own CodSpeed
-profile for main-branch baseline imports.
+runs. The saved plan records the tracked source, compiler and CodSpeed versions, and each built
+benchmark's SHA-256. Each runner checks the complete suite inventory and its selected binaries
+before execution, so missing, stale, or mixed build artifacts cannot silently reduce coverage. Each
+shard retains its own CodSpeed profile for main-branch baseline imports.
 
 ## Getting Started
 
