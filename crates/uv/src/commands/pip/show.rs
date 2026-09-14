@@ -215,10 +215,20 @@ pub(crate) fn pip_show(
         // If requests, show the list of installed files.
         if files {
             let path = distribution.install_path().join("RECORD");
-            let record = read_record(&mut File::open(path)?)?;
             writeln!(printer.stdout(), "Files:")?;
-            for entry in record {
-                writeln!(printer.stdout(), "  {}", entry.path)?;
+            match File::open(path) {
+                Ok(mut record) => {
+                    for entry in read_record(&mut record)? {
+                        writeln!(printer.stdout(), "  {}", entry.path)?;
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    writeln!(
+                        printer.stdout(),
+                        "Cannot locate RECORD or installed-files.txt"
+                    )?;
+                }
+                Err(error) => return Err(error.into()),
             }
         }
     }

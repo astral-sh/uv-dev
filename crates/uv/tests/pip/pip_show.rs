@@ -4,9 +4,11 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use assert_cmd::prelude::*;
+use assert_fs::fixture::ChildPath;
 use assert_fs::fixture::FileWriteBin;
 use assert_fs::fixture::FileWriteStr;
 use assert_fs::fixture::PathChild;
+use assert_fs::fixture::PathCreateDir;
 use indoc::indoc;
 
 use uv_static::EnvVars;
@@ -685,6 +687,31 @@ fn show_files() {
       requests/structures.py
       requests/utils.py
     ");
+}
+
+#[test]
+fn show_files_without_record() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let dist_info = ChildPath::new(context.site_packages()).child("project-1.0.0.dist-info");
+    dist_info.create_dir_all()?;
+    dist_info
+        .child("METADATA")
+        .write_str("Metadata-Version: 2.1\nName: project\nVersion: 1.0.0\n")?;
+
+    uv_snapshot!(context.filters(), context.pip_show().arg("project").arg("--files"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Name: project
+    Version: 1.0.0
+    Location: [SITE_PACKAGES]/
+    Requires:
+    Required-by:
+    Files:
+    Cannot locate RECORD or installed-files.txt
+    ");
+
+    Ok(())
 }
 
 #[test]
