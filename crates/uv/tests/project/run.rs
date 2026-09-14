@@ -10,6 +10,8 @@ use serde_json::json;
 #[cfg(unix)]
 use std::collections::BTreeMap;
 #[cfg(unix)]
+use std::env::join_paths;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 #[cfg(unix)]
@@ -270,6 +272,278 @@ fn run_with_python_file_reuses_copied_environment() -> Result<()> {
     marker.write_str("preserved")?;
     command.assert().success().stdout(contains("Python 3.12."));
     assert!(marker.path().is_file());
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn run_with_python_search_path_executable_name() -> Result<()> {
+    let context =
+        uv_test::test_context_with_versions!(&["3.12", "3.11"]).with_filtered_python_sources();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+        [project]
+        name = "foo"
+        version = "1.0.0"
+        requires-python = ">=3.11"
+        dependencies = []
+        "#
+        })?;
+
+    let system_path = context.temp_dir.child("system-path");
+    system_path.create_dir_all()?;
+    system_path
+        .child("python")
+        .symlink_to_file(&context.python_versions[0].1)?;
+    let override_path = context.temp_dir.child("override-path");
+    override_path.create_dir_all()?;
+    override_path
+        .child("python")
+        .symlink_to_file(&context.python_versions[1].1)?;
+
+    context
+        .run()
+        .arg("-p")
+        .arg(&context.python_versions[0].1)
+        .arg("python")
+        .arg("--version")
+        .env_remove(EnvVars::VIRTUAL_ENV)
+        .assert()
+        .success();
+    let seed_marker = context.temp_dir.child(".venv/seed-marker");
+    seed_marker.write_str("seed\n")?;
+
+    let mut request = context.run();
+    request
+        .arg("-p")
+        .arg("python")
+        .arg("python")
+        .arg("--version")
+        .env_remove(EnvVars::VIRTUAL_ENV)
+        .env(EnvVars::PATH, system_path.as_os_str());
+
+    // An empty override hides the existing environment's same-named launcher.
+    uv_snapshot!(context.filters(), request.env(EnvVars::UV_PYTHON_SEARCH_PATH, ""), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for executable name `python` in [PYTHON SOURCES]
+    ");
+    seed_marker.assert("seed\n");
+
+    uv_snapshot!(context.filters(), request.env(EnvVars::UV_PYTHON_SEARCH_PATH, override_path.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.11.[X]
+
+    ----- stderr -----
+    Using CPython 3.11.[X] interpreter at: override-path/python
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    seed_marker.assert(predicate::path::missing());
+
+    let repeat_marker = context.temp_dir.child(".venv/repeat-marker");
+    repeat_marker.write_str("repeat\n")?;
+    uv_snapshot!(context.filters(), &mut request, @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.11.[X]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    repeat_marker.assert("repeat\n");
+
+    // Without an explicit override, `python` can name the environment's own launcher.
+    uv_snapshot!(context.filters(), request.env_remove(EnvVars::UV_PYTHON_SEARCH_PATH), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.11.[X]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    repeat_marker.assert("repeat\n");
+
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn run_with_python_search_path_base_executable_name() -> Result<()> {
+    let context =
+        uv_test::test_context_with_versions!(&["3.12", "3.11"]).with_filtered_python_sources();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+        [project]
+        name = "foo"
+        version = "1.0.0"
+        requires-python = ">=3.11"
+        dependencies = []
+        "#
+        })?;
+
+    let base = context.temp_dir.child("named-base");
+    let base_bin = base.child("bin");
+    let named_python = base_bin.child("requested-python");
+    Command::new(&context.python_versions[0].1)
+        .arg("-I")
+        .arg("-c")
+        .arg(indoc! {r#"
+            import json
+            import pathlib
+            import shutil
+            import subprocess
+            import sys
+            import sysconfig
+
+            base = pathlib.Path(sys.argv[1])
+            creator = pathlib.Path(sys.argv[2])
+            executable = base / "bin" / "requested-python"
+            executable.parent.mkdir(parents=True)
+            shutil.copy2(creator, executable)
+            (base / "lib").symlink_to(
+                pathlib.Path(sysconfig.get_config_var("LIBDIR")),
+                target_is_directory=True,
+            )
+
+            query = subprocess.check_output([
+                str(executable), "-I", "-c",
+                "import json,sys;print(json.dumps([sys.implementation.name, "
+                "list(sys.version_info[:3]),sys.executable,sys._base_executable]))",
+            ], text=True)
+            assert json.loads(query) == [
+                sys.implementation.name,
+                list(sys.version_info[:3]),
+                str(executable),
+                str(executable),
+            ], query
+            "#})
+        .arg(base.path())
+        .arg(&context.python_versions[0].1)
+        .assert()
+        .success();
+
+    context
+        .run()
+        .arg("-p")
+        .arg(named_python.path())
+        .arg("python")
+        .arg("--version")
+        .env_remove(EnvVars::VIRTUAL_ENV)
+        .assert()
+        .success();
+
+    // Only the base executable has the requested name; the environment launcher is `python`.
+    Command::new(&context.python_versions[0].1)
+        .arg("-I")
+        .arg("-c")
+        .arg(indoc! {r#"
+            import json
+            import subprocess
+            import sys
+
+            query = subprocess.check_output([
+                sys.argv[1], "-I", "-c",
+                "import json,sys;print(json.dumps([sys.implementation.name, "
+                "list(sys.version_info[:3]),sys.executable,sys._base_executable]))",
+            ], text=True)
+            assert json.loads(query) == [
+                sys.implementation.name,
+                list(sys.version_info[:3]),
+                sys.argv[1],
+                sys.argv[2],
+            ], query
+            "#})
+        .arg(context.temp_dir.child(".venv/bin/python").path())
+        .arg(named_python.path())
+        .assert()
+        .success();
+
+    let override_path = context.temp_dir.child("override-path");
+    override_path.create_dir_all()?;
+    override_path
+        .child("requested-python")
+        .symlink_to_file(&context.python_versions[1].1)?;
+    let seed_marker = context.temp_dir.child(".venv/seed-marker");
+    seed_marker.write_str("seed\n")?;
+
+    let mut request = context.run();
+    request
+        .arg("-p")
+        .arg("requested-python")
+        .arg("python")
+        .arg("--version")
+        .env_remove(EnvVars::VIRTUAL_ENV)
+        .env(EnvVars::PATH, override_path.as_os_str());
+
+    uv_snapshot!(context.filters(), request.env(EnvVars::UV_PYTHON_SEARCH_PATH, base_bin.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.12.[X]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    seed_marker.assert("seed\n");
+
+    // An unset override still permits the base interpreter's explicit executable name.
+    uv_snapshot!(context.filters(), request.env_remove(EnvVars::UV_PYTHON_SEARCH_PATH), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.12.[X]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    seed_marker.assert("seed\n");
+
+    uv_snapshot!(context.filters(), request.env(EnvVars::UV_PYTHON_SEARCH_PATH, ""), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for executable name `requested-python` in [PYTHON SOURCES]
+    ");
+    seed_marker.assert("seed\n");
+
+    // The first configured executable takes precedence over a later matching base.
+    let ordered_path = join_paths([override_path.path(), base_bin.path()])?;
+    uv_snapshot!(context.filters(), request.env(EnvVars::UV_PYTHON_SEARCH_PATH, ordered_path), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.11.[X]
+
+    ----- stderr -----
+    Using CPython 3.11.[X] interpreter at: override-path/requested-python
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    seed_marker.assert(predicate::path::missing());
+
+    let repeat_marker = context.temp_dir.child(".venv/repeat-marker");
+    repeat_marker.write_str("repeat\n")?;
+    uv_snapshot!(context.filters(), &mut request, @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.11.[X]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    repeat_marker.assert("repeat\n");
+
     Ok(())
 }
 
