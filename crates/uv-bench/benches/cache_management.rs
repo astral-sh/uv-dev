@@ -1,53 +1,69 @@
-//! Inspect and clean a cache populated by real wheel installations.
+//! Inspect and clean caches populated by real project environments.
 
 mod common;
 
+use std::path::Path;
 use std::process::Command;
 
-use criterion::{BatchSize, Criterion, criterion_group, criterion_main, measurement::WallTime};
+use criterion::{
+    BatchSize, BenchmarkId, Criterion, SamplingMode, criterion_group, criterion_main,
+    measurement::WallTime,
+};
 use uv_bench::{
-    WHEEL_FIXTURES, fixture_path, is_codspeed_simulation, run_command, uv_command_with_cache,
+    EnvironmentFixture, PreparedEnvironment, environment_fixtures, is_codspeed_simulation,
+    run_command, uv_command_with_cache,
 };
 
+fn copy_cache(source: &Path, destination: &Path) -> std::io::Result<()> {
+    fs_err::create_dir_all(destination)?;
+    for entry in fs_err::read_dir(source)? {
+        let entry = entry?;
+        let target = destination.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            let link = fs_err::read_link(entry.path())?;
+            assert!(link.is_relative(), "Cache links must be relocatable");
+            #[cfg(unix)]
+            fs_err::os::unix::fs::symlink(link, target)?;
+            #[cfg(windows)]
+            if fs_err::metadata(entry.path())?.is_dir() {
+                fs_err::os::windows::fs::symlink_dir(link, target)?;
+            } else {
+                fs_err::os::windows::fs::symlink_file(link, target)?;
+            }
+        } else if file_type.is_dir() {
+            copy_cache(&entry.path(), &target)?;
+        } else {
+            fs_err::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
 struct PackageCache {
+    // Keep an installed environment alive so cached wheel files have real installation links.
+    _environment: PreparedEnvironment,
     directory: tempfile::TempDir,
 }
 
 impl PackageCache {
-    fn prepare() -> Self {
-        let cache = Self {
-            directory: tempfile::tempdir().expect("Failed to create package cache"),
-        };
-        let mut command = cache.command();
-        command
-            .env(
-                "UV_PYTHON_INSTALL_DIR",
-                std::path::absolute("../../.cache/bench-python")
-                    .expect("Failed to locate benchmark Python directory"),
-            )
-            .args([
-                "pip",
-                "install",
-                "--managed-python",
-                "--python",
-                "3.11.13",
-                "--python-platform",
-                "aarch64-manylinux2014",
-                "--no-deps",
-                "--link-mode",
-                "hardlink",
-                "--target",
-            ])
-            .arg(cache.directory.path().join("site-packages"));
-        for (_, filename) in WHEEL_FIXTURES {
-            command.arg(std::path::absolute(fixture_path(filename)).expect("Missing wheel"));
+    fn prepare(fixture: &EnvironmentFixture) -> Self {
+        let directory = tempfile::tempdir().expect("Failed to create package cache");
+        let source = Path::new("../../.cache/bench-caches").join(&fixture.name);
+        assert!(
+            source.is_dir(),
+            "Missing project cache. Run `python3 scripts/benchmark/prepare-environments.py --project-caches`."
+        );
+        copy_cache(&source, directory.path()).expect("Failed to copy project cache");
+        let environment = PreparedEnvironment::from_fixture_with_cache(fixture, directory.path());
+        Self {
+            _environment: environment,
+            directory,
         }
-        run_command(&mut command);
-        cache
     }
 
     fn command(&self) -> Command {
-        let mut command = uv_command_with_cache(&self.directory.path().join("cache"));
+        let mut command = uv_command_with_cache(self.directory.path());
         command.arg("--offline");
         command
     }
@@ -58,30 +74,34 @@ fn cache_management(c: &mut Criterion<WallTime>) {
         return;
     }
     let mut group = c.benchmark_group("cache_management");
-    for (name, arguments) in [
-        ("size", &["size", "--output-format", "machine"][..]),
-        ("prune", &["prune"][..]),
-        ("clean_flask", &["clean", "flask"][..]),
-        (
-            "clean_packages",
-            &["clean", "flask", "jupyterlab", "numpy", "sympy"][..],
-        ),
-    ] {
-        group.bench_function(name, |b| {
-            b.iter_batched(
-                || {
-                    let cache = PackageCache::prepare();
-                    let mut command = cache.command();
-                    command.arg("cache").args(arguments);
-                    (cache, command)
-                },
-                |(cache, mut command)| {
-                    run_command(&mut command);
-                    cache
-                },
-                BatchSize::PerIteration,
-            );
-        });
+    // Reconstructing a populated cache is expensive even though setup is not timed.
+    group.sampling_mode(SamplingMode::Flat);
+    for fixture in environment_fixtures() {
+        for (name, arguments) in [
+            ("size", &["size", "--output-format", "machine"][..]),
+            ("prune", &["prune"][..]),
+            ("clean_one", &["clean", "packaging"][..]),
+            (
+                "clean_packages",
+                &["clean", "packaging", "pyyaml", "click"][..],
+            ),
+        ] {
+            group.bench_function(BenchmarkId::new(name, &fixture.name), |b| {
+                b.iter_batched(
+                    || {
+                        let cache = PackageCache::prepare(&fixture);
+                        let mut command = cache.command();
+                        command.arg("cache").args(arguments);
+                        (cache, command)
+                    },
+                    |(cache, mut command)| {
+                        run_command(&mut command);
+                        cache
+                    },
+                    BatchSize::PerIteration,
+                );
+            });
+        }
     }
     group.finish();
 }
