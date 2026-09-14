@@ -13,6 +13,7 @@ pub mod project;
 pub mod scenario;
 mod server;
 mod wheel;
+pub mod witness;
 
 use std::path::{Path, PathBuf};
 
