@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileWriteStr, PathChild};
 use indoc::indoc;
+use serde_json::Value;
 
 use uv_fs::{PortablePathBuf, Simplified, write_atomic_sync};
 use uv_normalize::PackageName;
@@ -41,6 +42,37 @@ fn check_json(context: &TestContext) -> Command {
         "json-output",
     ]);
     command
+}
+
+fn check_jsonl(context: &TestContext) -> Command {
+    let mut command = context.pip_check();
+    command.args([
+        "--offline",
+        "--output-format",
+        "jsonl",
+        "--preview-features",
+        "jsonl",
+    ]);
+    command
+}
+
+fn parse_check_jsonl(contents: &[u8]) -> Result<Value> {
+    anyhow::ensure!(
+        contents.ends_with(b"\n"),
+        "incomplete JSONL pip-check record"
+    );
+    let lines = std::str::from_utf8(contents)?.lines().collect::<Vec<_>>();
+    anyhow::ensure!(lines.len() == 1, "expected one JSONL pip-check result");
+    let mut report: Value = serde_json::from_str(lines[0])?;
+    let event_type = report
+        .as_object_mut()
+        .context("JSONL pip-check report is not an object")?
+        .remove("type");
+    anyhow::ensure!(
+        event_type == Some(Value::String("result".to_owned())),
+        "JSONL pip-check event is not a result"
+    );
+    parse_check(&serde_json::to_vec(&report)?)
 }
 
 fn install_wheel(
@@ -123,6 +155,95 @@ fn pip_check_json_empty_and_preview() -> Result<()> {
     Checked 0 packages in [TIME]
     All installed packages are compatible
     ");
+    Ok(())
+}
+
+#[test]
+fn pip_check_jsonl_empty_and_preview() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let json = check_json(&context).assert().success();
+    let expected = parse_check(&json.get_output().stdout)?;
+    let unacknowledged = context
+        .pip_check()
+        .args(["--offline", "--output-format", "jsonl"])
+        .assert()
+        .success();
+    assert_eq!(
+        parse_check_jsonl(&unacknowledged.get_output().stdout)?,
+        expected
+    );
+    let stderr = String::from_utf8_lossy(&unacknowledged.get_output().stderr);
+    assert_eq!(
+        stderr
+            .matches("The JSONL output format is experimental")
+            .count(),
+        1
+    );
+    assert!(!stderr.contains("The `--output-format json` option is experimental"));
+    let acknowledged = check_jsonl(&context).assert().success().stderr("");
+    assert_eq!(
+        parse_check_jsonl(&acknowledged.get_output().stdout)?,
+        expected
+    );
+    Ok(())
+}
+
+#[test]
+fn pip_check_jsonl_completed_checks() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let package = install_wheel(&context, "diag-jsonl", "1.0.0", None)?;
+    write_metadata(
+        &package,
+        "diag-jsonl",
+        "1.0.0",
+        "Requires-Python: >=3.12\nRequires-Dist: diag-missing>=2 ; sys_platform == 'win32'\n",
+    )?;
+    let metadata = fs_err::read(package.join("METADATA"))?;
+    let target = [
+        "--python-version",
+        "3.11",
+        "--python-platform",
+        "x86_64-pc-windows-msvc",
+    ];
+    let json = check_json(&context)
+        .args(target)
+        .assert()
+        .code(1)
+        .stderr("");
+    let expected = parse_check(&json.get_output().stdout)?;
+    assert_eq!(expected["packages_checked"], 1);
+    assert_eq!(expected["diagnostics"].as_array().map(Vec::len), Some(2));
+    let normal = check_jsonl(&context)
+        .args(target)
+        .assert()
+        .code(1)
+        .stderr("");
+    assert_eq!(parse_check_jsonl(&normal.get_output().stdout)?, expected);
+    for argument in ["--quiet", "--no-progress"] {
+        let output = check_jsonl(&context)
+            .args(target)
+            .arg(argument)
+            .assert()
+            .code(1)
+            .stderr("");
+        assert_eq!(output.get_output().stdout, normal.get_output().stdout);
+    }
+    check_jsonl(&context)
+        .args(target)
+        .arg("-qq")
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr("");
+    assert_eq!(fs_err::read(package.join("METADATA"))?, metadata);
+
+    write_metadata(&package, "diag-jsonl", "1.0.0", "")?;
+    let json = check_json(&context).args(target).assert().success();
+    let compatible = check_jsonl(&context).args(target).assert().success();
+    let report = parse_check_jsonl(&compatible.get_output().stdout)?;
+    assert_eq!(report, parse_check(&json.get_output().stdout)?);
+    assert_eq!(report["packages_checked"], 1);
+    assert_eq!(report["diagnostics"], serde_json::json!([]));
     Ok(())
 }
 
@@ -264,6 +385,17 @@ fn pip_check_json_all_diagnostics() -> Result<()> {
         })
     );
     assert_eq!(report["diagnostics"].as_array().map(Vec::len), Some(8));
+    let jsonl = check_jsonl(&context)
+        .args([
+            "--python-version",
+            "3.11",
+            "--python-platform",
+            "x86_64-pc-windows-msvc",
+        ])
+        .assert()
+        .code(1)
+        .stderr("");
+    assert_eq!(parse_check_jsonl(&jsonl.get_output().stdout)?, report);
     let repeated = command().assert().code(1).stderr("");
     assert_eq!(repeated.get_output().stdout, output.stdout);
     assert_eq!(fs_err::read(mixed.join("METADATA"))?, metadata_before);
@@ -346,7 +478,20 @@ fn pip_check_json_omits_invalid_metadata_values() -> Result<()> {
             "requirement": "diag-direct @ https://user:****@example.com/diag_direct-1.0.0-py3-none-any.whl?X-Amz-Signature=****",
         }])
     );
-    for output in [&repaired.get_output().stdout, &repaired.get_output().stderr] {
+    let repaired_jsonl = check_jsonl(&context)
+        .env(EnvVars::RUST_LOG, "warn")
+        .assert()
+        .code(1);
+    assert_eq!(
+        parse_check_jsonl(&repaired_jsonl.get_output().stdout)?,
+        report
+    );
+    for output in [
+        &repaired.get_output().stdout,
+        &repaired.get_output().stderr,
+        &repaired_jsonl.get_output().stdout,
+        &repaired_jsonl.get_output().stderr,
+    ] {
         let output = String::from_utf8_lossy(output);
         for value in [
             "check-secret",
@@ -464,6 +609,18 @@ fn pip_check_json_quiet() -> Result<()> {
 fn pip_check_json_setup_error_has_no_report() {
     let context = uv_test::test_context!("3.12");
     check_json(&context)
+        .arg("--python")
+        .arg(context.temp_dir.child("missing-python").path())
+        .arg("--no-python-downloads")
+        .assert()
+        .code(2)
+        .stdout("");
+}
+
+#[test]
+fn pip_check_jsonl_setup_error_has_no_report() {
+    let context = uv_test::test_context!("3.12");
+    check_jsonl(&context)
         .arg("--python")
         .arg(context.temp_dir.child("missing-python").path())
         .arg("--no-python-downloads")

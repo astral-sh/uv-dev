@@ -51,3 +51,8 @@ the relevant requirement, installed version, or metadata paths. Requirements use
 URLs, and diagnostics are sorted by package and kind. The format is experimental; pass
 `--preview-features json-output` to acknowledge that its schema may change without warning. The
 [JSON Schema](../reference/internals/pip-check.schema.json) is generated from the report types.
+
+Use `--output-format jsonl --preview-features jsonl` for a single-line `"type": "result"` record
+containing the same report. A completed check still exits with status `0` or `1`; a setup failure,
+such as a missing interpreter, retains its usual error status without emitting a report. JSONL is a
+separate preview format and may change without warning.
