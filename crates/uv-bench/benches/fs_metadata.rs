@@ -20,6 +20,9 @@ use uv_distribution_types::{BuildInfo, Name};
 use uv_installer::SitePackages;
 use uv_python::{Interpreter, PythonEnvironment, Target};
 
+#[path = "fs_metadata/hardlinks.rs"]
+mod hardlinks;
+
 fn is_codspeed_simulation() -> bool {
     matches!(
         env::var("CODSPEED_RUNNER_MODE").as_deref(),
@@ -228,6 +231,7 @@ criterion_group!(
     fs_metadata,
     installed_package_sidecars,
     prune_retained_archive_files,
-    source_cache_key_globs
+    source_cache_key_globs,
+    hardlinks::metadata_backends
 );
 criterion_main!(fs_metadata);
