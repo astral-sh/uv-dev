@@ -3646,7 +3646,7 @@ impl VersionRequest {
     }
 
     /// Whether a patch version segment is present in the request.
-    pub(crate) fn has_patch(&self) -> bool {
+    fn has_patch(&self) -> bool {
         match self {
             Self::Any | Self::Default => false,
             Self::Major(..) => false,
