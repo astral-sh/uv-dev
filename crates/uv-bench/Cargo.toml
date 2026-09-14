@@ -144,6 +144,11 @@ path = "benches/member_index_lock.rs"
 harness = false
 
 [[bench]]
+name = "release_runtime"
+path = "benches/release_runtime.rs"
+harness = false
+
+[[bench]]
 name = "direct_url_lock"
 path = "benches/direct_url_lock.rs"
 harness = false

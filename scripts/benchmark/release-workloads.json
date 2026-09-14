@@ -1,0 +1,16 @@
+[
+  {
+    "name": "jupyterlab_project",
+    "size": "medium",
+    "url": "https://raw.githubusercontent.com/astral-sh/uv/c7db143b6a64b9ef73ab5cd39a3241a24c8807bc/test/ecosystem/jupyterlab/pyproject.toml",
+    "sha256": "948dfadc4d6a5d0f14814185cedd34f13796fa280a5bbbd81eb3b77b3d8b8c45",
+    "exclude_newer": "2026-06-30T00:00:00Z"
+  },
+  {
+    "name": "warehouse_project",
+    "size": "large",
+    "url": "https://raw.githubusercontent.com/astral-sh/uv/c7db143b6a64b9ef73ab5cd39a3241a24c8807bc/test/ecosystem/warehouse/pyproject.toml",
+    "sha256": "565ac41eac3f827d3ef18fba5ca12cc61746ec049d1e6b31575f7b921e85d356",
+    "exclude_newer": "2026-06-30T00:00:00Z"
+  }
+]
