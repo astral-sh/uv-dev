@@ -1,3 +1,4 @@
+use std::process::Output;
 use std::sync::LazyLock;
 
 use anyhow::{Context, Result, anyhow};
@@ -17,6 +18,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use uv_fs::Simplified;
 use uv_static::EnvVars;
 use uv_test::json_schema::JsonSchema;
+use uv_test::jsonl::{JsonlOutput, JsonlResultExpectation};
 use uv_test::packse::PackseServer;
 
 use uv_test::{TestContext, download_to_disk, uv_snapshot, venv_bin_path};
@@ -35,26 +37,6 @@ static SYNC_JSONL_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> = La
     .map_err(|error| error.to_string())
 });
 
-static JSONL_PROGRESS_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> =
-    LazyLock::new(|| {
-        JsonSchema::new(include_str!(
-            "../../../../docs/reference/internals/jsonl-progress.schema.json"
-        ))
-        .map_err(|error| error.to_string())
-    });
-
-fn validate_progress_events(events: &[Value]) -> Result<()> {
-    let schema = JSONL_PROGRESS_SCHEMA
-        .as_ref()
-        .map_err(|error| anyhow!("invalid JSONL progress schema: {error}"))?;
-    for event in events {
-        schema
-            .parse(&serde_json::to_vec(event)?)
-            .context("JSONL progress schema mismatch")?;
-    }
-    Ok(())
-}
-
 fn parse_sync_report(contents: &[u8]) -> Result<Value> {
     SYNC_SCHEMA
         .as_ref()
@@ -63,14 +45,11 @@ fn parse_sync_report(contents: &[u8]) -> Result<Value> {
         .context("sync schema mismatch")
 }
 
-fn parse_sync_jsonl_records(contents: &[u8]) -> Result<Vec<Value>> {
+fn parse_sync_jsonl(output: &Output, expectation: JsonlResultExpectation) -> Result<JsonlOutput> {
     let schema = SYNC_JSONL_SCHEMA
         .as_ref()
         .map_err(|error| anyhow!("invalid JSONL sync schema: {error}"))?;
-    std::str::from_utf8(contents)?
-        .lines()
-        .map(|line| schema.parse(line.as_bytes()))
-        .collect()
+    JsonlOutput::parse(schema, output, expectation)
 }
 
 macro_rules! sync_json_snapshot {
@@ -88,10 +67,8 @@ macro_rules! sync_json_snapshot {
 macro_rules! sync_jsonl_snapshot {
     ($($args:tt)*) => {{
         let output = uv_snapshot!($($args)*);
-        if !output.stdout.is_empty() {
-            let result = parse_sync_jsonl_records(&output.stdout);
-            assert!(result.is_ok(), "JSONL sync schema mismatch: {result:?}");
-        }
+        let result = parse_sync_jsonl(&output, JsonlResultExpectation::OptionalOnFailure);
+        assert!(result.is_ok(), "JSONL sync stream mismatch: {result:?}");
         output
     }};
 }
@@ -1436,11 +1413,18 @@ fn sync_jsonl_concurrent_download_and_install_events() -> Result<()> {
         .output()?;
     assert!(output.status.success());
 
-    let items = parse_sync_jsonl_records(&output.stdout)?;
-    let Some((report, progress)) = items.split_last() else {
-        anyhow::bail!("expected JSONL progress and a final sync report");
-    };
-    validate_progress_events(progress)?;
+    let parsed = parse_sync_jsonl(&output, JsonlResultExpectation::Required)?;
+    assert!(
+        parsed
+            .operations
+            .values()
+            .all(|operation| operation.completed)
+    );
+    let report = parsed
+        .result
+        .as_ref()
+        .context("missing final sync report")?;
+    let progress = &parsed.progress;
 
     let mut downloads = progress
         .iter()
@@ -1598,12 +1582,13 @@ fn sync_jsonl_git_checkout_and_build_events() -> Result<()> {
         .output()?;
     assert!(output.status.success());
 
-    let events = parse_sync_jsonl_records(&output.stdout)?;
-    let Some((report, progress)) = events.split_last() else {
-        anyhow::bail!("expected JSONL progress and a final sync report");
-    };
+    let parsed = parse_sync_jsonl(&output, JsonlResultExpectation::Required)?;
+    let report = parsed
+        .result
+        .as_ref()
+        .context("missing final sync report")?;
+    let progress = &parsed.progress;
     assert_eq!(report["type"], "result");
-    validate_progress_events(progress)?;
     let mut operations = progress
         .iter()
         .filter(|event| event["phase"] == "checkout" || event["phase"] == "build")

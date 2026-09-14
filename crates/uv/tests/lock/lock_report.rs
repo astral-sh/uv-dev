@@ -1,3 +1,4 @@
+use std::process::Output;
 use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
@@ -9,6 +10,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
 
 use uv_static::EnvVars;
 use uv_test::json_schema::JsonSchema;
+use uv_test::jsonl::{JsonlOutput, JsonlResultExpectation};
 use uv_test::packse::PackseServer;
 use uv_test::uv_snapshot;
 
@@ -51,29 +53,22 @@ fn lock_jsonl(context: &uv_test::TestContext) -> std::process::Command {
     command
 }
 
-fn parse_jsonl_report(contents: &[u8]) -> Result<(Vec<Value>, Value)> {
+fn parse_jsonl_output(output: &Output, expectation: JsonlResultExpectation) -> Result<JsonlOutput> {
     let schema = LOCK_JSONL_SCHEMA
         .as_ref()
         .map_err(|error| anyhow::anyhow!("invalid JSONL lock schema: {error}"))?;
-    let mut events = std::str::from_utf8(contents)?
-        .lines()
-        .map(|line| schema.parse(line.as_bytes()))
-        .collect::<Result<Vec<_>>>()?;
-    let mut report = events.pop().context("missing final JSONL lock report")?;
-    anyhow::ensure!(
-        events.iter().all(|event| event["type"] == "progress"),
-        "unexpected event before final JSONL lock report: {events:?}"
-    );
-    let event_type = report
+    JsonlOutput::parse(schema, output, expectation)
+}
+
+fn parse_jsonl_report(output: &Output) -> Result<(Vec<Value>, Value)> {
+    let parsed = parse_jsonl_output(output, JsonlResultExpectation::Required)?;
+    let mut report = parsed.result.context("missing final JSONL lock report")?;
+    report
         .as_object_mut()
         .context("JSONL lock report is not an object")?
         .remove("type");
-    anyhow::ensure!(
-        event_type == Some(Value::String("result".to_owned())),
-        "final JSONL event is not a result"
-    );
     let report = parse_report(&serde_json::to_vec(&report)?)?;
-    Ok((events, report))
+    Ok((parsed.progress, report))
 }
 
 fn assert_rejects_null_fields(report: &Value, object_pointer: &str, fields: &[&str]) -> Result<()> {
@@ -107,7 +102,7 @@ fn lock_jsonl_lifecycle() -> Result<()> {
         .args(["--check", "--offline"])
         .assert()
         .code(1);
-    let (progress, report) = parse_jsonl_report(&missing.get_output().stdout)?;
+    let (progress, report) = parse_jsonl_report(missing.get_output())?;
     assert!(progress.is_empty());
     assert_eq!(report["status"], "stale");
     assert_eq!(report["action"], "check");
@@ -122,7 +117,7 @@ fn lock_jsonl_lifecycle() -> Result<()> {
         .args(["--dry-run", "--offline"])
         .assert()
         .success();
-    let (progress, report) = parse_jsonl_report(&proposed.get_output().stdout)?;
+    let (progress, report) = parse_jsonl_report(proposed.get_output())?;
     assert_eq!(report, parse_report(&expected.get_output().stdout)?);
     assert!(
         progress
@@ -137,7 +132,7 @@ fn lock_jsonl_lifecycle() -> Result<()> {
     assert!(!context.temp_dir.child("uv.lock").exists());
 
     let created = lock_jsonl(&context).arg("--offline").assert().success();
-    let (_, report) = parse_jsonl_report(&created.get_output().stdout)?;
+    let (_, report) = parse_jsonl_report(created.get_output())?;
     assert_eq!(report["status"], "fresh");
     assert_eq!(report["action"], "create");
     assert_eq!(report["dry_run"], false);
@@ -155,7 +150,7 @@ fn lock_jsonl_lifecycle() -> Result<()> {
             .args(["--check", "--offline"])
             .assert()
             .code(i32::from(stale));
-        let (_, report) = parse_jsonl_report(&checked.get_output().stdout)?;
+        let (_, report) = parse_jsonl_report(checked.get_output())?;
         assert_eq!(report, parse_report(&expected.get_output().stdout)?);
         assert_eq!(context.read("uv.lock"), original);
     }
@@ -166,16 +161,19 @@ fn lock_jsonl_lifecycle() -> Result<()> {
             .args([flag, "--check", "--offline"])
             .assert()
             .success();
-        let (progress, report) = parse_jsonl_report(&output.get_output().stdout)?;
+        let (progress, report) = parse_jsonl_report(output.get_output())?;
         assert!(progress.is_empty(), "{flag} emitted progress");
         assert_eq!(report["status"], "fresh");
         assert_eq!(report["action"], "check");
     }
-    lock_jsonl(&context)
+    let silent = lock_jsonl(&context)
         .args(["--quiet", "--quiet", "--check", "--offline"])
         .assert()
         .success()
         .stdout("");
+    let parsed = parse_jsonl_output(silent.get_output(), JsonlResultExpectation::Forbidden)?;
+    assert!(parsed.status.success());
+    assert!(parsed.progress.is_empty());
     Ok(())
 }
 
@@ -212,7 +210,7 @@ async fn lock_jsonl_failed_create() -> Result<()> {
         .args(["--no-cache", "--no-index"])
         .assert()
         .code(2);
-    let (_, report) = parse_jsonl_report(&output.get_output().stdout)?;
+    let (_, report) = parse_jsonl_report(output.get_output())?;
     assert_eq!(report, parse_report(&expected.get_output().stdout)?);
     assert_eq!(report["status"], "stale");
     assert!(report.get("action").is_none());
@@ -237,7 +235,7 @@ fn lock_jsonl_script() -> Result<()> {
         .args(["--script", "script.py", "--dry-run", "--offline"])
         .assert()
         .success();
-    let (_, report) = parse_jsonl_report(&proposed.get_output().stdout)?;
+    let (_, report) = parse_jsonl_report(proposed.get_output())?;
     assert_eq!(report["status"], "stale");
     assert_eq!(report["action"], "create");
     assert_eq!(report["dry_run"], true);
@@ -253,7 +251,7 @@ fn lock_jsonl_script() -> Result<()> {
         .args(["--script", "script.py", "--offline"])
         .assert()
         .success();
-    let (_, report) = parse_jsonl_report(&created.get_output().stdout)?;
+    let (_, report) = parse_jsonl_report(created.get_output())?;
     assert_eq!(report["status"], "fresh");
     assert_eq!(report["action"], "create");
     let original = context.read("script.py.lock");
@@ -266,7 +264,7 @@ fn lock_jsonl_script() -> Result<()> {
         .args(["--script", "script.py", "--check-exists", "--offline"])
         .assert()
         .success();
-    let (_, report) = parse_jsonl_report(&frozen.get_output().stdout)?;
+    let (_, report) = parse_jsonl_report(frozen.get_output())?;
     assert_eq!(report, parse_report(&expected.get_output().stdout)?);
     assert_eq!(report["status"], "not_checked");
     assert_eq!(report["action"], "use");
@@ -306,8 +304,8 @@ fn lock_jsonl_preview_warning() -> Result<()> {
         .assert()
         .success();
     assert_eq!(
-        parse_jsonl_report(&unacknowledged.get_output().stdout)?.1,
-        parse_jsonl_report(&acknowledged.get_output().stdout)?.1
+        parse_jsonl_report(unacknowledged.get_output())?.1,
+        parse_jsonl_report(acknowledged.get_output())?.1
     );
     assert!(
         !String::from_utf8_lossy(&acknowledged.get_output().stderr)
