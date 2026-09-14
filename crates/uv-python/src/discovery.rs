@@ -1296,7 +1296,7 @@ fn python_installations_with_name<'a>(
 }
 
 /// Iterate over all Python installations that satisfy the given request.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn find_python_installations<'a>(
     request: &'a PythonRequest,
     environments: EnvironmentPreference,
@@ -1518,9 +1518,9 @@ fn find_python_installations_with_strategy<'a>(
 /// Find all Python installations that satisfy the given request, querying interpreters
 /// concurrently.
 ///
-/// Unlike [`find_python_installations`], this eagerly collects matching installations instead of
-/// returning a lazy iterator. Interpreter query failures produce warnings and are skipped. Other
-/// non-critical discovery errors are dropped, while critical errors are propagated in discovery order.
+/// This eagerly collects matching installations instead of returning a lazy iterator. Interpreter
+/// query failures produce warnings and are skipped. Other non-critical discovery errors are dropped,
+/// while critical errors are propagated in discovery order.
 pub fn find_all_python_installations(
     request: &PythonRequest,
     environments: EnvironmentPreference,
