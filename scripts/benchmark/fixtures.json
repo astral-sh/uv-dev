@@ -1,5 +1,10 @@
 [
   {
+    "filename": "click-8.4.2-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/fb/e2/79c688af8b210d232694e31e59da9f6ec747bae31c3f5946e4e9b98860d5/click-8.4.2-py3-none-any.whl",
+    "sha256": "e6f9f66136c816745b9d65817da91d61d957fb16e02e4dcd0552553c5a197b76"
+  },
+  {
     "filename": "uv.pyproject.toml",
     "url": "https://raw.githubusercontent.com/astral-sh/uv/c7db143b6a64b9ef73ab5cd39a3241a24c8807bc/pyproject.toml",
     "sha256": "d273d221a95a861dec0e7ec58f505c0e2110c93f21ad5d4a43111490eab93f27"

@@ -72,3 +72,79 @@ pub fn run_command(command: &mut Command) {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+/// A frozen Prefect runtime environment, installed from the prepared package cache.
+pub struct PreparedEnvironment {
+    directory: tempfile::TempDir,
+    python: PathBuf,
+}
+
+impl PreparedEnvironment {
+    /// Install the real runtime dependency graph without building the Prefect checkout.
+    pub fn prefect() -> Self {
+        let directory = tempfile::tempdir().expect("Failed to create project directory");
+        fs_err::copy(
+            fixture_path("prefect.pyproject.toml"),
+            directory.path().join("pyproject.toml"),
+        )
+        .expect("Failed to copy project metadata");
+        fs_err::copy(
+            fixture_path("prefect.lock"),
+            directory.path().join("uv.lock"),
+        )
+        .expect("Failed to copy project lockfile");
+        let mut environment = Self {
+            directory,
+            python: PathBuf::new(),
+        };
+        run_command(environment.command().args([
+            "sync",
+            "--frozen",
+            "--no-default-groups",
+            "--no-install-project",
+            "--managed-python",
+            "--python",
+            "3.11.13",
+        ]));
+        let output = environment
+            .command()
+            .args(["python", "find"])
+            .arg(environment.directory.path().join(".venv"))
+            .stdout(Stdio::piped())
+            .output()
+            .expect("Failed to locate environment Python");
+        assert!(
+            output.status.success(),
+            "Failed to locate environment Python"
+        );
+        environment.python = PathBuf::from(
+            String::from_utf8(output.stdout)
+                .expect("Python path is not UTF-8")
+                .trim(),
+        );
+        assert!(
+            environment.python.starts_with(environment.directory.path()),
+            "Python must belong to the benchmark environment"
+        );
+        environment
+    }
+
+    /// Return an offline command using this project and the pinned managed interpreter.
+    pub fn command(&self) -> Command {
+        let mut command = uv_command();
+        command
+            .env(
+                "UV_PYTHON_INSTALL_DIR",
+                std::path::absolute("../../.cache/bench-python")
+                    .expect("Failed to locate benchmark Python directory"),
+            )
+            .args(["--offline", "--project"])
+            .arg(self.directory.path());
+        command
+    }
+
+    /// The virtual environment's Python executable.
+    pub fn python(&self) -> &Path {
+        &self.python
+    }
+}

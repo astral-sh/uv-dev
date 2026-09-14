@@ -69,9 +69,18 @@ path = "benches/project_inspection.rs"
 harness = false
 
 [[bench]]
+name = "installed_environment"
+path = "benches/installed_environment.rs"
+harness = false
+
+[[bench]]
 name = "uv_pypi_types"
 path = "benches/uv_pypi_types.rs"
 harness = false
+
+[dependencies]
+fs-err = { workspace = true }
+tempfile = { workspace = true }
 
 [dev-dependencies]
 uv = { workspace = true }
@@ -103,13 +112,11 @@ async_zip = { workspace = true }
 clap = { workspace = true }
 criterion = { version = "5.0.1", default-features = false, package = "codspeed-criterion-compat", features = ["async_tokio"] }
 flate2 = { workspace = true }
-fs-err = { workspace = true }
 futures = { workspace = true }
 jiff = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tar-codec = { workspace = true }
-tempfile = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 toml = { workspace = true }
