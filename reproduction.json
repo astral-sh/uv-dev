@@ -1,0 +1,4 @@
+{
+  "reproduction": "needs_more_information",
+  "reason": "astral-sh/uv#21668 was withdrawn as opened in the wrong repository. The supplied event describes no behavior, commands, configuration, versions, platform, expected result, or actual result, so no meaningful uv reproduction can be constructed."
+}
