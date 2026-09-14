@@ -109,7 +109,8 @@ impl<'a> InstallRequest<'a> {
     }
 
     fn matches_installation(&self, installation: &ManagedPythonInstallation) -> bool {
-        self.download_request.satisfied_by_key(installation.key())
+        self.download_request
+            .satisfied_by_installation(installation)
     }
 
     fn python_request(&self) -> &PythonRequest {
@@ -534,7 +535,12 @@ async fn perform_install(
 
             let mut matching_installations = existing_installations
                 .iter()
-                .filter(|installation| request.matches_installation(installation))
+                // Reinstall matching keys even if their build revisions do not match.
+                .filter(|installation| {
+                    request
+                        .download_request
+                        .satisfied_by_key(installation.key())
+                })
                 .peekable();
 
             if matching_installations.peek().is_none() {
@@ -603,12 +609,20 @@ async fn perform_install(
                     unsatisfied.push(Cow::Borrowed(request));
                 }
             } else if let Some(installation) = existing_installations.iter().find(|inst| {
-                download_list.matches_installation(&request.download_request, inst.key())
+                request.matches_installation(inst)
+                    && download_list.allows_installed_build(&request.download_request, inst.key())
             }) {
                 debug!("Found `{}` for request `{}`", installation.key(), request);
                 satisfied.push(installation);
             } else {
                 debug!("No installation found for request `{}`", request);
+                // A different revision may already occupy the selected installation key.
+                if existing_installations
+                    .iter()
+                    .any(|installation| installation.key() == request.download.key())
+                {
+                    changelog.existing.insert(request.download.key().clone());
+                }
                 unsatisfied.push(Cow::Borrowed(request));
             }
         }
@@ -726,7 +740,13 @@ async fn perform_install(
         Some(python_executable_dir()?)
     };
 
-    let installations: Vec<_> = downloaded.iter().chain(satisfied.iter().copied()).collect();
+    // Prefer successful downloads over satisfied records for the same installation, which may
+    // still refer to the build revision that was replaced.
+    let installations: Vec<_> = downloaded
+        .iter()
+        .chain(satisfied.iter().copied())
+        .unique_by(|installation| installation.key())
+        .collect();
 
     // Ensure that the installations are _complete_ for both downloaded installations and existing
     // installations that match the request
