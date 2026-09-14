@@ -931,6 +931,133 @@ fn sync_json_python_key() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn sync_json_replaces_unusable_lockfile() -> Result<()> {
+    let server = PackseServer::new("simple/single-package.toml");
+    let index = server.index_url();
+    let mut reports = Vec::new();
+
+    for (script, lock_filename) in [(None, "uv.lock"), (Some("script.py"), "script.py.lock")] {
+        let context = uv_test::test_context!("3.12");
+        context
+            .temp_dir
+            .child("pyproject.toml")
+            .write_str(indoc! {r#"
+                [project]
+                name = "project"
+                version = "0.1.0"
+                requires-python = ">=3.12"
+                dependencies = ["a==1.0.0"]
+            "#})?;
+        context.temp_dir.child("script.py").write_str(indoc! {r#"
+            # /// script
+            # requires-python = ">=3.12"
+            # dependencies = ["a==1.0.0"]
+            # ///
+        "#})?;
+
+        let mut lock = context.lock();
+        lock.args(["--default-index", &index]);
+        if let Some(script) = script {
+            lock.args(["--script", script]);
+        }
+        lock.assert().success();
+
+        let mut sync = context.sync();
+        sync.args(["--default-index", &index]);
+        if let Some(script) = script {
+            sync.args(["--script", script]);
+        }
+        sync.assert().success();
+
+        // A syntactically valid lock can still have a source that cannot be reused.
+        let original = context.read(lock_filename);
+        let parsed: toml::Value = toml::from_str(&original)?;
+        let registry = parsed
+            .get("package")
+            .and_then(toml::Value::as_array)
+            .context("lockfile has no packages")?
+            .iter()
+            .find(|package| package.get("name").and_then(toml::Value::as_str) == Some("a"))
+            .and_then(|package| package.get("source"))
+            .and_then(|source| source.get("registry"))
+            .and_then(toml::Value::as_str)
+            .context("package a has no registry source")?;
+        let needle = format!("registry = {}", serde_json::to_string(registry)?);
+        assert_eq!(original.matches(&needle).count(), 1);
+        let invalid = original.replacen(&needle, r#"registry = "https://[invalid/simple""#, 1);
+        toml::from_str::<toml::Value>(&invalid)?;
+
+        for dry_run in [true, false] {
+            context.temp_dir.child(lock_filename).write_str(&invalid)?;
+            let mut command = context.sync();
+            command.args([
+                "--default-index",
+                &index,
+                "--output-format",
+                "json",
+                "--preview-features",
+                "json-output",
+                "--offline",
+            ]);
+            if let Some(script) = script {
+                command.args(["--script", script]);
+            }
+            if dry_run {
+                command.arg("--dry-run");
+            }
+            let output = command.assert().success();
+            let report = parse_sync_report(&output.get_output().stdout)?;
+            reports.push(json!({
+                "target": report["target"],
+                "action": report["lock"]["action"],
+                "dry_run": report["dry_run"],
+                "environment_action": report["sync"]["action"],
+                "package_changes": report["sync"]["changes"],
+                "lockfile_changed": context.read(lock_filename) != invalid,
+            }));
+        }
+    }
+
+    insta::assert_json_snapshot!(reports, @r#"
+    [
+      {
+        "action": "update",
+        "dry_run": true,
+        "environment_action": "check",
+        "lockfile_changed": false,
+        "package_changes": [],
+        "target": "project"
+      },
+      {
+        "action": "update",
+        "dry_run": false,
+        "environment_action": "check",
+        "lockfile_changed": true,
+        "package_changes": [],
+        "target": "project"
+      },
+      {
+        "action": "update",
+        "dry_run": true,
+        "environment_action": "check",
+        "lockfile_changed": false,
+        "package_changes": [],
+        "target": "script"
+      },
+      {
+        "action": "update",
+        "dry_run": false,
+        "environment_action": "check",
+        "lockfile_changed": true,
+        "package_changes": [],
+        "target": "script"
+      }
+    ]
+    "#);
+    Ok(())
+}
+
 /// Test json output
 #[test]
 fn sync_json() -> Result<()> {
