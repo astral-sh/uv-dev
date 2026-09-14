@@ -6,13 +6,13 @@ Classification: duplicate
 
 ## Summary
 
-On Linux with uv 0.12.13 and CPython 3.13.6, `uv add wxpython` fails while downloading and building the PyPI source distribution for both wxPython 4.3.1 and 4.2.5. The reported archive member changes between attempts. Installing the same releases with pip works, and `uv add` succeeds when given the already-downloaded local tarball.
+On MX Linux with uv 0.12.13 and CPython 3.13.6, `uv add wxpython` fails while downloading and building the PyPI source distribution for both wxPython 4.3.1 and 4.2.5. The reported archive member changes between attempts. Installing the same releases with pip works, and `uv add` succeeds when given the already-downloaded local tarball.
 
 The terminal error chain is `error decoding response body` -> `request or response body error` -> `error reading a body from connection` -> `connection reset`. The verbose log records three transient-failure retries followed by a fourth GET, so this is not evidence that the published tarball is malformed and is not the historical failure to recognize a stream error as retryable. The response is being interrupted while uv streams the sdist directly into its extractor; all full-download retries are exhausted.
 
 This is the same user-visible behavior already tracked by open issue astral-sh/uv#13717: a source distribution fails at an archive member during streamed extraction because the HTTP response body ends with a transport error. The low-level transport message differs (`broken pipe` there, `connection reset` here), but the command path, artifact type, extraction stage, error chain, and retry/robustness problem match.
 
-As of 2026-09-14, a maintainer was unable to reproduce the wxPython failure and asked whether antivirus software could be involved. No details about the maintainer's test environment were provided, and antivirus interference remains an unconfirmed hypothesis. Establishing whether the reporter has antivirus, endpoint-security, proxy, or other network-inspection software—and whether the behavior changes when such software is safely bypassed—would help distinguish an environment-specific connection reset from a generally reproducible PyPI download failure.
+As of 2026-09-14, a maintainer was unable to reproduce the wxPython failure and asked whether antivirus software could be involved. The reporter found no antivirus installed by default on MX Linux and also successfully ran `uv add polars --no-binary`, which forced a different registry source distribution through download and build. These observations make a universal sdist extraction failure and default-antivirus explanation less likely, but they do not identify why the wxPython response is repeatedly reset. No maintainer environment details or controlled endpoint-security comparison are available.
 
 ## Draft response
 
@@ -55,4 +55,4 @@ The reporter-suggested astral-sh/uv#14171 was inspected but ruled out as the can
 
 ### Follow-up investigation status
 
-A maintainer reported that they could not reproduce astral-sh/uv#21641 and asked about antivirus software. This narrows neither the affected environment nor the mechanism by itself: there is not yet a maintainer environment description, a reporter answer, or an antivirus-enabled/disabled comparison. Treat antivirus or endpoint-security interference as a diagnostic lead, not an established cause.
+A maintainer reported that they could not reproduce astral-sh/uv#21641 and asked about antivirus software. The reporter identifies the affected distribution as MX Linux, reports that it does not appear to install antivirus by default, and confirms that `uv add polars --no-binary` downloads and builds another sdist successfully in the same environment. This comparison shows the observed failure is narrower than all registry sdist downloads or builds. It does not rule out package-size, connection-path, proxy, endpoint-security, or other environmental differences, and none of those mechanisms is confirmed.
