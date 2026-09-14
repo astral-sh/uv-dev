@@ -340,6 +340,9 @@ pub enum PreviewFeature {
     MissingExcludeNewerPackageLock,
     /// Allows using `uv export --batch`.
     BatchExport,
+    /// Enables lazy imports in build backend invocations on CPython 3.15 and later.
+    /// This can affect import-time side effects in third-party build backends.
+    BuildLazyImports,
 }
 
 impl Display for PreviewFeature {
