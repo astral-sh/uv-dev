@@ -135,6 +135,12 @@ the measured command widens it to January 2026. Preparation also resolves withou
 so both preference-preserving and full-resolution implementations have the required metadata in
 cache. Regenerate these inputs explicitly with `--refresh-locks`.
 
+Run `python3 scripts/benchmark/prepare-member-index-locks.py` for the same application graphs as
+local path and workspace dependencies. The local package defines an explicit, query-qualified PyPI
+index, giving it a stable index identity distinct from the workspace's default index without
+requiring private credentials. The measured freshness checks are offline. These initial locks can
+also be regenerated with `--refresh-locks`.
+
 Run `python3 scripts/benchmark/prepare-resolver-errors.py` to prime the unsatisfiable requirements
 in `resolver-errors.json`. The fixed December 2024 cutoff selects 8 Rooster, 14 HTTPX, and 31 NumPy
 releases whose Python requirements exclude the requested interpreter. Diagnostic workloads solve
