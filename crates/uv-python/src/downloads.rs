@@ -1044,7 +1044,7 @@ impl ManagedPythonDownloadList {
     }
 
     /// Apply build selection to an installation whose version, runtime and platform already match.
-    pub fn allows_installed_build(
+    pub(crate) fn allows_installed_build(
         &self,
         request: &PythonDownloadRequest,
         key: &PythonInstallationKey,
