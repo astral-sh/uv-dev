@@ -89,6 +89,11 @@ path = "benches/wheel_tags.rs"
 harness = false
 
 [[bench]]
+name = "publish_preparation"
+path = "benches/publish_preparation.rs"
+harness = false
+
+[[bench]]
 name = "uv_pypi_types"
 path = "benches/uv_pypi_types.rs"
 harness = false
