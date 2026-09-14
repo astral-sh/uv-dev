@@ -1238,29 +1238,15 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
             // If the wheel does _not_ cover an environment that requires artifact coverage, it's
             // incompatible.
-            if env.marker_environment().is_none() && !self.options.artifact_environments.is_empty()
+            if let Some(marker) =
+                self.missing_artifact_environment(env, id, pubgrub, || implied_markers(filename))
             {
-                let wheel_marker = implied_markers(filename);
-                // If the caller marked an environment as requiring artifact coverage, ensure it
-                // has coverage.
-                for environment_marker in self.options.artifact_environments.iter().copied() {
-                    // If the platform is part of the current environment...
-                    if env.included_by_marker(environment_marker)
-                        && env.included_by_marker(
-                            find_environments(id, pubgrub).and(environment_marker),
-                        )
-                    {
-                        // ...but the wheel doesn't support it in this fork, it's incompatible.
-                        if !env.included_by_marker(wheel_marker.and(environment_marker)) {
-                            return Ok(Some(ResolverVersion::Unavailable(
-                                version.clone(),
-                                UnavailableVersion::IncompatibleDist(IncompatibleDist::Wheel(
-                                    IncompatibleWheel::MissingPlatform(environment_marker),
-                                )),
-                            )));
-                        }
-                    }
-                }
+                return Ok(Some(ResolverVersion::Unavailable(
+                    version.clone(),
+                    UnavailableVersion::IncompatibleDist(IncompatibleDist::Wheel(
+                        IncompatibleWheel::MissingPlatform(marker),
+                    )),
+                )));
             }
 
             // If the wheel's Python tag doesn't match the target Python, it's incompatible.
@@ -1466,6 +1452,41 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         Ok(Some(ResolverVersion::Unforked(version)))
     }
 
+    /// Return the first required environment in which the package is relevant but its artifacts
+    /// have no coverage within the current fork.
+    ///
+    /// The original required marker is returned for diagnostics and forking. Specific resolutions
+    /// check concrete wheel tags instead.
+    fn missing_artifact_environment(
+        &self,
+        env: &ResolverEnvironment,
+        id: Id<PubGrubPackage>,
+        pubgrub: &State<UvDependencyProvider>,
+        coverage: impl FnOnce() -> MarkerTree,
+    ) -> Option<MarkerTree> {
+        if env.marker_environment().is_some() || self.options.artifact_environments.is_empty() {
+            return None;
+        }
+        let coverage = coverage();
+        if coverage.is_true() {
+            return None;
+        }
+
+        let mut package_environments = None;
+        self.options
+            .artifact_environments
+            .iter()
+            .copied()
+            .find(|&required| {
+                if !env.may_include_marker(required) || env.markers_overlap(required, coverage) {
+                    return false;
+                }
+                let package_environments =
+                    *package_environments.get_or_insert_with(|| find_environments(id, pubgrub));
+                env.markers_overlap(required, package_environments)
+            })
+    }
+
     /// Determine whether a candidate covers all supported platforms; and, if not, generate a fork.
     ///
     /// This only ever applies to versions that lack source distributions And, for now, we only
@@ -1507,49 +1528,42 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
         // If the caller marked an environment as requiring artifact coverage, ensure it has
         // coverage.
-        for marker in self.options.artifact_environments.iter().copied() {
-            // If the platform is part of the current environment...
-            if env.included_by_marker(marker) {
-                // But isn't supported by the distribution in this fork...
-                if !env.included_by_marker(dist.implied_markers().and(marker))
-                    && env.included_by_marker(find_environments(id, pubgrub).and(marker))
-                {
-                    // Then we need to fork.
-                    let Some((left, right)) = fork_version_by_marker(env, marker) else {
-                        return Ok(Some(ResolverVersion::Unavailable(
-                            candidate.version().clone(),
-                            UnavailableVersion::IncompatibleDist(IncompatibleDist::Wheel(
-                                IncompatibleWheel::MissingPlatform(marker),
-                            )),
-                        )));
-                    };
+        if let Some(marker) =
+            self.missing_artifact_environment(env, id, pubgrub, || dist.implied_markers())
+        {
+            let Some((left, right)) = fork_version_by_marker(env, marker) else {
+                return Ok(Some(ResolverVersion::Unavailable(
+                    candidate.version().clone(),
+                    UnavailableVersion::IncompatibleDist(IncompatibleDist::Wheel(
+                        IncompatibleWheel::MissingPlatform(marker),
+                    )),
+                )));
+            };
 
-                    debug!(
-                        "Forking on required platform `{}` for {}=={} ({})",
-                        marker.try_to_string().unwrap_or_else(|| "true".to_string()),
-                        name,
-                        candidate.version(),
-                        [&left, &right]
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    );
-                    let forks = vec![
-                        VersionFork {
-                            env: left,
-                            id,
-                            version: None,
-                        },
-                        VersionFork {
-                            env: right,
-                            id,
-                            version: None,
-                        },
-                    ];
-                    return Ok(Some(ResolverVersion::Forked(forks)));
-                }
-            }
+            debug!(
+                "Forking on required platform `{}` for {}=={} ({})",
+                marker.try_to_string().unwrap_or_else(|| "true".to_string()),
+                name,
+                candidate.version(),
+                [&left, &right]
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            let forks = vec![
+                VersionFork {
+                    env: left,
+                    id,
+                    version: None,
+                },
+                VersionFork {
+                    env: right,
+                    id,
+                    version: None,
+                },
+            ];
+            return Ok(Some(ResolverVersion::Forked(forks)));
         }
 
         // For now, we only apply this to local versions.
@@ -1598,13 +1612,13 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         // If the remainder isn't relevant to the current environment, there's no need to fork.
         // For example, if we're solving for `sys_platform == 'darwin'` but the remainder is
         // `sys_platform == 'linux'`, we don't need to fork.
-        if !env.included_by_marker(remainder) {
+        if !env.may_include_marker(remainder) {
             return Ok(None);
         }
 
         // Similarly, if the local distribution is incompatible with the current environment, then
         // use the base distribution instead (but don't fork).
-        if !env.included_by_marker(dist.implied_markers()) {
+        if !env.may_include_marker(dist.implied_markers()) {
             let filename = match dist.for_installation() {
                 ResolvedDistRef::InstallableRegistrySourceDist { sdist, .. } => sdist
                     .filename()
@@ -2163,9 +2177,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                         .marker
                         .simplify_extras(slice::from_ref(&extra))
                         .simplify_not_extras_with(|candidate| candidate != &extra);
-                    if python_marker.is_disjoint(applicable_marker)
-                        || !env.included_by_marker(applicable_marker)
-                    {
+                    if !env.markers_overlap(python_marker, applicable_marker) {
                         continue;
                     }
                     if name == Some(&requirement.name) {
@@ -2320,7 +2332,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
         // If we're in a fork in universal mode, ignore any dependency that isn't part of
         // this fork (but will be part of another fork).
-        if !env.included_by_marker(requirement.marker) {
+        if !env.markers_overlap(python_marker, requirement.marker) {
             trace!("Skipping {requirement} because of {env}");
             return false;
         }
@@ -2417,7 +2429,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
                 // If we're in a fork in universal mode, ignore any dependency that isn't part of
                 // this fork (but will be part of another fork).
-                if !env.included_by_marker(constraint.marker) {
+                if !env.markers_overlap(python_marker, constraint.marker) {
                     trace!("Skipping {constraint} because of {env}");
                     return None;
                 }
@@ -4024,7 +4036,7 @@ impl ForkedDependencies {
                     let dep = deps.pop().unwrap();
                     let marker = dep.package.marker();
                     for fork in &mut forks {
-                        if fork.env.included_by_marker(marker) {
+                        if fork.env.markers_overlap(python_marker, marker) {
                             fork.add_dependency(dep.clone());
                         }
                     }
@@ -4043,7 +4055,7 @@ impl ForkedDependencies {
                         {
                             for dep in deps {
                                 for fork in &mut forks {
-                                    if fork.env.included_by_marker(marker) {
+                                    if fork.env.markers_overlap(python_marker, marker) {
                                         fork.add_dependency(dep.clone());
                                     }
                                 }
@@ -4083,17 +4095,17 @@ impl ForkedDependencies {
 
                     for fork_env in envs {
                         let mut new_fork = fork.clone();
-                        new_fork.set_env(fork_env);
+                        new_fork.set_env(fork_env, python_marker);
                         // We only add the dependency to this fork if it
                         // satisfies the fork's markers. Some forks are
                         // specifically created to exclude this dependency,
                         // so this isn't always true!
-                        if forker.included(&new_fork.env) {
+                        if forker.included(&new_fork.env, python_marker) {
                             new_fork.add_dependency(dep.clone());
                         }
                         // Filter out any forks we created that are disjoint with our
                         // Python requirement.
-                        if new_fork.env.included_by_marker(python_marker) {
+                        if new_fork.env.may_include_marker(python_marker) {
                             new.push(new_fork);
                         }
                     }
@@ -4168,10 +4180,9 @@ impl ForkedDependencies {
                         })
                     });
                     if dominated {
-                        // When dependencies are added to forks, we check `included_by_marker` but
-                        // not on whether the dependency's conflict item is included by the fork's
-                        // environment so there may be extraneous dependencies and we need to filter
-                        // the fork to clean up dependencies gated on already-excluded extras.
+                        // Marker checks do not determine whether the dependency's conflict item is
+                        // included by the fork's environment. Filter out dependencies gated on
+                        // already-excluded extras.
                         let rules: Vec<_> = set
                             .iter()
                             .filter(|item| !fork.env.included_by_group(item.as_ref()))
@@ -4276,13 +4287,13 @@ impl Fork {
 
     /// Sets the resolver environment to the one given.
     ///
-    /// Any dependency in this fork that does not satisfy the given environment
+    /// Any dependency that cannot satisfy both the given environment and the Python requirement
     /// is removed.
-    fn set_env(&mut self, env: ResolverEnvironment) {
+    fn set_env(&mut self, env: ResolverEnvironment, python_marker: MarkerTree) {
         self.env = env;
         self.dependencies.retain(|dep| {
             let marker = dep.package.marker();
-            if self.env.included_by_marker(marker) {
+            if self.env.markers_overlap(python_marker, marker) {
                 return true;
             }
             if let Some(conflicting_item) = dep.conflicting_item() {
@@ -4515,6 +4526,34 @@ struct ConflictTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn narrowing_a_fork_filters_dependencies_with_requires_python() {
+        let python_marker = "python_version >= '3.12'".parse().expect("valid marker");
+        let linux = "sys_platform == 'linux'".parse().expect("valid marker");
+        let dependency = "(python_version < '3.12' and sys_platform == 'linux') or \
+                          (python_version >= '3.12' and sys_platform == 'win32')"
+            .parse()
+            .expect("valid marker");
+        let env = ResolverEnvironment::universal(vec![]);
+        let (linux_env, _) = fork_version_by_marker(&env, linux).expect("distinct forks");
+        let mut fork = Fork::new(env);
+        fork.add_dependency(PubGrubDependency {
+            package: PubGrubPackageInner::Package {
+                name: "a".parse().expect("valid package name"),
+                extra: None,
+                group: None,
+                marker: dependency,
+            }
+            .into(),
+            version: Range::full(),
+            parent: None,
+            source: DependencySource::Unspecified,
+        });
+
+        fork.set_env(linux_env, python_marker);
+        assert!(fork.dependencies.is_empty());
+    }
 
     fn versions(versions: &[&str]) -> Vec<Version> {
         versions

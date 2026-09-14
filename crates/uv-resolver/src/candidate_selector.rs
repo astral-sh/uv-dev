@@ -215,7 +215,7 @@ impl CandidateSelector {
                     let marker = entry.marker();
 
                     // Prefer preferences that match the current environment.
-                    let matches_env = env.included_by_marker(marker.pep508());
+                    let matches_env = env.may_include_marker(marker.pep508());
 
                     // Prefer the latest (or earliest) version.
                     let version = if highest {

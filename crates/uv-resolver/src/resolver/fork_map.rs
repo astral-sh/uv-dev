@@ -72,7 +72,7 @@ impl ForkScope {
     }
 
     fn matches(&self, env: &ResolverEnvironment) -> bool {
-        env.included_by_marker(self.marker)
+        env.may_include_marker(self.marker)
             && self
                 .conflict()
                 .is_none_or(|conflict| env.included_by_group(conflict))

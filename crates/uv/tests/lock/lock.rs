@@ -23050,7 +23050,7 @@ fn lock_exclude_unnecessary_python_forks() -> Result<()> {
     Ok(())
 }
 
-/// A dependency outside the Python/fork intersection can cause a false version conflict.
+/// A requirement must be reachable within both `requires-python` and the current fork.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_requires_python_fork_marker_intersection() -> Result<()> {
@@ -23071,23 +23071,10 @@ fn lock_requires_python_fork_marker_intersection() -> Result<()> {
             environments = ["sys_platform == 'linux'"]
         "#})?;
 
-    let filters: Vec<_> = context
-        .filters()
-        .into_iter()
-        .chain([(
-            // This hint is only shown when the current platform doesn't match the target.
-            r"\nhint: The resolution failed for an environment that is not the current one[^\n]*\n",
-            "",
-        )])
-        .collect();
-
-    uv_snapshot!(filters, context.lock().arg("--no-index"), @"
-    exit_code: 1 (failure)
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @"
+    exit_code: 0 (success)
     ----- stderr -----
-    error: No solution found when resolving dependencies for split (markers: sys_platform == 'linux')
-      cause: Because your project depends on itself at an incompatible version (project{sys_platform == 'win32'}>1), we can conclude that your project's requirements are unsatisfiable.
-
-    hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
+    Resolved 1 package in [TIME]
     ");
 
     Ok(())
@@ -41135,6 +41122,92 @@ fn lock_required_environment_wheel_url_fork() -> Result<()> {
     error: No solution found when resolving dependencies for split (markers: platform_machine == 'x86_64')
       cause: Because only a==1.0.0 is available and a==1.0.0 has no Linux-compatible wheels, we can conclude that all versions of a cannot be used.
              And because your project depends on a, we can conclude that your project's requirements are unsatisfiable.
+    ");
+
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_package_relevance() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "required-environment-package-relevance"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.a.versions."1.0.0"]
+        sdist = false
+        wheel_tags = ["cp313-cp313-win_amd64"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12,<3.14"
+            dependencies = [
+                "a; (python_version < '3.13' and sys_platform == 'linux') or (python_version >= '3.13' and sys_platform == 'win32')",
+            ]
+
+            [tool.uv]
+            environments = ["python_version >= '3.13'"]
+            required-environments = ["sys_platform == 'linux'"]
+        "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_wheel_url_relevance() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "required-environment-wheel-url-relevance"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.a.versions."1.0.0"]
+        sdist = false
+        wheel_tags = ["cp313-cp313-win_amd64"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12,<3.14"
+            dependencies = [
+                "a @ {} ; (python_version < '3.13' and sys_platform == 'linux') or (python_version >= '3.13' and sys_platform == 'win32')",
+            ]
+
+            [tool.uv]
+            environments = ["python_version >= '3.13'"]
+            required-environments = ["sys_platform == 'linux'"]
+        "#, server.file_url("a-1.0.0-cp313-cp313-win_amd64.whl")})?;
+
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
     ");
 
     Ok(())
