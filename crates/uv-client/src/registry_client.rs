@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Formatter};
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -909,54 +908,8 @@ impl RegistryClient {
     ) -> Result<ResolutionMetadata, Error> {
         let metadata = match &built_dist {
             BuiltDist::Registry(wheels) => {
-                #[derive(Debug, Clone)]
-                enum WheelLocation {
-                    /// A local file path.
-                    Path(PathBuf),
-                    /// A remote URL.
-                    Url(DisplaySafeUrl),
-                }
-
-                let wheel = wheels.best_wheel();
-
-                let url = self
-                    .indexes
-                    .route_for(&wheel.index)
-                    .artifact_url_for_request(&wheel.file.url)
-                    .map_err(ErrorKind::ProxyIndex)?;
-                let location = if url.scheme() == "file" {
-                    let path = url
-                        .to_file_path()
-                        .map_err(|()| ErrorKind::NonFileUrl(url.clone()))?;
-                    WheelLocation::Path(path)
-                } else {
-                    WheelLocation::Url(url)
-                };
-
-                match location {
-                    WheelLocation::Path(path) => {
-                        let file = fs_err::tokio::File::open(&path)
-                            .await
-                            .map_err(ErrorKind::Io)?;
-                        let reader = tokio::io::BufReader::new(file);
-                        let contents = read_metadata_async_seek(&wheel.filename, reader)
-                            .await
-                            .map_err(|err| {
-                                ErrorKind::Metadata(path.to_string_lossy().to_string(), err)
-                            })?;
-                        ResolutionMetadata::parse_metadata(&contents).map_err(|err| {
-                            ErrorKind::MetadataParseError(
-                                wheel.filename.clone(),
-                                built_dist.to_string(),
-                                Box::new(err),
-                            )
-                        })?
-                    }
-                    WheelLocation::Url(url) => {
-                        self.wheel_metadata_registry(wheel, url, capabilities)
-                            .await?
-                    }
-                }
+                self.wheel_metadata_registry(wheels.best_wheel(), capabilities)
+                    .await?
             }
             BuiltDist::DirectUrl(wheel) => {
                 self.wheel_metadata_no_pep658(
@@ -1043,13 +996,10 @@ impl RegistryClient {
         Ok(metadata)
     }
 
-    /// Fetch registry wheel metadata from the request URL prepared by [`Self::wheel_metadata`].
-    ///
-    /// The URL has already been parsed and routed through the configured proxy, if any.
+    /// Fetch metadata for a registry wheel, applying its index route before reading the artifact.
     async fn wheel_metadata_registry(
         &self,
         wheel: &RegistryBuiltWheel,
-        url: DisplaySafeUrl,
         capabilities: &IndexCapabilities,
     ) -> Result<ResolutionMetadata, Error> {
         let RegistryBuiltWheel {
@@ -1059,6 +1009,27 @@ impl RegistryClient {
             ..
         } = wheel;
         let route = self.indexes.route_for(index);
+        let url = route
+            .artifact_url_for_request(&file.url)
+            .map_err(ErrorKind::ProxyIndex)?;
+
+        if url.scheme() == "file" {
+            let path = url
+                .to_file_path()
+                .map_err(|()| ErrorKind::NonFileUrl(url.clone()))?;
+            let file = fs_err::tokio::File::open(&path)
+                .await
+                .map_err(ErrorKind::Io)?;
+            let reader = tokio::io::BufReader::new(file);
+            let contents = read_metadata_async_seek(filename, reader)
+                .await
+                .map_err(|err| ErrorKind::Metadata(path.to_string_lossy().to_string(), err))?;
+            return ResolutionMetadata::parse_metadata(&contents).map_err(|err| {
+                ErrorKind::MetadataParseError(filename.clone(), wheel.to_string(), Box::new(err))
+                    .into()
+            });
+        }
+
         let effective_index = route.effective_url();
 
         // If the metadata file is available at its own url (PEP 658), download it from there.
@@ -1834,12 +1805,14 @@ impl Connectivity {
 #[cfg(test)]
 mod tests {
     use std::assert_matches;
+    use std::path::Path;
     use std::str::FromStr;
 
     use http::StatusCode;
     use tokio::sync::Semaphore;
     use url::Url;
     use uv_auth::AuthPolicy;
+    use uv_distribution_filename::WheelFilename;
     use uv_normalize::PackageName;
     use uv_pypi_types::{HashDigests, PypiSimpleDetail};
     use uv_redacted::DisplaySafeUrl;
@@ -1852,7 +1825,8 @@ mod tests {
     use uv_cache::Cache;
     use uv_distribution_types::{
         CanonicalArtifactUrl, File, FileLocation, Index, IndexCapabilities, IndexFormat,
-        IndexLocations, IndexMetadataRef, IndexName, IndexUrl, ToUrlError, Zstd,
+        IndexLocations, IndexMetadataRef, IndexName, IndexUrl, RegistryBuiltWheel, ToUrlError,
+        Zstd,
     };
     use uv_small_str::SmallString;
     use wiremock::matchers::{basic_auth, method, path, path_regex};
@@ -1955,6 +1929,92 @@ mod tests {
         ResponseTemplate::new(200)
             .set_body_raw(body.into(), "application/vnd.pypi.simple.v1+json")
             .insert_header("cache-control", "max-age=3600")
+    }
+
+    fn registry_wheel(
+        index: IndexUrl,
+        filename: &str,
+        url: DisplaySafeUrl,
+    ) -> Result<RegistryBuiltWheel, Error> {
+        Ok(RegistryBuiltWheel {
+            filename: WheelFilename::from_str(filename)?,
+            file: Box::new(File {
+                dist_info_metadata: true,
+                filename: filename.into(),
+                hashes: HashDigests::empty(),
+                requires_python: None,
+                size: None,
+                upload_time_utc_ms: None,
+                url: CanonicalArtifactUrl::from_lockfile(FileLocation::AbsoluteUrl(url.into())),
+                yanked: None,
+                zstd: None,
+            }),
+            index,
+            size_is_authoritative: false,
+        })
+    }
+
+    #[tokio::test]
+    async fn registry_wheel_metadata_uses_its_index_route() -> Result<(), Error> {
+        let canonical_server = MockServer::start().await;
+        let first_proxy = MockServer::start().await;
+        let second_proxy = MockServer::start().await;
+        let canonical = IndexUrl::from_str(&format!("{}/simple/", canonical_server.uri()))?;
+        let filename = "example-1.0.0-py3-none-any.whl";
+        let wheel = registry_wheel(
+            canonical.clone(),
+            filename,
+            canonical.url().join(&format!("../files/{filename}"))?,
+        )?;
+        let cache = Cache::temp()?;
+
+        for proxy in [&first_proxy, &second_proxy] {
+            Mock::given(method("GET"))
+                .and(path(format!("/files/{filename}.metadata")))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_string("Metadata-Version: 2.3\nName: example\nVersion: 1.0.0\n"),
+                )
+                .expect(1)
+                .mount(proxy)
+                .await;
+            let client = RegistryClientBuilder::new(BaseClientBuilder::default(), cache.clone())
+                .index_locations(proxy_index_locations(&canonical, proxy)?)
+                .build()?;
+
+            let metadata = client
+                .wheel_metadata_registry(&wheel, &IndexCapabilities::default())
+                .await?;
+            assert_eq!(metadata.name, PackageName::from_str("example")?);
+        }
+
+        assert_no_requests(&canonical_server).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn registry_wheel_metadata_reads_local_artifacts() -> Result<(), Error> {
+        let filename = "basic_package-0.1.0-py3-none-any.whl";
+        let wheel_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test/links")
+            .join(filename);
+        let url = Url::from_file_path(wheel_path).map_err(|()| "invalid wheel path")?;
+        let wheel = registry_wheel(
+            IndexUrl::from_str("https://example.com/simple/")?,
+            filename,
+            DisplaySafeUrl::from_url(url),
+        )?;
+        let client = RegistryClientBuilder::new(
+            BaseClientBuilder::default().connectivity(Connectivity::Offline),
+            Cache::temp()?,
+        )
+        .build()?;
+
+        let metadata = client
+            .wheel_metadata_registry(&wheel, &IndexCapabilities::default())
+            .await?;
+        assert_eq!(metadata.name, PackageName::from_str("basic-package")?);
+        Ok(())
     }
 
     #[tokio::test]
