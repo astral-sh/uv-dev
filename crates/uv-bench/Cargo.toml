@@ -49,6 +49,11 @@ path = "benches/wheel_install.rs"
 harness = false
 
 [[bench]]
+name = "sdist_extract"
+path = "benches/sdist_extract.rs"
+harness = false
+
+[[bench]]
 name = "uv_pypi_types"
 path = "benches/uv_pypi_types.rs"
 harness = false
