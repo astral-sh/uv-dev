@@ -187,6 +187,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(416)
                 return
         length = end - start + 1
+        if not head:
+            kind = "range" if range_header else "body"
+            with self.server.counts_lock:
+                self.server.counts[f"GET /files/{path.name} [{kind}]"] += 1
         self.send_response(206 if range_header else 200)
         self.send_header("Content-Type", "application/octet-stream")
         self.send_header("Content-Length", str(length))
