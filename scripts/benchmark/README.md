@@ -79,6 +79,12 @@ certificate-store access from TLS handshake and live network variability. Its na
 retains a separate profile stream, and its noise must be assessed independently from the Linux
 bare-metal runner.
 
+CodSpeed's runner currently supports Linux and macOS. Native Windows workloads use
+`criterion-runs.py` to retain three independent Criterion runs, their raw samples, exact binary
+hash, and within-run and between-run variation. CI uploads these separately as
+`benchmarks-walltime-windows`; they are native walltime measurements, not CodSpeed uploads. Use
+`--binary` to compare a different optimized uv build with the same workloads.
+
 Run `python3 scripts/benchmark/prepare-git.py` to prepare the Git sources in `git.json` under
 `.cache/bench-git`. These repositories retain upstream commit and tree objects for PyPA's sample
 project, Flask, Django, and the small pip regression fixture. Each captured ref points to its pinned
