@@ -2249,6 +2249,16 @@ impl PythonRequest {
                 false
             }
             Self::ExecutableName(name) => {
+                // An explicit search path controls named requests even when the virtual
+                // environment or its base has the requested basename.
+                if env::var_os(EnvVars::UV_PYTHON_SEARCH_PATH).is_some() {
+                    return match python_executables_with_name(name).next() {
+                        Some(Ok((_, executable))) => {
+                            Self::File(executable).satisfied(interpreter, cache)
+                        }
+                        Some(Err(_)) | None => false,
+                    };
+                }
                 // First, see if we have a match in the venv ...
                 if interpreter
                     .sys_executable()
