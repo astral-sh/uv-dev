@@ -84,6 +84,11 @@ path = "benches/installed_bytecode.rs"
 harness = false
 
 [[bench]]
+name = "wheel_tags"
+path = "benches/wheel_tags.rs"
+harness = false
+
+[[bench]]
 name = "uv_pypi_types"
 path = "benches/uv_pypi_types.rs"
 harness = false
