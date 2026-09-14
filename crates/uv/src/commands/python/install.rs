@@ -89,6 +89,25 @@ impl<'a> InstallRequest<'a> {
         })
     }
 
+    /// Create a reinstall request that preserves the exact installation identity.
+    fn from_installation(
+        installation: &ManagedPythonInstallation,
+        download_list: &'a ManagedPythonDownloadList,
+    ) -> Result<Self> {
+        let request = PythonDownloadRequest::from(installation);
+        let download_request = request.clone().fill()?;
+        let download = download_list
+            .iter_matching(&download_request)
+            .find(|download| download.key() == installation.key())
+            .ok_or_else(|| downloads::Error::NoDownloadFound(download_request.clone()))?;
+
+        Ok(Self {
+            request: PythonRequest::Key(request),
+            download_request,
+            download,
+        })
+    }
+
     fn matches_installation(&self, installation: &ManagedPythonInstallation) -> bool {
         self.download_request.satisfied_by_key(installation.key())
     }
@@ -405,9 +424,14 @@ async fn perform_install(
                     "Found Python version file at: {}",
                     file.path().user_display()
                 );
+                is_from_python_version_file = true;
             })
-            .map(PythonVersionFile::into_versions)
-            .inspect(|_| is_from_python_version_file = true)
+            .map(|file| {
+                file.into_versions()
+                    .into_iter()
+                    .map(|request| InstallRequest::new(request, &download_list))
+                    .collect::<Result<Vec<_>>>()
+            })
             .unwrap_or_else(|| {
                 // If no version file is found and no requests were made
                 // TODO(zanieb): We should consider differentiating between a global Python version
@@ -417,15 +441,17 @@ async fn perform_install(
                     // On bare `--reinstall`, reinstall all Python versions
                     existing_installations
                         .iter()
-                        .map(|installation| PythonRequest::Key(installation.into()))
+                        .map(|installation| {
+                            InstallRequest::from_installation(installation, &download_list)
+                        })
                         .collect()
                 } else {
-                    vec![PythonRequest::Default]
+                    Ok(vec![InstallRequest::new(
+                        PythonRequest::Default,
+                        &download_list,
+                    )?])
                 }
-            })
-            .into_iter()
-            .map(|request| InstallRequest::new(request, &download_list))
-            .collect::<Result<Vec<_>>>()?
+            })?
         }
     } else {
         targets
@@ -513,7 +539,7 @@ async fn perform_install(
                 }
 
                 // Construct an install request matching the existing installation.
-                match InstallRequest::new(PythonRequest::Key(installation.into()), &download_list) {
+                match InstallRequest::from_installation(installation, &download_list) {
                     Ok(request) => {
                         debug!("Will reinstall `{}`", installation.key());
                         unsatisfied.push(Cow::Owned(request));
