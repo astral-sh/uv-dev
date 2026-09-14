@@ -28,7 +28,8 @@ pub struct MarkerWitnessCertificate {
 }
 
 impl MarkerWitnessCertificate {
-    pub(super) fn assignment(&self) -> &Selection {
+    /// The fixed assignment certified against the complete scenario document.
+    pub fn assignment(&self) -> &Selection {
         &self.assignment
     }
 

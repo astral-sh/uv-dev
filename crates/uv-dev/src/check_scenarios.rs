@@ -24,7 +24,7 @@ use uv_test::packse::oracle::Selection;
 use uv_test::packse::project::ScenarioProject;
 use uv_test::packse::scenario::ScenarioDocument;
 
-const DEFAULT_MAX_WITNESS_WORK: usize = 100_000;
+pub(crate) const DEFAULT_MAX_WITNESS_WORK: usize = 100_000;
 
 #[derive(clap::Args)]
 pub(crate) struct Args {
@@ -275,7 +275,7 @@ struct SavedWitness {
     assignment: Selection,
 }
 
-fn read_witness(path: &Path) -> Result<Selection> {
+pub(crate) fn read_witness(path: &Path) -> Result<Selection> {
     // Stored certificates are evidence only; the actual scenario is certified again by the checker.
     let witness: SavedWitness = serde_json::from_slice(&fs_err::read(path)?)
         .with_context(|| format!("failed to read scenario witness `{}`", path.display()))?;
