@@ -172,6 +172,14 @@ fn tool_list_schema_rejects_invalid_output() -> Result<()> {
     assert!(parse_tool_list(&serde_json::to_vec(&invalid)?).is_err());
 
     let mut invalid = report.clone();
+    invalid["tools"][0]["editable_project_location"] = serde_json::json!(1);
+    assert!(parse_tool_list(&serde_json::to_vec(&invalid)?).is_err());
+
+    let mut invalid = report.clone();
+    invalid["tools"][0]["editable_project_location"] = serde_json::Value::Null;
+    assert!(parse_tool_list(&serde_json::to_vec(&invalid)?).is_err());
+
+    let mut invalid = report.clone();
     invalid["tools"][0]
         .as_object_mut()
         .unwrap()
