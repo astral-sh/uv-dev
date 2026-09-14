@@ -998,7 +998,9 @@ impl<'de> Deserialize<'de> for JsonPythonDownload {
             build: Option<String>,
         }
 
+        // Malformed modern fields must not be discarded by the legacy cache fallback.
         #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
         struct Legacy {
             name: String,
             arch: JsonArch,
@@ -2008,8 +2010,18 @@ mod tests {
                 }
             }
         }"#;
-        let downloads = parse_downloads_json(json.as_bytes(), "test".to_string()).unwrap();
-        assert_eq!(downloads["custom"].build_variant.as_deref(), Some("custom"));
+        for (default, expected_default) in [
+            (r#""default": false,"#, Some(false)),
+            (r#""default": true,"#, Some(true)),
+            (r#""default": null,"#, None),
+            ("", None),
+        ] {
+            let json = json.replace(r#""default": false,"#, default);
+            let downloads = parse_downloads_json(json.as_bytes(), "test".to_string())
+                .expect("Valid catalog should be parsed");
+            assert_eq!(downloads["custom"].build_variant.as_deref(), Some("custom"));
+            assert_eq!(downloads["custom"].default, expected_default);
+        }
     }
 
     #[test]
