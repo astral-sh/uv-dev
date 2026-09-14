@@ -4641,8 +4641,7 @@ fn python_build_variant_revision_context() -> anyhow::Result<(TestContext, Child
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
-        .with_managed_python_dirs()
-        .with_python_download_cache();
+        .with_managed_python_dirs();
     let platform = platform_key_from_env()?;
     let stock_key = format!("cpython-3.13.7-{platform}");
     context.python_install().arg(&stock_key).assert().success();
