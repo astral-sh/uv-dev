@@ -1,0 +1,19 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 21139,
+        "title": "Refactor HashDigest APIs",
+        "url": "https://github.com/astral-sh/uv/pull/21139",
+        "state": "open",
+        "reason": "Direct antecedent: it intentionally retains the old serialized layout through HashDigestWire to avoid cache churn and records removal for a future cache-bucket bump."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for HashDigestWire, HashDigest, CachedHashDigests, Digest<N>, Blake2b/Blake2b256, rkyv, Serde/archive identifiers, cache compatibility, cache churn, bucket versioning, schema migration, and hash invariants. Fix-oriented searches checked historical cache-format changes and serialization regressions. Inspected astral-sh/uv#21139 and its astral-sh/uv#21131 origin chain. Ruled out astral-sh/uv#6145, which concerns separate storage optimization, and astral-sh/uv#19298, a fixed legacy cache-ID regression. No existing implementation or canonical issue for this removal was found."
+  },
+  "type": "enhancement",
+  "type_reason": "This requests a deferred internal serialization simplification after a future cache-format change; no incorrect behavior is established. It is not a duplicate because astral-sh/uv#21139 intentionally retains HashDigestWire rather than tracking or implementing its removal.",
+  "summary": "astral-sh/uv#21139 is the sole close match and establishes why HashDigestWire exists and when it should be removed. Other cache and serialization candidates address different behavior.",
+  "draft_response": "astral-sh/uv#21139 confirms that HashDigestWire intentionally retains the current cache wire layout to avoid cache churn from the HashDigest refactor. We can keep this open for the next change that bumps all affected cache buckets. At that point, the compatibility conversions and custom rkyv verification can be removed in favor of the new representation, while CachedHashDigests should remain separate and the Blake2b spelling should change only after checking every remaining serialized consumer."
+}
