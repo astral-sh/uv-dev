@@ -75,9 +75,9 @@ $ uv run --profile --profile-output profile.html -m mypackage
 ```
 
 The original target determines the environment, including any inline script dependencies. The
-profiler uses that same interpreter and writes an HTML flame graph. Profiling requires permission
-to inspect the child process's memory. The command returns the profiler's exit status, which may
-differ from the target program's exit status.
+profiler uses that same interpreter and writes an HTML flame graph. Profiling requires permission to
+inspect the child process's memory. The command returns the profiler's exit status, which may differ
+from the target program's exit status.
 
 ## Legacy scripts on Windows
 
