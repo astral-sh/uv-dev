@@ -233,6 +233,84 @@ pub fn environment_fixtures() -> Vec<EnvironmentFixture> {
         .expect("Invalid environment fixture manifest")
 }
 
+/// A pinned command-line package with independently frozen dependencies.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct ToolFixture {
+    pub name: String,
+    pub version: String,
+    pub executable: String,
+}
+
+impl ToolFixture {
+    /// The exact top-level package requirement.
+    fn requirement(&self) -> String {
+        format!("{}=={}", self.name, self.version)
+    }
+
+    /// The tool's cross-platform, hashed dependency constraints.
+    fn constraints(&self) -> PathBuf {
+        std::path::absolute(
+            Path::new("../../scripts/benchmark/tool-locks").join(format!("{}.txt", self.name)),
+        )
+        .expect("Failed to locate tool constraints")
+    }
+}
+
+/// Ordinary Python CLI tools, ordered into one-, five-, and fifteen-tool installations.
+pub fn tool_fixtures() -> Vec<ToolFixture> {
+    serde_json::from_str(include_str!("../../../scripts/benchmark/tools.json"))
+        .expect("Invalid tool fixture manifest")
+}
+
+/// An isolated user-level tool installation, reconstructed from the prepared cache.
+pub struct PreparedTools {
+    directory: tempfile::TempDir,
+}
+
+impl PreparedTools {
+    /// Install the first `count` tools, including their real dependencies and entrypoints.
+    pub fn new(count: usize) -> Self {
+        let tools = tool_fixtures();
+        assert!(count > 0 && count <= tools.len(), "Invalid tool count");
+        let environment = Self {
+            directory: tempfile::tempdir().expect("Failed to create tool directory"),
+        };
+        for tool in tools.iter().take(count) {
+            run_command(
+                environment
+                    .command()
+                    .args([
+                        "tool",
+                        "install",
+                        "--no-build",
+                        "--managed-python",
+                        "--python",
+                        "3.12.11",
+                        "--constraints",
+                    ])
+                    .arg(tool.constraints())
+                    .arg(tool.requirement()),
+            );
+        }
+        environment
+    }
+
+    /// Return an offline command with this installation and the pinned managed interpreter.
+    pub fn command(&self) -> Command {
+        let mut command = uv_command();
+        command
+            .env("UV_TOOL_DIR", self.directory.path().join("tools"))
+            .env("UV_TOOL_BIN_DIR", self.directory.path().join("bin"))
+            .env(
+                "UV_PYTHON_INSTALL_DIR",
+                std::path::absolute("../../.cache/bench-python")
+                    .expect("Failed to locate benchmark Python directory"),
+            )
+            .arg("--offline");
+        command
+    }
+}
+
 /// A frozen project environment, installed from the prepared package cache.
 pub struct PreparedEnvironment {
     directory: tempfile::TempDir,
