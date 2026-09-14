@@ -97,6 +97,11 @@ commit and raw-content requests use the delayed replay server.
 
 ## Workload selection
 
+Run `python3 scripts/benchmark/prepare-resolver-errors.py` to prime the unsatisfiable requirements
+in `resolver-errors.json`. The fixed December 2024 cutoff selects 8 Rooster, 14 HTTPX, and 31 NumPy
+releases whose Python requirements exclude the requested interpreter. Diagnostic workloads solve
+offline and measure both the first rendering of a fresh error and resolution plus rendering.
+
 Prefer immutable artifacts and dependency graphs from real projects. Include small, medium, and
 large workloads where different sizes can exercise different paths, and identify the relevant
 dimension: package count, archive entries, artifact bytes, or dependency-graph complexity. A larger

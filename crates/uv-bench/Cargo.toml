@@ -24,6 +24,11 @@ path = "benches/uv.rs"
 harness = false
 
 [[bench]]
+name = "resolver_errors"
+path = "benches/resolver_errors.rs"
+harness = false
+
+[[bench]]
 name = "workspace_discovery"
 path = "benches/workspace_discovery.rs"
 harness = false
