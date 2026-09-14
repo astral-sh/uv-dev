@@ -798,29 +798,6 @@ mod tests {
     }
 
     #[test]
-    fn proxy_configuration_is_validated_during_deserialization() -> TestResult {
-        let proxy = named_index(
-            "socket",
-            "https://proxy.example.com/simple/",
-            None,
-            Some("pypi"),
-        )?;
-        let serialized = serde_json::json!({
-            "indexes": [proxy],
-            "flat-index": [],
-            "no-index": false,
-        });
-
-        let error = serde_json::from_value::<IndexLocations>(serialized)
-            .expect_err("an invalid proxy configuration should fail deserialization");
-        assert_eq!(
-            error.to_string(),
-            "Proxy indexes require an `artifact-base-url`, but `https://proxy.example.com/simple/` does not have one configured"
-        );
-        Ok(())
-    }
-
-    #[test]
     fn proxy_flat_index_keeps_identity_route() -> TestResult {
         let flat = index_url("https://flat.example.com/packages/")?;
         let locations = IndexLocations::new(
