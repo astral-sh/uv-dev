@@ -15,7 +15,7 @@ use uv_python::PythonEnvironment;
 
 use crate::commands::ExitStatus;
 use crate::commands::report::{EnvironmentReport, SchemaReport};
-use crate::printer::Printer;
+use crate::printer::{Printer, jsonl_result};
 
 /// The target used to check the installed distributions.
 #[derive(Debug, Serialize)]
@@ -93,6 +93,10 @@ impl Report {
                     "{}",
                     serde_json::to_string_pretty(self)?
                 )?;
+                Ok(())
+            }
+            PipCheckFormat::Jsonl => {
+                writeln!(printer.stdout_important(), "{}", jsonl_result(self)?)?;
                 Ok(())
             }
         }

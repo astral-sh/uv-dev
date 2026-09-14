@@ -82,6 +82,8 @@ pub enum PipCheckFormat {
     Text,
     /// Display the result in JSON format.
     Json,
+    /// Display the result as newline-delimited JSON.
+    Jsonl,
 }
 
 #[derive(Debug, Default, Clone, Copy, clap::ValueEnum)]
@@ -213,6 +215,10 @@ impl Cli {
             Commands::Workspace(WorkspaceNamespace {
                 command: WorkspaceCommand::Metadata(args),
             }) => matches!(args.output_format, MetadataOutputFormat::Jsonl),
+            Commands::Pip(PipNamespace {
+                command: PipCommand::Check(args),
+                ..
+            }) => matches!(args.output_format, PipCheckFormat::Jsonl),
             Commands::Tool(ToolNamespace {
                 command: ToolCommand::List(args),
             }) => matches!(args.output_format, ToolListFormat::Jsonl),
@@ -2898,6 +2904,8 @@ pub struct PipListArgs {
 #[derive(Args)]
 pub struct PipCheckArgs {
     /// Select the output format.
+    ///
+    /// The JSON and JSONL formats are experimental and may change without warning.
     #[arg(long, value_enum, default_value_t = PipCheckFormat::default())]
     pub output_format: PipCheckFormat,
 
