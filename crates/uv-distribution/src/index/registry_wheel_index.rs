@@ -5,18 +5,18 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use uv_cache::{Cache, CacheBucket, WheelCache};
 use uv_cache_info::CacheInfo;
-use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
     BuildInfo, BuildVariables, CachedRegistryDist, ConfigSettings, ExtraBuildRequirement,
     ExtraBuildRequires, ExtraBuildVariables, HashPolicy, Hashed, Index, IndexFormat,
-    IndexLocations, IndexUrl, PackageConfigSettings, RegistryBuiltDist, RegistrySourceDist,
+    IndexLocations, IndexRoute, IndexUrl, PackageConfigSettings, RegistryBuiltDist,
+    RegistrySourceDist,
 };
 use uv_fs::{directories, files};
 use uv_normalize::PackageName;
-use uv_pep440::Version;
 use uv_platform_tags::Tags;
 use uv_types::HashStrategy;
 
+use crate::hash::ArtifactHashPolicy;
 use crate::index::cached_wheel::{CachedWheel, ResolvedWheel};
 use crate::source::{HTTP_REVISION, HttpRevisionPointer, LOCAL_REVISION, LocalRevisionPointer};
 
@@ -49,26 +49,57 @@ impl IndexEntry<'_> {
 
     fn matches_wheel(
         &self,
-        index: &IndexUrl,
-        filename: &WheelFilename,
+        distribution: &RegistryBuiltDist,
+        route: &IndexRoute,
+        required: HashPolicy<'_>,
         no_build: bool,
         no_binary: bool,
     ) -> bool {
-        self.matches_index_and_build_policy(index, no_build, no_binary)
-            && self.dist.filename == *filename
+        let wheel = distribution.best_wheel();
+        if !self.matches_index_and_build_policy(&wheel.index, no_build, no_binary)
+            || self.dist.filename != wheel.filename
+        {
+            return false;
+        }
+
+        let file = if self.built {
+            distribution
+                .sdist
+                .as_ref()
+                .map(|source| source.file.as_ref())
+        } else {
+            Some(wheel.file.as_ref())
+        };
+        ArtifactHashPolicy::for_cached_registry(required, route, file)
+            .is_some_and(|hashes| hashes.admits_cached_artifact(&self.dist))
     }
 
     fn matches_source(
         &self,
-        index: &IndexUrl,
-        name: &PackageName,
-        version: &Version,
+        source: &RegistrySourceDist,
+        route: &IndexRoute,
+        required: HashPolicy<'_>,
         no_build: bool,
         no_binary: bool,
     ) -> bool {
-        self.matches_index_and_build_policy(index, no_build, no_binary)
-            && self.dist.filename.name == *name
-            && self.dist.filename.version == *version
+        if !self.matches_index_and_build_policy(&source.index, no_build, no_binary)
+            || self.dist.filename.name != source.name
+            || self.dist.filename.version != source.version
+        {
+            return false;
+        }
+
+        let file = if self.built {
+            Some(source.file.as_ref())
+        } else {
+            source
+                .wheels
+                .iter()
+                .find(|wheel| wheel.filename == self.dist.filename)
+                .map(|wheel| wheel.file.as_ref())
+        };
+        ArtifactHashPolicy::for_cached_registry(required, route, file)
+            .is_some_and(|hashes| hashes.admits_cached_artifact(&self.dist))
     }
 
     fn matches_index_and_build_policy(
@@ -131,27 +162,14 @@ impl<'a> RegistryWheelIndex<'a> {
         no_binary: bool,
     ) -> Option<&CachedRegistryDist> {
         let wheel = distribution.best_wheel();
-        let is_proxy = self.index_locations.route_for(&wheel.index).is_proxy();
+        let route = self.index_locations.route_for(&wheel.index);
+        let required = self
+            .hasher
+            .get_package(&wheel.filename.name, &wheel.filename.version);
 
-        self.get(&wheel.filename.name).find_map(|entry| {
-            if !entry.matches_wheel(&wheel.index, &wheel.filename, no_build, no_binary) {
-                return None;
-            }
-
-            if is_proxy {
-                let hashes = if entry.built {
-                    &distribution.sdist.as_ref()?.file.hashes
-                } else {
-                    &wheel.file.hashes
-                };
-
-                if !hashes.is_empty() && !entry.dist.satisfies(HashPolicy::Any(hashes.as_slice())) {
-                    return None;
-                }
-            }
-
-            Some(&entry.dist)
-        })
+        self.get(&wheel.filename.name)
+            .find(|entry| entry.matches_wheel(distribution, &route, required, no_build, no_binary))
+            .map(IndexEntry::dist)
     }
 
     /// Return a cached wheel that satisfies a registry source distribution requirement.
@@ -161,38 +179,12 @@ impl<'a> RegistryWheelIndex<'a> {
         no_build: bool,
         no_binary: bool,
     ) -> Option<&CachedRegistryDist> {
-        let is_proxy = self.index_locations.route_for(&source.index).is_proxy();
+        let route = self.index_locations.route_for(&source.index);
+        let required = self.hasher.get_package(&source.name, &source.version);
 
-        self.get(&source.name).find_map(|entry| {
-            if !entry.matches_source(
-                &source.index,
-                &source.name,
-                &source.version,
-                no_build,
-                no_binary,
-            ) {
-                return None;
-            }
-
-            if is_proxy {
-                let hashes = if entry.built {
-                    &source.file.hashes
-                } else {
-                    &source
-                        .wheels
-                        .iter()
-                        .find(|wheel| wheel.filename == entry.dist.filename)?
-                        .file
-                        .hashes
-                };
-
-                if !hashes.is_empty() && !entry.dist.satisfies(HashPolicy::Any(hashes.as_slice())) {
-                    return None;
-                }
-            }
-
-            Some(&entry.dist)
-        })
+        self.get(&source.name)
+            .find(|entry| entry.matches_source(source, &route, required, no_build, no_binary))
+            .map(IndexEntry::dist)
     }
 
     /// Return an iterator over available wheels for a given package.

@@ -40,6 +40,24 @@ impl<'a> ArtifactHashPolicy<'a> {
         Self::new(required, cache_verification)
     }
 
+    /// Determine the hash policy for a cached registry artifact.
+    ///
+    /// Direct indexes can reuse cached artifacts absent from the current registry metadata. A
+    /// proxy requires the matching file so its advertised hashes can be checked.
+    pub(crate) fn for_cached_registry(
+        required: HashPolicy<'a>,
+        route: &IndexRoute,
+        file: Option<&'a RegistryFile>,
+    ) -> Option<Self> {
+        if let Some(file) = file {
+            Some(Self::for_registry(required, route, file))
+        } else if route.is_proxy() {
+            None
+        } else {
+            Some(Self::from(required))
+        }
+    }
+
     pub(crate) fn algorithms(self) -> Vec<HashAlgorithm> {
         let mut algorithms = self.required.algorithms();
         algorithms.extend(self.cache_verification.algorithms());
@@ -102,6 +120,7 @@ impl<'a> From<HashPolicy<'a>> for ArtifactHashPolicy<'a> {
 
 #[cfg(test)]
 mod tests {
+    use uv_distribution_types::{File, FileLocation, Index, IndexLocations, IndexUrl};
     use uv_pypi_types::HashDigests;
 
     use super::*;
@@ -140,6 +159,75 @@ mod tests {
         );
 
         assert!(!hashes.admits_cached_artifact(&cached_hashes));
+        Ok(())
+    }
+
+    #[test]
+    fn cached_registry_policy_checks_provenance_and_hashes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let index: IndexUrl = "https://pypi.org/simple/".parse()?;
+        let direct = IndexLocations::default().route_for(&index);
+        let proxy = Index {
+            name: Some("proxy".parse()?),
+            proxy_for: Some("pypi".parse()?),
+            artifact_base_url: Some("https://proxy.example.com/files/".parse()?),
+            ..Index::from_extra_index_url("https://proxy.example.com/simple/".parse()?)
+        };
+        let proxy = IndexLocations::new(vec![proxy], Vec::new(), false)?.route_for(&index);
+        let expected = vec![
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".parse()?,
+        ];
+        let unexpected = vec![
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".parse()?,
+        ];
+        let file = direct.canonicalize_file(File {
+            dist_info_metadata: false,
+            filename: "package.whl".into(),
+            hashes: expected.clone().into(),
+            requires_python: None,
+            size: None,
+            upload_time_utc_ms: None,
+            url: FileLocation::new(
+                "https://files.pythonhosted.org/packages/package.whl".into(),
+                &"https://pypi.org/simple/package/".into(),
+            ),
+            yanked: None,
+            zstd: None,
+        })?;
+
+        let admits = |route, file, required, artifact: &Vec<HashDigest>| {
+            ArtifactHashPolicy::for_cached_registry(required, route, file)
+                .is_some_and(|hashes| hashes.admits_cached_artifact(artifact))
+        };
+
+        assert!(admits(&direct, None, HashPolicy::None, &unexpected));
+        assert!(!admits(&proxy, None, HashPolicy::None, &expected));
+        assert!(admits(&direct, Some(&file), HashPolicy::None, &unexpected));
+        assert!(admits(&proxy, Some(&file), HashPolicy::None, &expected));
+        assert!(!admits(&proxy, Some(&file), HashPolicy::None, &unexpected));
+
+        let hashless = RegistryFile {
+            hashes: HashDigests::empty(),
+            ..file.clone()
+        };
+        assert!(admits(
+            &proxy,
+            Some(&hashless),
+            HashPolicy::None,
+            &unexpected,
+        ));
+        assert!(admits(
+            &proxy,
+            Some(&hashless),
+            HashPolicy::Any(&expected),
+            &expected,
+        ));
+        assert!(!admits(
+            &proxy,
+            Some(&hashless),
+            HashPolicy::Any(&expected),
+            &unexpected,
+        ));
         Ok(())
     }
 }
