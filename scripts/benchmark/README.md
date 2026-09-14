@@ -13,6 +13,11 @@ runs. The saved plan is checked against the extracted benchmark binaries before 
 missing or stale artifact cannot silently reduce coverage. Each shard retains its own CodSpeed
 profile for main-branch baseline imports.
 
+Source-build workloads use the published backend wheels in the same fixture manifest and pin their
+versions with `source-build-constraints.txt`. This lets isolated builds use their real PEP 517
+backends through the replay index or a local wheel directory without depending on current PyPI
+releases.
+
 Whole-command workloads also need `cargo build --locked --profile profiling --bin uv`. Run
 `python3 scripts/benchmark/prepare-environments.py` to install the pinned CPython interpreter under
 `.cache/bench-python` and prime the package cache with frozen project dependencies. The

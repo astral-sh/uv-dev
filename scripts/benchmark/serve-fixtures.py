@@ -108,7 +108,7 @@ class Fixtures:
                 names = [
                     name
                     for name in wheel.namelist()
-                    if name.endswith(".dist-info/METADATA")
+                    if name.count("/") == 1 and name.endswith(".dist-info/METADATA")
                 ]
                 if len(names) != 1:
                     raise ValueError(f"Expected one METADATA file in {filename}")
