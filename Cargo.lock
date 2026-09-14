@@ -6103,6 +6103,7 @@ dependencies = [
  "uv-pypi-types",
  "uv-python",
  "uv-redacted",
+ "uv-requirements",
  "uv-requirements-txt",
  "uv-resolver",
  "uv-types",

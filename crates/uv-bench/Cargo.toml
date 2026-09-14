@@ -94,6 +94,11 @@ path = "benches/source_build_reuse.rs"
 harness = false
 
 [[bench]]
+name = "source_requirements"
+path = "benches/source_requirements.rs"
+harness = false
+
+[[bench]]
 name = "core_metadata"
 path = "benches/core_metadata.rs"
 harness = false
@@ -284,6 +289,7 @@ uv-preview = { workspace = true }
 uv-pypi-types = { workspace = true }
 uv-python = { workspace = true }
 uv-redacted = { workspace = true }
+uv-requirements = { workspace = true }
 uv-requirements-txt = { workspace = true }
 uv-resolver = { workspace = true }
 uv-types = { workspace = true }
