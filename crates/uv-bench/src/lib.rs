@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 /// Published wheels spanning Python source, application assets, and native extensions.
 pub const WHEEL_FIXTURES: &[(&str, &str)] = &[
@@ -28,4 +29,46 @@ pub fn fixture_path(filename: &str) -> PathBuf {
         path.display()
     );
     path
+}
+
+/// Run an optimized uv binary without inheriting user-specific uv configuration.
+pub fn uv_command() -> Command {
+    let root = std::path::absolute("../..").expect("Failed to locate repository root");
+    let binary = std::env::var_os("UV_BENCH_BINARY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            root.join("target/profiling")
+                .join(format!("uv{}", std::env::consts::EXE_SUFFIX))
+        });
+    assert!(
+        binary.is_file(),
+        "Missing benchmark binary {}. Run `cargo build --locked --profile profiling --bin uv`.",
+        binary.display()
+    );
+    let mut command = Command::new(binary);
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("UV_") {
+            command.env_remove(name);
+        }
+    }
+    command
+        .env_remove("VIRTUAL_ENV")
+        .env_remove("CONDA_PREFIX")
+        .env("UV_PYTHON_DOWNLOADS", "never")
+        .args(["--no-config", "--cache-dir"])
+        .arg(root.join(".cache"))
+        .stdout(Stdio::null());
+    command
+}
+
+/// Execute a benchmark command, retaining errors for failed fixture setup or invocations.
+pub fn run_command(command: &mut Command) {
+    let output = command
+        .output()
+        .expect("Failed to execute benchmark command");
+    assert!(
+        output.status.success(),
+        "Benchmark command {command:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
