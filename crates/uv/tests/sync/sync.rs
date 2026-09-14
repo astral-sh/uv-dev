@@ -1282,6 +1282,7 @@ fn sync_json() -> Result<()> {
 fn sync_jsonl() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_python_names()
+        .with_filtered_python_keys()
         .with_filtered_virtualenv_bin();
 
     context.temp_dir.child("pyproject.toml").write_str(
@@ -1312,7 +1313,7 @@ fn sync_jsonl() -> Result<()> {
     {"type":"progress","phase":"install","status":"started","total":1}
     {"type":"progress","phase":"install","status":"updated","name":"iniconfig==2.0.0","completed":1,"total":1}
     {"type":"progress","phase":"install","status":"completed","completed":1,"total":1}
-    {"type":"result","schema":{"version":"preview"},"target":"project","project":{"path":"[TEMP_DIR]/","workspace":{"path":"[TEMP_DIR]/"}},"sync":{"environment":{"path":"[VENV]/","python":{"path":"[VENV]/[BIN]/[PYTHON]","version":"3.12.[X]","implementation":"cpython"}},"action":"check","changes":[{"name":"iniconfig","version":"2.0.0","action":"installed"}]},"lock":{"path":"[TEMP_DIR]/uv.lock","action":"create"},"dry_run":false}
+    {"type":"result","schema":{"version":"preview"},"target":"project","project":{"path":"[TEMP_DIR]/","workspace":{"path":"[TEMP_DIR]/"}},"sync":{"environment":{"path":"[VENV]/","python":{"path":"[VENV]/[BIN]/[PYTHON]","version":"3.12.[X]","implementation":"cpython","key":"cpython-3.12.[X]-[PLATFORM]"}},"action":"check","changes":[{"name":"iniconfig","version":"2.0.0","action":"installed"}]},"lock":{"path":"[TEMP_DIR]/uv.lock","action":"create"},"dry_run":false}
 
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -1327,7 +1328,7 @@ fn sync_jsonl() -> Result<()> {
         .arg("--output-format").arg("jsonl"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
-    {"type":"result","schema":{"version":"preview"},"target":"project","project":{"path":"[TEMP_DIR]/","workspace":{"path":"[TEMP_DIR]/"}},"sync":{"environment":{"path":"[VENV]/","python":{"path":"[VENV]/[BIN]/[PYTHON]","version":"3.12.[X]","implementation":"cpython"}},"action":"check","changes":[]},"lock":{"path":"[TEMP_DIR]/uv.lock","action":"use"},"dry_run":false}
+    {"type":"result","schema":{"version":"preview"},"target":"project","project":{"path":"[TEMP_DIR]/","workspace":{"path":"[TEMP_DIR]/"}},"sync":{"environment":{"path":"[VENV]/","python":{"path":"[VENV]/[BIN]/[PYTHON]","version":"3.12.[X]","implementation":"cpython","key":"cpython-3.12.[X]-[PLATFORM]"}},"action":"check","changes":[]},"lock":{"path":"[TEMP_DIR]/uv.lock","action":"use"},"dry_run":false}
 
     ----- stderr -----
     warning: The JSONL output format is experimental and the schema may change without warning. Pass `--preview-features jsonl` to disable this warning.
@@ -1342,7 +1343,7 @@ fn sync_jsonl() -> Result<()> {
         .arg("--preview-features").arg("jsonl"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
-    {"type":"result","schema":{"version":"preview"},"target":"project","project":{"path":"[TEMP_DIR]/","workspace":{"path":"[TEMP_DIR]/"}},"sync":{"environment":{"path":"[VENV]/","python":{"path":"[VENV]/[BIN]/[PYTHON]","version":"3.12.[X]","implementation":"cpython"}},"action":"check","changes":[]},"lock":{"path":"[TEMP_DIR]/uv.lock","action":"use"},"dry_run":false}
+    {"type":"result","schema":{"version":"preview"},"target":"project","project":{"path":"[TEMP_DIR]/","workspace":{"path":"[TEMP_DIR]/"}},"sync":{"environment":{"path":"[VENV]/","python":{"path":"[VENV]/[BIN]/[PYTHON]","version":"3.12.[X]","implementation":"cpython","key":"cpython-3.12.[X]-[PLATFORM]"}},"action":"check","changes":[]},"lock":{"path":"[TEMP_DIR]/uv.lock","action":"use"},"dry_run":false}
     "#
     );
 
@@ -1353,7 +1354,7 @@ fn sync_jsonl() -> Result<()> {
         .arg("--preview-features").arg("jsonl"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
-    {"type":"result","schema":{"version":"preview"},"target":"project","project":{"path":"[TEMP_DIR]/","workspace":{"path":"[TEMP_DIR]/"}},"sync":{"environment":{"path":"[VENV]/","python":{"path":"[VENV]/[BIN]/[PYTHON]","version":"3.12.[X]","implementation":"cpython"}},"action":"check","changes":[]},"lock":{"path":"[TEMP_DIR]/uv.lock","action":"use"},"dry_run":false}
+    {"type":"result","schema":{"version":"preview"},"target":"project","project":{"path":"[TEMP_DIR]/","workspace":{"path":"[TEMP_DIR]/"}},"sync":{"environment":{"path":"[VENV]/","python":{"path":"[VENV]/[BIN]/[PYTHON]","version":"3.12.[X]","implementation":"cpython","key":"cpython-3.12.[X]-[PLATFORM]"}},"action":"check","changes":[]},"lock":{"path":"[TEMP_DIR]/uv.lock","action":"use"},"dry_run":false}
 
     ----- stderr -----
     Checked 1 package in [TIME]
