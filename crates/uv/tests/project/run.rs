@@ -7,6 +7,10 @@ use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
+#[cfg(unix)]
+use std::collections::BTreeMap;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 #[cfg(unix)]
 use std::process::Command;
@@ -16,6 +20,8 @@ use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+#[cfg(unix)]
+use uv_test::packse::generate_wheel;
 use uv_test::{TestContext, packse::PackseServer, uv_snapshot};
 
 #[test]
@@ -1501,10 +1507,8 @@ fn run_with() -> Result<()> {
     Ok(())
 }
 
-#[test]
 #[cfg(unix)]
-fn run_with_copied_virtualenv_uses_matching_base_interpreter() {
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
+fn create_copied_virtualenv_with_mismatched_base(context: &TestContext) -> ChildPath {
     let newer_python = &context.python_versions[0].1;
     let older_python = &context.python_versions[1].1;
     let base = context.temp_dir.child("base");
@@ -1579,6 +1583,120 @@ fn run_with_copied_virtualenv_uses_matching_base_interpreter() {
         .assert()
         .success();
 
+    base
+}
+
+#[cfg(unix)]
+fn remove_copied_virtualenv_home_executables(base: &Path) -> Result<()> {
+    for executable in ["python", "python3", "python3.12"] {
+        fs_err::remove_file(base.join("bin").join(executable))?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn copied_virtualenv_probe(context: &TestContext) -> Result<Command> {
+    let (filename, wheel) = generate_wheel(
+        &"copied-venv-probe".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+    );
+    let wheel_path = context.temp_dir.child(filename);
+    wheel_path.write_binary(&wheel)?;
+
+    let mut command = context.run();
+    command
+        .env(EnvVars::VIRTUAL_ENV, context.venv.path())
+        .arg("--no-project")
+        .arg("--offline")
+        .arg("--with")
+        .arg(wheel_path.path())
+        .arg("python")
+        .arg("-I")
+        .arg("-c")
+        .arg(indoc! {r"
+            import copied_venv_probe
+            import platform
+
+            print(platform.python_version())
+            print(copied_venv_probe.__version__)
+            "});
+    Ok(command)
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+enum CopiedVirtualenvBaseFault {
+    PermissionDenied,
+    InvalidResponse,
+    UnsuccessfulExit,
+    SymlinkLoop,
+    MissingHome,
+    UninspectableHome,
+}
+
+#[cfg(unix)]
+fn set_copied_virtualenv_base_fault(
+    base: &ChildPath,
+    fault: CopiedVirtualenvBaseFault,
+) -> Result<()> {
+    remove_copied_virtualenv_home_executables(base.path())?;
+    let reported = base.child("bin/reported-python");
+    let (script, mode) = match fault {
+        CopiedVirtualenvBaseFault::PermissionDenied => (
+            "#!/bin/sh\nprintf '%s\\n' 'not a Python query response'\n",
+            0o644,
+        ),
+        CopiedVirtualenvBaseFault::InvalidResponse => (
+            "#!/bin/sh\nprintf '%s\\n' 'not a Python query response'\n",
+            0o755,
+        ),
+        CopiedVirtualenvBaseFault::UnsuccessfulExit
+        | CopiedVirtualenvBaseFault::MissingHome
+        | CopiedVirtualenvBaseFault::UninspectableHome => (
+            "#!/bin/sh\nprintf '%s\\n' 'reported interpreter failed' >&2\nexit 17\n",
+            0o755,
+        ),
+        CopiedVirtualenvBaseFault::SymlinkLoop => {
+            base.child("bin/python").symlink_to_file("python3")?;
+            base.child("bin/python3").symlink_to_file("python")?;
+            return Ok(());
+        }
+    };
+    reported.write_str(script)?;
+    fs_err::set_permissions(reported.path(), PermissionsExt::from_mode(mode))?;
+    for executable in ["python", "python3", "python3.12"] {
+        base.child("bin")
+            .child(executable)
+            .symlink_to_file(reported.path())?;
+    }
+
+    match fault {
+        CopiedVirtualenvBaseFault::MissingHome | CopiedVirtualenvBaseFault::UninspectableHome => {
+            let home = base.child("reported-home");
+            if let CopiedVirtualenvBaseFault::UninspectableHome = fault {
+                home.symlink_to_file(home.path())?;
+            }
+            base.child("pyvenv.cfg")
+                .write_str(&format!("home = {}\n", home.display()))?;
+        }
+        CopiedVirtualenvBaseFault::PermissionDenied
+        | CopiedVirtualenvBaseFault::InvalidResponse
+        | CopiedVirtualenvBaseFault::UnsuccessfulExit
+        | CopiedVirtualenvBaseFault::SymlinkLoop => {}
+    }
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn run_with_copied_virtualenv_uses_matching_base_interpreter() {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
+    create_copied_virtualenv_with_mismatched_base(&context);
+
     let mut command = context.run();
     command
         .env(EnvVars::VIRTUAL_ENV, context.venv.path())
@@ -1617,6 +1735,188 @@ fn run_with_copied_virtualenv_uses_matching_base_interpreter() {
     ----- stderr -----
     Resolved 1 package in [TIME]
     ");
+}
+
+#[test]
+#[cfg(unix)]
+fn run_with_copied_virtualenv_recovers_removed_base_interpreter() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
+    let base = create_copied_virtualenv_with_mismatched_base(&context);
+    remove_copied_virtualenv_home_executables(base.path())?;
+
+    let mut command = copied_virtualenv_probe(&context)?;
+    uv_snapshot!(context.filters(), &mut command, @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.12.[X]
+    1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + copied-venv-probe==1.0.0 (from file://[TEMP_DIR]/copied_venv_probe-1.0.0-py3-none-any.whl)
+    ");
+    uv_snapshot!(context.filters(), &mut command, @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.12.[X]
+    1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn run_with_copied_virtualenv_recovers_dangling_base_interpreter() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
+    let base = create_copied_virtualenv_with_mismatched_base(&context);
+    remove_copied_virtualenv_home_executables(base.path())?;
+    let missing = base.child("bin/missing-python");
+    for executable in ["python", "python3", "python3.12"] {
+        base.child("bin")
+            .child(executable)
+            .symlink_to_file(missing.path())?;
+    }
+
+    let mut command = copied_virtualenv_probe(&context)?;
+    uv_snapshot!(context.filters(), &mut command, @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.12.[X]
+    1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + copied-venv-probe==1.0.0 (from file://[TEMP_DIR]/copied_venv_probe-1.0.0-py3-none-any.whl)
+    ");
+    uv_snapshot!(context.filters(), &mut command, @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.12.[X]
+    1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn run_with_copied_virtualenv_requires_matching_creator() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
+    let base = create_copied_virtualenv_with_mismatched_base(&context);
+    remove_copied_virtualenv_home_executables(base.path())?;
+
+    let configuration = context.venv.child("pyvenv.cfg");
+    let contents = fs_err::read_to_string(configuration.path())?
+        .lines()
+        .filter(|line| !line.starts_with("executable ="))
+        .collect::<Vec<_>>()
+        .join("\n");
+    configuration.write_str(&format!(
+        "{contents}\nexecutable = {}\n",
+        context.python_versions[1].1.display()
+    ))?;
+    uv_snapshot!(context.filters(), copied_virtualenv_probe(&context)?, @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Python interpreter not found at `[TEMP_DIR]/base/bin/python`
+    ");
+
+    configuration.write_str(&format!("{contents}\n"))?;
+    uv_snapshot!(context.filters(), copied_virtualenv_probe(&context)?, @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Python interpreter not found at `[TEMP_DIR]/base/bin/python`
+    ");
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn run_with_copied_virtualenv_classifies_base_query_failures() -> Result<()> {
+    for fault in [
+        CopiedVirtualenvBaseFault::PermissionDenied,
+        CopiedVirtualenvBaseFault::InvalidResponse,
+        CopiedVirtualenvBaseFault::UnsuccessfulExit,
+        CopiedVirtualenvBaseFault::SymlinkLoop,
+        CopiedVirtualenvBaseFault::MissingHome,
+        CopiedVirtualenvBaseFault::UninspectableHome,
+    ] {
+        let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
+        let base = create_copied_virtualenv_with_mismatched_base(&context);
+        set_copied_virtualenv_base_fault(&base, fault)?;
+        let command = copied_virtualenv_probe(&context)?;
+        match fault {
+            CopiedVirtualenvBaseFault::PermissionDenied => {
+                uv_snapshot!(context.filters(), command, @"
+                exit_code: 2 (failure)
+                ----- stderr -----
+                error: Failed to query Python interpreter at `[TEMP_DIR]/base/bin/python`
+                  cause: Permission denied (os error 13)
+                ");
+            }
+            CopiedVirtualenvBaseFault::InvalidResponse => {
+                uv_snapshot!(context.filters(), command, @"
+                exit_code: 2 (failure)
+                ----- stderr -----
+                error: Querying Python at `[TEMP_DIR]/base/bin/python` returned an invalid response: expected ident at line 1 column 2
+
+                [stdout]
+                not a Python query response
+                ");
+            }
+            CopiedVirtualenvBaseFault::UnsuccessfulExit => {
+                uv_snapshot!(context.filters(), command, @"
+                exit_code: 2 (failure)
+                ----- stderr -----
+                error: Querying Python at `[TEMP_DIR]/base/bin/python` failed with exit status exit status: 17
+
+                [stderr]
+                reported interpreter failed
+                ");
+            }
+            CopiedVirtualenvBaseFault::SymlinkLoop => {
+                let mut filters = context.filters();
+                filters.push((r"\(os error (40|62)\)", "(os error [N])"));
+                uv_snapshot!(filters, command, @"
+                exit_code: 2 (failure)
+                ----- stderr -----
+                error: Failed to query Python interpreter
+                  cause: failed to canonicalize path `[TEMP_DIR]/base/bin/python`: Too many levels of symbolic links (os error [N])
+                ");
+            }
+            CopiedVirtualenvBaseFault::MissingHome => {
+                uv_snapshot!(context.filters(), command, @"
+                exit_code: 0 (success)
+                ----- stdout -----
+                3.12.[X]
+                1.0.0
+
+                ----- stderr -----
+                Resolved 1 package in [TIME]
+                Prepared 1 package in [TIME]
+                Installed 1 package in [TIME]
+                 + copied-venv-probe==1.0.0 (from file://[TEMP_DIR]/copied_venv_probe-1.0.0-py3-none-any.whl)
+                ");
+            }
+            CopiedVirtualenvBaseFault::UninspectableHome => {
+                uv_snapshot!(context.filters(), command, @"
+                exit_code: 2 (failure)
+                ----- stderr -----
+                error: Broken Python trampoline at `base/bin/python`, was the underlying Python interpreter removed?
+                ");
+            }
+        }
+    }
+    Ok(())
 }
 
 #[test]
@@ -5942,7 +6242,6 @@ fn run_without_overlay() -> Result<()> {
 #[test]
 fn detect_infinite_recursion() -> Result<()> {
     use indoc::formatdoc;
-    use std::os::unix::fs::PermissionsExt;
     use uv_test::get_bin;
 
     let context = uv_test::test_context!("3.12");
