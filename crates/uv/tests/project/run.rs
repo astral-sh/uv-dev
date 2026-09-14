@@ -205,6 +205,75 @@ fn run_with_python_executable_name() -> Result<()> {
 }
 
 #[test]
+#[cfg(windows)]
+fn run_with_python_file_reuses_copied_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let requested = context.temp_dir.child("requested");
+    context
+        .venv()
+        .arg("--python")
+        .arg(&context.python_versions[0].1)
+        .arg(requested.path())
+        .assert()
+        .success();
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "foo"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = []
+
+            [tool.uv]
+            package = false
+        "#})?;
+
+    let requested_executable = requested.child("Scripts").child("python.exe");
+    let mut command = context.run();
+    command
+        .env_remove(EnvVars::VIRTUAL_ENV)
+        .arg("--offline")
+        .arg("--python")
+        .arg(requested_executable.path())
+        .arg("python")
+        .arg("--version");
+    command.assert().success().stdout(contains("Python 3.12."));
+
+    // The two Windows launchers are distinct files with the same compatible base interpreter.
+    std::process::Command::new(requested_executable.path())
+        .arg("-I")
+        .arg("-c")
+        .arg(indoc! {r#"
+            import json
+            import os
+            import subprocess
+            import sys
+
+            other = json.loads(subprocess.check_output([
+                sys.argv[1], "-I", "-c",
+                "import json,sys; print(json.dumps([sys.executable, "
+                "sys._base_executable, sys.implementation.name, "
+                "list(sys.version_info[:3])]))",
+            ], text=True))
+            assert not os.path.samefile(sys.executable, other[0]), other
+            assert os.path.samefile(sys._base_executable, other[1]), other
+            assert other[2:] == [sys.implementation.name, list(sys.version_info[:3])], other
+        "#})
+        .arg(context.venv.child("Scripts").child("python.exe").path())
+        .assert()
+        .success();
+
+    let marker = context.venv.child("copied-file-request-marker");
+    marker.write_str("preserved")?;
+    command.assert().success().stdout(contains("Python 3.12."));
+    assert!(marker.path().is_file());
+    Ok(())
+}
+
+#[test]
 fn run_args() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filter((
@@ -1789,6 +1858,85 @@ fn run_with_copied_virtualenv_uses_matching_base_interpreter() {
     ----- stderr -----
     Resolved 1 package in [TIME]
     ");
+}
+
+#[test]
+#[cfg(unix)]
+fn run_with_copied_virtualenv_rejects_incompatible_file_request() -> Result<()> {
+    const QUERY: &str =
+        "import json,sys; print(json.dumps([sys.implementation.name,list(sys.version_info[:3])]))";
+
+    for include_wrong_creator in [true, false] {
+        let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
+        create_copied_virtualenv_with_mismatched_base(&context);
+        let older_python = &context.python_versions[1].1;
+
+        let configuration = context.venv.child("pyvenv.cfg");
+        let contents = fs_err::read_to_string(configuration.path())?
+            .lines()
+            .filter(|line| {
+                line.split_once('=')
+                    .is_none_or(|(key, _)| key.trim() != "executable")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if include_wrong_creator {
+            configuration.write_str(&format!(
+                "{contents}\nexecutable = {}\n",
+                older_python.display()
+            ))?;
+        } else {
+            configuration.write_str(&format!("{contents}\n"))?;
+        }
+
+        context
+            .temp_dir
+            .child("pyproject.toml")
+            .write_str(indoc! {r#"
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                requires-python = ">=3.11"
+                dependencies = []
+
+                [tool.uv]
+                package = false
+            "#})?;
+
+        let expected = Command::new(older_python)
+            .args(["-I", "-c", QUERY])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let expected: serde_json::Value = serde_json::from_slice(&expected)?;
+        let mut command = context.run();
+        command
+            .env_remove(EnvVars::VIRTUAL_ENV)
+            .arg("--offline")
+            .arg("--python")
+            .arg(older_python)
+            .args(["python", "-I", "-c", QUERY]);
+
+        let marker = context.venv.child("file-request-marker");
+        marker.write_str("replaced")?;
+        let first = command.assert().success().get_output().stdout.clone();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&first)?,
+            expected
+        );
+        assert!(!marker.path().exists());
+
+        marker.write_str("preserved")?;
+        let repeated = command.assert().success().get_output().stdout.clone();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&repeated)?,
+            expected
+        );
+        assert!(marker.path().is_file());
+    }
+    Ok(())
 }
 
 #[test]

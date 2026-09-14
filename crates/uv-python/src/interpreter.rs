@@ -66,6 +66,35 @@ pub struct Interpreter {
     debug_enabled: bool,
 }
 
+/// The implementation and ABI properties required when using another interpreter as a base.
+#[derive(Eq, PartialEq)]
+struct InterpreterCompatibility<'a> {
+    python_full_version: &'a StringVersion,
+    implementation_name: &'a str,
+    implementation_version: &'a StringVersion,
+    platform: &'a Platform,
+    gil_disabled: bool,
+    debug_enabled: bool,
+}
+
+impl<'a> InterpreterCompatibility<'a> {
+    fn new(
+        markers: &'a MarkerEnvironment,
+        platform: &'a Platform,
+        gil_disabled: bool,
+        debug_enabled: bool,
+    ) -> Self {
+        Self {
+            python_full_version: markers.python_full_version(),
+            implementation_name: markers.implementation_name(),
+            implementation_version: markers.implementation_version(),
+            platform,
+            gil_disabled,
+            debug_enabled,
+        }
+    }
+}
+
 impl Interpreter {
     /// Detect the interpreter info for the given Python executable.
     pub fn query(executable: impl AsRef<Path>, cache: &Cache) -> Result<Self, Error> {
@@ -233,6 +262,23 @@ impl Interpreter {
     #[inline]
     pub const fn markers(&self) -> &MarkerEnvironment {
         &self.markers
+    }
+
+    /// Return whether another interpreter has the same Python implementation and ABI.
+    ///
+    /// This does not establish that the two interpreters belong to the same installation.
+    pub(crate) fn matches_interpreter(&self, other: &Self) -> bool {
+        InterpreterCompatibility::new(
+            &self.markers,
+            &self.platform,
+            self.gil_disabled,
+            self.debug_enabled,
+        ) == InterpreterCompatibility::new(
+            &other.markers,
+            &other.platform,
+            other.gil_disabled,
+            other.debug_enabled,
+        )
     }
 
     /// Return the [`ResolverMarkerEnvironment`] for this Python executable.
@@ -1028,12 +1074,17 @@ impl InterpreterInfo {
 
     /// Return whether another interpreter has the same Python implementation and ABI.
     fn matches_interpreter(&self, other: &Self) -> bool {
-        self.markers.python_full_version() == other.markers.python_full_version()
-            && self.markers.implementation_name() == other.markers.implementation_name()
-            && self.markers.implementation_version() == other.markers.implementation_version()
-            && self.platform == other.platform
-            && self.gil_disabled == other.gil_disabled
-            && self.debug_enabled == other.debug_enabled
+        InterpreterCompatibility::new(
+            &self.markers,
+            &self.platform,
+            self.gil_disabled,
+            self.debug_enabled,
+        ) == InterpreterCompatibility::new(
+            &other.markers,
+            &other.platform,
+            other.gil_disabled,
+            other.debug_enabled,
+        )
     }
 
     /// Return the resolved [`InterpreterInfo`] for the given Python executable.
@@ -1436,6 +1487,7 @@ mod tests {
     use uv_pep440::Version;
 
     use crate::Interpreter;
+    use crate::interpreter::InterpreterInfo;
 
     fn mocked_interpreter_response() -> &'static str {
         indoc! {r##"
@@ -1496,6 +1548,41 @@ mod tests {
             "debug_enabled": false
         }
     "##}
+    }
+
+    #[test]
+    fn interpreter_compatibility_requires_all_provenance_fields() -> Result<()> {
+        let response: Value = serde_json::from_str(mocked_interpreter_response())?;
+        let original: InterpreterInfo = serde_json::from_value(response.clone())?;
+        assert!(original.matches_interpreter(&original));
+
+        for (field, replacement) in [
+            ("/markers/python_full_version", serde_json::json!("3.12.1")),
+            ("/markers/implementation_name", serde_json::json!("pypy")),
+            (
+                "/markers/implementation_version",
+                serde_json::json!("3.12.1"),
+            ),
+            ("/platform/arch", serde_json::json!("aarch64")),
+            ("/gil_disabled", serde_json::json!(false)),
+            ("/debug_enabled", serde_json::json!(true)),
+        ] {
+            let mut changed = response.clone();
+            *changed.pointer_mut(field).unwrap() = replacement;
+            let changed: InterpreterInfo = serde_json::from_value(changed)?;
+            assert!(
+                !original.matches_interpreter(&changed),
+                "different {field} must be incompatible"
+            );
+        }
+
+        // Compatibility is independent of the environment path and incidental host markers.
+        let mut compatible = response;
+        compatible["sys_prefix"] = serde_json::json!("/another/environment");
+        compatible["markers"]["platform_release"] = serde_json::json!("another release");
+        let compatible: InterpreterInfo = serde_json::from_value(compatible)?;
+        assert!(original.matches_interpreter(&compatible));
+        Ok(())
     }
 
     #[tokio::test]
