@@ -1,0 +1,26 @@
+[
+  {
+    "name": "sampleproject",
+    "repository": "https://github.com/pypa/sampleproject",
+    "commit": "621e4974ca25ce531773def586ba3ed8e736b3fc",
+    "reference": "refs/heads/main"
+  },
+  {
+    "name": "flask",
+    "repository": "https://github.com/pallets/flask",
+    "commit": "2c1b30d0503cfb064f1cb252e6614a06915a362a",
+    "reference": "refs/tags/3.1.2"
+  },
+  {
+    "name": "django",
+    "repository": "https://github.com/django/django",
+    "commit": "75c4403f07b8ad25893f7832dbe8fc6814b53b2d",
+    "reference": "refs/tags/5.2.6"
+  },
+  {
+    "name": "pip-test-package",
+    "repository": "https://github.com/pypa/pip-test-package",
+    "commit": "5547fa909e83df8bd743d3978d6667497983a4b7",
+    "reference": "refs/heads/master"
+  }
+]

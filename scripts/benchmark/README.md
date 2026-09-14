@@ -43,6 +43,13 @@ immutable lockfile. The server binds an ephemeral loopback port and applies a fi
 delay to model an ordinary remote index without relying on live service timing. Wheel responses
 support byte ranges; only locally prepared artifact bodies can be downloaded.
 
+Run `python3 scripts/benchmark/prepare-git.py` to prepare the Git sources in `git.json` under
+`.cache/bench-git`. These repositories retain upstream commit and tree objects for PyPA's sample
+project, Flask, Django, and the small pip regression fixture. Each captured ref points to its pinned
+commit. Their complete reachable history lets the ordinary Git client fetch branches and tags
+without requiring special handling for a shallow remote. Git workloads use these local repositories
+without fetching live upstream data while timing.
+
 ## Workload selection
 
 Prefer immutable artifacts and dependency graphs from real projects. Include small, medium, and
