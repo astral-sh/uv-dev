@@ -1198,7 +1198,7 @@ pub(super) fn store_credentials_from_target(
                 uv_git::store_credentials_from_url(git)?;
             }
             Source::Url { url, .. } => {
-                client_builder.store_credentials_from_url(url)?;
+                client_builder.store_credentials_from_url(url.as_url())?;
             }
             _ => {}
         }

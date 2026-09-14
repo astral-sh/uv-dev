@@ -288,6 +288,79 @@ fn add_git() -> Result<()> {
     Ok(())
 }
 
+/// A direct URL source must retain the authentication needed to replay its download.
+#[test]
+fn add_url_credentials() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .arg("example @ https://user:password@example.com/example-1.0.tar.gz?sig=signature&keep=value")
+        .arg("--frozen"), @"
+    exit_code: 0 (success)
+    ");
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "example",
+    ]
+
+    [tool.uv.sources]
+    example = { url = "https://user:password@example.com/example-1.0.tar.gz?sig=signature&keep=value" }
+    "#);
+    Ok(())
+}
+
+#[test]
+fn add_index_query_credentials() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .arg("example")
+        .arg("--index")
+        .arg("https://user:password@example.com/simple?sig=signature&keep=value")
+        .arg("--frozen"), @"
+    exit_code: 0 (success)
+    ");
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "example",
+    ]
+
+    [[tool.uv.index]]
+    url = "https://example.com/simple?keep=value"
+    "#);
+    Ok(())
+}
+
 /// Add a Git requirement from a private repository, with credentials. The resolution should
 /// succeed, but the `pyproject.toml` should omit the credentials.
 #[test]

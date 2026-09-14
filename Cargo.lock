@@ -7224,6 +7224,7 @@ dependencies = [
  "ref-cast",
  "schemars",
  "serde",
+ "serde_json",
  "thiserror",
  "url",
 ]

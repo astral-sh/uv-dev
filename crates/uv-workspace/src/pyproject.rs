@@ -33,7 +33,7 @@ use uv_pypi_types::{
     ConflictError, Conflicts, DependencyGroups, SchemaConflicts, SupportedEnvironments,
     VerbatimParsedUrl,
 };
-use uv_redacted::DisplaySafeUrl;
+use uv_redacted::{DisplaySafeUrl, UrlWithCredentials};
 use uv_toml::deserialize_unique_map;
 
 #[derive(Error, Debug)]
@@ -1172,7 +1172,8 @@ pub enum Source {
     /// flask = { url = "https://files.pythonhosted.org/packages/61/80/ffe1da13ad9300f87c93af113edd0638c75138c42a0994becfacac078c06/flask-3.0.3-py3-none-any.whl" }
     /// ```
     Url {
-        url: DisplaySafeUrl,
+        #[cfg_attr(feature = "schemars", schemars(with = "DisplaySafeUrl"))]
+        url: UrlWithCredentials,
         /// For source distributions, the path to the directory with the `pyproject.toml`, if it's
         /// not in the archive root.
         subdirectory: Option<PortablePathBuf>,
@@ -1424,7 +1425,7 @@ impl<'de> Deserialize<'de> for Source {
             }
 
             return Ok(Self::Url {
-                url,
+                url: url.into(),
                 subdirectory,
                 marker,
                 extra,
@@ -1808,7 +1809,7 @@ impl Source {
                 subdirectory,
                 ..
             } => Self::Url {
-                url: location,
+                url: location.into(),
                 subdirectory: subdirectory.map(PortablePathBuf::from),
                 marker: MarkerTree::TRUE,
                 extra: None,
