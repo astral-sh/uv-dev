@@ -659,6 +659,7 @@ impl Cache {
 
         let mut summary = self.removal();
         let mut directories = Vec::new();
+        let mut hardlinks = uv_fs::HardlinkScanner::new();
         let mut entries = walkdir::WalkDir::new(&root).min_depth(1).into_iter();
         while let Some(entry) = entries.next() {
             let entry = entry?;
@@ -670,7 +671,7 @@ impl Cache {
                     Err(err) => return Err(err),
                 }
             } else if entry.file_type().is_dir() {
-                if let Some(files) = uv_fs::files_with_one_hardlink(entry.path())? {
+                if let Some(files) = hardlinks.files_with_one_hardlink(entry.path())? {
                     entries.skip_current_dir();
                     for file in files {
                         summary += self.remove_path(file)?;
