@@ -1157,23 +1157,11 @@ impl ManagedPythonDownloadList {
             .filter(move |download| request.satisfied_by_download(download))
     }
 
-    /// Whether an installed build satisfies the request and the catalog's selection policy.
+    /// Apply build selection to an installation whose version, runtime and platform already match.
     ///
     /// Installations absent from the catalog can still be requested explicitly. Legacy untagged
     /// installations remain usable when the catalog has no entries for their version and platform.
-    pub fn matches_installation(
-        &self,
-        request: &PythonDownloadRequest,
-        key: &PythonInstallationKey,
-    ) -> bool {
-        if !request.satisfied_by_key(key) {
-            return false;
-        }
-        self.allows_installed_build(request, key)
-    }
-
-    /// Apply build selection to an installation whose version, runtime and platform already match.
-    pub(crate) fn allows_installed_build(
+    pub fn allows_installed_build(
         &self,
         request: &PythonDownloadRequest,
         key: &PythonInstallationKey,
