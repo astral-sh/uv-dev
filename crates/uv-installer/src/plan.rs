@@ -386,6 +386,46 @@ impl<'a> Planner<'a> {
                 unreachable!("Installed distribution could not be found in site-packages: {dist}");
             };
 
+            // Revalidation bypasses the cache, but must not bypass wheel compatibility checks.
+            match dist.as_ref() {
+                Dist::Built(BuiltDist::DirectUrl(wheel)) => {
+                    if !wheel.filename.is_compatible(tags) {
+                        return Err(IncompatibleWheelError {
+                            kind: IncompatibleWheelKind::Url(wheel.url.to_url()),
+                            compatibility_hint: generate_wheel_compatibility_hint(
+                                &wheel.filename,
+                                tags,
+                            ),
+                        }
+                        .into());
+                    }
+                }
+                Dist::Built(BuiltDist::Path(wheel)) => {
+                    if !wheel.install_path.exists() {
+                        return Err(Error::NotFound(wheel.url.to_url()).into());
+                    }
+                    if !wheel.filename.is_compatible(tags) {
+                        return Err(IncompatibleWheelError {
+                            kind: IncompatibleWheelKind::Path(wheel.install_path.to_path_buf()),
+                            compatibility_hint: generate_wheel_compatibility_hint(
+                                &wheel.filename,
+                                tags,
+                            ),
+                        }
+                        .into());
+                    }
+                }
+                Dist::Built(BuiltDist::GitPath(wheel)) => {
+                    if !wheel.filename.is_compatible(tags) {
+                        bail!(
+                            "A Git path dependency is incompatible with the current platform: {}",
+                            wheel.install_path.user_display()
+                        );
+                    }
+                }
+                Dist::Built(BuiltDist::Registry(_)) | Dist::Source(_) => {}
+            }
+
             if cache.must_revalidate_package(dist.name())
                 || dist
                     .source_tree()
@@ -406,17 +446,6 @@ impl<'a> Planner<'a> {
                     }
                 }
                 Dist::Built(BuiltDist::DirectUrl(wheel)) => {
-                    if !wheel.filename.is_compatible(tags) {
-                        return Err(IncompatibleWheelError {
-                            kind: IncompatibleWheelKind::Url(wheel.url.to_url()),
-                            compatibility_hint: generate_wheel_compatibility_hint(
-                                &wheel.filename,
-                                tags,
-                            ),
-                        }
-                        .into());
-                    }
-
                     if no_binary {
                         bail!(
                             "A URL dependency points to a wheel which conflicts with `--no-binary`: {}",
@@ -469,22 +498,6 @@ impl<'a> Planner<'a> {
                     }
                 }
                 Dist::Built(BuiltDist::Path(wheel)) => {
-                    // Validate that the path exists.
-                    if !wheel.install_path.exists() {
-                        return Err(Error::NotFound(wheel.url.to_url()).into());
-                    }
-
-                    if !wheel.filename.is_compatible(tags) {
-                        return Err(IncompatibleWheelError {
-                            kind: IncompatibleWheelKind::Path(wheel.install_path.to_path_buf()),
-                            compatibility_hint: generate_wheel_compatibility_hint(
-                                &wheel.filename,
-                                tags,
-                            ),
-                        }
-                        .into());
-                    }
-
                     if no_binary {
                         bail!(
                             "A path dependency points to a wheel which conflicts with `--no-binary`: {}",
@@ -544,13 +557,6 @@ impl<'a> Planner<'a> {
                     }
                 }
                 Dist::Built(BuiltDist::GitPath(wheel)) => {
-                    if !wheel.filename.is_compatible(tags) {
-                        bail!(
-                            "A Git path dependency is incompatible with the current platform: {}",
-                            wheel.install_path.user_display()
-                        );
-                    }
-
                     if no_binary {
                         bail!(
                             "A Git path dependency points to a wheel which conflicts with `--no-binary`: {}",

@@ -16803,35 +16803,68 @@ fn abi3t_compatibility_on_python_315() -> Result<()> {
                 &format!("cp315-{abi}-manylinux_2_17_x86_64"),
             );
             fs::write(context.temp_dir.join(&filename), wheel)?;
-            let output = context
-                .pip_install()
-                .arg("--no-index")
-                .arg("--python-platform")
-                .arg("linux")
-                .arg(&filename)
-                .output()?;
-            writeln!(
-                results,
-                "{python} {abi}: {}",
-                output
-                    .status
-                    .code()
-                    .context("installer terminated without an exit code")?
-            )?;
+            let mut statuses = Vec::new();
+            for flag in [None, Some("--reinstall"), Some("--refresh")] {
+                let output = context
+                    .pip_install()
+                    .arg("--no-index")
+                    .args(flag)
+                    .arg("--python-platform")
+                    .arg("linux")
+                    .arg(&filename)
+                    .output()?;
+                statuses.push(
+                    output
+                        .status
+                        .code()
+                        .context("installer terminated without an exit code")?,
+                );
+            }
+            writeln!(results, "{python} {abi}: {statuses:?}")?;
         }
     }
     assert_snapshot!(results, @"
-    3.15+gil cp315: 0
-    3.15+gil cp315t: 2
-    3.15+gil abi3: 0
-    3.15+gil abi3t: 2
-    3.15+gil abi3.abi3t: 0
-    3.15t cp315: 2
-    3.15t cp315t: 0
-    3.15t abi3: 2
-    3.15t abi3t: 0
-    3.15t abi3.abi3t: 0
+    3.15+gil cp315: [0, 0, 0]
+    3.15+gil cp315t: [2, 2, 2]
+    3.15+gil abi3: [0, 0, 0]
+    3.15+gil abi3t: [2, 2, 2]
+    3.15+gil abi3.abi3t: [0, 0, 0]
+    3.15t cp315: [2, 2, 2]
+    3.15t cp315t: [0, 0, 0]
+    3.15t abi3: [2, 2, 2]
+    3.15t abi3t: [0, 0, 0]
+    3.15t abi3.abi3t: [0, 0, 0]
     ");
+    Ok(())
+}
+
+#[test]
+fn refreshed_direct_url_wheel_compatibility() -> Result<()> {
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "refreshed-direct-wheel"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.incompatible.versions."1.0.0"]
+        sdist = false
+        wheel_tags = ["cp314-cp314t-manylinux_2_17_x86_64"]
+    "#})?);
+    let context = uv_test::test_context!("3.14");
+    let url = server.file_url("incompatible-1.0.0-cp314-cp314t-manylinux_2_17_x86_64.whl");
+    for flag in ["--reinstall", "--refresh"] {
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), context.pip_install()
+                .arg(flag).arg("--python-platform").arg("linux").arg(&url), @"
+            exit_code: 2 (failure)
+            ----- stderr -----
+            Resolved 1 package in [TIME]
+            error: Failed to determine installation plan
+              cause: A URL (http://[LOCALHOST]/files/incompatible-1.0.0-cp314-cp314t-manylinux_2_17_x86_64.whl) dependency is incompatible with the current platform
+
+            hint: The wheel is compatible with free-threaded CPython 3.14 (`cp314t`), but you're using CPython 3.14 (`cp314`)
+            ");
+        }
+    }
     Ok(())
 }
 
