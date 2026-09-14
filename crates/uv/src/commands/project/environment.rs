@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use tracing::debug;
 
@@ -19,6 +19,7 @@ use uv_configuration::{Concurrency, Constraints, HashCheckingMode, TargetTriple}
 use uv_distribution_types::{
     BuiltDist, Dist, Identifier, Node, Resolution, ResolvedDist, SourceDist,
 };
+use uv_fs::PythonExt;
 use uv_preview::Preview;
 use uv_python::{Interpreter, PythonEnvironment, canonicalize_executable};
 use uv_settings::MalwareCheckSettings;
@@ -43,14 +44,30 @@ impl From<EphemeralEnvironment> for PythonEnvironment {
 
 impl EphemeralEnvironment {
     /// Set the ephemeral overlay for a Python environment.
-    pub(crate) fn set_overlay(&self, contents: impl AsRef<[u8]>) -> Result<(), ProjectError> {
+    pub(crate) fn set_overlay(&self, paths: &[PathBuf]) -> Result<(), ProjectError> {
         let site_packages = self
             .0
             .site_packages()
             .next()
             .ok_or(ProjectError::NoSitePackages)?;
-        let overlay_path = site_packages.join("_uv_ephemeral_overlay.pth");
-        fs_err::write(overlay_path, contents)?;
+        // Distinct modules keep nested overlays from sharing another environment's startup data.
+        let module = format!("_uv_ephemeral_overlay_{}", cache_digest(&paths));
+        let paths = paths
+            .iter()
+            .map(|path| path.escape_for_python())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let contents = include_str!("_overlay.py")
+            .replace("SITE_PACKAGES = ()", &format!("SITE_PACKAGES = [{paths}]"));
+        fs_err::write(site_packages.join(format!("{module}.py")), contents)?;
+        fs_err::write(
+            site_packages.join("_uv_ephemeral_overlay.pth"),
+            format!("import {module}; {module}.apply()\n"),
+        )?;
+        fs_err::write(
+            site_packages.join("_uv_ephemeral_overlay.start"),
+            format!("{module}:apply\n"),
+        )?;
         Ok(())
     }
 
@@ -64,8 +81,8 @@ impl EphemeralEnvironment {
     /// Set the `extends-environment` key in the `pyvenv.cfg` file to the given path.
     ///
     /// Ephemeral environments created by `uv run --with` extend a parent (virtual or system)
-    /// environment by adding a `.pth` file to the ephemeral environment's `site-packages`
-    /// directory. The `pth` file contains Python code to dynamically add the parent
+    /// environment by adding startup files to the ephemeral environment's `site-packages`
+    /// directory. The startup hook dynamically adds the parent
     /// environment's `site-packages` directory to Python's import search paths in addition to
     /// the ephemeral environment's `site-packages` directory. This works well at runtime, but
     /// is too dynamic for static analysis tools like ty to understand. As such, we

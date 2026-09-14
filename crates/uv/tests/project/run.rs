@@ -14,7 +14,11 @@ use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use uv_test::{TestContext, packse::PackseServer, uv_snapshot};
+use uv_test::{
+    TestContext,
+    packse::{PackseServer, generate_wheel_with_files},
+    uv_snapshot,
+};
 
 #[test]
 fn run_with_python_version() -> Result<()> {
@@ -1944,6 +1948,70 @@ fn run_with_overlay_interpreter() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
+    Ok(())
+}
+
+#[test]
+fn run_with_overlay_startup_files() -> Result<()> {
+    let context = uv_test::test_context!("3.15");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.15.0rc2"
+    "#})?;
+    let source = context.temp_dir.child("source");
+    source
+        .child("project_only.py")
+        .write_str("TOKEN = 'project path'\n")?;
+    fs_err::write(
+        context.site_packages().join("project_path.pth"),
+        source.path().as_os_str().as_encoded_bytes(),
+    )?;
+
+    let (filename, wheel) = generate_wheel_with_files(
+        &"overlay-hooks".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &Default::default(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "overlay_hooks/startup.py",
+                indoc! {r#"
+                import sys
+
+                def apply():
+                    from project_only import TOKEN
+                    events = getattr(sys, '_uv_overlay_events', [])
+                    events.append(TOKEN)
+                    sys._uv_overlay_events = events
+            "#},
+            ),
+            (
+                "overlay_hooks.pth",
+                "import overlay_hooks.startup; overlay_hooks.startup.apply()\n",
+            ),
+            ("overlay_hooks.start", "overlay_hooks.startup:apply\n"),
+        ],
+    );
+    context.temp_dir.child(&filename).write_binary(&wheel)?;
+
+    // The requirements environment is visited first, but its startup hook can import a module
+    // exposed only by a path extension in the project environment.
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--quiet")
+        .arg("--no-index")
+        .arg("--with").arg(&filename)
+        .arg("python").arg("-c").arg("import sys; print(sys._uv_overlay_events)"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ['project path']
+    ");
     Ok(())
 }
 
