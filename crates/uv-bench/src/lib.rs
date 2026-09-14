@@ -32,6 +32,21 @@ pub fn fixture_path(filename: &str) -> PathBuf {
     path
 }
 
+/// A real Git repository captured at a pinned upstream commit.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct GitFixture {
+    pub name: String,
+    pub repository: String,
+    pub commit: String,
+    pub reference: String,
+}
+
+/// Git sources spanning small packaging examples and larger Python projects.
+pub fn git_fixtures() -> Vec<GitFixture> {
+    serde_json::from_str(include_str!("../../../scripts/benchmark/git.json"))
+        .expect("Invalid Git fixture manifest")
+}
+
 /// Run an optimized uv binary without inheriting user-specific uv configuration.
 pub fn uv_command() -> Command {
     let cache = std::path::absolute("../../.cache").expect("Failed to locate benchmark cache");
