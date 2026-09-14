@@ -90,6 +90,7 @@ pub(crate) async fn run(
     project_dir: &Path,
     script: Option<Pep723Item>,
     command: Option<RunCommand>,
+    profile: Option<PathBuf>,
     requirements: Vec<RequirementsSource>,
     show_resolution: bool,
     lock_check: LockCheck,
@@ -123,6 +124,9 @@ pub(crate) async fn run(
     malware_settings: MalwareCheckSettings,
     #[cfg(unix)] run_rlimit_nofile: Option<u32>,
 ) -> anyhow::Result<ExitStatus> {
+    if profile.is_some() && command.is_none() {
+        bail!("`--profile` requires a Python script or module");
+    }
     // Check if max recursion depth was exceeded. This most commonly happens
     // for scripts with a shebang line like `#!/usr/bin/env -S uv run`, so try
     // to provide guidance for that case.
@@ -1242,7 +1246,11 @@ pub(crate) async fn run(
     };
 
     debug!("Running `{command}`");
-    let mut process = command.as_command(interpreter);
+    let mut process = if let Some(output) = profile {
+        command.as_profiled_command(interpreter, &output)?
+    } else {
+        command.as_command(interpreter)
+    };
     process.envs(env_file_environment);
 
     // Construct the `PATH` environment variable.
@@ -1631,6 +1639,47 @@ impl ParsedRunCommand {
 }
 
 impl RunCommand {
+    /// Run a Python target under the selected interpreter's sampling profiler.
+    fn as_profiled_command(
+        &self,
+        interpreter: &Interpreter,
+        output: &Path,
+    ) -> anyhow::Result<Command> {
+        if interpreter.implementation_name() != "cpython" || interpreter.python_tuple() < (3, 15) {
+            bail!(
+                "`--profile` requires CPython 3.15 or later; use `--python` to select a compatible interpreter"
+            );
+        }
+
+        let mut process = Command::new(interpreter.sys_executable());
+        process.args(["-m", "profiling.sampling", "run", "--flamegraph", "-o"]);
+        process.arg(output);
+        match self {
+            Self::PythonScript(target, args) => {
+                process.arg("--").arg(target).args(args);
+            }
+            Self::PythonRemote(script, args) => {
+                process.arg("--").arg(script.path()).args(args);
+            }
+            Self::PythonModule(module, args) => {
+                process.args(["-m", "--"]).arg(module).args(args);
+            }
+            Self::Python(_)
+            | Self::PythonGuiScript(..)
+            | Self::PythonPackage(..)
+            | Self::PythonZipapp(..)
+            | Self::PythonStdin(..)
+            | Self::PythonGuiStdin(..)
+            | Self::External(..)
+            | Self::Empty => {
+                bail!(
+                    "`--profile` only supports Python scripts and modules; use `uv run --profile script.py` or `uv run --profile -m module`"
+                );
+            }
+        }
+        Ok(process)
+    }
+
     /// Read any inline PEP 723 metadata associated with this command target.
     async fn read_pep723_item(&self) -> Result<Option<Pep723Item>, Pep723Error> {
         match self {
