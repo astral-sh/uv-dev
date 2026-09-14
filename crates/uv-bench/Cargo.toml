@@ -189,6 +189,11 @@ path = "benches/local_wheel_cache.rs"
 harness = false
 
 [[bench]]
+name = "download_hashing"
+path = "benches/download_hashing.rs"
+harness = false
+
+[[bench]]
 name = "multi_index"
 path = "benches/multi_index.rs"
 harness = false
