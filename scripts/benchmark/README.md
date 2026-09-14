@@ -18,6 +18,13 @@ versions with `source-build-constraints.txt`. This lets isolated builds use thei
 backends through the replay index or a local wheel directory without depending on current PyPI
 releases.
 
+Run `python3 scripts/benchmark/prepare-build-backend.py` after preparing the interpreter to build
+the current `uv_build` wheel with the release workflow's pinned Maturin version. Native-backend
+workloads can then compare direct builds with the ordinary isolated PEP 517 path using the same
+checkout, rather than a previously released backend binary. The shared native-source fixtures change
+only packaging configuration in real sampleproject, Flask, and Django trees; their Python modules,
+data files, documentation, and tests remain intact.
+
 Whole-command workloads also need `cargo build --locked --profile profiling --bin uv`. Run
 `python3 scripts/benchmark/prepare-environments.py` to install the pinned CPython interpreter under
 `.cache/bench-python` and prime the package cache with frozen project dependencies. The

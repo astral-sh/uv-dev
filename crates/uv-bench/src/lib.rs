@@ -43,6 +43,113 @@ pub fn source_fixture(name: &str) -> PathBuf {
     path
 }
 
+/// Real Python projects with source layouts suitable for the native build backend.
+pub const NATIVE_SOURCE_FIXTURES: &[NativeSourceFixture] = &[
+    NativeSourceFixture {
+        name: "sampleproject",
+        version: "4.0.0",
+        module: "sample",
+        module_root: "src",
+        source_include: &["tests/**"],
+    },
+    NativeSourceFixture {
+        name: "flask",
+        version: "3.1.2",
+        module: "flask",
+        module_root: "src",
+        source_include: &["docs/**", "tests/**", "examples/**"],
+    },
+    NativeSourceFixture {
+        name: "django",
+        version: "5.2.6",
+        module: "django",
+        module_root: "",
+        source_include: &["docs/**", "tests/**"],
+    },
+];
+
+/// The packaging adjustments needed to build a real source tree with `uv_build`.
+pub struct NativeSourceFixture {
+    pub name: &'static str,
+    version: &'static str,
+    module: &'static str,
+    module_root: &'static str,
+    source_include: &'static [&'static str],
+}
+
+/// A writable copy of a real project configured for the current native build backend.
+pub struct PreparedNativeSource {
+    directory: tempfile::TempDir,
+}
+
+impl PreparedNativeSource {
+    /// Adapt packaging metadata while retaining the project's actual source and data files.
+    pub fn new(fixture: &NativeSourceFixture, source: &Path, backend_version: &str) -> Self {
+        let directory = tempfile::tempdir().expect("Failed to create source directory");
+        copy_cache(source, directory.path()).expect("Failed to copy source fixture");
+        let path = directory.path().join("pyproject.toml");
+        let mut metadata: toml::Table = toml::from_str(
+            &fs_err::read_to_string(&path).expect("Failed to read project metadata"),
+        )
+        .expect("Invalid project metadata");
+        let project = metadata
+            .get_mut("project")
+            .and_then(toml::Value::as_table_mut)
+            .expect("Missing project table");
+        project.insert("version".to_string(), fixture.version.into());
+        if let Some(dynamic) = project
+            .get_mut("dynamic")
+            .and_then(toml::Value::as_array_mut)
+        {
+            dynamic.retain(|field| field.as_str() != Some("version"));
+            if dynamic.is_empty() {
+                project.remove("dynamic");
+            }
+        }
+        metadata.insert(
+            "build-system".to_string(),
+            toml::Value::Table(toml::toml! {
+                requires = [(format!("uv_build=={backend_version}"))]
+                build-backend = "uv_build"
+            }),
+        );
+        let tool = metadata
+            .entry("tool")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+            .as_table_mut()
+            .expect("Invalid tool table");
+        let uv = tool
+            .entry("uv")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+            .as_table_mut()
+            .expect("Invalid uv table");
+        let source_include = fixture
+            .source_include
+            .iter()
+            .map(|pattern| (*pattern).to_string())
+            .collect::<Vec<_>>();
+        uv.insert(
+            "build-backend".to_string(),
+            toml::Value::Table(toml::toml! {
+                module-name = (fixture.module)
+                module-root = (fixture.module_root)
+                source-include = (source_include)
+            }),
+        );
+        fs_err::write(
+            path,
+            toml::to_string_pretty(&metadata).expect("Failed to serialize project metadata"),
+        )
+        .expect("Failed to configure native build backend");
+        Self { directory }
+    }
+
+    /// The isolated project directory.
+    pub fn path(&self) -> &Path {
+        self.directory.path()
+    }
+}
+
 /// A real Git repository captured at a pinned upstream commit.
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct GitFixture {
