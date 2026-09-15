@@ -192,6 +192,11 @@ $ uv run example.py
 ]
 ```
 
+By default, uv manages the environment for a script with explicitly declared dependencies in its
+cache. It may retain and reuse that environment across invocations, rather than removing it when the
+script exits. See [clearing the cache](../concepts/cache.md#clearing-the-cache) for cache cleanup
+options.
+
 !!! important
 
     When using inline script metadata, even if `uv run` is [used in a _project_](../concepts/projects/run.md), the project's dependencies will be ignored. The `--no-project` flag is not required.

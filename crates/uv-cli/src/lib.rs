@@ -1097,9 +1097,10 @@ pub enum ProjectCommand {
     /// When used with a file ending in `.py` or an HTTP(S) URL, the file will be treated as a
     /// script and run with a Python interpreter, i.e., `uv run file.py` is equivalent to `uv run
     /// python file.py`. For URLs, the script is temporarily downloaded before execution. If the
-    /// script contains inline dependency metadata, it will be installed into an isolated, ephemeral
-    /// environment. When used with `-`, the input will be read from stdin, and treated as a Python
-    /// script.
+    /// script explicitly declares dependencies in inline metadata, uv runs it in a managed
+    /// environment. By default, this environment is isolated and may be retained in uv's cache for
+    /// reuse; it is not necessarily removed when the command exits. When used with `-`, the input
+    /// will be read from stdin, and treated as a Python script.
     ///
     /// When used in a project, the project environment will be created and updated before invoking
     /// the command.
