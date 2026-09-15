@@ -9,10 +9,7 @@ use thiserror::Error;
 use uv_cache_key::cache_digest;
 use uv_normalize::{InvalidNameError, PackageName};
 use uv_pep440::{Version, VersionParseError};
-use uv_platform_tags::{
-    AbiTag, LanguageTag, ParseAbiTagError, ParseLanguageTagError, ParsePlatformTagError,
-    PlatformTag, TagCompatibility, Tags,
-};
+use uv_platform_tags::{AbiTag, LanguageTag, PlatformTag, TagCompatibility, Tags};
 
 use crate::splitter::MemchrSplitter;
 use crate::wheel_tag::{TagSet, WheelTag, WheelTagLarge, WheelTagSmall};
@@ -377,12 +374,6 @@ pub enum WheelFilenameError {
     InvalidPackageName(String, InvalidNameError),
     #[error("The wheel filename \"{0}\" has an invalid build tag: {1}")]
     InvalidBuildTag(String, BuildTagError),
-    #[error("The wheel filename \"{0}\" has an invalid language tag: {1}")]
-    InvalidLanguageTag(String, ParseLanguageTagError),
-    #[error("The wheel filename \"{0}\" has an invalid ABI tag: {1}")]
-    InvalidAbiTag(String, ParseAbiTagError),
-    #[error("The wheel filename \"{0}\" has an invalid platform tag: {1}")]
-    InvalidPlatformTag(String, ParsePlatformTagError),
     #[error("The wheel filename \"{0}\" is missing a language tag")]
     MissingLanguageTag(String),
     #[error("The wheel filename \"{0}\" is missing an ABI tag")]
