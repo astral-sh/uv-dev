@@ -1179,79 +1179,57 @@ fn find_python_installations_with_strategy<'a>(
     }
     .sources(request);
 
+    if let Err(err) = preference.check_allows_request_source(request) {
+        return Box::new(iter::once(Err(err)));
+    }
+
     match request {
         PythonRequest::File(path) => Box::new(iter::once({
-            if preference.allows_source(PythonSource::ProvidedPath) {
-                debug!("Checking for Python interpreter at {request}");
-                match Interpreter::query(path, cache) {
-                    Ok(interpreter) => Ok(Ok(PythonInstallation {
-                        source: PythonSource::ProvidedPath,
-                        interpreter,
-                    })),
-                    Err(InterpreterError::NotFound(_) | InterpreterError::BrokenLink(_)) => {
-                        Ok(Err(PythonNotFound {
-                            request: request.clone(),
-                            python_preference: preference,
-                            environment_preference: environments,
-                        }))
-                    }
-                    Err(err) => Err(Error::Query(
-                        Box::new(err),
-                        path.clone(),
-                        PythonSource::ProvidedPath,
-                    )),
+            debug!("Checking for Python interpreter at {request}");
+            match Interpreter::query(path, cache) {
+                Ok(interpreter) => Ok(Ok(PythonInstallation {
+                    source: PythonSource::ProvidedPath,
+                    interpreter,
+                })),
+                Err(InterpreterError::NotFound(_) | InterpreterError::BrokenLink(_)) => {
+                    Ok(Err(PythonNotFound {
+                        request: request.clone(),
+                        python_preference: preference,
+                        environment_preference: environments,
+                    }))
                 }
-            } else {
-                Err(Error::SourceNotAllowed(
-                    request.clone(),
+                Err(err) => Err(Error::Query(
+                    Box::new(err),
+                    path.clone(),
                     PythonSource::ProvidedPath,
-                    preference,
-                ))
+                )),
             }
         })),
         PythonRequest::Directory(path) => Box::new(iter::once({
-            if preference.allows_source(PythonSource::ProvidedPath) {
-                debug!("Checking for Python interpreter in {request}");
-                match python_installation_from_directory(path, cache) {
-                    Ok(installation) => Ok(Ok(installation)),
-                    Err(InterpreterError::NotFound(_) | InterpreterError::BrokenLink(_)) => {
-                        Ok(Err(PythonNotFound {
-                            request: request.clone(),
-                            python_preference: preference,
-                            environment_preference: environments,
-                        }))
-                    }
-                    Err(err) => Err(Error::Query(
-                        Box::new(err),
-                        path.clone(),
-                        PythonSource::ProvidedPath,
-                    )),
+            debug!("Checking for Python interpreter in {request}");
+            match python_installation_from_directory(path, cache) {
+                Ok(installation) => Ok(Ok(installation)),
+                Err(InterpreterError::NotFound(_) | InterpreterError::BrokenLink(_)) => {
+                    Ok(Err(PythonNotFound {
+                        request: request.clone(),
+                        python_preference: preference,
+                        environment_preference: environments,
+                    }))
                 }
-            } else {
-                Err(Error::SourceNotAllowed(
-                    request.clone(),
+                Err(err) => Err(Error::Query(
+                    Box::new(err),
+                    path.clone(),
                     PythonSource::ProvidedPath,
-                    preference,
-                ))
+                )),
             }
         })),
         PythonRequest::ExecutableName(name) => {
-            if preference.allows_source(PythonSource::SearchPath) {
-                debug!("Searching for Python interpreter with {request}");
-                Box::new(
-                    python_installations_with_name(name, cache, strategy)
-                        .filter_ok(move |installation| {
-                            environments.allows_installation(installation)
-                        })
-                        .map_ok(Ok),
-                )
-            } else {
-                Box::new(iter::once(Err(Error::SourceNotAllowed(
-                    request.clone(),
-                    PythonSource::SearchPath,
-                    preference,
-                ))))
-            }
+            debug!("Searching for Python interpreter with {request}");
+            Box::new(
+                python_installations_with_name(name, cache, strategy)
+                    .filter_ok(move |installation| environments.allows_installation(installation))
+                    .map_ok(Ok),
+            )
         }
         PythonRequest::Any => Box::new({
             debug!("Searching for any Python interpreter in {sources}");
@@ -2512,6 +2490,26 @@ impl PythonSource {
 }
 
 impl PythonPreference {
+    /// Check whether an explicit request uses an allowed discovery source.
+    fn check_allows_request_source(self, request: &PythonRequest) -> Result<(), Error> {
+        let source = match request {
+            PythonRequest::File(_) | PythonRequest::Directory(_) => PythonSource::ProvidedPath,
+            PythonRequest::ExecutableName(_) => PythonSource::SearchPath,
+            PythonRequest::Default
+            | PythonRequest::Any
+            | PythonRequest::Version(_)
+            | PythonRequest::Implementation(_)
+            | PythonRequest::ImplementationVersion(_, _)
+            | PythonRequest::Key(_) => return Ok(()),
+        };
+
+        if self.allows_source(source) {
+            Ok(())
+        } else {
+            Err(Error::SourceNotAllowed(request.clone(), source, self))
+        }
+    }
+
     fn allows_source(self, source: PythonSource) -> bool {
         // If not dealing with a system interpreter source, we don't care about the preference
         if !matches!(
@@ -3861,8 +3859,115 @@ mod tests {
     use super::{
         DiscoveryPreferences, EnvironmentPreference, Error, InterpreterError,
         PythonExecutableGroup, PythonPreference, PythonSource, PythonVariant, QueryStrategy,
-        python_installations_from_executables, sort_installations_by_key,
+        find_python_installations_with_strategy, python_installations_from_executables,
+        sort_installations_by_key,
     };
+
+    #[test]
+    fn request_source_preferences() -> anyhow::Result<()> {
+        let version = VersionRequest::MajorMinor(3, 12, PythonVariant::Default);
+        let requests = [
+            (PythonRequest::Default, None),
+            (PythonRequest::Any, None),
+            (PythonRequest::Version(version.clone()), None),
+            (PythonRequest::Directory(PathBuf::from("environment")), None),
+            (PythonRequest::File(PathBuf::from("python")), None),
+            (
+                PythonRequest::ExecutableName("uv-test-python".to_string()),
+                Some(PythonSource::SearchPath),
+            ),
+            (
+                PythonRequest::Implementation(ImplementationName::CPython),
+                None,
+            ),
+            (
+                PythonRequest::ImplementationVersion(ImplementationName::CPython, version),
+                None,
+            ),
+            (
+                PythonRequest::Key(PythonDownloadRequest::from_str(
+                    "cpython-3.12-linux-x86_64-gnu",
+                )?),
+                None,
+            ),
+        ];
+
+        for preference in [
+            PythonPreference::OnlyManaged,
+            PythonPreference::Managed,
+            PythonPreference::System,
+            PythonPreference::OnlySystem,
+        ] {
+            for (request, denied_source) in &requests {
+                let result = preference.check_allows_request_source(request);
+                if preference == PythonPreference::OnlyManaged
+                    && let Some(denied_source) = denied_source
+                {
+                    assert_matches!(
+                        result,
+                        Err(Error::SourceNotAllowed(found_request, source, found_preference))
+                            if found_request == *request
+                                && source == *denied_source
+                                && found_preference == preference
+                    );
+                } else {
+                    result?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn only_managed_request_sources() -> anyhow::Result<()> {
+        let cache = Cache::temp()?;
+        let root = TempDir::new()?;
+        let preference = PythonPreference::OnlyManaged;
+        let environments = EnvironmentPreference::Any;
+
+        for strategy in [QueryStrategy::Sequential, QueryStrategy::Parallel] {
+            for request in [
+                PythonRequest::File(root.child("missing-python").to_path_buf()),
+                PythonRequest::Directory(root.child("missing-environment").to_path_buf()),
+            ] {
+                let mut installations = find_python_installations_with_strategy(
+                    &request,
+                    environments,
+                    preference,
+                    &cache,
+                    strategy,
+                );
+                assert_matches!(
+                    installations.next(),
+                    Some(Ok(Err(not_found)))
+                        if not_found.request == request
+                            && not_found.python_preference == preference
+                            && not_found.environment_preference == environments
+                );
+                assert!(installations.next().is_none());
+            }
+
+            let request = PythonRequest::ExecutableName("uv-test-missing-python".to_string());
+            let mut installations = find_python_installations_with_strategy(
+                &request,
+                environments,
+                preference,
+                &cache,
+                strategy,
+            );
+            assert_matches!(
+                installations.next(),
+                Some(Err(Error::SourceNotAllowed(found_request, source, found_preference)))
+                    if found_request == request
+                        && source == PythonSource::SearchPath
+                        && found_preference == preference
+            );
+            assert!(installations.next().is_none());
+        }
+
+        Ok(())
+    }
 
     // Testing this at a higher level would necessitate relying on filesystem ordering.
     #[test]
