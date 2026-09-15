@@ -909,17 +909,10 @@ impl EnvironmentOptions {
             venv_relocatable: EnvFlag::new(EnvVars::UV_VENV_RELOCATABLE)?,
             init_bare: EnvFlag::new(EnvVars::UV_INIT_BARE)?,
             malware_check: EnvFlag::new(EnvVars::UV_MALWARE_CHECK)?,
-            malware_check_url: parse_string_environment_variable(EnvVars::UV_MALWARE_CHECK_URL)?
-                .map(|value| {
-                    value.parse::<DisplaySafeUrl>().map_err(|err| {
-                        Error::InvalidEnvironmentVariable(InvalidEnvironmentVariable {
-                            name: EnvVars::UV_MALWARE_CHECK_URL.to_string(),
-                            value,
-                            err: err.to_string(),
-                        })
-                    })
-                })
-                .transpose()?,
+            malware_check_url: parse_typed_environment_variable(
+                EnvVars::UV_MALWARE_CHECK_URL,
+                None,
+            )?,
             #[cfg(unix)]
             run_rlimit_nofile: parse_integer_environment_variable(
                 EnvVars::UV_RUN_RLIMIT_NOFILE,
@@ -1033,39 +1026,7 @@ where
     T: std::str::FromStr + Copy,
     <T as std::str::FromStr>::Err: std::fmt::Display,
 {
-    let value = match std::env::var(name) {
-        Ok(v) => v,
-        Err(e) => {
-            return match e {
-                std::env::VarError::NotPresent => Ok(None),
-                std::env::VarError::NotUnicode(err) => Err(Error::InvalidEnvironmentVariable(
-                    InvalidEnvironmentVariable {
-                        name: name.to_string(),
-                        value: err.to_string_lossy().to_string(),
-                        err: "expected a valid UTF-8 string".to_string(),
-                    },
-                )),
-            };
-        }
-    };
-    if value.is_empty() {
-        return Ok(None);
-    }
-
-    match value.parse::<T>() {
-        Ok(v) => Ok(Some(v)),
-        Err(err) => Err(Error::InvalidEnvironmentVariable(
-            InvalidEnvironmentVariable {
-                name: name.to_string(),
-                value,
-                err: if let Some(help) = help {
-                    format!("{err}; {help}")
-                } else {
-                    err.to_string()
-                },
-            },
-        )),
-    }
+    parse_typed_environment_variable(name, help)
 }
 
 /// Parse a path environment variable.
