@@ -453,24 +453,36 @@ async fn python_build_variant_catalog_selection() -> anyhow::Result<()> {
     }
     let server = MockServer::start().await;
     let metadata_url = format!("{}/metadata", server.uri());
-    let mount_catalog = async |downloads: serde_json::Map<String, serde_json::Value>| {
+    let mount_catalog = async |downloads: serde_json::Map<String, serde_json::Value>,
+                               cache_control: &str| {
         Mock::given(method("GET"))
             .and(path("/metadata"))
             .respond_with(
                 ResponseTemplate::new(200)
-                    .insert_header("Cache-Control", "max-age=0")
+                    .insert_header("Cache-Control", cache_control)
                     .set_body_json(serde_json::json!({"version": 1, "downloads": downloads})),
             )
             .mount(&server)
             .await;
     };
-    mount_catalog(downloads.clone()).await;
+    mount_catalog(downloads.clone(), "max-age=0").await;
     let find = |request| {
         let mut command = context.python_find();
         command
             .arg(request)
             .arg("--python-downloads-json-url")
             .arg(&metadata_url);
+        command
+    };
+
+    let base_prefix = "import os, sys; print(os.path.realpath(sys.base_prefix))";
+    let run = || {
+        let mut command = context.run();
+        command
+            .arg("--python")
+            .arg("3.13")
+            .env_remove(EnvVars::VIRTUAL_ENV)
+            .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, &metadata_url);
         command
     };
 
@@ -491,6 +503,14 @@ async fn python_build_variant_catalog_selection() -> anyhow::Result<()> {
     ----- stdout -----
     [TEMP_DIR]/managed/cpython-3.13.[LATEST]+pgo+lto-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .context("Missing request log")?
+            .len(),
+        1
+    );
     uv_snapshot!(context.filters(), find("3.13+pgo+lto"), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -519,6 +539,31 @@ async fn python_build_variant_catalog_selection() -> anyhow::Result<()> {
     [TEMP_DIR]/managed/cpython-3.13.[LATEST]+noopt-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
 
+    // Installed candidates use the cached catalog even when HTTP metadata has expired.
+    uv_snapshot!(context.filters(), run()
+        .arg("python").arg("-c").arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+pgo+lto-[PLATFORM]
+    ");
+    context.temp_dir.child("requirements.in").write_str("")?;
+    uv_snapshot!(context.filters(), context.pip_compile().arg("requirements.in")
+        .arg("--python-version").arg("3.13").arg("--no-header")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, &metadata_url), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Requirements file `requirements.in` does not contain any dependencies
+    Resolved in [TIME]
+    ");
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .context("Missing request log")?
+            .len(),
+        1
+    );
+
     // Removing stock must not turn the installed non-default custom build into a match.
     let optimized_path = managed_dir.join(format!("{version}+pgo+lto-{platform}"));
     let hidden_path = context.temp_dir.join("stock-optimized");
@@ -528,6 +573,14 @@ async fn python_build_variant_catalog_selection() -> anyhow::Result<()> {
     ----- stderr -----
     error: No interpreter found for Python 3.13 in [PYTHON SOURCES]
     ");
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .context("Missing request log")?
+            .len(),
+        2
+    );
     uv_snapshot!(context.filters(), find("3.13+pgo+lto"), @"
     exit_code: 2 (failure)
     ----- stderr -----
@@ -554,7 +607,35 @@ async fn python_build_variant_catalog_selection() -> anyhow::Result<()> {
         download["default"] = serde_json::json!(download["build_variant"] == "custom+pgo+lto");
     }
     server.reset().await;
-    mount_catalog(downloads.clone()).await;
+    mount_catalog(downloads.clone(), "max-age=86400").await;
+    // A changed remote default does not invalidate an installed candidate in the cached catalog.
+    uv_snapshot!(context.filters(), find("3.13"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+pgo+lto-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .context("Missing request log")?
+            .is_empty()
+    );
+    // Explicit refresh observes the new default even though the cached candidate is installed.
+    uv_snapshot!(context.filters(), run().arg("--refresh")
+        .arg("python").arg("-c").arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]
+    ");
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .context("Missing request log")?
+            .len(),
+        1
+    );
     uv_snapshot!(context.filters(), find("3.13"), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -605,7 +686,7 @@ async fn python_build_variant_catalog_selection() -> anyhow::Result<()> {
     [TEMP_DIR]/managed/cpython-3.13.[LATEST]-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
 
-    // An unavailable remote falls back to the cached catalog, including its custom default.
+    // An unavailable remote is not contacted when the cached catalog has a matching installation.
     server.reset().await;
     Mock::given(method("GET"))
         .and(path("/metadata"))
@@ -622,6 +703,62 @@ async fn python_build_variant_catalog_selection() -> anyhow::Result<()> {
     ----- stdout -----
     [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .context("Missing request log")?
+            .is_empty()
+    );
+    uv_snapshot!(context.filters(), run().arg("--offline")
+        .arg("python").arg("-c").arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .context("Missing request log")?
+            .is_empty()
+    );
+    // A requested refresh still falls back to the cached catalog when the server is unavailable.
+    uv_snapshot!(context.filters(), run().arg("--refresh").env(EnvVars::UV_HTTP_RETRIES, "0")
+        .arg("python").arg("-c").arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]
+    ");
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .context("Missing request log")?
+            .len(),
+        1
+    );
+
+    // A missing cached candidate refreshes the catalog and retries installed-interpreter discovery.
+    server.reset().await;
+    for download in downloads.values_mut() {
+        download["default"] = serde_json::json!(download["build_variant"] == "pgo+lto");
+    }
+    mount_catalog(downloads, "max-age=86400").await;
+    fs_err::rename(&custom_path, &hidden_custom_path)?;
+    uv_snapshot!(context.filters(), find("3.13"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+pgo+lto-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    ");
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .context("Missing request log")?
+            .len(),
+        1
+    );
     Ok(())
 }
 

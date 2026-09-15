@@ -1565,6 +1565,51 @@ pub(crate) fn find_python_installation(
     find_python_installation_with_catalog(request, environments, preference, cache, None)
 }
 
+/// Search with the cached catalog before refreshing metadata when no installation matches.
+///
+/// Return the catalog with the result so downloads and fallback requests use the same metadata.
+pub(crate) async fn find_python_installation_with_cached_catalog(
+    request: &PythonRequest,
+    environments: EnvironmentPreference,
+    preference: PythonPreference,
+    client_builder: &BaseClientBuilder<'_>,
+    cache: &Cache,
+    python_downloads_json_url: Option<&str>,
+) -> Result<
+    (
+        Result<PythonInstallation, crate::Error>,
+        ManagedPythonDownloadList,
+    ),
+    crate::Error,
+> {
+    let find =
+        |download_list: &ManagedPythonDownloadList| -> Result<PythonInstallation, crate::Error> {
+            Ok(find_python_installation_with_catalog(
+                request,
+                environments,
+                preference,
+                cache,
+                Some(download_list),
+            )??)
+        };
+    let download_list = if let Some(download_list) =
+        ManagedPythonDownloadList::from_cache(client_builder, cache, python_downloads_json_url)
+            .await?
+    {
+        match find(&download_list) {
+            Ok(installation) => return Ok((Ok(installation), download_list)),
+            Err(crate::Error::MissingPython(..)) => {}
+            Err(crate::Error::Discovery(error)) if !error.is_critical() => {}
+            Err(error) => return Err(error),
+        }
+        ManagedPythonDownloadList::refresh(client_builder, cache, python_downloads_json_url).await?
+    } else {
+        ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url).await?
+    };
+    let result = find(&download_list);
+    Ok((result, download_list))
+}
+
 pub(crate) fn find_python_installation_with_catalog(
     request: &PythonRequest,
     environments: EnvironmentPreference,
@@ -1764,8 +1809,16 @@ pub(crate) async fn find_best_python_installation(
         Err(error) if error.is_critical() => return Err(error.into()),
         Ok(_) | Err(_) => {}
     }
-    let download_list =
-        ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url).await?;
+    let (result, download_list) = find_python_installation_with_cached_catalog(
+        request,
+        environments,
+        preference,
+        client_builder,
+        cache,
+        python_downloads_json_url,
+    )
+    .await?;
+    let mut first_result = Some(result);
 
     let mut previous_fetch_failed = false;
     let mut download_state = None;
@@ -1797,22 +1850,24 @@ pub(crate) async fn find_best_python_installation(
                 String::new()
             }
         );
-        let result = find_python_installation_with_catalog(
-            request,
-            environments,
-            preference,
-            cache,
-            Some(&download_list),
-        );
+        let result = first_result.take().unwrap_or_else(|| {
+            Ok(find_python_installation_with_catalog(
+                request,
+                environments,
+                preference,
+                cache,
+                Some(&download_list),
+            )??)
+        });
         let error = match result {
-            Ok(Ok(installation)) => {
+            Ok(installation) => {
                 warn_on_unsupported_python(installation.interpreter());
                 return Ok(installation);
             }
             // Continue if we can't find a matching Python and ignore non-critical discovery errors
-            Ok(Err(error)) => error.into(),
-            Err(error) if !error.is_critical() => error.into(),
-            Err(error) => return Err(error.into()),
+            Err(error @ crate::Error::MissingPython(..)) => error,
+            Err(crate::Error::Discovery(error)) if !error.is_critical() => error.into(),
+            Err(error) => return Err(error),
         };
 
         // Attempt to download the version if downloads are enabled
