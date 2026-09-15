@@ -2383,11 +2383,13 @@ mod tests {
     use insta::{assert_json_snapshot, assert_snapshot};
 
     use uv_cache::Cache;
-    use uv_normalize::{GroupName, PackageName};
+    use uv_normalize::{DefaultGroups, GroupName, PackageName};
     use uv_pypi_types::DependencyGroupSpecifier;
 
     use crate::pyproject::PyProjectToml;
-    use crate::workspace::{DiscoveryOptions, MemberDiscovery, ProjectWorkspace, Workspace};
+    use crate::workspace::{
+        DiscoveryOptions, MemberDiscovery, ProjectWorkspace, VirtualProject, Workspace,
+    };
     use crate::{WorkspaceCache, WorkspaceError};
 
     async fn workspace_test(folder: &str) -> (ProjectWorkspace, String) {
@@ -2763,6 +2765,70 @@ mod tests {
             }
             "#);
         });
+    }
+
+    #[tokio::test]
+    async fn default_groups_follow_selected_project() -> Result<()> {
+        let root = tempfile::TempDir::new()?;
+        let root = ChildPath::new(root.path());
+
+        root.child("pyproject.toml").write_str(
+            r#"
+            [dependency-groups]
+            root-only = []
+
+            [tool.uv]
+            default-groups = ["root-only"]
+
+            [tool.uv.workspace]
+            members = ["child"]
+            "#,
+        )?;
+        root.child("child").child("pyproject.toml").write_str(
+            r#"
+            [project]
+            name = "child"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            member-only = []
+
+            [tool.uv]
+            default-groups = ["member-only"]
+            "#,
+        )?;
+
+        let cache = Cache::from_path(root.child(".cache").path());
+        let workspace_cache = WorkspaceCache::default();
+        let root_project = VirtualProject::discover(
+            root.as_ref(),
+            &DiscoveryOptions::default(),
+            &cache,
+            &workspace_cache,
+        )
+        .await?;
+        let member_project = VirtualProject::discover_with_package(
+            root.as_ref(),
+            &DiscoveryOptions::default(),
+            &cache,
+            &workspace_cache,
+            PackageName::from_str("child")?,
+        )
+        .await?;
+
+        let root_groups = DefaultGroups::List(vec![GroupName::from_str("root-only")?]);
+        let member_groups = DefaultGroups::List(vec![GroupName::from_str("member-only")?]);
+        assert_eq!(root_project.default_groups()?, root_groups);
+        assert_eq!(member_project.default_groups()?, member_groups);
+        assert_eq!(member_project.workspace().default_groups()?, root_groups);
+        assert_eq!(
+            root_project.workspace().packages()[&PackageName::from_str("child")?]
+                .default_groups()?,
+            member_groups
+        );
+
+        Ok(())
     }
 
     #[tokio::test]
