@@ -103,6 +103,23 @@
     {
       "caller": "uv",
       "environment": "automations",
+      "caller_workflow": "issue-triage.yml",
+      "reusable_workflow": "evaluate-bug-fix.yml",
+      "on": ["issues", "workflow_dispatch"],
+      "permissions": { "contents": "write" },
+      "target": "uv-dev"
+    },
+    {
+      "caller": "uv",
+      "environment": "automations",
+      "caller_workflow": "improve-bug-fix-quality.yml",
+      "on": ["schedule", "workflow_dispatch"],
+      "permissions": { "contents": "write", "pull_requests": "write" },
+      "target": "uv-dev"
+    },
+    {
+      "caller": "uv",
+      "environment": "automations",
       "caller_workflow": "reproduce-bug.yml",
       "on": ["workflow_dispatch"],
       "permissions": { "contents": "write", "pull_requests": "write" },
