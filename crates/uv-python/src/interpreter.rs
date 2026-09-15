@@ -713,6 +713,10 @@ impl Interpreter {
 
 /// Calls `fs_err::canonicalize` on Unix. On Windows, avoids attempting to resolve symlinks
 /// but will resolve junctions if they are part of a trampoline target.
+///
+/// The input path must be absolute. Ordinary Windows paths are returned unchanged to preserve
+/// their spelling: canonicalizing a UNC path can add a verbatim prefix that cannot safely be
+/// removed. See <https://github.com/astral-sh/uv/issues/5440>.
 pub fn canonicalize_executable(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
     let path = path.as_ref();
     debug_assert!(
