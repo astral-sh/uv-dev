@@ -10,7 +10,8 @@ The reported literal-dot target regression is reproducible. On Linux, uv 0.12.14
 `annotated-types==0.8.0` with `uv pip install --target=.` and reports that the wheel's normal
 `.dist-info` directory escapes its destination. The same command succeeds with uv 0.12.13, and uv
 0.12.14 succeeds when the target is a non-dot relative path or an absolute path. Python 3.12.3 is
-enough to reproduce the report, so the reported Python 3.14 is not required.
+enough to reproduce the report, so the reported Python 3.14 is not required. A maintainer confirms
+that the regression is fixed in uv 0.12.15.
 
 ## Classification
 
@@ -60,11 +61,12 @@ and the astral-sh/uv#21569 symlink-rejection tests such as
 `reject_symlinked_wheel_package_directory`. Those tests do not exercise `.` or `./`; the parent
 regression tests described below provide the current-directory coverage.
 
-An absolute target such as `--target="$PWD"` is an observed workaround on uv 0.12.14.
+For users who must remain on uv 0.12.14, an absolute target such as `--target="$PWD"` is an observed
+workaround.
 
 ## Fix
 
-Outcome: fixed in the checkout.
+Outcome: fixed and released in uv 0.12.15, as confirmed by a maintainer on astral-sh/uv#21694.
 
 The root cause is that [`Target`] retained current-directory spellings such as `.` unchanged. Wheel
 destination validation normalizes that root to an empty path, and [`normalize_path_under`] rejects
@@ -79,7 +81,8 @@ installation into the current directory for both `--target=.` and `target = "."`
 for both updated regressions, the existing non-dot relative-target bytecode test, the existing
 symlinked wheel-destination rejection test, and the pip-sync relative-target install/upgrade/script
 round trip. The changed Rust files were formatted with `cargo fmt --all` using the available stable
-rustfmt, and focused clippy checks for `uv-python` passed with warnings denied.
+rustfmt, and focused clippy checks for `uv-python` passed with warnings denied. The fix was developed
+in astral-sh/uv-dev#1808.
 
 ## Related
 
@@ -90,5 +93,3 @@ rustfmt, and focused clippy checks for `uv-python` passed with warnings denied.
 - astral-sh/uv#21692 — a sibling uv 0.12.14 regression in the same destination-validation area.
   Its trigger is a pre-existing `/usr/local/man` symlink and its error is `Cannot install into
   symlinked directory`, so it is distinct from the literal-dot target failure.
-
-Pull request: https://github.com/astral-sh/uv-dev/pull/1808
