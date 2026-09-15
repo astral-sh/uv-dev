@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 use tracing::info_span;
-use uv_client::{DEFAULT_CONNECT_TIMEOUT, DEFAULT_READ_TIMEOUT, DEFAULT_READ_TIMEOUT_UPLOAD};
+use uv_client::{
+    DEFAULT_CONNECT_TIMEOUT, DEFAULT_READ_TIMEOUT, DEFAULT_READ_TIMEOUT_UPLOAD, GitHubFastPathUrl,
+};
 use uv_configuration::RequiredVersion;
 use uv_dirs::{system_config_file, user_config_dir};
 use uv_distribution_types::{IndexUrlError, Origin};
@@ -736,6 +738,7 @@ pub struct EnvironmentOptions {
     pub python_no_registry: EnvFlag,
     pub install_mirrors: PythonInstallMirrors,
     pub log_context: Option<bool>,
+    pub github_fast_path_url: Option<GitHubFastPathUrl>,
     pub lfs: Option<bool>,
     pub cuda_driver_version: Option<Version>,
     pub amd_gpu_architecture: Option<AmdGpuArchitecture>,
@@ -846,6 +849,10 @@ impl EnvironmentOptions {
                 )?,
             },
             log_context: parse_boolish_environment_variable(EnvVars::UV_LOG_CONTEXT)?,
+            // Keep empty overrides and the existing fallback for non-Unicode values.
+            github_fast_path_url: std::env::var(EnvVars::UV_GITHUB_FAST_PATH_URL)
+                .ok()
+                .map(GitHubFastPathUrl::new),
             lfs: parse_boolish_environment_variable(EnvVars::UV_GIT_LFS)?,
             cuda_driver_version: parse_typed_environment_variable(
                 EnvVars::UV_CUDA_DRIVER_VERSION,

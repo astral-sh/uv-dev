@@ -1,3 +1,7 @@
+#[cfg(unix)]
+use std::ffi::OsString;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
 use std::process::Command;
 
 use assert_fs::prelude::*;
@@ -18,6 +22,7 @@ fn add_shared_args(mut command: Command) -> Command {
         .env(EnvVars::UV_CONCURRENT_INSTALLS, "8")
         .env(EnvVars::UV_CONCURRENT_CACHE_READS, "2")
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env_remove(EnvVars::UV_GITHUB_FAST_PATH_URL)
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS);
 
     if cfg!(unix) {
@@ -58,6 +63,7 @@ fn pip_compile_baseline() {
             connect_timeout: [TIME],
             retries: 3,
             metadata_range_request: Fallback,
+            github_fast_path_url: None,
         },
         concurrency: Concurrency {
             downloads: 50,
@@ -263,6 +269,7 @@ fn publish_resolved_settings() -> anyhow::Result<()> {
             connect_timeout: [TIME],
             retries: 3,
             metadata_range_request: Fallback,
+            github_fast_path_url: None,
         },
         concurrency: Concurrency {
             downloads: 50,
@@ -432,6 +439,7 @@ fn pip_install_baseline() {
             connect_timeout: [TIME],
             retries: 3,
             metadata_range_request: Fallback,
+            github_fast_path_url: None,
         },
         concurrency: Concurrency {
             downloads: 50,
@@ -620,6 +628,7 @@ fn lock_baseline() {
             connect_timeout: [TIME],
             retries: 3,
             metadata_range_request: Fallback,
+            github_fast_path_url: None,
         },
         concurrency: Concurrency {
             downloads: 50,
@@ -747,6 +756,7 @@ fn version_baseline() {
             connect_timeout: [TIME],
             retries: 3,
             metadata_range_request: Fallback,
+            github_fast_path_url: None,
         },
         concurrency: Concurrency {
             downloads: 50,
@@ -863,6 +873,91 @@ fn version_baseline() {
     windows,
     ignore = "Configuration tests are not yet supported on Windows"
 )]
+fn github_fast_path_url_environment() {
+    let context = uv_test::test_context!("3.12");
+
+    let baseline = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.version()).arg("--show-settings")
+    );
+
+    // An empty override is distinct from an absent one.
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.version())
+        .arg("--show-settings")
+        .env(EnvVars::UV_GITHUB_FAST_PATH_URL, ""), @r#"
+    ...
+             connect_timeout: [TIME],
+             retries: 3,
+             metadata_range_request: Fallback,
+    -        github_fast_path_url: None,
+    +        github_fast_path_url: Some(
+    +            ****,
+    +        ),
+         },
+         concurrency: Concurrency {
+             downloads: 50,
+    ...
+    "#);
+
+    // URL parsing remains deferred to the HTTP request, if one is made.
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.version())
+        .arg("--show-settings")
+        .env(EnvVars::UV_GITHUB_FAST_PATH_URL, "not a URL"), @r#"
+    ...
+             connect_timeout: [TIME],
+             retries: 3,
+             metadata_range_request: Fallback,
+    -        github_fast_path_url: None,
+    +        github_fast_path_url: Some(
+    +            ****,
+    +        ),
+         },
+         concurrency: Concurrency {
+             downloads: 50,
+    ...
+    "#);
+
+    // Even a credential-bearing override stays opaque in resolved settings.
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.version())
+        .arg("--show-settings")
+        .env(
+            EnvVars::UV_GITHUB_FAST_PATH_URL,
+            "https://user:password@example.invalid/repos?token=secret",
+        ), @r#"
+    ...
+             connect_timeout: [TIME],
+             retries: 3,
+             metadata_range_request: Fallback,
+    -        github_fast_path_url: None,
+    +        github_fast_path_url: Some(
+    +            ****,
+    +        ),
+         },
+         concurrency: Concurrency {
+             downloads: 50,
+    ...
+    "#);
+
+    // A non-Unicode value retains the same fallback as an absent variable.
+    #[cfg(unix)]
+    diff_uv_snapshot!(
+        context.filters(),
+        &baseline,
+        add_shared_args(context.version())
+            .arg("--show-settings")
+            .env(
+                EnvVars::UV_GITHUB_FAST_PATH_URL,
+                OsString::from_vec(vec![0xff]),
+            ),
+        @""
+    );
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
 fn tool_install_baseline() {
     let context = uv_test::test_context!("3.12");
 
@@ -889,6 +984,7 @@ fn tool_install_baseline() {
             connect_timeout: [TIME],
             retries: 3,
             metadata_range_request: Fallback,
+            github_fast_path_url: None,
         },
         concurrency: Concurrency {
             downloads: 50,

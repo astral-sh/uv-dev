@@ -32,7 +32,7 @@ use uv_cli::{
         resolver_installer_options, resolver_options,
     },
 };
-use uv_client::{Certificates, Connectivity, MetadataRangeRequest};
+use uv_client::{Certificates, Connectivity, GitHubFastPathUrl, MetadataRangeRequest};
 use uv_configuration::{
     ActiveEnvironment, BuildIsolation, BuildOptions, Concurrency, DependencyGroups, DevMode,
     DryRun, EditableMode, EnvFile, ExcludeDependency, ExportFormat, ExtrasSpecification,
@@ -285,6 +285,7 @@ pub(crate) struct NetworkSettings {
     pub(super) connect_timeout: Duration,
     pub(super) retries: u32,
     pub(super) metadata_range_request: MetadataRangeRequest,
+    pub(super) github_fast_path_url: Option<GitHubFastPathUrl>,
 }
 
 impl NetworkSettings {
@@ -415,6 +416,7 @@ impl NetworkSettings {
                 .require_metadata_range_requests
                 .unwrap_or_default()
                 .into(),
+            github_fast_path_url: environment.github_fast_path_url.clone(),
         })
     }
 
