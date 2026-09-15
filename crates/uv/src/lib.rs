@@ -949,7 +949,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             let build_constraints = args
                 .build_constraints
                 .into_iter()
-                .map(RequirementsSource::from_overrides_txt)
+                .map(RequirementsSource::from_constraints_txt)
                 .collect::<Result<Vec<_>, _>>()?;
             let groups = GroupsSpecification {
                 root: project_dir.to_path_buf(),
