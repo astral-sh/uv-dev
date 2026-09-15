@@ -635,15 +635,14 @@ impl Workspace {
                 else {
                     continue;
                 };
-                let existing = required_members.insert(package.clone(), *editable);
-                if let Some(Some(existing)) = existing {
-                    if let Some(editable) = editable {
-                        // If there are conflicting `editable` values, raise an error.
-                        if existing != *editable {
-                            return Err(WorkspaceError::from(
-                                WorkspaceErrorKind::EditableConflict(package.clone()),
-                            ));
-                        }
+                let existing = required_members.entry(package.clone()).or_insert(*editable);
+                if let Some(editable) = editable {
+                    let existing = existing.get_or_insert(*editable);
+                    // If there are conflicting `editable` values, raise an error.
+                    if *existing != *editable {
+                        return Err(WorkspaceError::from(WorkspaceErrorKind::EditableConflict(
+                            package.clone(),
+                        )));
                     }
                 }
             }
