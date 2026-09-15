@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 21569,
+        "title": "Reject symlinked wheel installation destinations",
+        "url": "https://github.com/astral-sh/uv/pull/21569",
+        "state": "merged",
+        "reason": "This directly introduced the exact rejection and shipped between uv 0.12.13 and 0.12.14. It prevents writes through destination symlinks but does not distinguish links whose targets remain within the installation prefix."
+      },
+      {
+        "kind": "issue",
+        "number": 21255,
+        "title": "uv sync and uv pip install fails for packages with console scripts when the venv contains a `lib` to `usr/lib` symlink",
+        "url": "https://github.com/astral-sh/uv/issues/21255",
+        "state": "open",
+        "reason": "This is an adjacent symlink-related installer failure, but it predates 0.12.14 and concerns console-script path calculation rather than rejection of a `.data/data` destination."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed-unmerged, and merged pull requests using the exact error, `/usr/local/man`, `share/man`, `.data/data`, `uv pip install --system`, wheel destinations, installation-prefix symlinks, Docker/Python images, man pages, and post-0.12.14 fixes. Inspected astral-sh/uv#21569, astral-sh/uv#21255, astral-sh/uv#21256, current source/tests, and the 0.12.14 release notes. No existing tracker or fix for this exact regression was found. astral-sh/uv#15243 was ruled out as a build-backend source-tree issue; astral-sh/uv#4731 and astral-sh/uv#11354 concern exposing tool man pages and completions."
+  },
+  "type": "bug",
+  "type_reason": "This is a source-confirmed correctness regression, not a duplicate. astral-sh/uv#21569 introduced unconditional rejection of destination directory symlinks in uv 0.12.14, including the reported `/usr/local/man` layout whose target remains under `/usr/local`. No existing issue or pull request tracks this specific regression. Calling the wheel invalid is also misleading because the failure depends on the target environment layout.",
+  "summary": "astral-sh/uv#21569 is the causative merged change. astral-sh/uv#21255 is adjacent but has a different trigger and mechanism; no canonical duplicate or existing fix was found.",
+  "draft_response": "Thanks for the detailed reproduction. astral-sh/uv#21569 introduced the destination-symlink check in uv 0.12.14 to prevent wheel payloads from being written outside their installation environment. The current check also rejects `/usr/local/man` without considering that `/usr/local/share/man` remains within the same prefix, so this is a regression rather than an invalid wheel. The next step is to add coverage for an existing scheme-directory symlink whose target stays within the prefix and adjust validation without weakening the outside-prefix protection. For now, replacing `/usr/local/man` with a directory or pinning uv 0.12.13 are the available workarounds from the reproduction."
+}
