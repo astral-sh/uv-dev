@@ -27,7 +27,7 @@ use uv_configuration::{
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::NameRequirementSpecification;
 use uv_fs::which::is_executable;
-use uv_fs::{PythonExt, Simplified, create_symlink};
+use uv_fs::{Simplified, create_symlink};
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::Preview;
@@ -1090,18 +1090,14 @@ pub(crate) async fn run(
                 return Err(anyhow!("Base environment has no site packages directory"));
             }
 
-            let overlay_content = format!(
-                "import site; {}",
-                std::iter::once(requirements_site_packages)
-                    .chain(base_site_packages)
-                    .dedup()
-                    .inspect(|path| debug!("Adding `{}` to site packages", path.display()))
-                    .map(|path| format!("site.addsitedir({})", path.escape_for_python()))
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            );
+            let overlay_paths = std::iter::once(requirements_site_packages)
+                .chain(base_site_packages)
+                .dedup()
+                .inspect(|path| debug!("Adding `{}` to site packages", path.display()))
+                .map(Cow::into_owned)
+                .collect::<Vec<_>>();
 
-            ephemeral_env.set_overlay(overlay_content)?;
+            ephemeral_env.set_overlay(&overlay_paths)?;
 
             // N.B. The order here matters — earlier interpreters take precedence over the
             // later ones.
