@@ -4911,6 +4911,153 @@ fn python_run_build_variant_revision() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn python_project_build_variant_revision() -> anyhow::Result<()> {
+    let (context, installation) = python_build_variant_revision_context()?;
+    let context = context
+        .with_filtered_python_names()
+        .with_filtered_python_sources()
+        .with_filtered_python_install_bin();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = []
+    "#})?;
+    context
+        .sync()
+        .args(["--python", "3.13.7+custom"])
+        .assert()
+        .success();
+    let marker = installation.child("marker");
+    let build = installation.child("BUILD");
+    let environment_marker = context.venv.child("marker");
+    environment_marker.touch()?;
+
+    // Reuse the installed revision when it is requested, even if the catalog only offers a newer one.
+    uv_snapshot!(context.filters(), context.sync().args(["--python", "3.13.7+custom"])
+        .env(EnvVars::UV_PYTHON_BUILD, "20260825"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    marker.assert(predicate::path::exists());
+    environment_marker.assert(predicate::path::exists());
+
+    // An unqualified request and an explicit executable do not opt into build revision selection.
+    for request in ["3.13.7".as_ref(), context.interpreter().as_os_str()] {
+        context
+            .sync()
+            .arg("--python")
+            .arg(request)
+            .env(EnvVars::UV_PYTHON_BUILD, "missing-build")
+            .assert()
+            .success();
+    }
+    marker.assert(predicate::path::exists());
+    environment_marker.assert(predicate::path::exists());
+
+    // Failure to find the requested revision must leave the healthy environment available.
+    uv_snapshot!(context.filters(), context.sync().args(["--python", "3.13.7+custom"])
+        .env(EnvVars::UV_PYTHON_BUILD, "missing-build")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "never"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for Python 3.13.7+custom in [PYTHON SOURCES]
+    ");
+    marker.assert(predicate::path::exists());
+    environment_marker.assert(predicate::path::exists());
+    insta::assert_snapshot!(fs_err::read_to_string(&build)?, @"20260825");
+
+    // A revision mismatch must reach discovery, even when a healthy project environment exists.
+    uv_snapshot!(context.filters(), context.run().args(["--python", "3.13.7+custom", "python", "-c",
+        "import sys; from pathlib import Path; print((Path(sys.base_prefix) / 'BUILD').read_text().strip())"])
+        .env(EnvVars::UV_PYTHON_BUILD, "20260901"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    20260901
+
+    ----- stderr -----
+    Using CPython 3.13.7
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    marker.assert(predicate::path::missing());
+    insta::assert_snapshot!(fs_err::read_to_string(&build)?, @"20260901");
+
+    // Matching revisions still reuse the installation and environment.
+    marker.touch()?;
+    environment_marker.touch()?;
+    context
+        .sync()
+        .args(["--python", "3.13.7+custom"])
+        .env(EnvVars::UV_PYTHON_BUILD, "20260901")
+        .assert()
+        .success();
+    marker.assert(predicate::path::exists());
+    environment_marker.assert(predicate::path::exists());
+
+    // A missing revision cannot satisfy an explicit build request through environment reuse.
+    fs_err::remove_file(&build)?;
+    context
+        .sync()
+        .args(["--python", "3.13.7+custom"])
+        .env(EnvVars::UV_PYTHON_BUILD, "20260901")
+        .assert()
+        .success();
+    marker.assert(predicate::path::missing());
+    insta::assert_snapshot!(fs_err::read_to_string(&build)?, @"20260901");
+    Ok(())
+}
+
+#[test]
+fn python_script_build_variant_revision() -> anyhow::Result<()> {
+    let (context, installation) = python_build_variant_revision_context()?;
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.13"
+        # dependencies = []
+        # ///
+        import sys
+        from pathlib import Path
+
+        print((Path(sys.base_prefix) / "BUILD").read_text().strip())
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.run().args(["--python", "3.13.7+custom", "script.py"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    20260825
+    ");
+    let marker = installation.child("marker");
+    marker.assert(predicate::path::exists());
+
+    uv_snapshot!(context.filters(), context.run().args(["--python", "3.13.7+custom", "script.py"])
+        .env(EnvVars::UV_PYTHON_BUILD, "20260901"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    20260901
+    ");
+    marker.assert(predicate::path::missing());
+
+    marker.touch()?;
+    uv_snapshot!(context.filters(), context.run().args(["--python", "3.13.7+custom", "script.py"])
+        .env(EnvVars::UV_PYTHON_BUILD, "20260901"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    20260901
+    ");
+    marker.assert(predicate::path::exists());
+    Ok(())
+}
+
 #[tokio::test]
 async fn python_build_variant_revision_download_failure() -> anyhow::Result<()> {
     for automatic in [false, true] {
