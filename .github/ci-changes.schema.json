@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CI change facts",
+  "type": "object",
+  "required": [
+    "rust-code-changed",
+    "rust-deps-changed",
+    "rust-config-changed",
+    "python-config-changed",
+    "workflow-changed",
+    "release-workflow-changed",
+    "release-build-changed",
+    "ci-workflow-changed",
+    "schema-changed",
+    "publish-code-changed",
+    "trampoline-workflow-changed",
+    "trampoline-code-changed",
+    "trampoline-repro-changed",
+    "trampoline-build-scripts-changed",
+    "trampoline-scripts-changed",
+    "uv-build-changed",
+    "dockerfile-changed",
+    "docker-workflow-changed",
+    "bench-workflow-changed",
+    "integration-changed",
+    "system-workflow-changed",
+    "system-test-changed",
+    "any-code-changed",
+    "any-rust-changed",
+    "publish-changed",
+    "cache-relevant-changed",
+    "docker-build-changed"
+  ],
+  "maxProperties": 27,
+  "additionalProperties": {
+    "type": "boolean"
+  }
+}
