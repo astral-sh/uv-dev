@@ -109,6 +109,18 @@ jobs:
     with:
       sha: ${{ github.sha }}
 
+  review-qa:
+    needs:
+      - plan
+      - build-dev-binaries
+    if: ${{ github.event_name == 'pull_request' && github.repository == 'astral-sh/uv' && github.event.pull_request.head.repo.full_name == github.repository && needs.plan.outputs.test-code == 'true' }}
+    uses: $/.github/workflows/pull-request-qa-review.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] required for the automations environment, as in release.yml
+    permissions:
+      contents: read
+    with:
+      sha: ${{ github.sha }}
+
   test-integration:
     needs:
       - plan
