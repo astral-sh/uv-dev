@@ -5,6 +5,7 @@ use indoc::{formatdoc, indoc};
 use uv_fs::Simplified;
 use uv_static::EnvVars;
 
+use uv_test::packse::PackseServer;
 use uv_test::{site_packages_path, uv_snapshot};
 
 /// Filter the user scheme, which differs between Windows and Unix.
@@ -204,7 +205,9 @@ fn find_uv_bin_in_ephemeral_environment() -> anyhow::Result<()> {
 
 #[test]
 fn find_uv_bin_in_parent_of_ephemeral_environment() -> anyhow::Result<()> {
+    let server = PackseServer::new("packages/pip-commands.toml");
     let context = uv_test::test_context!("3.12")
+        .with_default_index(&server.index_url())
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -232,7 +235,7 @@ fn find_uv_bin_in_parent_of_ephemeral_environment() -> anyhow::Result<()> {
     // environment
     uv_snapshot!(context.filters(), context.run()
         .arg("--with")
-        .arg("anyio")
+        .arg("simple-package")
         .arg("python")
         .arg("-c")
         .arg(TEST_SCRIPT),
@@ -246,12 +249,10 @@ fn find_uv_bin_in_parent_of_ephemeral_environment() -> anyhow::Result<()> {
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + uv==0.1.0 (from file://[WORKSPACE]/test/packages/fake-uv)
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + sniffio==1.3.1
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + simple-package==2.1.3
     "
     );
 

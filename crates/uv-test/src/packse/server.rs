@@ -8,26 +8,27 @@
 //! `/files/*` routes as scenario packages.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::net::{Ipv4Addr, TcpListener};
 use std::str::FromStr;
 use std::sync::Arc;
 
+use anyhow::Context;
 use serde_json::json;
 use wiremock::{
     Mock, MockServer, Request, ResponseTemplate,
     matchers::{header_exists, method, path},
 };
 
-use uv_distribution_filename::WheelFilename;
+use uv_distribution_filename::DistFilename;
 use uv_normalize::PackageName;
 use uv_pep440::VersionSpecifiers;
 
 use crate::http_server::{HttpServer, content_type_for_filename};
 use crate::vendor::{VendorArtifact, vendor_artifacts};
 
-use super::scenario::{Scenario, WheelTag};
+use super::scenario::{Scenario, WheelTag, Yanked};
 use super::scenarios_dir;
-use super::wheel::{generate_sdist, generate_wheel, sha256_hex};
+use super::wheel::{generate_scenario_sdist, generate_scenario_wheel, sha256_hex};
 
 const PACKSE_UPLOAD_TIME: &str = "2024-03-24T00:00:00Z";
 
@@ -37,7 +38,7 @@ struct DistInfo {
     sha256: String,
     requires_python: Option<VersionSpecifiers>,
     upload_time: Option<String>,
-    yanked: bool,
+    yanked: Yanked,
 }
 
 /// All distributions for a given package name, across versions.
@@ -86,6 +87,27 @@ impl PackseServer {
         Self::from_scenario(&scenario)
     }
 
+    /// Start two different scenarios whose index URLs sort in the given order.
+    ///
+    /// Lockfiles use registry URLs to order otherwise-identical package versions. Reserving both
+    /// ports before assigning scenarios keeps that order independent of ephemeral port allocation.
+    pub fn new_ordered_pair(first: &str, second: &str) -> anyhow::Result<(Self, Self)> {
+        let first = Scenario::from_path(&scenarios_dir().join(first))?;
+        let second = Scenario::from_path(&scenarios_dir().join(second))?;
+        let mut listeners = [
+            TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?,
+            TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?,
+        ];
+        if listeners[0].local_addr()?.to_string() > listeners[1].local_addr()?.to_string() {
+            listeners.swap(0, 1);
+        }
+        let [first_listener, second_listener] = listeners;
+        Ok((
+            Self::start_index_on(build_server_index(&first), true, Some(first_listener)),
+            Self::start_index_on(build_server_index(&second), true, Some(second_listener)),
+        ))
+    }
+
     /// Start a mock server with no packages (only cached build dependencies).
     ///
     /// Useful as a dummy index that will 404 for any non-cached package lookup.
@@ -104,12 +126,42 @@ impl PackseServer {
         Self::start(scenario, false)
     }
 
+    /// Override advertised SHA-256 digests without changing the distribution bytes.
+    pub fn from_scenario_with_hash_overrides(
+        scenario: &Scenario,
+        overrides: &[(&str, &str)],
+    ) -> anyhow::Result<Self> {
+        let mut index = build_server_index(scenario);
+        for &(filename, hash) in overrides {
+            let dist = index
+                .packages
+                .values_mut()
+                .flat_map(|package| &mut package.dists)
+                .find(|dist| dist.filename == filename)
+                .with_context(|| format!("No scenario distribution named `{filename}`"))?;
+            hash.clone_into(&mut dist.sha256);
+        }
+        Ok(Self::start_index(index, true))
+    }
+
     fn start(scenario: &Scenario, hashes: bool) -> Self {
-        let index = Arc::new(build_server_index(scenario));
+        Self::start_index(build_server_index(scenario), hashes)
+    }
+
+    fn start_index(index: ServerIndex, hashes: bool) -> Self {
+        Self::start_index_on(index, hashes, None)
+    }
+
+    fn start_index_on(index: ServerIndex, hashes: bool, listener: Option<TcpListener>) -> Self {
+        let index = Arc::new(index);
         let server_index = Arc::clone(&index);
-        let server = HttpServer::start(move |request, server_uri| {
+        let handler = move |request: &Request, server_uri: &str| {
             handle_request(request, server_uri, &server_index, hashes)
-        });
+        };
+        let server = match listener {
+            Some(listener) => HttpServer::start_with_listener(listener, handler),
+            None => HttpServer::start(handler),
+        };
 
         Self { server, index }
     }
@@ -122,6 +174,21 @@ impl PackseServer {
     /// Return the URL for a generated distribution file.
     pub fn file_url(&self, filename: &str) -> String {
         format!("{}/files/{filename}", self.server.url())
+    }
+
+    /// Return the advertised SHA-256 digest of a distribution.
+    pub fn file_hash(&self, filename: &str) -> Option<&str> {
+        self.files()
+            .find_map(|(candidate, hash)| (candidate == filename).then_some(hash))
+    }
+
+    /// Load the generated or pinned bytes for a distribution.
+    pub fn file_bytes(&self, filename: &str) -> anyhow::Result<Arc<[u8]>> {
+        self.index
+            .files
+            .get(filename)
+            .with_context(|| format!("No scenario distribution named `{filename}`"))?
+            .bytes()
     }
 
     /// Return the filename and advertised SHA-256 digest of each distribution.
@@ -151,42 +218,36 @@ fn build_server_index(scenario: &Scenario) -> ServerIndex {
                 };
 
                 for tag in tags {
-                    let (filename, bytes) = generate_wheel(
-                        package_name,
-                        version,
-                        &meta.requires,
-                        &meta.extras,
-                        meta.requires_python.as_ref(),
-                        tag,
-                    );
+                    let (filename, bytes) =
+                        generate_scenario_wheel(package_name, version, meta, tag);
                     let sha256 = sha256_hex(&bytes);
                     files.insert(filename.clone(), FileData::Bytes(bytes.into()));
                     dists.push(DistInfo {
                         filename,
                         sha256,
                         requires_python: meta.requires_python.clone(),
-                        upload_time: wheel_metadata.upload_time.clone(),
-                        yanked: meta.yanked,
+                        upload_time: wheel_metadata
+                            .upload_time
+                            .clone()
+                            .or_else(|| meta.upload_time.clone()),
+                        yanked: meta.yanked.clone(),
                     });
                 }
             }
 
             if let Some(sdist_metadata) = &meta.sdist {
-                let (filename, bytes) = generate_sdist(
-                    package_name,
-                    version,
-                    &meta.requires,
-                    &meta.extras,
-                    meta.requires_python.as_ref(),
-                );
+                let (filename, bytes) = generate_scenario_sdist(package_name, version, meta);
                 let sha256 = sha256_hex(&bytes);
                 files.insert(filename.clone(), FileData::Bytes(bytes.into()));
                 dists.push(DistInfo {
                     filename,
                     sha256,
                     requires_python: meta.requires_python.clone(),
-                    upload_time: sdist_metadata.upload_time.clone(),
-                    yanked: meta.yanked,
+                    upload_time: sdist_metadata
+                        .upload_time
+                        .clone()
+                        .or_else(|| meta.upload_time.clone()),
+                    yanked: meta.yanked.clone(),
                 });
             }
         }
@@ -195,28 +256,23 @@ fn build_server_index(scenario: &Scenario) -> ServerIndex {
     }
 
     for artifact in vendor_artifacts() {
-        if !Path::new(artifact.filename)
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("whl"))
-        {
+        let Some(filename) = DistFilename::try_from_normalized_filename(artifact.filename) else {
             continue;
-        }
-
-        let wheel_filename =
-            WheelFilename::from_str(artifact.filename).expect("invalid vendor wheel filename");
+        };
 
         files.insert(artifact.filename.to_string(), FileData::Vendor(artifact));
-        packages
-            .entry(wheel_filename.name)
+        let dists = &mut packages
+            .entry(filename.name().clone())
             .or_insert_with(|| PackageEntry { dists: Vec::new() })
-            .dists
-            .push(DistInfo {
-                filename: artifact.filename.to_string(),
-                sha256: artifact.sha256.to_string(),
-                requires_python: None,
-                upload_time: None,
-                yanked: false,
-            });
+            .dists;
+        dists.retain(|dist| dist.filename != artifact.filename);
+        dists.push(DistInfo {
+            filename: artifact.filename.to_string(),
+            sha256: artifact.sha256.to_string(),
+            requires_python: None,
+            upload_time: artifact.upload_time.map(str::to_owned),
+            yanked: Yanked::No,
+        });
     }
 
     ServerIndex { packages, files }
@@ -374,8 +430,8 @@ fn build_simple_api_response(
             if let Some(rp) = &dist.requires_python {
                 file_obj["requires-python"] = json!(rp);
             }
-            if dist.yanked {
-                file_obj["yanked"] = json!(true);
+            if let Some(yanked) = dist.yanked.simple_api_value() {
+                file_obj["yanked"] = yanked;
             }
             file_obj
         })
@@ -434,11 +490,77 @@ mod tests {
     fn server_index_construction_does_not_load_vendor_artifacts() {
         let _index = build_server_index(&Scenario::empty());
 
-        assert!(
-            vendor_artifacts()
-                .iter()
-                .all(|artifact| !artifact.is_loaded())
+        assert!(vendor_artifacts().all(|artifact| !artifact.is_loaded()));
+    }
+
+    #[tokio::test]
+    async fn ordered_pair_keeps_scenario_contents_distinct() -> Result<()> {
+        let (first, second) =
+            PackseServer::new_ordered_pair("packages/tool-list.toml", "packages/workflow.toml")?;
+        assert!(first.index_url() < second.index_url());
+        let client = reqwest::Client::builder().no_proxy().build()?;
+        for (server, present, absent) in [
+            (&first, "list-tool", "workflow-direct"),
+            (&second, "workflow-direct", "list-tool"),
+        ] {
+            assert_eq!(
+                client
+                    .get(format!("{}{present}/", server.index_url()))
+                    .send()
+                    .await?
+                    .status(),
+                StatusCode::OK,
+            );
+            assert_eq!(
+                client
+                    .get(format!("{}{absent}/", server.index_url()))
+                    .send()
+                    .await?
+                    .status(),
+                StatusCode::NOT_FOUND,
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn advertised_hash_overrides_leave_artifact_bytes_unchanged() -> Result<()> {
+        let scenario: Scenario = toml::from_str(
+            r#"
+name = "hash-override"
+[root]
+requires = ["a"]
+[expected]
+satisfiable = true
+[packages.a.versions."1.0.0"]
+sdist = false
+"#,
+        )?;
+        let original = PackseServer::from_scenario(&scenario);
+        let changed = PackseServer::from_scenario_with_hash_overrides(
+            &scenario,
+            &[("a-1.0.0-py3-none-any.whl", "incorrect")],
+        )?;
+        assert_ne!(
+            original.file_hash("a-1.0.0-py3-none-any.whl"),
+            Some("incorrect")
         );
+        assert_eq!(
+            changed.file_hash("a-1.0.0-py3-none-any.whl"),
+            Some("incorrect")
+        );
+        assert_eq!(
+            original.file_bytes("a-1.0.0-py3-none-any.whl")?,
+            changed.file_bytes("a-1.0.0-py3-none-any.whl")?
+        );
+        assert!(
+            PackseServer::from_scenario_with_hash_overrides(
+                &scenario,
+                &[("missing.whl", "incorrect")]
+            )
+            .is_err()
+        );
+        Ok(())
     }
 
     #[tokio::test]

@@ -1,0 +1,20 @@
+name = "lock-find-links-registry"
+description = "Registry packages that compete with find-links artifacts in lock integration tests."
+
+[root]
+requires = []
+
+[expected]
+satisfiable = true
+
+[packages.colorama.versions."0.4.6"]
+requires_python = ">=3.7"
+sdist_backend = "in-tree"
+
+[packages.tqdm.versions."4.66.2"]
+requires_python = ">=3.7"
+requires = ["colorama; sys_platform == 'win32'"]
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true

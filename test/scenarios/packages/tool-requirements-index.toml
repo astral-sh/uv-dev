@@ -1,0 +1,18 @@
+name = "tool-requirements-index"
+description = "An alternate index for tool requirements-file settings."
+
+[root]
+requires = ["web-tool", "extra-requirement"]
+
+[expected]
+satisfiable = true
+
+[packages.web-tool.versions."3.0.2"]
+scripts = { web-tool = "web_tool:main" }
+sdist_backend = "in-tree"
+
+[packages.extra-requirement.versions."1.0.0"]
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true

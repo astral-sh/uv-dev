@@ -174,7 +174,6 @@ test-defaults = [
   "test-crates-io",
   "test-git",
   "test-git-lfs",
-  "test-pypi",
   "test-r2",
   "test-python",
   "test-python-managed",

@@ -189,7 +189,7 @@ impl<'a> RegistryClientBuilder<'a> {
             .base_client_builder
             .indexes(Indexes::from(&self.index_locations));
         let client = if let Some(existing) = existing {
-            builder.wrap_existing(existing)
+            builder.wrap_existing(existing)?
         } else {
             builder.build()?
         };

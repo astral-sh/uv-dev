@@ -8,21 +8,22 @@ use uv_test::uv_snapshot;
 #[test]
 fn tool_uninstall() {
     let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/tool-list.toml")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
 
-    // Install `black`
+    // Install `list-tool`
     context
         .tool_install()
-        .arg("black==24.2.0")
+        .arg("list-tool==1.0.0")
         .assert()
         .success();
 
-    uv_snapshot!(context.filters(), context.tool_uninstall().arg("black"), @"
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("list-tool"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Uninstalled 2 executables: black, blackd
+    Uninstalled 2 executables: list-tool, list-tool-helper
     ");
 
     // After uninstalling the tool, it shouldn't be listed.
@@ -34,41 +35,41 @@ fn tool_uninstall() {
 
     // After uninstalling the tool, we should be able to reinstall it.
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("black==24.2.0")
+        .arg("list-tool==1.0.0")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Installed 6 packages in [TIME]
-     + black==24.2.0
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    Installed 2 executables: black, blackd
+    Resolved 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + list-tool==1.0.0
+    Installed 2 executables: list-tool, list-tool-helper
     ");
 }
 
 #[test]
 fn tool_uninstall_multiple_names() {
     let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/tool-list.toml")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
 
-    // Install `black`
+    // Install `list-tool`
     context
         .tool_install()
-        .arg("black==24.2.0")
+        .arg("list-tool==1.0.0")
         .assert()
         .success();
 
-    context.tool_install().arg("ruff==0.3.4").assert().success();
+    context
+        .tool_install()
+        .arg("list-other==0.3.4")
+        .assert()
+        .success();
 
-    uv_snapshot!(context.filters(), context.tool_uninstall().arg("black").arg("ruff"), @"
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("list-tool").arg("list-other"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Uninstalled 3 executables: black, blackd, ruff
+    Uninstalled 3 executables: list-other, list-tool, list-tool-helper
     ");
 
     // After uninstalling the tool, it shouldn't be listed.
@@ -82,62 +83,69 @@ fn tool_uninstall_multiple_names() {
 #[test]
 fn tool_uninstall_not_installed() {
     let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/tool-list.toml")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
 
-    uv_snapshot!(context.filters(), context.tool_uninstall().arg("black"), @"
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("list-tool"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: `black` is not installed
+    error: `list-tool` is not installed
     ");
 }
 
 #[test]
 fn tool_uninstall_missing_receipt() {
     let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/tool-list.toml")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
 
-    // Install `black`
+    // Install `list-tool`
     context
         .tool_install()
-        .arg("black==24.2.0")
+        .arg("list-tool==1.0.0")
         .assert()
         .success();
 
-    fs_err::remove_file(tool_dir.join("black").join("uv-receipt.toml")).unwrap();
+    fs_err::remove_file(tool_dir.join("list-tool").join("uv-receipt.toml")).unwrap();
 
-    uv_snapshot!(context.filters(), context.tool_uninstall().arg("black"), @"
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("list-tool"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Removed dangling environment for `black`
+    Removed dangling environment for `list-tool`
     ");
 }
 
 #[test]
 fn tool_uninstall_multiple_names_with_missing_receipt() {
     let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/tool-list.toml")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
 
-    // Install `black`
+    // Install `list-tool`
     context
         .tool_install()
-        .arg("black==24.2.0")
+        .arg("list-tool==1.0.0")
         .assert()
         .success();
 
-    context.tool_install().arg("ruff==0.3.4").assert().success();
+    context
+        .tool_install()
+        .arg("list-other==0.3.4")
+        .assert()
+        .success();
 
-    fs_err::remove_file(tool_dir.join("black").join("uv-receipt.toml")).unwrap();
+    fs_err::remove_file(tool_dir.join("list-tool").join("uv-receipt.toml")).unwrap();
 
-    uv_snapshot!(context.filters(), context.tool_uninstall().arg("black").arg("ruff"), @"
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("list-tool").arg("list-other"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Removed dangling environment for `black`
-    Uninstalled 1 executable: ruff
+    Removed dangling environment for `list-tool`
+    Uninstalled 1 executable: list-other
     ");
 
     // After uninstalling both tools, neither should be listed.
@@ -151,22 +159,23 @@ fn tool_uninstall_multiple_names_with_missing_receipt() {
 #[test]
 fn tool_uninstall_all_missing_receipt() {
     let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/tool-list.toml")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
 
-    // Install `black`
+    // Install `list-tool`
     context
         .tool_install()
-        .arg("black==24.2.0")
+        .arg("list-tool==1.0.0")
         .assert()
         .success();
 
-    fs_err::remove_file(tool_dir.join("black").join("uv-receipt.toml")).unwrap();
+    fs_err::remove_file(tool_dir.join("list-tool").join("uv-receipt.toml")).unwrap();
 
     uv_snapshot!(context.filters(), context.tool_uninstall().arg("--all"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Removed dangling environment for `black`
+    Removed dangling environment for `list-tool`
     ");
 }

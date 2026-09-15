@@ -7,11 +7,13 @@ use assert_fs::fixture::PathChild;
 use assert_fs::fixture::PathCreateDir;
 use indoc::indoc;
 
+use uv_test::packse::PackseServer;
 use uv_test::uv_snapshot;
 
 #[test]
 fn no_package() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     uv_snapshot!(context.filters(), context.pip_tree(), @"
     exit_code: 0 (success)
@@ -20,12 +22,12 @@ fn no_package() {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn prune_last_in_the_subgroup() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("requests==2.31.0").unwrap();
+    requirements_txt.write_str("tree-parent==2.31.0").unwrap();
 
     uv_snapshot!(context
         .pip_install()
@@ -37,33 +39,33 @@ fn prune_last_in_the_subgroup() {
     Resolved 5 packages in [TIME]
     Prepared 5 packages in [TIME]
     Installed 5 packages in [TIME]
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + idna==3.6
-     + requests==2.31.0
-     + urllib3==2.2.1
+     + tree-leaf-a==2024.2.2
+     + tree-leaf-b==3.3.2
+     + tree-leaf-c==3.6
+     + tree-leaf-d==2.2.1
+     + tree-parent==2.31.0
     "
     );
 
-    context.assert_command("import requests").success();
-    uv_snapshot!(context.filters(), context.pip_tree().arg("--prune").arg("certifi"), @"
+    context.assert_command("import tree_parent").success();
+    uv_snapshot!(context.filters(), context.pip_tree().arg("--prune").arg("tree-leaf-a"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    requests v2.31.0
-    ├── charset-normalizer v3.3.2
-    ├── idna v3.6
-    └── urllib3 v2.2.1
+    tree-parent v2.31.0
+    ├── tree-leaf-b v3.3.2
+    ├── tree-leaf-c v3.6
+    └── tree-leaf-d v2.2.1
     "
     );
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn single_package() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("requests==2.31.0").unwrap();
+    requirements_txt.write_str("tree-parent==2.31.0").unwrap();
 
     uv_snapshot!(context
         .pip_install()
@@ -75,35 +77,35 @@ fn single_package() {
     Resolved 5 packages in [TIME]
     Prepared 5 packages in [TIME]
     Installed 5 packages in [TIME]
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + idna==3.6
-     + requests==2.31.0
-     + urllib3==2.2.1
+     + tree-leaf-a==2024.2.2
+     + tree-leaf-b==3.3.2
+     + tree-leaf-c==3.6
+     + tree-leaf-d==2.2.1
+     + tree-parent==2.31.0
     "
     );
 
-    context.assert_command("import requests").success();
+    context.assert_command("import tree_parent").success();
 
     uv_snapshot!(context.filters(), context.pip_tree(), @"
     exit_code: 0 (success)
     ----- stdout -----
-    requests v2.31.0
-    ├── certifi v2024.2.2
-    ├── charset-normalizer v3.3.2
-    ├── idna v3.6
-    └── urllib3 v2.2.1
+    tree-parent v2.31.0
+    ├── tree-leaf-a v2024.2.2
+    ├── tree-leaf-b v3.3.2
+    ├── tree-leaf-c v3.6
+    └── tree-leaf-d v2.2.1
     "
     );
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn nested_dependencies() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("flask").unwrap();
+    requirements_txt.write_str("tree-root").unwrap();
 
     uv_snapshot!(context
         .pip_install()
@@ -115,39 +117,39 @@ fn nested_dependencies() {
     Resolved 7 packages in [TIME]
     Prepared 7 packages in [TIME]
     Installed 7 packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
+     + tree-branch-a==1.7.0
+     + tree-branch-b==8.1.7
+     + tree-branch-c==2.1.2
+     + tree-branch-d==3.1.3
+     + tree-branch-e==3.0.1
+     + tree-root==3.0.2
+     + tree-shared-leaf==2.1.5
     "
     );
 
     uv_snapshot!(context.filters(), context.pip_tree(), @"
     exit_code: 0 (success)
     ----- stdout -----
-    flask v3.0.2
-    ├── blinker v1.7.0
-    ├── click v8.1.7
-    ├── itsdangerous v2.1.2
-    ├── jinja2 v3.1.3
-    │   └── markupsafe v2.1.5
-    └── werkzeug v3.0.1
-        └── markupsafe v2.1.5
+    tree-root v3.0.2
+    ├── tree-branch-a v1.7.0
+    ├── tree-branch-b v8.1.7
+    ├── tree-branch-c v2.1.2
+    ├── tree-branch-d v3.1.3
+    │   └── tree-shared-leaf v2.1.5
+    └── tree-branch-e v3.0.1
+        └── tree-shared-leaf v2.1.5
     "
     );
 }
 
 /// Identical test as `invert` since `--reverse` is simply an alias for `--invert`.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn reverse() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("flask").unwrap();
+    requirements_txt.write_str("tree-root").unwrap();
 
     uv_snapshot!(context
         .pip_install()
@@ -159,41 +161,41 @@ fn reverse() {
     Resolved 7 packages in [TIME]
     Prepared 7 packages in [TIME]
     Installed 7 packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
+     + tree-branch-a==1.7.0
+     + tree-branch-b==8.1.7
+     + tree-branch-c==2.1.2
+     + tree-branch-d==3.1.3
+     + tree-branch-e==3.0.1
+     + tree-root==3.0.2
+     + tree-shared-leaf==2.1.5
     "
     );
 
     uv_snapshot!(context.filters(), context.pip_tree().arg("--reverse"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    blinker v1.7.0
-    └── flask v3.0.2
-    click v8.1.7
-    └── flask v3.0.2
-    itsdangerous v2.1.2
-    └── flask v3.0.2
-    markupsafe v2.1.5
-    ├── jinja2 v3.1.3
-    │   └── flask v3.0.2
-    └── werkzeug v3.0.1
-        └── flask v3.0.2
+    tree-branch-a v1.7.0
+    └── tree-root v3.0.2
+    tree-branch-b v8.1.7
+    └── tree-root v3.0.2
+    tree-branch-c v2.1.2
+    └── tree-root v3.0.2
+    tree-shared-leaf v2.1.5
+    ├── tree-branch-d v3.1.3
+    │   └── tree-root v3.0.2
+    └── tree-branch-e v3.0.1
+        └── tree-root v3.0.2
     "
     );
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn invert() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("flask").unwrap();
+    requirements_txt.write_str("tree-root").unwrap();
 
     uv_snapshot!(context
         .pip_install()
@@ -205,41 +207,41 @@ fn invert() {
     Resolved 7 packages in [TIME]
     Prepared 7 packages in [TIME]
     Installed 7 packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
+     + tree-branch-a==1.7.0
+     + tree-branch-b==8.1.7
+     + tree-branch-c==2.1.2
+     + tree-branch-d==3.1.3
+     + tree-branch-e==3.0.1
+     + tree-root==3.0.2
+     + tree-shared-leaf==2.1.5
     "
     );
 
     uv_snapshot!(context.filters(), context.pip_tree().arg("--invert"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    blinker v1.7.0
-    └── flask v3.0.2
-    click v8.1.7
-    └── flask v3.0.2
-    itsdangerous v2.1.2
-    └── flask v3.0.2
-    markupsafe v2.1.5
-    ├── jinja2 v3.1.3
-    │   └── flask v3.0.2
-    └── werkzeug v3.0.1
-        └── flask v3.0.2
+    tree-branch-a v1.7.0
+    └── tree-root v3.0.2
+    tree-branch-b v8.1.7
+    └── tree-root v3.0.2
+    tree-branch-c v2.1.2
+    └── tree-root v3.0.2
+    tree-shared-leaf v2.1.5
+    ├── tree-branch-d v3.1.3
+    │   └── tree-root v3.0.2
+    └── tree-branch-e v3.0.1
+        └── tree-root v3.0.2
     "
     );
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn depth() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("flask").unwrap();
+    requirements_txt.write_str("tree-root").unwrap();
 
     uv_snapshot!(context.pip_install()
         .arg("-r")
@@ -250,13 +252,13 @@ fn depth() {
     Resolved 7 packages in [TIME]
     Prepared 7 packages in [TIME]
     Installed 7 packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
+     + tree-branch-a==1.7.0
+     + tree-branch-b==8.1.7
+     + tree-branch-c==2.1.2
+     + tree-branch-d==3.1.3
+     + tree-branch-e==3.0.1
+     + tree-root==3.0.2
+     + tree-shared-leaf==2.1.5
     "
     );
 
@@ -265,7 +267,7 @@ fn depth() {
         .arg("0"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    flask v3.0.2
+    tree-root v3.0.2
     "
     );
 
@@ -274,12 +276,12 @@ fn depth() {
         .arg("1"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    flask v3.0.2
-    ├── blinker v1.7.0
-    ├── click v8.1.7
-    ├── itsdangerous v2.1.2
-    ├── jinja2 v3.1.3
-    └── werkzeug v3.0.1
+    tree-root v3.0.2
+    ├── tree-branch-a v1.7.0
+    ├── tree-branch-b v8.1.7
+    ├── tree-branch-c v2.1.2
+    ├── tree-branch-d v3.1.3
+    └── tree-branch-e v3.0.1
     "
     );
 
@@ -288,25 +290,25 @@ fn depth() {
         .arg("2"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    flask v3.0.2
-    ├── blinker v1.7.0
-    ├── click v8.1.7
-    ├── itsdangerous v2.1.2
-    ├── jinja2 v3.1.3
-    │   └── markupsafe v2.1.5
-    └── werkzeug v3.0.1
-        └── markupsafe v2.1.5
+    tree-root v3.0.2
+    ├── tree-branch-a v1.7.0
+    ├── tree-branch-b v8.1.7
+    ├── tree-branch-c v2.1.2
+    ├── tree-branch-d v3.1.3
+    │   └── tree-shared-leaf v2.1.5
+    └── tree-branch-e v3.0.1
+        └── tree-shared-leaf v2.1.5
     "
     );
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn prune() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("flask").unwrap();
+    requirements_txt.write_str("tree-root").unwrap();
 
     uv_snapshot!(context.pip_install()
         .arg("-r")
@@ -317,68 +319,68 @@ fn prune() {
     Resolved 7 packages in [TIME]
     Prepared 7 packages in [TIME]
     Installed 7 packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
+     + tree-branch-a==1.7.0
+     + tree-branch-b==8.1.7
+     + tree-branch-c==2.1.2
+     + tree-branch-d==3.1.3
+     + tree-branch-e==3.0.1
+     + tree-root==3.0.2
+     + tree-shared-leaf==2.1.5
     "
     );
 
     uv_snapshot!(context.filters(), context.pip_tree()
         .arg("--prune")
-        .arg("werkzeug"), @"
+        .arg("tree-branch-e"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    flask v3.0.2
-    ├── blinker v1.7.0
-    ├── click v8.1.7
-    ├── itsdangerous v2.1.2
-    └── jinja2 v3.1.3
-        └── markupsafe v2.1.5
+    tree-root v3.0.2
+    ├── tree-branch-a v1.7.0
+    ├── tree-branch-b v8.1.7
+    ├── tree-branch-c v2.1.2
+    └── tree-branch-d v3.1.3
+        └── tree-shared-leaf v2.1.5
     "
     );
 
     uv_snapshot!(context.filters(), context.pip_tree()
         .arg("--prune")
-        .arg("werkzeug")
+        .arg("tree-branch-e")
         .arg("--prune")
-        .arg("jinja2"), @"
+        .arg("tree-branch-d"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    flask v3.0.2
-    ├── blinker v1.7.0
-    ├── click v8.1.7
-    └── itsdangerous v2.1.2
-    markupsafe v2.1.5
+    tree-root v3.0.2
+    ├── tree-branch-a v1.7.0
+    ├── tree-branch-b v8.1.7
+    └── tree-branch-c v2.1.2
+    tree-shared-leaf v2.1.5
     "
     );
 
     uv_snapshot!(context.filters(), context.pip_tree()
         .arg("--prune")
-        .arg("werkzeug"), @"
+        .arg("tree-branch-e"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    flask v3.0.2
-    ├── blinker v1.7.0
-    ├── click v8.1.7
-    ├── itsdangerous v2.1.2
-    └── jinja2 v3.1.3
-        └── markupsafe v2.1.5
+    tree-root v3.0.2
+    ├── tree-branch-a v1.7.0
+    ├── tree-branch-b v8.1.7
+    ├── tree-branch-c v2.1.2
+    └── tree-branch-d v3.1.3
+        └── tree-shared-leaf v2.1.5
     "
     );
 }
 
 /// Ensure `pip tree` behaves correctly after a package has been removed.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn removed_dependency() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("requests==2.31.0").unwrap();
+    requirements_txt.write_str("tree-parent==2.31.0").unwrap();
 
     uv_snapshot!(context
         .pip_install()
@@ -390,46 +392,46 @@ fn removed_dependency() {
     Resolved 5 packages in [TIME]
     Prepared 5 packages in [TIME]
     Installed 5 packages in [TIME]
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + idna==3.6
-     + requests==2.31.0
-     + urllib3==2.2.1
+     + tree-leaf-a==2024.2.2
+     + tree-leaf-b==3.3.2
+     + tree-leaf-c==3.6
+     + tree-leaf-d==2.2.1
+     + tree-parent==2.31.0
     "
     );
 
     uv_snapshot!(context.filters(), context
         .pip_uninstall()
-        .arg("requests"), @"
+        .arg("tree-parent"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Uninstalled 1 package in [TIME]
-     - requests==2.31.0
+     - tree-parent==2.31.0
     "
     );
 
     uv_snapshot!(context.filters(), context.pip_tree(), @"
     exit_code: 0 (success)
     ----- stdout -----
-    certifi v2024.2.2
-    charset-normalizer v3.3.2
-    idna v3.6
-    urllib3 v2.2.1
+    tree-leaf-a v2024.2.2
+    tree-leaf-b v3.3.2
+    tree-leaf-c v3.6
+    tree-leaf-d v2.2.1
     "
     );
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn multiple_packages() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
         .write_str(
             r"
-        requests==2.31.0
-        click==8.1.7
+        tree-parent==2.31.0
+        tree-branch-b==8.1.7
     ",
         )
         .unwrap();
@@ -444,41 +446,41 @@ fn multiple_packages() {
     Resolved 6 packages in [TIME]
     Prepared 6 packages in [TIME]
     Installed 6 packages in [TIME]
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + click==8.1.7
-     + idna==3.6
-     + requests==2.31.0
-     + urllib3==2.2.1
+     + tree-branch-b==8.1.7
+     + tree-leaf-a==2024.2.2
+     + tree-leaf-b==3.3.2
+     + tree-leaf-c==3.6
+     + tree-leaf-d==2.2.1
+     + tree-parent==2.31.0
     "
     );
 
-    context.assert_command("import requests").success();
+    context.assert_command("import tree_parent").success();
     uv_snapshot!(context.filters(), context.pip_tree(), @"
     exit_code: 0 (success)
     ----- stdout -----
-    click v8.1.7
-    requests v2.31.0
-    ├── certifi v2024.2.2
-    ├── charset-normalizer v3.3.2
-    ├── idna v3.6
-    └── urllib3 v2.2.1
+    tree-branch-b v8.1.7
+    tree-parent v2.31.0
+    ├── tree-leaf-a v2024.2.2
+    ├── tree-leaf-b v3.3.2
+    ├── tree-leaf-c v3.6
+    └── tree-leaf-d v2.2.1
     "
     );
 }
 
 /// Show the installed tree in the presence of a cycle.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn cycle() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
         .write_str(
             r"
-        testtools==2.3.0
-        fixtures==3.0.0
+        cycle-root==2.3.0
+        cycle-backref==3.0.0
     ",
         )
         .unwrap();
@@ -490,40 +492,35 @@ fn cycle() {
         .arg("--strict"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 10 packages in [TIME]
-    Prepared 10 packages in [TIME]
-    Installed 10 packages in [TIME]
-     + argparse==1.4.0
-     + extras==1.0.0
-     + fixtures==3.0.0
-     + linecache2==1.0.0
-     + pbr==6.0.0
-     + python-mimeparse==1.6.0
-     + six==1.16.0
-     + testtools==2.3.0
-     + traceback2==1.4.0
-     + unittest2==1.1.0
+    Resolved 9 packages in [TIME]
+    Prepared 9 packages in [TIME]
+    Installed 9 packages in [TIME]
+     + cycle-backref==3.0.0
+     + cycle-leaf-a==1.0.0
+     + cycle-leaf-b==6.0.0
+     + cycle-leaf-c==1.16.0
+     + cycle-leaf-d==1.4.0
+     + cycle-leaf-e==1.0.0
+     + cycle-nested==1.1.0
+     + cycle-root==2.3.0
+     + cycle-trace==1.4.0
     "
     );
 
     uv_snapshot!(context.filters(), context.pip_tree(), @"
     exit_code: 0 (success)
     ----- stdout -----
-    testtools v2.3.0
-    ├── extras v1.0.0
-    ├── fixtures v3.0.0
-    │   ├── pbr v6.0.0
-    │   ├── six v1.16.0
-    │   └── testtools v2.3.0 (*)
-    ├── pbr v6.0.0
-    ├── python-mimeparse v1.6.0
-    ├── six v1.16.0
-    ├── traceback2 v1.4.0
-    │   └── linecache2 v1.0.0
-    └── unittest2 v1.1.0
-        ├── argparse v1.4.0
-        ├── six v1.16.0
-        └── traceback2 v1.4.0 (*)
+    cycle-root v2.3.0
+    ├── cycle-backref v3.0.0
+    │   ├── cycle-leaf-c v1.16.0
+    │   └── cycle-root v2.3.0 (*)
+    ├── cycle-leaf-a v1.0.0
+    ├── cycle-leaf-b v6.0.0
+    └── cycle-nested v1.1.0
+        ├── cycle-leaf-c v1.16.0
+        ├── cycle-leaf-d v1.4.0
+        └── cycle-trace v1.4.0
+            └── cycle-leaf-e v1.0.0
     (*) Package tree already displayed
     "
     );
@@ -531,16 +528,16 @@ fn cycle() {
 
 /// Both `pendulum` and `boto3` depend on `python-dateutil`.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn multiple_packages_shared_descendant() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
         .write_str(
             r"
-        pendulum
-        time-machine
+        shared-root
+        shared-branch
     ",
         )
         .unwrap();
@@ -555,23 +552,23 @@ fn multiple_packages_shared_descendant() {
     Resolved 5 packages in [TIME]
     Prepared 5 packages in [TIME]
     Installed 5 packages in [TIME]
-     + pendulum==3.0.0
-     + python-dateutil==2.9.0.post0
-     + six==1.16.0
-     + time-machine==2.14.1
-     + tzdata==2024.1
+     + shared-bottom==1.16.0
+     + shared-branch==2.14.1
+     + shared-extra==2024.1
+     + shared-leaf==2.9.0
+     + shared-root==3.0.0
     "
     );
 
     uv_snapshot!(context.filters(), context.pip_tree(), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pendulum v3.0.0
-    ├── python-dateutil v2.9.0.post0
-    │   └── six v1.16.0
-    ├── time-machine v2.14.1
-    │   └── python-dateutil v2.9.0.post0 (*)
-    └── tzdata v2024.1
+    shared-root v3.0.0
+    ├── shared-branch v2.14.1
+    │   └── shared-leaf v2.9.0
+    │       └── shared-bottom v1.16.0
+    ├── shared-extra v2024.1
+    └── shared-leaf v2.9.0 (*)
     (*) Package tree already displayed
     "
     );
@@ -579,16 +576,16 @@ fn multiple_packages_shared_descendant() {
 
 /// Test the interaction between `--no-dedupe` and `--invert`.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn no_dedupe_and_invert() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
         .write_str(
             r"
-        pendulum
-        time-machine
+        shared-root
+        shared-branch
     ",
         )
         .unwrap();
@@ -603,39 +600,39 @@ fn no_dedupe_and_invert() {
     Resolved 5 packages in [TIME]
     Prepared 5 packages in [TIME]
     Installed 5 packages in [TIME]
-     + pendulum==3.0.0
-     + python-dateutil==2.9.0.post0
-     + six==1.16.0
-     + time-machine==2.14.1
-     + tzdata==2024.1
+     + shared-bottom==1.16.0
+     + shared-branch==2.14.1
+     + shared-extra==2024.1
+     + shared-leaf==2.9.0
+     + shared-root==3.0.0
     "
     );
 
     uv_snapshot!(context.filters(), context.pip_tree().arg("--no-dedupe").arg("--invert"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    six v1.16.0
-    └── python-dateutil v2.9.0.post0
-        ├── pendulum v3.0.0
-        └── time-machine v2.14.1
-            └── pendulum v3.0.0
-    tzdata v2024.1
-    └── pendulum v3.0.0
+    shared-bottom v1.16.0
+    └── shared-leaf v2.9.0
+        ├── shared-branch v2.14.1
+        │   └── shared-root v3.0.0
+        └── shared-root v3.0.0
+    shared-extra v2024.1
+    └── shared-root v3.0.0
     "
     );
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn no_dedupe() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
         .write_str(
             r"
-        pendulum
-        time-machine
+        shared-root
+        shared-branch
     ",
         )
         .unwrap();
@@ -650,11 +647,11 @@ fn no_dedupe() {
     Resolved 5 packages in [TIME]
     Prepared 5 packages in [TIME]
     Installed 5 packages in [TIME]
-     + pendulum==3.0.0
-     + python-dateutil==2.9.0.post0
-     + six==1.16.0
-     + time-machine==2.14.1
-     + tzdata==2024.1
+     + shared-bottom==1.16.0
+     + shared-branch==2.14.1
+     + shared-extra==2024.1
+     + shared-leaf==2.9.0
+     + shared-root==3.0.0
     "
     );
 
@@ -662,13 +659,13 @@ fn no_dedupe() {
         .arg("--no-dedupe"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pendulum v3.0.0
-    ├── python-dateutil v2.9.0.post0
-    │   └── six v1.16.0
-    ├── time-machine v2.14.1
-    │   └── python-dateutil v2.9.0.post0
-    │       └── six v1.16.0
-    └── tzdata v2024.1
+    shared-root v3.0.0
+    ├── shared-branch v2.14.1
+    │   └── shared-leaf v2.9.0
+    │       └── shared-bottom v1.16.0
+    ├── shared-extra v2024.1
+    └── shared-leaf v2.9.0
+        └── shared-bottom v1.16.0
     "
     );
 }
@@ -676,7 +673,8 @@ fn no_dedupe() {
 #[test]
 #[cfg(feature = "test-git")]
 fn with_editable() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     // Install the editable package.
     uv_snapshot!(context.filters(), context
@@ -703,12 +701,12 @@ fn with_editable() {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn package_flag() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("flask").unwrap();
+    requirements_txt.write_str("tree-root").unwrap();
 
     uv_snapshot!(context
         .pip_install()
@@ -720,13 +718,13 @@ fn package_flag() {
     Resolved 7 packages in [TIME]
     Prepared 7 packages in [TIME]
     Installed 7 packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
+     + tree-branch-a==1.7.0
+     + tree-branch-b==8.1.7
+     + tree-branch-c==2.1.2
+     + tree-branch-d==3.1.3
+     + tree-branch-e==3.0.1
+     + tree-root==3.0.2
+     + tree-shared-leaf==2.1.5
     "
     );
 
@@ -734,12 +732,12 @@ fn package_flag() {
         context.filters(),
         context.pip_tree()
         .arg("--package")
-        .arg("werkzeug"),
+        .arg("tree-branch-e"),
         @"
     exit_code: 0 (success)
     ----- stdout -----
-    werkzeug v3.0.1
-    └── markupsafe v2.1.5
+    tree-branch-e v3.0.1
+    └── tree-shared-leaf v2.1.5
     "
     );
 
@@ -747,27 +745,27 @@ fn package_flag() {
         context.filters(),
         context.pip_tree()
         .arg("--package")
-        .arg("werkzeug")
+        .arg("tree-branch-e")
         .arg("--package")
-        .arg("jinja2"),
+        .arg("tree-branch-d"),
         @"
     exit_code: 0 (success)
     ----- stdout -----
-    jinja2 v3.1.3
-    └── markupsafe v2.1.5
-    werkzeug v3.0.1
-    └── markupsafe v2.1.5
+    tree-branch-d v3.1.3
+    └── tree-shared-leaf v2.1.5
+    tree-branch-e v3.0.1
+    └── tree-shared-leaf v2.1.5
     "
     );
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn show_version_specifiers_simple() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("requests==2.31.0").unwrap();
+    requirements_txt.write_str("tree-parent==2.31.0").unwrap();
 
     uv_snapshot!(context
         .pip_install()
@@ -779,33 +777,33 @@ fn show_version_specifiers_simple() {
     Resolved 5 packages in [TIME]
     Prepared 5 packages in [TIME]
     Installed 5 packages in [TIME]
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + idna==3.6
-     + requests==2.31.0
-     + urllib3==2.2.1
+     + tree-leaf-a==2024.2.2
+     + tree-leaf-b==3.3.2
+     + tree-leaf-c==3.6
+     + tree-leaf-d==2.2.1
+     + tree-parent==2.31.0
     "
     );
 
     uv_snapshot!(context.filters(), context.pip_tree().arg("--show-version-specifiers"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    requests v2.31.0
-    ├── certifi v2024.2.2 [required: >=2017.4.17]
-    ├── charset-normalizer v3.3.2 [required: >=2, <4]
-    ├── idna v3.6 [required: >=2.5, <4]
-    └── urllib3 v2.2.1 [required: >=1.21.1, <3]
+    tree-parent v2.31.0
+    ├── tree-leaf-a v2024.2.2 [required: >=2017.4.17]
+    ├── tree-leaf-b v3.3.2 [required: >=2, <4]
+    ├── tree-leaf-c v3.6 [required: >=2.5, <4]
+    └── tree-leaf-d v2.2.1 [required: >=1.21.1, <3]
     "
     );
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn show_version_specifiers_with_invert() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("flask").unwrap();
+    requirements_txt.write_str("tree-root").unwrap();
 
     uv_snapshot!(context
         .pip_install()
@@ -817,13 +815,13 @@ fn show_version_specifiers_with_invert() {
     Resolved 7 packages in [TIME]
     Prepared 7 packages in [TIME]
     Installed 7 packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
+     + tree-branch-a==1.7.0
+     + tree-branch-b==8.1.7
+     + tree-branch-c==2.1.2
+     + tree-branch-d==3.1.3
+     + tree-branch-e==3.0.1
+     + tree-root==3.0.2
+     + tree-shared-leaf==2.1.5
     "
     );
 
@@ -834,28 +832,28 @@ fn show_version_specifiers_with_invert() {
         .arg("--invert"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    blinker v1.7.0
-    └── flask v3.0.2 [requires: blinker >=1.6.2]
-    click v8.1.7
-    └── flask v3.0.2 [requires: click >=8.1.3]
-    itsdangerous v2.1.2
-    └── flask v3.0.2 [requires: itsdangerous >=2.1.2]
-    markupsafe v2.1.5
-    ├── jinja2 v3.1.3 [requires: markupsafe >=2.0]
-    │   └── flask v3.0.2 [requires: jinja2 >=3.1.2]
-    └── werkzeug v3.0.1 [requires: markupsafe >=2.1.1]
-        └── flask v3.0.2 [requires: werkzeug >=3.0.0]
+    tree-branch-a v1.7.0
+    └── tree-root v3.0.2 [requires: tree-branch-a >=1.6.2]
+    tree-branch-b v8.1.7
+    └── tree-root v3.0.2 [requires: tree-branch-b >=8.1.3]
+    tree-branch-c v2.1.2
+    └── tree-root v3.0.2 [requires: tree-branch-c >=2.1.2]
+    tree-shared-leaf v2.1.5
+    ├── tree-branch-d v3.1.3 [requires: tree-shared-leaf >=2.0]
+    │   └── tree-root v3.0.2 [requires: tree-branch-d >=3.1.2]
+    └── tree-branch-e v3.0.1 [requires: tree-shared-leaf >=2.1.1]
+        └── tree-root v3.0.2 [requires: tree-branch-e >=3.0.0]
     "
     );
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn show_version_specifiers_with_package() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("flask").unwrap();
+    requirements_txt.write_str("tree-root").unwrap();
 
     uv_snapshot!(context
         .pip_install()
@@ -867,13 +865,13 @@ fn show_version_specifiers_with_package() {
     Resolved 7 packages in [TIME]
     Prepared 7 packages in [TIME]
     Installed 7 packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
+     + tree-branch-a==1.7.0
+     + tree-branch-b==8.1.7
+     + tree-branch-c==2.1.2
+     + tree-branch-d==3.1.3
+     + tree-branch-e==3.0.1
+     + tree-root==3.0.2
+     + tree-shared-leaf==2.1.5
     "
     );
 
@@ -882,22 +880,22 @@ fn show_version_specifiers_with_package() {
         context.pip_tree()
         .arg("--show-version-specifiers")
         .arg("--package")
-        .arg("werkzeug"), @"
+        .arg("tree-branch-e"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    werkzeug v3.0.1
-    └── markupsafe v2.1.5 [required: >=2.1.1]
+    tree-branch-e v3.0.1
+    └── tree-shared-leaf v2.1.5 [required: >=2.1.1]
     "
     );
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn print_output_even_with_quite_flag() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("requests==2.31.0").unwrap();
+    requirements_txt.write_str("tree-parent==2.31.0").unwrap();
 
     uv_snapshot!(context
         .pip_install()
@@ -909,15 +907,15 @@ fn print_output_even_with_quite_flag() {
     Resolved 5 packages in [TIME]
     Prepared 5 packages in [TIME]
     Installed 5 packages in [TIME]
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + idna==3.6
-     + requests==2.31.0
-     + urllib3==2.2.1
+     + tree-leaf-a==2024.2.2
+     + tree-leaf-b==3.3.2
+     + tree-leaf-c==3.6
+     + tree-leaf-d==2.2.1
+     + tree-parent==2.31.0
     "
     );
 
-    context.assert_command("import requests").success();
+    context.assert_command("import tree_parent").success();
     uv_snapshot!(context.filters(), context.pip_tree().arg("--quiet"), @"
     exit_code: 0 (success)
     "
@@ -925,12 +923,12 @@ fn print_output_even_with_quite_flag() {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn outdated() {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("flask==2.0.0").unwrap();
+    requirements_txt.write_str("tree-root==2.0.0").unwrap();
 
     uv_snapshot!(context
         .pip_install()
@@ -942,12 +940,12 @@ fn outdated() {
     Resolved 6 packages in [TIME]
     Prepared 6 packages in [TIME]
     Installed 6 packages in [TIME]
-     + click==8.1.7
-     + flask==2.0.0
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
+     + tree-branch-b==8.1.7
+     + tree-branch-c==2.1.2
+     + tree-branch-d==3.1.3
+     + tree-branch-e==3.0.1
+     + tree-root==2.0.0
+     + tree-shared-leaf==2.1.5
     "
     );
 
@@ -956,13 +954,13 @@ fn outdated() {
         context.pip_tree().arg("--outdated"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    flask v2.0.0 (latest: v3.0.2)
-    ├── click v8.1.7
-    ├── itsdangerous v2.1.2
-    ├── jinja2 v3.1.3
-    │   └── markupsafe v2.1.5
-    └── werkzeug v3.0.1
-        └── markupsafe v2.1.5
+    tree-root v2.0.0 (latest: v3.0.2)
+    ├── tree-branch-b v8.1.7
+    ├── tree-branch-c v2.1.2
+    ├── tree-branch-d v3.1.3
+    │   └── tree-shared-leaf v2.1.5
+    └── tree-branch-e v3.0.1
+        └── tree-shared-leaf v2.1.5
     "
     );
 }
@@ -970,7 +968,6 @@ fn outdated() {
 /// Test that dependencies with multiple marker-specific requirements
 /// are only displayed once in the tree.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn no_duplicate_dependencies_with_markers() {
     const PY_PROJECT: &str = indoc! {r#"
         [project]
@@ -978,9 +975,9 @@ fn no_duplicate_dependencies_with_markers() {
         version = "0.1.0"
         requires-python = ">=3.12.0"
         dependencies = [
-          "sniffio>=1.0.0; python_version >= '3.11'",
-          "sniffio>=1.0.1; python_version >= '3.12'",
-          "sniffio>=1.0.2; python_version >= '3.13'",
+          "marker-child>=1.0.0; python_version >= '3.11'",
+          "marker-child>=1.0.1; python_version >= '3.12'",
+          "marker-child>=1.0.2; python_version >= '3.13'",
         ]
 
         [build-system]
@@ -988,7 +985,10 @@ fn no_duplicate_dependencies_with_markers() {
         build-backend = "uv_build"
     "#};
 
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]).with_filtered_counts();
+    let server = PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"])
+        .with_default_index(&server.index_url())
+        .with_filtered_counts();
 
     let project = context.temp_dir.child("debug");
 
@@ -1015,7 +1015,7 @@ fn no_duplicate_dependencies_with_markers() {
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
      + debug==0.1.0 (from file://[TEMP_DIR]/debug)
-     + sniffio==1.3.1
+     + marker-child==1.3.1
     "
     );
 
@@ -1025,7 +1025,7 @@ fn no_duplicate_dependencies_with_markers() {
     exit_code: 0 (success)
     ----- stdout -----
     debug v0.1.0
-    └── sniffio v1.3.1
+    └── marker-child v1.3.1
     "
     );
 
@@ -1036,7 +1036,7 @@ fn no_duplicate_dependencies_with_markers() {
     exit_code: 0 (success)
     ----- stdout -----
     debug v0.1.0
-    └── sniffio v1.3.1 [required: >=1.0.1]
+    └── marker-child v1.3.1 [required: >=1.0.1]
     "
     );
 
@@ -1058,7 +1058,7 @@ fn no_duplicate_dependencies_with_markers() {
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
      + debug==0.1.0 (from file://[TEMP_DIR]/debug)
-     + sniffio==1.3.1
+     + marker-child==1.3.1
     "
     );
 
@@ -1069,7 +1069,7 @@ fn no_duplicate_dependencies_with_markers() {
     exit_code: 0 (success)
     ----- stdout -----
     debug v0.1.0
-    └── sniffio v1.3.1 [required: >=1.0.2]
+    └── marker-child v1.3.1 [required: >=1.0.2]
     "
     );
 }

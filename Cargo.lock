@@ -6643,6 +6643,7 @@ dependencies = [
  "uv-pypi-types",
  "uv-redacted",
  "uv-small-str",
+ "uv-static",
  "uv-warnings",
 ]
 
@@ -7507,6 +7508,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "toml",
+ "toml_edit",
  "url",
  "uv-cache",
  "uv-client",

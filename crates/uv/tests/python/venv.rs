@@ -17,6 +17,7 @@ use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
 #[cfg(windows)]
 use std::{ffi::OsString, os::windows::ffi::OsStringExt};
 
+use uv_test::packse::PackseServer;
 use uv_test::{site_packages_path, uv_snapshot};
 
 #[test]
@@ -615,7 +616,6 @@ fn create_centralized_project_environment_no_cache() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn create_centralized_project_environment_with_seed_packages() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"])
         .with_filtered_centralized_environment_hashes();
@@ -1211,9 +1211,10 @@ fn create_venv_explicit_request_takes_priority_over_python_version_file() {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn seed() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let server = PackseServer::new("packages/venv-seed.toml");
+    let context =
+        uv_test::test_context_with_versions!(&["3.12"]).with_default_index(&server.index_url());
     uv_snapshot!(context.filters(), context.venv()
         .arg(context.venv.as_os_str())
         .arg("--seed")
@@ -1232,9 +1233,10 @@ fn seed() {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn seed_older_python_version() {
-    let context = uv_test::test_context_with_versions!(&["3.11"]);
+    let server = PackseServer::new("packages/venv-seed.toml");
+    let context =
+        uv_test::test_context_with_versions!(&["3.11"]).with_default_index(&server.index_url());
     uv_snapshot!(context.filters(), context.venv()
         .arg(context.venv.as_os_str())
         .arg("--seed")

@@ -329,7 +329,9 @@ fn cache_project_inside_cache_no_cache() -> Result<()> {
 fn cache_init_failure() -> Result<()> {
     use uv_test::ReadOnlyDirectoryGuard;
 
-    let context = uv_test::test_context!("3.12").with_cache_dir("cache_parent/cache");
+    let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/pip-commands.toml")
+        .with_cache_dir("cache_parent/cache");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -338,7 +340,7 @@ fn cache_init_failure() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
+        dependencies = ["simple-package"]
         "#,
     )?;
 

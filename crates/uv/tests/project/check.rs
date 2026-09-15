@@ -1638,10 +1638,11 @@ fn check_no_sync_isolated_does_not_write_lock_or_sync() -> Result<()> {
 }
 
 #[tokio::test]
-#[cfg(feature = "test-pypi")]
 async fn check_uses_exact_ty_version_from_selected_included_group() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"ty 0\.0\.17(?: \([^)]*\))?", "ty 0.0.17"));
+    let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/tool-selection.toml")
+        .with_exclude_newer("2026-02-15T00:00:00Z")
+        .with_filter((r"ty 0\.0\.17(?: \([^)]*\))?", "ty 0.0.17"));
 
     context
         .temp_dir
@@ -1688,6 +1689,10 @@ async fn check_uses_exact_ty_version_from_selected_included_group() -> Result<()
     assert!(context.temp_dir.child("uv.lock").exists());
     assert!(context.site_packages().join("ty").exists());
 
+    // OSV identifies packages by their registry, while the artifact URLs stay local.
+    context.rewrite_lock_registry_sources("https://pypi.org/simple")?;
+    let context = context.with_default_index("https://pypi.org/simple");
+
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/querybatch"))
@@ -1732,10 +1737,11 @@ async fn check_uses_exact_ty_version_from_selected_included_group() -> Result<()
 
 /// Ensure that the cached environment for a locked tool rejects invalid lockfile hashes.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_locked_tool_rejects_invalid_hash() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"sha256:[0-9a-f]{64}", "sha256:[HASH]"));
+    let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/tool-selection.toml")
+        .with_exclude_newer("2026-02-15T00:00:00Z")
+        .with_filter((r"sha256:[0-9a-f]{64}", "sha256:[HASH]"));
 
     context
         .temp_dir
@@ -1798,9 +1804,10 @@ fn check_locked_tool_rejects_invalid_hash() -> Result<()> {
 
 /// Ensure that a cached environment for a locked tool is checked for malware before reuse.
 #[tokio::test]
-#[cfg(feature = "test-pypi")]
 async fn check_locked_tool_rejects_malware_from_warm_cache() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/tool-selection.toml")
+        .with_exclude_newer("2026-02-15T00:00:00Z");
 
     context
         .temp_dir
@@ -1823,6 +1830,9 @@ async fn check_locked_tool_rejects_malware_from_warm_cache() -> Result<()> {
         .arg("2026-02-15T00:00:00Z")
         .assert()
         .success();
+
+    context.rewrite_lock_registry_sources("https://pypi.org/simple")?;
+    let context = context.with_default_index("https://pypi.org/simple");
 
     // Populate the locked tool environment without a malware check.
     context
@@ -1868,10 +1878,11 @@ async fn check_locked_tool_rejects_malware_from_warm_cache() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_uses_ty_version_from_production_dependency() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"ty 0\.0\.16(?: \([^)]*\))?", "ty 0.0.16"));
+    let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/tool-selection.toml")
+        .with_exclude_newer("2026-02-15T00:00:00Z")
+        .with_filter((r"ty 0\.0\.16(?: \([^)]*\))?", "ty 0.0.16"));
 
     context
         .temp_dir
@@ -1911,10 +1922,11 @@ fn check_uses_ty_version_from_production_dependency() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_uses_ty_version_from_forked_lock() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"ty 0\.0\.17(?: \([^)]*\))?", "ty 0.0.17"));
+    let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/tool-selection.toml")
+        .with_exclude_newer("2026-02-15T00:00:00Z")
+        .with_filter((r"ty 0\.0\.17(?: \([^)]*\))?", "ty 0.0.17"));
 
     context
         .temp_dir
@@ -1957,7 +1969,6 @@ fn check_uses_ty_version_from_forked_lock() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_uses_workspace_ty_subgraph_from_lock() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -2030,10 +2041,11 @@ fn check_uses_workspace_ty_subgraph_from_lock() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_virtual_root_uses_own_ty() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"ty 0\.0\.17(?: \([^)]*\))?", "ty 0.0.17"));
+    let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/tool-selection.toml")
+        .with_exclude_newer("2026-02-15T00:00:00Z")
+        .with_filter((r"ty 0\.0\.17(?: \([^)]*\))?", "ty 0.0.17"));
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
         [dependency-groups]
@@ -2084,10 +2096,11 @@ fn check_virtual_root_uses_own_ty() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_uses_ty_from_environment() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"ty 0\.0\.17(?: \([^)]*\))?", "ty 0.0.17"));
+    let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/tool-selection.toml")
+        .with_exclude_newer("2026-02-15T00:00:00Z")
+        .with_filter((r"ty 0\.0\.17(?: \([^)]*\))?", "ty 0.0.17"));
     let tool_dir = context.root.child("tools");
     let bin_dir = context.root.child("tool-bin");
 
@@ -2141,10 +2154,11 @@ fn check_uses_ty_from_environment() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_script() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
+    let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/tool-selection.toml")
+        .with_exclude_newer("2026-02-15T00:00:00Z")
+        .with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
 
     // If `ty` accidentally uses the workspace environment, it will see this incompatible stub
     // instead of the script dependency and report that `IniConfig` is not callable.
@@ -2187,7 +2201,6 @@ fn check_script() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_script_respects_exclude_newer_package_for_ty_selection() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -2259,7 +2272,6 @@ fn check_script_respects_exclude_newer_package_for_ty_selection() -> Result<()> 
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_respects_exclude_newer_package_for_ty_selection() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -2343,10 +2355,11 @@ fn check_respects_exclude_newer_package_for_ty_selection() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_script_uses_ty_version_from_forked_lock() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"ty 0\.0\.17(?: \([^)]*\))?", "ty 0.0.17"));
+    let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/tool-selection.toml")
+        .with_exclude_newer("2026-02-15T00:00:00Z")
+        .with_filter((r"ty 0\.0\.17(?: \([^)]*\))?", "ty 0.0.17"));
 
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! {r#"
@@ -2386,7 +2399,6 @@ fn check_script_uses_ty_version_from_forked_lock() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_script_uses_ty_from_path_with_transitive_dependency() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -2457,9 +2469,10 @@ fn check_script_uses_ty_from_path_with_transitive_dependency() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_script_ty_override_precedence() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/tool-selection.toml")
+        .with_exclude_newer("2026-02-15T00:00:00Z")
         .with_filter((r"ty 0\.0\.17(?: \([^)]*\))?", "ty 0.0.17"))
         .with_filter((
             r"(?m)^WARN Failed to fetch `ty` from .+; falling back to .+\n",
@@ -2534,9 +2547,10 @@ fn check_script_ty_override_precedence() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_script_ignores_transitive_ty_for_tool_selection() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/tool-selection.toml")
+        .with_exclude_newer("2026-02-15T00:00:00Z")
         .with_filter((r"ty 0\.0\.17(?: \([^)]*\))?", "ty 0.0.17"))
         .with_filter((
             r"(?m)^WARN Failed to fetch `ty` from .+; falling back to .+\n",
