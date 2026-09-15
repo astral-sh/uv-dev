@@ -2422,8 +2422,36 @@ impl PythonRequest {
         }
     }
 
+    /// Check if an interpreter satisfies the request and the catalog's build selection policy.
+    pub async fn satisfied_with_catalog(
+        &self,
+        interpreter: &Interpreter,
+        client_builder: &BaseClientBuilder<'_>,
+        cache: &Cache,
+        python_downloads_json_url: Option<&str>,
+    ) -> Result<bool, crate::Error> {
+        if !self.satisfied(interpreter, cache) {
+            return Ok(false);
+        }
+        let Some(request) = PythonDownloadRequest::from_request(self) else {
+            return Ok(true);
+        };
+        let Some(key) = ManagedPythonInstallation::key_from_interpreter(interpreter) else {
+            return Ok(true);
+        };
+        let download_list = if let Some(download_list) =
+            ManagedPythonDownloadList::from_cache(client_builder, cache, python_downloads_json_url)
+                .await?
+        {
+            download_list
+        } else {
+            ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url).await?
+        };
+        Ok(download_list.allows_installed_build(&request, &key))
+    }
+
     /// Check if a given interpreter satisfies the interpreter request.
-    pub fn satisfied(&self, interpreter: &Interpreter, cache: &Cache) -> bool {
+    fn satisfied(&self, interpreter: &Interpreter, cache: &Cache) -> bool {
         /// Returns `true` if the two paths refer to the same interpreter executable.
         fn is_same_executable(path1: &Path, path2: &Path) -> bool {
             path1 == path2 || is_same_file(path1, path2).unwrap_or(false)
