@@ -42,6 +42,7 @@ pub(super) async fn run(
 ) -> Result<ExitStatus> {
     let (ty_path, ty_version) = if let Some(ty_path) = ty_path {
         let output = Command::new(&ty_path)
+            .current_dir(target_dir)
             .arg("--version")
             .output()
             .await
