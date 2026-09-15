@@ -808,6 +808,11 @@ fn is_after(version: &Version, bound: Bound<&Version>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::{path::PathBuf, ptr};
+
+    use uv_distribution_types::{InstalledDist, InstalledDistKind, InstalledRegistryDist};
+    use uv_platform_tags::IncompatibleTag;
+
     use super::*;
 
     fn version(value: &str) -> Version {
@@ -847,6 +852,73 @@ mod tests {
     #[test]
     fn range_cursor_descending() {
         assert_range_cursor(true, &["6", "5", "4", "3", "2.5", "2", "1"]);
+    }
+
+    #[test]
+    fn into_compatible_retains_candidate() {
+        let name: PackageName = "project".parse().expect("valid test package name");
+        let version = version("1");
+        let installed = InstalledDist::from(InstalledDistKind::Registry(InstalledRegistryDist {
+            name: name.clone(),
+            version: version.clone(),
+            path: PathBuf::from("project-1.dist-info").into_boxed_path(),
+            cache_info: None,
+            build_info: None,
+        }));
+        let candidate = Candidate {
+            name: &name,
+            version: &version,
+            dist: CandidateDist::Compatible(CompatibleDist::InstalledDist(&installed)),
+            choice_kind: VersionChoiceKind::Installed,
+        };
+
+        let (candidate, dist) = candidate
+            .into_compatible()
+            .expect("installed distribution is compatible");
+
+        assert!(ptr::eq(candidate.name(), &raw const name));
+        assert!(ptr::eq(candidate.version(), &raw const version));
+        assert_eq!(candidate.choice_kind().to_string(), "installed");
+        assert!(matches!(
+            candidate.dist(),
+            CandidateDist::Compatible(CompatibleDist::InstalledDist(dist))
+                if ptr::eq(*dist, &raw const installed)
+        ));
+        assert!(matches!(
+            dist,
+            CompatibleDist::InstalledDist(dist) if ptr::eq(dist, &raw const installed)
+        ));
+    }
+
+    #[test]
+    fn into_compatible_retains_incompatibility() {
+        let name: PackageName = "project".parse().expect("valid test package name");
+        let version = version("1");
+        let prioritized_dist = PrioritizedDist::default();
+
+        for incompatibility in [
+            IncompatibleDist::Unavailable,
+            IncompatibleDist::Source(IncompatibleSource::NoBuild),
+            IncompatibleDist::Wheel(IncompatibleWheel::Tag(IncompatibleTag::Abi)),
+        ] {
+            let expected = incompatibility.clone();
+            let candidate = Candidate {
+                name: &name,
+                version: &version,
+                dist: CandidateDist::Incompatible {
+                    incompatible_dist: incompatibility,
+                    prioritized_dist: &prioritized_dist,
+                },
+                choice_kind: VersionChoiceKind::Compatible,
+            };
+
+            let (selected_version, incompatibility) = candidate
+                .into_compatible()
+                .expect_err("candidate has no compatible distribution");
+
+            assert!(ptr::eq(selected_version, &raw const version));
+            assert_eq!(incompatibility, expected);
+        }
     }
 }
 
@@ -978,6 +1050,20 @@ impl<'a> Candidate<'a> {
             Some(dist)
         } else {
             None
+        }
+    }
+
+    /// Return this candidate and its compatible distribution, or the version and owned
+    /// incompatibility if no distribution can be used.
+    pub(crate) fn into_compatible(
+        self,
+    ) -> Result<(Self, CompatibleDist<'a>), (&'a Version, IncompatibleDist)> {
+        match self.dist {
+            CandidateDist::Compatible(dist) => Ok((self, dist)),
+            CandidateDist::Incompatible {
+                incompatible_dist,
+                prioritized_dist: _,
+            } => Err((self.version, incompatible_dist)),
         }
     }
 
