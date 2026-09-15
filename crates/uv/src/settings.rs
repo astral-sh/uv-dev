@@ -595,6 +595,7 @@ impl InitSettings {
 pub(crate) enum LockedFlag {
     Locked,
     Check,
+    CheckPackage,
 }
 
 impl LockedFlag {
@@ -602,6 +603,7 @@ impl LockedFlag {
         match self {
             Self::Locked => "locked",
             Self::Check => "check",
+            Self::CheckPackage => "check-package",
         }
     }
 }
@@ -2154,6 +2156,7 @@ impl SyncSettings {
 #[derive(Debug, Clone)]
 pub(crate) struct LockSettings {
     pub(crate) lock_check: LockCheck,
+    pub(crate) check_packages: Vec<PackageName>,
     pub(crate) frozen: Option<FrozenSource>,
     pub(crate) dry_run: DryRun,
     pub(crate) script: Option<PathBuf>,
@@ -2172,6 +2175,7 @@ impl LockSettings {
     ) -> anyhow::Result<Self> {
         let LockArgs {
             check,
+            check_package,
             locked,
             no_locked,
             check_exists,
@@ -2192,9 +2196,11 @@ impl LockSettings {
 
         // Resolve flags from CLI and environment variables.
         let locked = resolve_lock_check(
-            locked || check,
+            locked || check || !check_package.is_empty(),
             no_locked,
-            if check {
+            if !check_package.is_empty() {
+                LockedFlag::CheckPackage
+            } else if check {
                 LockedFlag::Check
             } else {
                 LockedFlag::Locked
@@ -2216,6 +2222,7 @@ impl LockSettings {
 
         Ok(Self {
             lock_check: locked,
+            check_packages: check_package,
             frozen,
             dry_run: DryRun::from_args(dry_run),
             script,
