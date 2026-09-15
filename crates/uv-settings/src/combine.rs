@@ -266,10 +266,8 @@ impl Combine for ExcludeNewer {
                 self.package = other.package;
             } else {
                 // Merge package-specific settings, with self taking precedence
-                for (pkg, setting) in &other.package {
-                    self.package
-                        .entry(pkg.clone())
-                        .or_insert_with(|| setting.clone());
+                for (pkg, setting) in other.package {
+                    self.package.entry(pkg).or_insert(setting);
                 }
             }
         }
