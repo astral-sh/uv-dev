@@ -107,20 +107,20 @@ impl ExcludeNewerValue {
         Self::Relative(span)
     }
 
-    /// Parse an [`ExcludeNewerValue`] from persistent configuration.
+    /// Parse an [`ExcludeNewerValue`] from persistent data.
     ///
-    /// Unlike command-line arguments, persistent configuration should not depend on the system
-    /// time zone, so warn when local dates are used instead of explicit timestamps.
+    /// Local dates are accepted with a warning so existing configurations can migrate to explicit
+    /// timestamps without changing their effective cutoff.
     fn from_persistent_str(input: &str) -> Result<Self, String> {
         let value = Self::from_str(input)?;
-        if let Self::Absolute(timestamp) = &value
-            && input.parse::<Timestamp>().is_err()
-        {
-            warn_user_once!(
-                "`{input}` is a local date without a timezone. `exclude-newer` values in persistent configuration should use a full timestamp with a timezone (use `{timestamp}` to retain the current cutoff); local dates will be rejected in a future release"
-            );
+        match &value {
+            Self::Absolute(timestamp) if input.parse::<Timestamp>().is_err() => {
+                warn_user_once!(
+                    "`{input}` is a local date without a timezone. `exclude-newer` values in persistent configuration should use a full timestamp with a timezone (use `{timestamp}` to retain the current cutoff); local dates will be rejected in a future release"
+                );
+            }
+            Self::Absolute(_) | Self::Relative(_) => {}
         }
-
         Ok(value)
     }
 }
@@ -428,6 +428,18 @@ impl<'de> serde::Deserialize<'de> for ExcludeNewerOverride {
     }
 }
 
+impl serde::Serialize for ExcludeNewerOverride {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Enabled(timestamp) => timestamp.to_string().serialize(serializer),
+            Self::Disabled => serializer.serialize_bool(false),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ExcludeNewerOverride, ExcludeNewerValue};
@@ -460,16 +472,24 @@ mod tests {
         toml::from_str::<Options>(r#"exclude-newer = "2024-01-01T00:00:00Z""#).unwrap();
         toml::from_str::<Options>(r#"exclude-newer = "30 days""#).unwrap();
     }
-}
 
-impl serde::Serialize for ExcludeNewerOverride {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match self {
-            Self::Enabled(timestamp) => timestamp.to_string().serialize(serializer),
-            Self::Disabled => serializer.serialize_bool(false),
-        }
+    #[test]
+    fn persistent_timestamp_span_tables_are_accepted() -> Result<(), toml::de::Error> {
+        let absolute =
+            toml::from_str::<Value>(r#"_value = { timestamp = "2024-01-01T00:00:00Z" }"#)?;
+        assert_eq!(
+            absolute._value.timestamp().to_string(),
+            "2024-01-01T00:00:00Z"
+        );
+        assert_eq!(absolute._value.span(), None);
+
+        let relative = toml::from_str::<Value>(
+            r#"_value = { timestamp = "0001-01-01T00:00:00Z", span = "P3D" }"#,
+        )?;
+        assert_eq!(
+            relative._value.span().map(ToString::to_string),
+            Some("P3D".to_string())
+        );
+        Ok(())
     }
 }
