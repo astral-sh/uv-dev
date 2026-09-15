@@ -10,7 +10,7 @@ use jiff::Timestamp;
 use owo_colors::OwoColorize;
 use pubgrub::{DerivationTree, Derived, External, Map, ReportFormatter, Term};
 use reqwest::StatusCode;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use uv_configuration::{IndexStrategy, NoBinary, NoBuild};
 use uv_distribution_types::{
@@ -761,6 +761,7 @@ impl PubGrubReportFormatter<'_> {
         }
 
         let requested_ranges = requested_ranges(derivation_tree);
+        let mut global_index_hints = None;
 
         let mut pending = vec![(derivation_tree, inherited_exclude_newer_ranges.clone())];
         while let Some((derivation_tree, inherited_exclude_newer_ranges)) = pending.pop() {
@@ -798,6 +799,7 @@ impl PubGrubReportFormatter<'_> {
                             available_indexes,
                             unavailable_packages,
                             incomplete_packages,
+                            &mut global_index_hints,
                             output_hints,
                         );
 
@@ -865,6 +867,7 @@ impl PubGrubReportFormatter<'_> {
                             available_indexes,
                             unavailable_packages,
                             incomplete_packages,
+                            &mut global_index_hints,
                             output_hints,
                         );
 
@@ -1203,6 +1206,7 @@ impl PubGrubReportFormatter<'_> {
         available_indexes: &FxHashMap<PackageName, BTreeSet<IndexUrl>>,
         unavailable_packages: &FxHashMap<PackageName, UnavailablePackage>,
         incomplete_packages: &FxHashMap<PackageName, BTreeMap<Version, MetadataUnavailable>>,
+        global_index_hints: &mut Option<Vec<PubGrubHint>>,
         hints: &mut IndexSet<PubGrubHint>,
     ) {
         let no_find_links = index_locations.flat_indexes().peekable().peek().is_none();
@@ -1316,22 +1320,55 @@ impl PubGrubReportFormatter<'_> {
             }
         }
 
-        // Add hints due to an index returning an unauthorized response.
+        // Add the global index hints at the first original insertion point. Later leaves cannot
+        // change them, so avoid repeating capability and successful-index lookups.
+        hints.extend(
+            global_index_hints
+                .get_or_insert_with(|| {
+                    Self::global_index_hints(index_locations, index_capabilities, available_indexes)
+                })
+                .drain(..),
+        );
+    }
+
+    fn global_index_hints(
+        index_locations: &IndexLocations,
+        index_capabilities: &IndexCapabilities,
+        available_indexes: &FxHashMap<PackageName, BTreeSet<IndexUrl>>,
+    ) -> Vec<PubGrubHint> {
+        let mut hints = Vec::new();
+        let mut successful_indexes = None;
+        let mut first_forbidden = true;
         for index in index_locations.allowed_indexes() {
             if index_capabilities.unauthorized(&index.url) {
-                hints.insert(PubGrubHint::UnauthorizedIndex {
+                hints.push(PubGrubHint::UnauthorizedIndex {
                     index: index.url.clone(),
                 });
             }
             if index_capabilities.forbidden(&index.url) {
-                hints.insert(PubGrubHint::ForbiddenIndex {
-                    index: index.url.clone(),
-                    any_successful_response: available_indexes
+                let any_successful_response = if first_forbidden {
+                    first_forbidden = false;
+                    available_indexes
                         .values()
-                        .any(|indexes| indexes.contains(&index.url)),
+                        .any(|indexes| indexes.contains(&index.url))
+                } else {
+                    successful_indexes
+                        .get_or_insert_with(|| {
+                            available_indexes
+                                .values()
+                                .flatten()
+                                .collect::<FxHashSet<_>>()
+                        })
+                        .contains(&index.url)
+                };
+                hints.push(PubGrubHint::ForbiddenIndex {
+                    index: index.url.clone(),
+                    any_successful_response,
                 });
             }
         }
+
+        hints
     }
 
     /// Generate a [`PubGrubHint`] for a package whose pre-releases were not considered.
@@ -2781,7 +2818,7 @@ fn padded<'a, T: std::fmt::Display + ?Sized>(
 #[cfg(test)]
 mod tests {
     use pubgrub::{DefaultStringReporter, Reporter};
-    use uv_distribution_types::RequiresPython;
+    use uv_distribution_types::{IndexStatusCodeStrategy, RequiresPython};
     use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder};
 
     use super::*;
@@ -2870,6 +2907,118 @@ mod tests {
                 DefaultStringReporter::report_with_formatter(&tree, &formatter)
             );
         }
+    }
+
+    #[test]
+    fn global_index_hints_are_emitted_once_in_order() {
+        let unauthorized_url =
+            IndexUrl::parse("https://unauthorized.example/simple", None).expect("valid URL");
+        let forbidden_url =
+            IndexUrl::parse("https://forbidden.example/simple", None).expect("valid URL");
+        let successful_url =
+            IndexUrl::parse("https://successful.example/simple", None).expect("valid URL");
+        let ignored_url =
+            IndexUrl::parse("https://ignored.example/simple", None).expect("valid URL");
+
+        let unauthorized = Index::from_extra_index_url(unauthorized_url.clone());
+        let mut successful = Index::from_extra_index_url(successful_url.clone());
+        successful.explicit = true;
+        let ignored = Index::from_extra_index_url(ignored_url.clone());
+        let forbidden = Index::from_index_url(forbidden_url.clone());
+        let index_locations = IndexLocations::new(
+            vec![unauthorized, successful, ignored, forbidden],
+            vec![],
+            false,
+        );
+
+        let index_capabilities = IndexCapabilities::default();
+        IndexStatusCodeStrategy::Default.handle_status_code(
+            StatusCode::UNAUTHORIZED,
+            &unauthorized_url,
+            &index_capabilities,
+        );
+        IndexStatusCodeStrategy::Default.handle_status_code(
+            StatusCode::FORBIDDEN,
+            &forbidden_url,
+            &index_capabilities,
+        );
+        IndexStatusCodeStrategy::Default.handle_status_code(
+            StatusCode::FORBIDDEN,
+            &successful_url,
+            &index_capabilities,
+        );
+        IndexStatusCodeStrategy::ignore_authentication_error_codes().handle_status_code(
+            StatusCode::FORBIDDEN,
+            &ignored_url,
+            &index_capabilities,
+        );
+
+        let first: PackageName = "first".parse().expect("valid package name");
+        let second: PackageName = "second".parse().expect("valid package name");
+        let available_indexes = FxHashMap::from_iter([
+            (first.clone(), BTreeSet::from([successful_url.clone()])),
+            (second.clone(), BTreeSet::from([successful_url.clone()])),
+        ]);
+        let unavailable_packages = FxHashMap::from_iter([
+            (first.clone(), UnavailablePackage::Offline),
+            (second.clone(), UnavailablePackage::NoIndex),
+        ]);
+        let options = Options::default();
+        let manifest = crate::Manifest::simple(vec![]);
+        let environment = ResolverEnvironment::universal(vec![]);
+        let selector = CandidateSelector::for_resolution(&options, &manifest, &environment);
+        let mut global_index_hints = None;
+        let mut hints = IndexSet::new();
+
+        PubGrubReportFormatter::index_hints(
+            &first,
+            &Range::full(),
+            None,
+            &selector,
+            &index_locations,
+            &index_capabilities,
+            &available_indexes,
+            &unavailable_packages,
+            &FxHashMap::default(),
+            &mut global_index_hints,
+            &mut hints,
+        );
+        PubGrubReportFormatter::index_hints(
+            &second,
+            &Range::full(),
+            None,
+            &selector,
+            &index_locations,
+            &index_capabilities,
+            &available_indexes,
+            &unavailable_packages,
+            &FxHashMap::default(),
+            &mut global_index_hints,
+            &mut hints,
+        );
+        let hints = hints.into_iter().collect::<Vec<_>>();
+
+        assert_eq!(hints.len(), 5);
+        assert!(matches!(hints[0], PubGrubHint::Offline));
+        assert!(matches!(
+            &hints[1],
+            PubGrubHint::ForbiddenIndex {
+                index,
+                any_successful_response: false,
+            } if index == &forbidden_url
+        ));
+        assert!(matches!(
+            &hints[2],
+            PubGrubHint::ForbiddenIndex {
+                index,
+                any_successful_response: true,
+            } if index == &successful_url
+        ));
+        assert!(matches!(
+            &hints[3],
+            PubGrubHint::UnauthorizedIndex { index } if index == &unauthorized_url
+        ));
+        assert!(matches!(hints[4], PubGrubHint::NoIndex));
     }
 
     #[test]
