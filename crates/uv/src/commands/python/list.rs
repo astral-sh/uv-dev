@@ -52,15 +52,21 @@ struct PrintData {
     libc: String,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum PythonListUrlDisplay {
+    Show,
+    Hide,
+}
+
 /// List available Python installations.
-#[expect(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+#[expect(clippy::too_many_arguments)]
 pub(crate) async fn list(
     request: Option<String>,
     kinds: PythonListKinds,
     all_versions: bool,
     all_platforms: bool,
     all_arches: bool,
-    show_urls: bool,
+    url_display: PythonListUrlDisplay,
     output_format: PythonListFormat,
     python_downloads_json_url: Option<String>,
     python_install_mirror: Option<String>,
@@ -304,17 +310,18 @@ pub(crate) async fn list(
                             )?;
                         }
                     }
-                    Either::Right(url) => {
-                        if show_urls {
+                    Either::Right(url) => match url_display {
+                        PythonListUrlDisplay::Show => {
                             writeln!(printer.stdout(), "{key:width$}    {}", url.dimmed())?;
-                        } else {
+                        }
+                        PythonListUrlDisplay::Hide => {
                             writeln!(
                                 printer.stdout(),
                                 "{key:width$}    {}",
                                 "<download available>".dimmed()
                             )?;
                         }
-                    }
+                    },
                 }
             }
         }
