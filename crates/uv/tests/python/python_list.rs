@@ -601,6 +601,24 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
             "variant": "freethreaded",
             "build": "20250317"
         },
+        "cpython-3.12.9-linux-x86_64-gnu": {
+            "name": "cpython",
+            "arch": {
+                "family": "x86_64",
+                "variant": null
+            },
+            "os": "linux",
+            "libc": "gnu",
+            "major": 3,
+            "minor": 12,
+            "patch": 9,
+            "prerelease": "",
+            "url": "https://custom.com/cpython-3.12.9-linux-x86_64-gnu.tar.gz",
+            "sha256": "8df69c81f1b4bd0a7a9e8ea3b6d4c7a6c13c2b6f6bc0a4f27f3d0e0d0ff7e70e",
+            "variant": null,
+            "default": true,
+            "build": "20250317"
+        },
         "cpython-3.12.9+custom-linux-x86_64-gnu": {
             "name": "cpython",
             "arch": {
@@ -689,6 +707,7 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     ----- stdout -----
     cpython-3.14.0-macos-aarch64-none                    https://custom.com/cpython-3.14.0-darwin-aarch64-none.tar.gz
     cpython-3.13.2+freethreaded-linux-powerpc64le-gnu    https://custom.com/ccpython-3.13.2+freethreaded-linux-powerpc64le-gnu.tar.gz
+    cpython-3.12.9-linux-x86_64-gnu                      https://custom.com/cpython-3.12.9-linux-x86_64-gnu.tar.gz
     cpython-3.12.9+custom-linux-x86_64-gnu               https://custom.com/cpython-3.12.9+custom-linux-x86_64-gnu.tar.gz
     ");
 
@@ -789,7 +808,7 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Unable to parse the JSON Python download list at http://[LOCALHOST]/invalid-default
-      cause: data did not match any variant of untagged enum Compatible at line 56 column 5
+      cause: data did not match any variant of untagged enum Compatible at line 74 column 5
     ");
 
     uv_snapshot!(context.filters(), context
