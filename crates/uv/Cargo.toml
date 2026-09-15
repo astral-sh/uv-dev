@@ -93,6 +93,7 @@ indoc = { workspace = true }
 itertools = { workspace = true }
 owo-colors = { workspace = true }
 petgraph = { workspace = true }
+reqwest-retry = { workspace = true }
 rkyv = { workspace = true }
 rustc-hash = { workspace = true }
 serde = { workspace = true }
