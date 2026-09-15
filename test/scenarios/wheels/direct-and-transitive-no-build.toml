@@ -1,0 +1,36 @@
+name = "direct-and-transitive-no-build"
+description = "Older parent releases have no usable wheels, while newer releases require a dependency that also has no usable wheels."
+
+[root]
+requires = ["parent"]
+
+[expected]
+satisfiable = false
+explanation = "Directly unavailable parent releases must not be reported as though they share an uninspected dependency."
+
+[packages.parent.versions."1.0.0"]
+wheel = false
+
+[packages.parent.versions."1.5.0"]
+wheel = false
+
+[packages.parent.versions."2.0.0"]
+requires = ["dependency>=1,<2"]
+
+[packages.parent.versions."2.5.0"]
+requires = ["dependency>=2,<3"]
+
+[packages.dependency.versions."1.0.0"]
+wheel = false
+
+[packages.dependency.versions."1.5.0"]
+wheel = false
+
+[packages.dependency.versions."2.0.0"]
+wheel = false
+
+[packages.dependency.versions."2.5.0"]
+wheel = false
+
+[resolver_options]
+no_build = ["parent", "dependency"]
