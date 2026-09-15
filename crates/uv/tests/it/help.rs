@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use indoc::indoc;
 use uv_static::EnvVars;
 
 use uv_test::uv_snapshot;
@@ -1147,6 +1149,76 @@ fn help_with_version() {
     Usage: uv help --verbose... [COMMAND]...
 
     For more information, try '--help'.
+    ");
+}
+
+/// Pager selection requires a real terminal, so run help inside a Python-managed PTY.
+#[test]
+#[cfg(unix)]
+fn help_with_failing_pager() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+
+    let terminal = indoc! {r#"
+        import os
+        import pty
+        import subprocess
+        import sys
+
+        primary, secondary = pty.openpty()
+        child = subprocess.Popen(
+            sys.argv[1:],
+            stdin=subprocess.DEVNULL,
+            stdout=secondary,
+            stderr=secondary,
+        )
+        os.close(secondary)
+
+        while True:
+            try:
+                output = os.read(primary, 65536)
+            except OSError:
+                break
+            if not output:
+                break
+            sys.stdout.buffer.write(output.replace(b"\r\n", b"\n"))
+
+        os.close(primary)
+        sys.exit(child.wait())
+    "#};
+
+    let command = uv_test::get_bin!();
+
+    uv_snapshot!(context.filters(), context
+        .python_command()
+        .arg("-c")
+        .arg(terminal)
+        .arg(&command)
+        .arg("help")
+        .arg("help")
+        .env(EnvVars::PAGER, "false")
+        .env(EnvVars::NO_COLOR, "1"), @"
+    exit_code: 0 (success)
+    ");
+
+    uv_snapshot!(context.filters(), context
+        .python_command()
+        .arg("-c")
+        .arg(terminal)
+        .arg(&command)
+        .arg("help")
+        .arg("help")
+        .env(EnvVars::PAGER, "cat")
+        .env(EnvVars::NO_COLOR, "1"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    uv help: help
+
+    Display documentation for a command
+
+    Usage: uv help [OPTIONS] [COMMAND]...
+
+    Options:
+      --no-pager Disable pager when printing help
     ");
 }
 
