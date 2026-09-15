@@ -1,0 +1,15 @@
+name = "pip-sync-build"
+description = "A required import for source distributions using the implicit build backend."
+
+[root]
+requires = ["build-requirement==1.0.0"]
+
+[expected]
+satisfiable = true
+
+[packages.build-requirement.versions."1.0.0"]
+sdist = false
+init_py = 'VALUE = "available during the build"'
+
+[testgen]
+disable = true

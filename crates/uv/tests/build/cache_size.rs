@@ -20,10 +20,17 @@ fn cache_size_empty_raw() {
 /// Test that `cache size` returns raw bytes after installing packages.
 #[test]
 fn cache_size_with_packages_raw() {
-    let context = uv_test::test_context!("3.12").with_filtered_cache_size();
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_default_index(&_server.index_url())
+        .with_filtered_cache_size();
 
     // Install a requirement to populate the cache.
-    context.pip_install().arg("iniconfig").assert().success();
+    context
+        .pip_install()
+        .arg("simple-package")
+        .assert()
+        .success();
 
     // Check cache size is now positive (raw bytes).
     uv_snapshot!(context.filters(), context.cache_size().arg("--preview"), @"
@@ -36,10 +43,17 @@ fn cache_size_with_packages_raw() {
 /// Test that `cache size --human` returns human-readable format after installing packages.
 #[test]
 fn cache_size_with_packages_human() {
-    let context = uv_test::test_context!("3.12").with_filtered_cache_size();
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_default_index(&_server.index_url())
+        .with_filtered_cache_size();
 
     // Install a requirement to populate the cache.
-    context.pip_install().arg("iniconfig").assert().success();
+    context
+        .pip_install()
+        .arg("simple-package")
+        .assert()
+        .success();
 
     // Check cache size with --human flag
     uv_snapshot!(context.filters(), context.cache_size().arg("--preview").arg("--human"), @"

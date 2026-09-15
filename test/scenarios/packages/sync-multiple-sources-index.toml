@@ -1,0 +1,36 @@
+name = "sync-multiple-sources-index"
+description = "An explicit index for sync source selection tests."
+
+[root]
+requires = ["jinja2==3.1.2"]
+
+[expected]
+satisfiable = true
+
+[expected.packages]
+jinja2 = "3.1.2"
+
+[packages.jinja2.versions."3.1.2"]
+requires_python = ">=3.7"
+requires = ["markupsafe>=2.0"]
+sdist_backend = "in-tree"
+
+[packages.jinja2.versions."3.1.2".extras]
+i18n = ["babel>=2.7"]
+
+[packages.jinja2.versions."3.1.3"]
+requires_python = ">=3.8"
+requires = ["markupsafe>=2.0"]
+sdist_backend = "in-tree"
+
+[packages.jinja2.versions."3.1.3".extras]
+i18n = ["babel>=2.7"]
+
+[packages.babel.versions."2.16.0"]
+sdist_backend = "in-tree"
+
+[packages.markupsafe.versions."2.1.5"]
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true

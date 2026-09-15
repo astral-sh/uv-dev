@@ -12,146 +12,172 @@ use wiremock::{
 
 #[test]
 fn tool_list() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
+        .with_default_index(&_server.index_url())
         .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    // Install `black`
+        .with_filter((r#"index-url = ".*"\n"#, ""))
+        .with_tool_dirs(); // Install `list-tool`
     context
         .tool_install()
-        .arg("black==24.2.0")
+        .arg("list-tool==1.0.0")
         .assert()
         .success();
-
-    uv_snapshot!(context.filters(), context.tool_list(), @"
+    uv_snapshot!(
+        context.filters(),
+        context.tool_list(),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black v24.2.0
-    - black
-    - blackd
-    ");
+    list-tool v1.0.0
+    - list-tool
+    - list-tool-helper
+    "
+    );
 }
 
 #[test]
 fn tool_list_paths() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
+        .with_default_index(&_server.index_url())
         .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    // Install `black`
+        .with_filter((r#"index-url = ".*"\n"#, ""))
+        .with_tool_dirs(); // Install `list-tool`
     context
         .tool_install()
-        .arg("black==24.2.0")
+        .arg("list-tool==1.0.0")
         .assert()
         .success();
-
-    uv_snapshot!(context.filters(), context.tool_list().arg("--show-paths"), @"
+    uv_snapshot!(
+        context.filters(),
+        context.tool_list().arg("--show-paths"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black v24.2.0 ([TEMP_DIR]/tools/black)
-    - black ([TEMP_DIR]/bin/black)
-    - blackd ([TEMP_DIR]/bin/blackd)
-    ");
+    list-tool v1.0.0 ([TEMP_DIR]/tools/list-tool)
+    - list-tool ([TEMP_DIR]/bin/list-tool)
+    - list-tool-helper ([TEMP_DIR]/bin/list-tool-helper)
+    "
+    );
 }
 
 #[cfg(windows)]
 #[test]
 fn tool_list_paths_windows() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
+        .with_default_index(&_server.index_url())
+        .with_filtered_exe_suffix()
+        .with_filter((r#"index-url = ".*"\n"#, ""));
+    let context = context
         .clear_filters()
         .with_filtered_windows_temp_dir()
         .with_tool_dirs();
 
-    // Install `black`
+    // Install `list-tool`
     context
         .tool_install()
-        .arg("black==24.2.0")
+        .arg("list-tool==1.0.0")
         .assert()
         .success();
 
-    uv_snapshot!(context.filters_without_standard_filters(), context.tool_list().arg("--show-paths"), @r###"
+    uv_snapshot!(context.filters_without_standard_filters(), context.tool_list().arg("--show-paths"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
-    black v24.2.0 ([TEMP_DIR]\tools\black)
-    - black ([TEMP_DIR]\bin\black.exe)
-    - blackd ([TEMP_DIR]\bin\blackd.exe)
-    "###);
+    list-tool v1.0.0 ([TEMP_DIR]\tools\list-tool)
+    - list-tool ([TEMP_DIR]\bin\list-tool.exe)
+    - list-tool-helper ([TEMP_DIR]\bin\list-tool-helper.exe)
+    "#);
 }
 
 #[test]
 fn tool_list_empty() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
+        .with_default_index(&_server.index_url())
         .with_filtered_exe_suffix()
+        .with_filter((r#"index-url = ".*"\n"#, ""))
         .with_tool_dirs();
-
-    uv_snapshot!(context.filters(), context.tool_list(), @"
+    uv_snapshot!(
+        context.filters(),
+        context.tool_list(),
+        @"
     exit_code: 0 (success)
     ----- stderr -----
     No tools installed
-    ");
+    "
+    );
 }
 
 #[test]
 fn tool_list_outdated_empty() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
+        .with_default_index(&_server.index_url())
         .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    // With no tools installed, `--outdated` should produce the same output as the base case.
-    uv_snapshot!(context.filters(), context.tool_list()
-    .arg("--outdated"), @"
+        .with_filter((r#"index-url = ".*"\n"#, ""))
+        .with_tool_dirs(); // With no tools installed, `--outdated` should produce the same output as the base case.
+    uv_snapshot!(
+        context.filters(),
+        context.tool_list().arg("--outdated"),
+        @"
     exit_code: 0 (success)
     ----- stderr -----
     No tools installed
-    ");
+    "
+    );
 }
 
 #[test]
 fn tool_list_outdated() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
+        .with_default_index(&_server.index_url())
         .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    // Install an older version of `black`.
+        .with_filter((r#"index-url = ".*"\n"#, ""))
+        .with_tool_dirs(); // Install an older version of `list-tool`.
     context
         .tool_install()
-        .arg("black==24.2.0")
+        .arg("list-tool==1.0.0")
         .assert()
-        .success();
-
-    // With `--outdated`, the installed (older) version should be listed with the latest version.
-    uv_snapshot!(context.filters(), context.tool_list()
-    .arg("--outdated"), @"
+        .success(); // With `--outdated`, the installed (older) version should be listed with the latest version.
+    uv_snapshot!(
+        context.filters(),
+        context.tool_list().arg("--outdated"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black v24.2.0 [latest: 24.3.0]
-    - black
-    - blackd
-    ");
+    list-tool v1.0.0 [latest: 2.0.0]
+    - list-tool
+    - list-tool-helper
+    "
+    );
 }
 
 #[tokio::test]
 async fn tool_list_outdated_respects_configured_index() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/tool-run.toml")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
 
     context
         .tool_install()
-        .arg("black==24.2.0")
+        .arg("format-tool==24.2.0")
         .assert()
         .success();
 
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/simple/black/"))
+        .and(path("/simple/format-tool/"))
         .respond_with(ResponseTemplate::new(200).set_body_raw(
             r#"{
                 "meta": { "api-version": "1.1" },
-                "name": "black",
+                "name": "format-tool",
                 "files": [{
-                    "filename": "black-99.0.0-py3-none-any.whl",
-                    "url": "black-99.0.0-py3-none-any.whl",
+                    "filename": "format-tool-99.0.0-py3-none-any.whl",
+                    "url": "format-tool-99.0.0-py3-none-any.whl",
                     "hashes": {},
                     "upload-time": "2024-03-24T00:00:00Z"
                 }]
@@ -173,13 +199,7 @@ async fn tool_list_outdated_respects_configured_index() -> Result<()> {
     uv_snapshot!(context.filters(), context.tool_list()
     .arg("--outdated")
     .arg("--config-file")
-    .arg(context.temp_dir.child("uv.toml").as_os_str()), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    black v24.2.0 [latest: 99.0.0]
-    - black
-    - blackd
-    ");
+    .arg(context.temp_dir.child("uv.toml").as_os_str()), @"exit_code: 0 (success)");
 
     Ok(())
 }
@@ -187,13 +207,14 @@ async fn tool_list_outdated_respects_configured_index() -> Result<()> {
 #[test]
 fn tool_list_outdated_respects_exclude_newer() {
     let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/tool-run.toml")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
 
-    // Install `black` with a persisted `exclude-newer` cutoff.
+    // Install `format-tool` with a persisted `exclude-newer` cutoff.
     context
         .tool_install()
-        .arg("black")
+        .arg("format-tool")
         .arg("--exclude-newer")
         .arg("2024-03-25T00:00:00Z")
         .assert()
@@ -210,13 +231,14 @@ fn tool_list_outdated_respects_exclude_newer() {
 #[test]
 fn tool_list_outdated_recomputes_relative_exclude_newer() {
     let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/tool-run.toml")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
 
-    // Install `black` with a relative `exclude-newer` cutoff that initially resolves to 2024-03-01.
+    // Install `format-tool` with a relative `exclude-newer` cutoff that initially resolves to 2024-03-01.
     context
         .tool_install()
-        .arg("black")
+        .arg("format-tool")
         .arg("--exclude-newer")
         .arg("3 weeks")
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
@@ -224,29 +246,30 @@ fn tool_list_outdated_recomputes_relative_exclude_newer() {
         .assert()
         .success();
 
-    // Recompute the stored span at a later time so `black` is considered outdated.
+    // Recompute the stored span at a later time so `format-tool` is considered outdated.
     uv_snapshot!(context.filters(), context.tool_list()
     .arg("--outdated")
     .env_remove(EnvVars::UV_EXCLUDE_NEWER)
     .env(EnvVars::UV_TEST_CURRENT_TIMESTAMP, "2024-04-15T00:00:00Z"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    black v24.2.0 [latest: 24.3.0]
-    - black
-    - blackd
+    format-tool v24.2.0 [latest: 24.3.0]
+    - format-tool
+    - format-tool-daemon
     ");
 }
 
 #[test]
 fn tool_list_outdated_cli_exclude_newer() {
     let context = uv_test::test_context!("3.12")
+        .with_packse_index("packages/tool-run.toml")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
 
-    // Install an older version of `black`.
+    // Install an older version of `format-tool`.
     context
         .tool_install()
-        .arg("black==24.2.0")
+        .arg("format-tool==24.2.0")
         .assert()
         .success();
 
@@ -262,48 +285,61 @@ fn tool_list_outdated_cli_exclude_newer() {
 
 #[test]
 fn tool_list_missing_receipt() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
+        .with_default_index(&_server.index_url())
         .with_filtered_exe_suffix()
+        .with_filter((r#"index-url = ".*"\n"#, ""))
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
 
-    // Install `black`
+    // Install `list-tool`.
     context
         .tool_install()
-        .arg("black==24.2.0")
+        .arg("list-tool==1.0.0")
         .assert()
         .success();
-
-    fs_err::remove_file(tool_dir.join("black").join("uv-receipt.toml")).unwrap();
-
-    uv_snapshot!(context.filters(), context.tool_list(), @"
+    fs_err::remove_file(tool_dir.join("list-tool").join("uv-receipt.toml")).unwrap();
+    uv_snapshot!(
+        context.filters(),
+        context.tool_list(),
+        @"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: Ignoring malformed tool `black` (run `uv tool uninstall black` to remove)
-    ");
+    warning: Ignoring malformed tool `list-tool` (run `uv tool uninstall list-tool` to remove)
+    "
+    );
 }
 
 #[test]
 fn tool_list_bad_environment() -> Result<()> {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
+        .with_default_index(&_server.index_url())
+        .with_filter((r#"index-url = ".*"\n"#, ""));
+    let context = context
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
 
-    // Install `black`
+    // Install `list-tool`
     context
         .tool_install()
-        .arg("black==24.2.0")
+        .arg("list-tool==1.0.0")
         .assert()
         .success();
 
-    // Install `ruff`
-    context.tool_install().arg("ruff==0.3.4").assert().success();
+    // Install `list-other`
+    context
+        .tool_install()
+        .arg("list-other==0.3.4")
+        .assert()
+        .success();
 
-    let venv_path = uv_test::venv_bin_path(tool_dir.path().join("black"));
-    // Remove the python interpreter for black
+    let venv_path = uv_test::venv_bin_path(tool_dir.path().join("list-tool"));
+    // Remove the python interpreter for list-tool
     fs::remove_dir_all(venv_path.clone())?;
 
     uv_snapshot!(
@@ -315,11 +351,11 @@ fn tool_list_bad_environment() -> Result<()> {
         @"
     exit_code: 0 (success)
     ----- stdout -----
-    ruff v0.3.4
-    - ruff
+    list-other v0.3.4
+    - list-other
 
     ----- stderr -----
-    warning: Invalid environment at `tools/black`: missing Python executable at `tools/black/[BIN]/[PYTHON]` (run `uv tool install black --reinstall` to reinstall)
+    warning: Invalid environment at `tools/list-tool`: missing Python executable at `tools/list-tool/[BIN]/[PYTHON]` (run `uv tool install list-tool --reinstall` to reinstall)
     "
     );
 
@@ -328,347 +364,384 @@ fn tool_list_bad_environment() -> Result<()> {
 
 #[test]
 fn tool_list_deprecated() -> Result<()> {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
+        .with_default_index(&_server.index_url())
         .with_filtered_exe_suffix()
+        .with_filter((r#"index-url = ".*"\n"#, ""))
         .with_tool_dirs();
-    let tool_dir = context.temp_dir.child("tools");
-
-    // Install `black`
+    let tool_dir = context.temp_dir.child("tools"); // Install `list-tool`
     context
         .tool_install()
-        .arg("black==24.2.0")
+        .arg("list-tool==1.0.0")
         .assert()
         .success();
 
     // Ensure that we have a modern tool receipt.
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(fs_err::read_to_string(tool_dir.join("black").join("uv-receipt.toml")).unwrap(), @r#"
-        [tool]
-        requirements = [{ name = "black", specifier = "==24.2.0" }]
-        entrypoints = [
-            { name = "black", install-path = "[TEMP_DIR]/bin/black", from = "black" },
-            { name = "blackd", install-path = "[TEMP_DIR]/bin/blackd", from = "black" },
-        ]
+    let receipt = fs_err::read_to_string(tool_dir.join("list-tool").join("uv-receipt.toml"))?;
+    insta::with_settings!({filters => context.filters()}, {
+        assert_snapshot!(
+            receipt,
+            @r#"
+    [tool]
+    requirements = [{ name = "list-tool", specifier = "==1.0.0" }]
+    entrypoints = [
+        { name = "list-tool", install-path = "[TEMP_DIR]/bin/list-tool", from = "list-tool" },
+        { name = "list-tool-helper", install-path = "[TEMP_DIR]/bin/list-tool-helper", from = "list-tool" },
+    ]
 
-        [tool.options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-        "#);
+    [tool.options]
+    exclude-newer = "2024-03-25T00:00:00Z"
+    "#);
     });
 
     // Replace with a legacy receipt.
     fs::write(
-        tool_dir.join("black").join("uv-receipt.toml"),
+        tool_dir.join("list-tool").join("uv-receipt.toml"),
         r#"
         [tool]
-        requirements = ["black==24.2.0"]
+        requirements = ["list-tool==1.0.0"]
         entrypoints = [
-            { name = "black", install-path = "[TEMP_DIR]/bin/black", from = "black" },
-            { name = "blackd", install-path = "[TEMP_DIR]/bin/blackd", from = "black" },
+            { name = "list-tool", install-path = "[TEMP_DIR]/bin/list-tool", from = "list-tool" },
+            { name = "list-tool-helper", install-path = "[TEMP_DIR]/bin/list-tool-helper", from = "list-tool" },
         ]
         "#,
-    )?;
-
-    // Ensure that we can still list the tool.
-    uv_snapshot!(context.filters(), context.tool_list(), @"
+    )?; // Ensure that we can still list the tool.
+    uv_snapshot!(
+        context.filters(),
+        context.tool_list(),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black v24.2.0
-    - black
-    - blackd
-    ");
-
-    // Replace with an invalid receipt.
+    list-tool v1.0.0
+    - list-tool
+    - list-tool-helper
+    "
+    ); // Replace with an invalid receipt.
     fs::write(
-        tool_dir.join("black").join("uv-receipt.toml"),
+        tool_dir.join("list-tool").join("uv-receipt.toml"),
         r#"
         [tool]
-        requirements = ["black<>24.2.0"]
+        requirements = ["list-tool<>1.0.0"]
         entrypoints = [
-            { name = "black", install-path = "[TEMP_DIR]/bin/black", from = "black" },
-            { name = "blackd", install-path = "[TEMP_DIR]/bin/blackd", from = "black" },
+            { name = "list-tool", install-path = "[TEMP_DIR]/bin/list-tool", from = "list-tool" },
+            { name = "list-tool-helper", install-path = "[TEMP_DIR]/bin/list-tool-helper", from = "list-tool" },
         ]
         "#,
-    )?;
-
-    // Ensure that listing fails.
-    uv_snapshot!(context.filters(), context.tool_list(), @"
+    )?; // Ensure that listing fails.
+    uv_snapshot!(
+        context.filters(),
+        context.tool_list(),
+        @"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: Ignoring malformed tool `black` (run `uv tool uninstall black` to remove)
-    ");
-
+    warning: Ignoring malformed tool `list-tool` (run `uv tool uninstall list-tool` to remove)
+    "
+    );
     Ok(())
 }
 
 #[test]
 fn tool_list_show_version_specifiers() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
+        .with_default_index(&_server.index_url())
         .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    // Install `black` with a version specifier
+        .with_filter((r#"index-url = ".*"\n"#, ""))
+        .with_tool_dirs(); // Install `list-tool` with a version specifier
     context
         .tool_install()
-        .arg("black<24.3.0")
+        .arg("list-tool<2.0.0")
         .assert()
-        .success();
-
-    // Install `flask`
-    context.tool_install().arg("flask").assert().success();
-
-    uv_snapshot!(context.filters(), context.tool_list().arg("--show-version-specifiers"), @"
+        .success(); // Install `list-flags`
+    context.tool_install().arg("list-flags").assert().success();
+    uv_snapshot!(
+        context.filters(),
+        context.tool_list().arg("--show-version-specifiers"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black v24.2.0 [required: <24.3.0]
-    - black
-    - blackd
-    flask v3.0.2
-    - flask
-    ");
-
-    // with paths
-    uv_snapshot!(context.filters(), context.tool_list().arg("--show-version-specifiers").arg("--show-paths"), @"
+    list-flags v3.0.2
+    - list-flags
+    list-tool v1.0.0 [required: <2.0.0]
+    - list-tool
+    - list-tool-helper
+    "
+    ); // with paths
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_list()
+            .arg("--show-version-specifiers")
+            .arg("--show-paths"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black v24.2.0 [required: <24.3.0] ([TEMP_DIR]/tools/black)
-    - black ([TEMP_DIR]/bin/black)
-    - blackd ([TEMP_DIR]/bin/blackd)
-    flask v3.0.2 ([TEMP_DIR]/tools/flask)
-    - flask ([TEMP_DIR]/bin/flask)
-    ");
+    list-flags v3.0.2 ([TEMP_DIR]/tools/list-flags)
+    - list-flags ([TEMP_DIR]/bin/list-flags)
+    list-tool v1.0.0 [required: <2.0.0] ([TEMP_DIR]/tools/list-tool)
+    - list-tool ([TEMP_DIR]/bin/list-tool)
+    - list-tool-helper ([TEMP_DIR]/bin/list-tool-helper)
+    "
+    );
 }
 
 #[test]
 fn tool_list_show_with() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
+        .with_default_index(&_server.index_url())
         .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    // Install `black` without additional requirements
+        .with_filter((r#"index-url = ".*"\n"#, ""))
+        .with_tool_dirs(); // Install `list-tool` without additional requirements
     context
         .tool_install()
-        .arg("black==24.2.0")
+        .arg("list-tool==1.0.0")
         .assert()
-        .success();
-
-    // Install `flask` with additional requirements
+        .success(); // Install `list-flags` with additional requirements
     context
         .tool_install()
-        .arg("flask")
+        .arg("list-flags")
         .arg("--with")
-        .arg("requests")
+        .arg("list-dependency")
         .arg("--with")
-        .arg("black==24.2.0")
+        .arg("list-tool==1.0.0")
         .assert()
-        .success();
-
-    // Install `ruff` with version specifier and additional requirements
+        .success(); // Install `list-other` with version specifier and additional requirements
     context
         .tool_install()
-        .arg("ruff==0.3.4")
+        .arg("list-other==0.3.4")
         .arg("--with")
-        .arg("requests")
+        .arg("list-dependency")
         .assert()
-        .success();
-
-    // Test with --show-with
-    uv_snapshot!(context.filters(), context.tool_list().arg("--show-with"), @"
+        .success(); // Test with --show-with
+    uv_snapshot!(
+        context.filters(),
+        context.tool_list().arg("--show-with"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black v24.2.0
-    - black
-    - blackd
-    flask v3.0.2 [with: requests, black==24.2.0]
-    - flask
-    ruff v0.3.4 [with: requests]
-    - ruff
-    ");
-
-    // Test with both --show-with and --show-paths
-    uv_snapshot!(context.filters(), context.tool_list().arg("--show-with").arg("--show-paths"), @"
+    list-flags v3.0.2 [with: list-dependency, list-tool==1.0.0]
+    - list-flags
+    list-other v0.3.4 [with: list-dependency]
+    - list-other
+    list-tool v1.0.0
+    - list-tool
+    - list-tool-helper
+    "
+    ); // Test with both --show-with and --show-paths
+    uv_snapshot!(
+        context.filters(),
+        context.tool_list().arg("--show-with").arg("--show-paths"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black v24.2.0 ([TEMP_DIR]/tools/black)
-    - black ([TEMP_DIR]/bin/black)
-    - blackd ([TEMP_DIR]/bin/blackd)
-    flask v3.0.2 [with: requests, black==24.2.0] ([TEMP_DIR]/tools/flask)
-    - flask ([TEMP_DIR]/bin/flask)
-    ruff v0.3.4 [with: requests] ([TEMP_DIR]/tools/ruff)
-    - ruff ([TEMP_DIR]/bin/ruff)
-    ");
-
-    // Test with both --show-with and --show-version-specifiers
-    uv_snapshot!(context.filters(), context.tool_list().arg("--show-with").arg("--show-version-specifiers"), @"
+    list-flags v3.0.2 [with: list-dependency, list-tool==1.0.0] ([TEMP_DIR]/tools/list-flags)
+    - list-flags ([TEMP_DIR]/bin/list-flags)
+    list-other v0.3.4 [with: list-dependency] ([TEMP_DIR]/tools/list-other)
+    - list-other ([TEMP_DIR]/bin/list-other)
+    list-tool v1.0.0 ([TEMP_DIR]/tools/list-tool)
+    - list-tool ([TEMP_DIR]/bin/list-tool)
+    - list-tool-helper ([TEMP_DIR]/bin/list-tool-helper)
+    "
+    ); // Test with both --show-with and --show-version-specifiers
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_list()
+            .arg("--show-with")
+            .arg("--show-version-specifiers"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black v24.2.0 [required: ==24.2.0]
-    - black
-    - blackd
-    flask v3.0.2 [with: requests, black==24.2.0]
-    - flask
-    ruff v0.3.4 [required: ==0.3.4] [with: requests]
-    - ruff
-    ");
-
-    // Test with all flags
-    uv_snapshot!(context.filters(), context.tool_list()
-    .arg("--show-with")
-    .arg("--show-version-specifiers")
-    .arg("--show-paths"), @"
+    list-flags v3.0.2 [with: list-dependency, list-tool==1.0.0]
+    - list-flags
+    list-other v0.3.4 [required: ==0.3.4] [with: list-dependency]
+    - list-other
+    list-tool v1.0.0 [required: ==1.0.0]
+    - list-tool
+    - list-tool-helper
+    "
+    ); // Test with all flags
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_list()
+            .arg("--show-with")
+            .arg("--show-version-specifiers")
+            .arg("--show-paths"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black v24.2.0 [required: ==24.2.0] ([TEMP_DIR]/tools/black)
-    - black ([TEMP_DIR]/bin/black)
-    - blackd ([TEMP_DIR]/bin/blackd)
-    flask v3.0.2 [with: requests, black==24.2.0] ([TEMP_DIR]/tools/flask)
-    - flask ([TEMP_DIR]/bin/flask)
-    ruff v0.3.4 [required: ==0.3.4] [with: requests] ([TEMP_DIR]/tools/ruff)
-    - ruff ([TEMP_DIR]/bin/ruff)
-    ");
+    list-flags v3.0.2 [with: list-dependency, list-tool==1.0.0] ([TEMP_DIR]/tools/list-flags)
+    - list-flags ([TEMP_DIR]/bin/list-flags)
+    list-other v0.3.4 [required: ==0.3.4] [with: list-dependency] ([TEMP_DIR]/tools/list-other)
+    - list-other ([TEMP_DIR]/bin/list-other)
+    list-tool v1.0.0 [required: ==1.0.0] ([TEMP_DIR]/tools/list-tool)
+    - list-tool ([TEMP_DIR]/bin/list-tool)
+    - list-tool-helper ([TEMP_DIR]/bin/list-tool-helper)
+    "
+    );
 }
 
 #[test]
 fn tool_list_show_extras() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
+        .with_default_index(&_server.index_url())
         .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    // Install `black` without extras
+        .with_filter((r#"index-url = ".*"\n"#, ""))
+        .with_tool_dirs(); // Install `list-tool` without extras
     context
         .tool_install()
-        .arg("black==24.2.0")
+        .arg("list-tool==1.0.0")
         .assert()
-        .success();
-
-    // Install `flask` with extras and additional requirements
+        .success(); // Install `list-flags` with extras and additional requirements
     context
         .tool_install()
-        .arg("flask[async,dotenv]")
+        .arg("list-flags[async,dotenv]")
         .arg("--with")
-        .arg("requests")
+        .arg("list-dependency")
         .assert()
-        .success();
-
-    // Test with --show-extras only
-    uv_snapshot!(context.filters(), context.tool_list().arg("--show-extras"), @"
+        .success(); // Test with --show-extras only
+    uv_snapshot!(
+        context.filters(),
+        context.tool_list().arg("--show-extras"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black v24.2.0
-    - black
-    - blackd
-    flask v3.0.2 [extras: async, dotenv]
-    - flask
-    ");
-
-    // Test with both --show-extras and --show-with
-    uv_snapshot!(context.filters(), context.tool_list().arg("--show-extras").arg("--show-with"), @"
+    list-flags v3.0.2 [extras: async, dotenv]
+    - list-flags
+    list-tool v1.0.0
+    - list-tool
+    - list-tool-helper
+    "
+    ); // Test with both --show-extras and --show-with
+    uv_snapshot!(
+        context.filters(),
+        context.tool_list().arg("--show-extras").arg("--show-with"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black v24.2.0
-    - black
-    - blackd
-    flask v3.0.2 [extras: async, dotenv] [with: requests]
-    - flask
-    ");
-
-    // Test with --show-extras and --show-paths
-    uv_snapshot!(context.filters(), context.tool_list().arg("--show-extras").arg("--show-paths"), @"
+    list-flags v3.0.2 [extras: async, dotenv] [with: list-dependency]
+    - list-flags
+    list-tool v1.0.0
+    - list-tool
+    - list-tool-helper
+    "
+    ); // Test with --show-extras and --show-paths
+    uv_snapshot!(
+        context.filters(),
+        context.tool_list().arg("--show-extras").arg("--show-paths"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black v24.2.0 ([TEMP_DIR]/tools/black)
-    - black ([TEMP_DIR]/bin/black)
-    - blackd ([TEMP_DIR]/bin/blackd)
-    flask v3.0.2 [extras: async, dotenv] ([TEMP_DIR]/tools/flask)
-    - flask ([TEMP_DIR]/bin/flask)
-    ");
-
-    // Test with --show-extras and --show-version-specifiers
-    uv_snapshot!(context.filters(), context.tool_list().arg("--show-extras").arg("--show-version-specifiers"), @"
+    list-flags v3.0.2 [extras: async, dotenv] ([TEMP_DIR]/tools/list-flags)
+    - list-flags ([TEMP_DIR]/bin/list-flags)
+    list-tool v1.0.0 ([TEMP_DIR]/tools/list-tool)
+    - list-tool ([TEMP_DIR]/bin/list-tool)
+    - list-tool-helper ([TEMP_DIR]/bin/list-tool-helper)
+    "
+    ); // Test with --show-extras and --show-version-specifiers
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_list()
+            .arg("--show-extras")
+            .arg("--show-version-specifiers"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black v24.2.0 [required: ==24.2.0]
-    - black
-    - blackd
-    flask v3.0.2 [extras: async, dotenv]
-    - flask
-    ");
-
-    // Test with all flags including --show-extras
-    uv_snapshot!(context.filters(), context.tool_list()
-    .arg("--show-extras")
-    .arg("--show-with")
-    .arg("--show-version-specifiers")
-    .arg("--show-paths"), @"
+    list-flags v3.0.2 [extras: async, dotenv]
+    - list-flags
+    list-tool v1.0.0 [required: ==1.0.0]
+    - list-tool
+    - list-tool-helper
+    "
+    ); // Test with all flags including --show-extras
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_list()
+            .arg("--show-extras")
+            .arg("--show-with")
+            .arg("--show-version-specifiers")
+            .arg("--show-paths"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black v24.2.0 [required: ==24.2.0] ([TEMP_DIR]/tools/black)
-    - black ([TEMP_DIR]/bin/black)
-    - blackd ([TEMP_DIR]/bin/blackd)
-    flask v3.0.2 [extras: async, dotenv] [with: requests] ([TEMP_DIR]/tools/flask)
-    - flask ([TEMP_DIR]/bin/flask)
-    ");
+    list-flags v3.0.2 [extras: async, dotenv] [with: list-dependency] ([TEMP_DIR]/tools/list-flags)
+    - list-flags ([TEMP_DIR]/bin/list-flags)
+    list-tool v1.0.0 [required: ==1.0.0] ([TEMP_DIR]/tools/list-tool)
+    - list-tool ([TEMP_DIR]/bin/list-tool)
+    - list-tool-helper ([TEMP_DIR]/bin/list-tool-helper)
+    "
+    );
 }
 
 #[test]
 fn tool_list_show_python() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
+        .with_default_index(&_server.index_url())
         .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    // Install `black` with python 3.12
+        .with_filter((r#"index-url = ".*"\n"#, ""))
+        .with_tool_dirs(); // Install `list-tool` with python 3.12
     context
         .tool_install()
-        .arg("black==24.2.0")
+        .arg("list-tool==1.0.0")
         .assert()
-        .success();
-
-    // Test with --show-python
-    uv_snapshot!(context.filters(), context.tool_list().arg("--show-python"), @"
+        .success(); // Test with --show-python
+    uv_snapshot!(
+        context.filters(),
+        context.tool_list().arg("--show-python"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black v24.2.0 [CPython 3.12.[X]]
-    - black
-    - blackd
-    ");
+    list-tool v1.0.0 [CPython 3.12.[X]]
+    - list-tool
+    - list-tool-helper
+    "
+    );
 }
 
 #[test]
 fn tool_list_show_all() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
+        .with_default_index(&_server.index_url())
         .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    // Install `black` without extras
+        .with_filter((r#"index-url = ".*"\n"#, ""))
+        .with_tool_dirs(); // Install `list-tool` without extras
     context
         .tool_install()
-        .arg("black==24.2.0")
+        .arg("list-tool==1.0.0")
         .assert()
-        .success();
-
-    // Install `flask` with extras and additional requirements
+        .success(); // Install `list-flags` with extras and additional requirements
     context
         .tool_install()
-        .arg("flask[async,dotenv]")
+        .arg("list-flags[async,dotenv]")
         .arg("--with")
-        .arg("requests")
+        .arg("list-dependency")
         .assert()
-        .success();
-
-    // Test with all flags
-    uv_snapshot!(context.filters(), context.tool_list()
-    .arg("--show-extras")
-    .arg("--show-with")
-    .arg("--show-version-specifiers")
-    .arg("--show-paths")
-    .arg("--show-python"), @"
+        .success(); // Test with all flags
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_list()
+            .arg("--show-extras")
+            .arg("--show-with")
+            .arg("--show-version-specifiers")
+            .arg("--show-paths")
+            .arg("--show-python"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    black v24.2.0 [required: ==24.2.0] [CPython 3.12.[X]] ([TEMP_DIR]/tools/black)
-    - black ([TEMP_DIR]/bin/black)
-    - blackd ([TEMP_DIR]/bin/blackd)
-    flask v3.0.2 [extras: async, dotenv] [with: requests] [CPython 3.12.[X]] ([TEMP_DIR]/tools/flask)
-    - flask ([TEMP_DIR]/bin/flask)
-    ");
+    list-flags v3.0.2 [extras: async, dotenv] [with: list-dependency] [CPython 3.12.[X]] ([TEMP_DIR]/tools/list-flags)
+    - list-flags ([TEMP_DIR]/bin/list-flags)
+    list-tool v1.0.0 [required: ==1.0.0] [CPython 3.12.[X]] ([TEMP_DIR]/tools/list-tool)
+    - list-tool ([TEMP_DIR]/bin/list-tool)
+    - list-tool-helper ([TEMP_DIR]/bin/list-tool-helper)
+    "
+    );
 }

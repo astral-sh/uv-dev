@@ -1,0 +1,18 @@
+name = "init"
+description = "Registry packages used by project initialization tests."
+
+[root]
+requires = ["init-dependency==1.0.0"]
+
+[expected]
+satisfiable = true
+
+[expected.packages]
+init-dependency = "1.0.0"
+
+[packages.init-dependency.versions."1.0.0"]
+requires_python = ">=3.11"
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true

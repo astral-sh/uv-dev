@@ -1,28 +1,28 @@
 //! Integration tests for uv project commands.
 
-#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+#[cfg(feature = "test-python")]
 use uv_test::pypi_proxy;
 
 #[cfg(all(feature = "test-python", feature = "test-r2"))]
 mod check;
 
-#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+#[cfg(feature = "test-python")]
 mod edit;
 
-#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+#[cfg(feature = "test-python")]
 mod export;
 
 #[cfg(all(feature = "test-python", feature = "test-r2"))]
 mod format;
 
-#[cfg(all(feature = "test-python", feature = "test-pypi", feature = "test-git"))]
+#[cfg(all(feature = "test-python", feature = "test-git"))]
 mod init;
 
-#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+#[cfg(feature = "test-python")]
 mod run;
 
-#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+#[cfg(feature = "test-python")]
 mod tree;
 
-#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+#[cfg(feature = "test-python")]
 mod workflow;

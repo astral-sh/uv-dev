@@ -1,0 +1,32 @@
+name = "no-sdist-no-wheels-with-matching-abi-or-platform"
+description = "Older wheels have the wrong ABI and newer wheels have the wrong platform."
+
+[root]
+requires = ["a"]
+
+[expected]
+satisfiable = false
+
+[packages.a.versions."1.0.0"]
+wheel_tags = [
+  "cp36-cp36m-manylinux2014_x86_64",
+  "cp37-cp37m-manylinux2014_x86_64",
+  "cp38-cp38-manylinux2014_x86_64",
+  "cp39-cp39-manylinux2014_x86_64",
+]
+sdist = false
+
+[packages.a.versions."2.0.0"]
+wheel_tags = [
+  "cp310-cp310-macosx_11_0_x86_64",
+  "cp310-cp310-manylinux_2_27_x86_64",
+  "cp310-cp310-win_amd64",
+]
+sdist = false
+
+[resolver_options]
+python = "3.10"
+python_platform = "x86_64-manylinux_2_17"
+
+[testgen]
+disable = true

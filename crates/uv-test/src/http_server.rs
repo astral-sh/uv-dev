@@ -1,3 +1,4 @@
+use std::net::TcpListener;
 use std::path::Path;
 use std::thread;
 use std::time::Duration;
@@ -16,6 +17,20 @@ impl HttpServer {
     pub(crate) fn start(
         handler: impl Fn(&Request, &str) -> ResponseTemplate + Send + Sync + 'static,
     ) -> Self {
+        Self::start_inner(None, handler)
+    }
+
+    pub(crate) fn start_with_listener(
+        listener: TcpListener,
+        handler: impl Fn(&Request, &str) -> ResponseTemplate + Send + Sync + 'static,
+    ) -> Self {
+        Self::start_inner(Some(listener), handler)
+    }
+
+    fn start_inner(
+        listener: Option<TcpListener>,
+        handler: impl Fn(&Request, &str) -> ResponseTemplate + Send + Sync + 'static,
+    ) -> Self {
         let (url_tx, url_rx) = std::sync::mpsc::channel::<String>();
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
@@ -26,7 +41,10 @@ impl HttpServer {
                 .expect("failed to create tokio runtime for local HTTP test server");
 
             runtime.block_on(async move {
-                let server = MockServer::start().await;
+                let server = match listener {
+                    Some(listener) => MockServer::builder().listener(listener).start().await,
+                    None => MockServer::start().await,
+                };
                 let server_uri = server.uri();
 
                 Mock::given(any())
