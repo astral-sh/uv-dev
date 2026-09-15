@@ -1443,6 +1443,10 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
         }) => commands::self_install(args, printer).await,
         #[cfg(feature = "self-update")]
         Commands::Self_(SelfNamespace {
+            command: SelfCommand::Uninstall(args),
+        }) => commands::self_uninstall(args, printer).await,
+        #[cfg(feature = "self-update")]
+        Commands::Self_(SelfNamespace {
             command:
                 SelfCommand::Update(SelfUpdateArgs {
                     target_version,
