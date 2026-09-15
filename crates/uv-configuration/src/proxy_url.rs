@@ -15,7 +15,7 @@ use uv_redacted::DisplaySafeUrl;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ProxyUrl(DisplaySafeUrl);
 
-/// Mapping to [`reqwest::proxy::Intercept`] kinds which are not public API.
+/// The request protocols selected by [`Proxy::http`] and [`Proxy::https`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProxyUrlKind {
     Http,
