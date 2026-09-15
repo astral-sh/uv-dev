@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
@@ -18,7 +19,8 @@ use uv_platform::{Arch, Libc, Os, Platform};
 
 use crate::discovery::{
     EnvironmentPreference, PythonRequest, VersionRequest, find_best_python_installation,
-    find_python_installation, find_python_installation_with_catalog,
+    find_python_installation, find_python_installation_with_cached_catalog,
+    find_python_installation_with_catalog,
 };
 use crate::downloads::{
     DownloadResult, ManagedPythonDownload, ManagedPythonDownloadList, PythonDownloadRequest,
@@ -150,14 +152,28 @@ impl PythonInstallation {
         cache: &Cache,
         python_downloads_json_url: Option<&str>,
     ) -> Result<Self, Error> {
-        let installation = Self::find_existing(request, environments, preference, cache)?;
-        if !installation.is_managed() || PythonDownloadRequest::from_request(request).is_none() {
-            return Ok(installation);
+        if PythonDownloadRequest::from_request(request).is_none() {
+            return Self::find_existing(request, environments, preference, cache);
         }
-        let download_list =
-            ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url)
-                .await?;
-        Self::find(request, environments, preference, &download_list, cache)
+        match Self::find_existing(request, environments, preference, cache) {
+            Ok(installation) if !installation.is_managed() => return Ok(installation),
+            Err(err) if !preference.allows_managed() => return Err(err),
+            Ok(_) | Err(Error::MissingPython(..)) => {}
+            Err(Error::Discovery(err)) if !err.is_critical() => {}
+            Err(err) => return Err(err),
+        }
+        let (result, download_list) = find_python_installation_with_cached_catalog(
+            request,
+            environments,
+            preference,
+            client_builder,
+            cache,
+            python_downloads_json_url,
+        )
+        .await?;
+        let installation = result?;
+        installation.warn_if_outdated_prerelease(request, &download_list);
+        Ok(installation)
     }
 
     /// Find or download a [`PythonInstallation`] that satisfies a requested version, if the request
@@ -227,11 +243,20 @@ impl PythonInstallation {
             Err(err) => return Err(err),
         }
 
-        let download_list =
-            ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url)
-                .await?;
-        let err = match Self::find(request, environments, preference, &download_list, cache) {
-            Ok(installation) => return Ok(installation),
+        let (result, download_list) = find_python_installation_with_cached_catalog(
+            request,
+            environments,
+            preference,
+            client_builder,
+            cache,
+            python_downloads_json_url,
+        )
+        .await?;
+        let err = match result {
+            Ok(installation) => {
+                installation.warn_if_outdated_prerelease(request, &download_list);
+                return Ok(installation);
+            }
             Err(err) => err,
         };
 
@@ -565,9 +590,14 @@ impl PythonInstallation {
             return Ok(());
         }
 
-        let download_list =
-            ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url)
-                .await?;
+        let download_list = if let Some(download_list) =
+            ManagedPythonDownloadList::from_cache(client_builder, cache, python_downloads_json_url)
+                .await?
+        {
+            download_list
+        } else {
+            ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url).await?
+        };
         self.warn_if_outdated_prerelease(request, &download_list);
 
         Ok(())
@@ -887,16 +917,26 @@ impl FromStr for PythonInstallationKey {
 }
 
 impl PartialOrd for PythonInstallationKey {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for PythonInstallationKey {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> Ordering {
         self.implementation
             .cmp(&other.implementation)
-            .then_with(|| self.version().cmp(&other.version()))
+            .then_with(|| self.major.cmp(&other.major))
+            .then_with(|| self.minor.cmp(&other.minor))
+            .then_with(|| self.patch.cmp(&other.patch))
+            // Compare the parsed version components without allocating or parsing a version string.
+            // Final releases sort after prereleases of the same release version.
+            .then_with(|| match (self.prerelease, other.prerelease) {
+                (Some(left), Some(right)) => left.cmp(&right),
+                (Some(_), None) => Ordering::Less,
+                (None, Some(_)) => Ordering::Greater,
+                (None, None) => Ordering::Equal,
+            })
             // Platforms are sorted in preferred order for the target
             .then_with(|| self.platform.cmp(&other.platform).reverse())
             // Python variants are sorted in preferred order, with `Default` first
@@ -1015,6 +1055,50 @@ impl From<PythonInstallationKey> for PythonInstallationMinorVersionKey {
 mod tests {
     use super::*;
     use uv_platform::ArchVariant;
+
+    #[test]
+    fn test_python_installation_key_version_order() -> Result<(), PythonInstallationKeyError> {
+        let mut keys = [
+            "3.13.0",
+            "3.13.0rc10",
+            "3.12.10",
+            "3.13.0b2",
+            "3.13.0a10",
+            "3.13.0rc2",
+            "3.13.1",
+            "3.13.0b10",
+            "3.13.0a2",
+            "3.9.20",
+            "4.0.0a1",
+            "3.10.0",
+        ]
+        .into_iter()
+        .map(|version| {
+            PythonInstallationKey::from_str(&format!("cpython-{version}-linux-x86_64-gnu"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+        keys.sort();
+
+        insta::assert_debug_snapshot!(
+            keys.iter().map(|key| key.version().to_string()).collect::<Vec<_>>(),
+            @r#"
+        [
+            "3.9.20",
+            "3.10.0",
+            "3.12.10",
+            "3.13.0a2",
+            "3.13.0a10",
+            "3.13.0b2",
+            "3.13.0b10",
+            "3.13.0rc2",
+            "3.13.0rc10",
+            "3.13.0",
+            "3.13.1",
+            "4.0.0a1",
+        ]
+        "#);
+        Ok(())
+    }
 
     #[cfg(windows)]
     #[test]

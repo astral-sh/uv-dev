@@ -129,16 +129,37 @@ fn python_install() {
 
 #[tokio::test]
 #[cfg(feature = "test-python-managed")]
-async fn python_install_build_variant() {
+async fn python_install_build_variant() -> anyhow::Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_python_sources()
         .with_filtered_python_install_bin()
         .with_filtered_python_names()
         .with_filtered_exe_suffix()
+        .with_filtered_centralized_environment_hashes()
         .with_managed_python_dirs();
 
     context.python_install().arg("3.13").assert().success();
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = []
+        "#,
+    )?;
+    context
+        .sync()
+        .arg("--preview-features")
+        .arg("centralized-project-envs")
+        .arg("--python")
+        .arg("3.13")
+        .assert()
+        .success();
+    let stock_environment = fs_err::canonicalize(&context.venv)?;
+    context.venv.child("stock-marker").touch()?;
 
     let managed_dir = context.temp_dir.child("managed");
     let default_path = fs_err::read_dir(managed_dir.path())
@@ -160,7 +181,8 @@ async fn python_install_build_variant() {
     let version = default_name.strip_suffix(&format!("-{platform}")).unwrap();
     let custom_name = format!("{version}+custom-{platform}");
     let custom_path = managed_dir.join(&custom_name);
-    fs_err::rename(&default_path, &custom_path).unwrap();
+    // Keep the stock installation available so its existing environment remains usable.
+    copy_dir_all(&default_path, &custom_path)?;
 
     let arch = key.arch().to_string();
     let (arch_family, arch_variant) = arch
@@ -171,7 +193,7 @@ async fn python_install_build_variant() {
 
     let server = MockServer::start().await;
     let metadata = serde_json::json!({
-        (custom_name): {
+        (custom_name.clone()): {
             "name": "cpython",
             "arch": {
                 "family": arch_family,
@@ -201,6 +223,7 @@ async fn python_install_build_variant() {
         .python_install()
         .arg("3.13+custom")
         .arg("--default")
+        .arg("--force")
         .arg("--python-downloads-json-url")
         .arg(format!("{}/metadata", server.uri()))
         .assert()
@@ -239,6 +262,133 @@ async fn python_install_build_variant() {
     ----- stdout -----
     [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
+
+    // Restore the custom build before checking project environment reuse.
+    fs_err::rename(&optimized_path, &custom_path)?;
+
+    for (directory, request) in [
+        ("init-major", "3+custom"),
+        ("init-implementation", "cpython@3.13+custom"),
+        ("init-key", custom_name.as_str()),
+    ] {
+        context
+            .init()
+            .arg(directory)
+            .arg("--no-workspace")
+            .arg("--python")
+            .arg(request)
+            .assert()
+            .success();
+        assert_eq!(
+            context.read(format!("{directory}/.python-version")),
+            "3.13+custom\n"
+        );
+    }
+
+    // The existing stock environment must still run before testing build compatibility.
+    let base_prefix =
+        "import sys; from pathlib import Path; print(Path(sys.base_prefix).resolve().as_posix())";
+    assert!(context.interpreter().is_file());
+    uv_snapshot!(context.filters(), context.python_command().arg("-c").arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]-[PLATFORM]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--preview-features")
+        .arg("centralized-project-envs")
+        .arg("--python")
+        .arg("3.13+custom"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[LATEST]
+    Creating virtual environment `project-cp3.13-[HASH]`
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    let custom_environment = fs_err::canonicalize(&context.venv)?;
+    assert_ne!(stock_environment, custom_environment);
+    assert!(stock_environment.join("stock-marker").is_file());
+    context.venv.child("custom-marker").touch()?;
+
+    uv_snapshot!(context.filters(), context.python_command().arg("-c").arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]
+    ");
+
+    // Running with the same build reuses the custom environment.
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--preview-features")
+        .arg("centralized-project-envs")
+        .arg("--python")
+        .arg("3.13+custom")
+        .arg("python")
+        .arg("-c")
+        .arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    assert_eq!(custom_environment, fs_err::canonicalize(&context.venv)?);
+    context
+        .venv
+        .child("custom-marker")
+        .assert(predicate::path::exists());
+
+    // An unqualified request selects the stock catalog default instead of the custom environment.
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--preview-features")
+        .arg("centralized-project-envs")
+        .arg("--python")
+        .arg("3.13")
+        .arg("python")
+        .arg("-c")
+        .arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]-[PLATFORM]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    assert_eq!(stock_environment, fs_err::canonicalize(&context.venv)?);
+    context
+        .venv
+        .child("stock-marker")
+        .assert(predicate::path::exists());
+    assert!(custom_environment.join("custom-marker").is_file());
+
+    // `uv run` must also switch a healthy stock environment to the requested custom build.
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--preview-features")
+        .arg("centralized-project-envs")
+        .arg("--python")
+        .arg("3.13+custom")
+        .arg("python")
+        .arg("-c")
+        .arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    assert_eq!(custom_environment, fs_err::canonicalize(&context.venv)?);
+    context
+        .venv
+        .child("custom-marker")
+        .assert(predicate::path::exists());
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -298,24 +448,36 @@ async fn python_build_variant_catalog_selection() -> anyhow::Result<()> {
     }
     let server = MockServer::start().await;
     let metadata_url = format!("{}/metadata", server.uri());
-    let mount_catalog = async |downloads: serde_json::Map<String, serde_json::Value>| {
+    let mount_catalog = async |downloads: serde_json::Map<String, serde_json::Value>,
+                               cache_control: &str| {
         Mock::given(method("GET"))
             .and(path("/metadata"))
             .respond_with(
                 ResponseTemplate::new(200)
-                    .insert_header("Cache-Control", "max-age=0")
+                    .insert_header("Cache-Control", cache_control)
                     .set_body_json(serde_json::json!({"version": 1, "downloads": downloads})),
             )
             .mount(&server)
             .await;
     };
-    mount_catalog(downloads.clone()).await;
+    mount_catalog(downloads.clone(), "max-age=0").await;
     let find = |request| {
         let mut command = context.python_find();
         command
             .arg(request)
             .arg("--python-downloads-json-url")
             .arg(&metadata_url);
+        command
+    };
+
+    let base_prefix = "import os, sys; print(os.path.realpath(sys.base_prefix))";
+    let run = || {
+        let mut command = context.run();
+        command
+            .arg("--python")
+            .arg("3.13")
+            .env_remove(EnvVars::VIRTUAL_ENV)
+            .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, &metadata_url);
         command
     };
 
@@ -336,6 +498,14 @@ async fn python_build_variant_catalog_selection() -> anyhow::Result<()> {
     ----- stdout -----
     [TEMP_DIR]/managed/cpython-3.13.[LATEST]+pgo+lto-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .context("Missing request log")?
+            .len(),
+        1
+    );
     uv_snapshot!(context.filters(), find("3.13+pgo+lto"), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -364,6 +534,31 @@ async fn python_build_variant_catalog_selection() -> anyhow::Result<()> {
     [TEMP_DIR]/managed/cpython-3.13.[LATEST]+noopt-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
 
+    // Installed candidates use the cached catalog even when HTTP metadata has expired.
+    uv_snapshot!(context.filters(), run()
+        .arg("python").arg("-c").arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+pgo+lto-[PLATFORM]
+    ");
+    context.temp_dir.child("requirements.in").write_str("")?;
+    uv_snapshot!(context.filters(), context.pip_compile().arg("requirements.in")
+        .arg("--python-version").arg("3.13").arg("--no-header")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, &metadata_url), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Requirements file `requirements.in` does not contain any dependencies
+    Resolved in [TIME]
+    ");
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .context("Missing request log")?
+            .len(),
+        1
+    );
+
     // Removing stock must not turn the installed non-default custom build into a match.
     let optimized_path = managed_dir.join(format!("{version}+pgo+lto-{platform}"));
     let hidden_path = context.temp_dir.join("stock-optimized");
@@ -373,6 +568,14 @@ async fn python_build_variant_catalog_selection() -> anyhow::Result<()> {
     ----- stderr -----
     error: No interpreter found for Python 3.13 in [PYTHON SOURCES]
     ");
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .context("Missing request log")?
+            .len(),
+        2
+    );
     uv_snapshot!(context.filters(), find("3.13+pgo+lto"), @"
     exit_code: 2 (failure)
     ----- stderr -----
@@ -394,12 +597,183 @@ async fn python_build_variant_catalog_selection() -> anyhow::Result<()> {
     "#);
     fs_err::rename(&hidden_path, &optimized_path)?;
 
+    let requests_before_project = server
+        .received_requests()
+        .await
+        .context("Missing request log")?
+        .len();
+    let project = context.temp_dir.child("project");
+    project.create_dir_all()?;
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = []
+    "#})?;
+    context
+        .sync()
+        .current_dir(&project)
+        .arg("--python")
+        .arg("3.13+custom")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, &metadata_url)
+        .assert()
+        .success();
+    let project_run = |request| {
+        let mut command = context.run();
+        command
+            .current_dir(&project)
+            .env_remove(EnvVars::VIRTUAL_ENV)
+            .arg("--python")
+            .arg(request)
+            .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, &metadata_url);
+        command
+    };
+
+    // An explicit provider request reuses its environment even when it is not the default.
+    project.child(".venv/custom-marker").touch()?;
+    uv_snapshot!(context.filters(), project_run("3.13+custom")
+        .arg("python").arg("-c").arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    project
+        .child(".venv/custom-marker")
+        .assert(predicate::path::exists());
+
+    // An unqualified request replaces the non-default custom environment with stock.
+    uv_snapshot!(context.filters(), project_run("3.13")
+        .arg("python").arg("-c").arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+pgo+lto-[PLATFORM]
+
+    ----- stderr -----
+    Using CPython 3.13.[LATEST]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    project
+        .child(".venv/custom-marker")
+        .assert(predicate::path::missing());
+    project.child(".venv/stock-marker").touch()?;
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .context("Missing request log")?
+            .len(),
+        requests_before_project
+    );
+
     // Change the catalog default with both installations present and healthy.
     for download in downloads.values_mut() {
         download["default"] = serde_json::json!(download["build_variant"] == "custom+pgo+lto");
     }
     server.reset().await;
-    mount_catalog(downloads.clone()).await;
+    mount_catalog(downloads.clone(), "max-age=86400").await;
+    // The cached catalog remains authoritative when reusing an existing environment.
+    uv_snapshot!(context.filters(), project_run("3.13")
+        .arg("python").arg("-c").arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+pgo+lto-[PLATFORM]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    project
+        .child(".venv/stock-marker")
+        .assert(predicate::path::exists());
+    // A changed remote default does not invalidate an installed candidate in the cached catalog.
+    uv_snapshot!(context.filters(), find("3.13"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+pgo+lto-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .context("Missing request log")?
+            .is_empty()
+    );
+    // Explicit refresh observes the new default even though the cached candidate is installed.
+    uv_snapshot!(context.filters(), project_run("3.13").arg("--refresh")
+        .arg("python").arg("-c").arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]
+
+    ----- stderr -----
+    Using CPython 3.13.[LATEST]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .context("Missing request log")?
+            .len(),
+        1
+    );
+    project
+        .child(".venv/stock-marker")
+        .assert(predicate::path::missing());
+
+    // An unqualified request reuses custom when the catalog marks it as the default.
+    project.child(".venv/custom-marker").touch()?;
+    uv_snapshot!(context.filters(), project_run("3.13")
+        .arg("python").arg("-c").arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    project
+        .child(".venv/custom-marker")
+        .assert(predicate::path::exists());
+
+    // Catalog errors must not cause a healthy environment to be removed.
+    project_run("3.13")
+        .env(
+            EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL,
+            "missing-catalog.json",
+        )
+        .arg("python")
+        .arg("-c")
+        .arg(base_prefix)
+        .assert()
+        .failure();
+    // A system-only preference rejects the managed environment without reading the catalog.
+    uv_snapshot!(context.filters(), project_run("3.13")
+        .arg("--no-managed-python").arg("--no-sync")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, "missing-catalog.json")
+        .arg("python").arg("-c").arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]
+
+    ----- stderr -----
+    warning: Using incompatible environment (`.venv`) due to `--no-sync` (The project environment's Python interpreter does not meet the Python preference: `only system`)
+    ");
+    project
+        .child(".venv/custom-marker")
+        .assert(predicate::path::exists());
     uv_snapshot!(context.filters(), find("3.13"), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -450,13 +824,57 @@ async fn python_build_variant_catalog_selection() -> anyhow::Result<()> {
     [TEMP_DIR]/managed/cpython-3.13.[LATEST]-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
 
-    // An unavailable remote falls back to the cached catalog, including its custom default.
+    // An explicit executable request can switch environments without reading the catalog.
+    context
+        .run()
+        .current_dir(&project)
+        .env_remove(EnvVars::VIRTUAL_ENV)
+        .arg("--python")
+        .arg(&executable)
+        .env(
+            EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL,
+            "missing-catalog.json",
+        )
+        .arg("python")
+        .arg("-c")
+        .arg(base_prefix)
+        .assert()
+        .success();
+
+    // An unavailable remote is not contacted when the cached catalog has a matching installation.
     server.reset().await;
     Mock::given(method("GET"))
         .and(path("/metadata"))
         .respond_with(ResponseTemplate::new(503))
         .mount(&server)
         .await;
+    uv_snapshot!(context.filters(), project_run("3.13").env(EnvVars::UV_HTTP_RETRIES, "0")
+        .arg("python").arg("-c").arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]
+
+    ----- stderr -----
+    Using CPython 3.13.[LATEST]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    project.child(".venv/custom-marker").touch()?;
+    uv_snapshot!(context.filters(), project_run("3.13").arg("--offline")
+        .arg("python").arg("-c").arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    project
+        .child(".venv/custom-marker")
+        .assert(predicate::path::exists());
     uv_snapshot!(context.filters(), find("3.13").env(EnvVars::UV_HTTP_RETRIES, "0"), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -467,6 +885,62 @@ async fn python_build_variant_catalog_selection() -> anyhow::Result<()> {
     ----- stdout -----
     [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .context("Missing request log")?
+            .is_empty()
+    );
+    uv_snapshot!(context.filters(), run().arg("--offline")
+        .arg("python").arg("-c").arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .context("Missing request log")?
+            .is_empty()
+    );
+    // A requested refresh still falls back to the cached catalog when the server is unavailable.
+    uv_snapshot!(context.filters(), run().arg("--refresh").env(EnvVars::UV_HTTP_RETRIES, "0")
+        .arg("python").arg("-c").arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]
+    ");
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .context("Missing request log")?
+            .len(),
+        1
+    );
+
+    // A missing cached candidate refreshes the catalog and retries installed-interpreter discovery.
+    server.reset().await;
+    for download in downloads.values_mut() {
+        download["default"] = serde_json::json!(download["build_variant"] == "pgo+lto");
+    }
+    mount_catalog(downloads, "max-age=86400").await;
+    fs_err::rename(&custom_path, &hidden_custom_path)?;
+    uv_snapshot!(context.filters(), find("3.13"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+pgo+lto-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    ");
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .context("Missing request log")?
+            .len(),
+        1
+    );
     Ok(())
 }
 
