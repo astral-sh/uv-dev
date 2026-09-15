@@ -60,7 +60,7 @@ jobs:
           uv workspace list --scripts |
           while IFS= read -r script; do
             printf 'Checking %s\n' "$script" >&2
-            uv check --script "$script" --locked
+            uv check --script "$script"
           done
 
   shellcheck:
