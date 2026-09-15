@@ -2,6 +2,7 @@
 //!
 //! The fly.dev proxy is an nginx reverse-proxy in front of PyPI that adds HTTP Basic Auth.
 //! This module replicates its behavior with wiremock so tests don't depend on an external service.
+//! Simple API package routes accept URLs with or without a trailing slash.
 //!
 //! ## Routes
 //!
@@ -528,10 +529,7 @@ pub async fn start() -> PypiProxy {
             if let Some((status, reason, kind, suffix)) = parse_status_path(path) {
                 match kind {
                     StatusRouteKind::Simple => {
-                        // `suffix` is `"{pkg}/"` (trailing slash from the URL);
-                        // strip it to get the package name.
-                        if let Some(pkg) = suffix.strip_suffix('/')
-                            && !pkg.contains('/')
+                        if let Some(pkg) = extract_package_name(suffix, "")
                             && let Some(entries) = db.get(pkg)
                         {
                             let file_prefix = format!(
@@ -603,12 +601,12 @@ fn status_route_prefix(status: &str, reason: Option<&str>) -> String {
     }
 }
 
-/// Extract the package name from a path like `/prefix/{package}/`.
+/// Extract the package name from `/prefix/{package}` or `/prefix/{package}/`.
 fn extract_package_name<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
     let rest = path.strip_prefix(prefix)?;
-    let pkg = rest.strip_suffix('/')?;
+    let pkg = rest.strip_suffix('/').unwrap_or(rest);
     // Only match single-segment names (no nested paths).
-    if pkg.contains('/') {
+    if pkg.is_empty() || pkg.contains('/') {
         return None;
     }
     Some(pkg)
@@ -647,4 +645,111 @@ fn simple_api_response(body: &serde_json::Value) -> wiremock::ResponseTemplate {
         .insert_header("Cache-Control", "max-age=600, public")
         .insert_header("ETag", etag)
         .set_body_raw(body_str, "application/vnd.pypi.simple.v1+json")
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    use reqwest::{Client, StatusCode};
+    use serde_json::{Value, json};
+
+    use super::start;
+
+    const SIMPLE_ROUTES: &[(&str, Option<&str>)] = &[
+        ("/simple", None),
+        ("/relative/simple", None),
+        ("/no-upload-time/simple", None),
+        ("/basic-auth/simple", Some("heron")),
+        ("/basic-auth/relative/simple", Some("heron")),
+        ("/basic-auth-heron/simple", Some("heron")),
+        ("/basic-auth-eagle/simple", Some("eagle")),
+        ("/status/quarantined/simple", None),
+        ("/status/quarantined/reason/test-reason/simple", None),
+    ];
+
+    #[tokio::test]
+    async fn simple_api_routes_accept_optional_trailing_slash() -> Result<()> {
+        let proxy = start().await;
+        let client = Client::builder().no_proxy().build()?;
+
+        for &(prefix, password) in SIMPLE_ROUTES {
+            let mut previous = None;
+            for trailing_slash in ["/", ""] {
+                let path = format!("{prefix}/iniconfig{trailing_slash}");
+                let mut request = client.get(format!("{}{path}", proxy.uri()));
+                if let Some(password) = password {
+                    request = request.basic_auth("public", Some(password));
+                }
+                let response = request.send().await?;
+                assert_eq!(response.status(), StatusCode::OK, "{path}");
+                let body: Value = response.json().await?;
+                assert_eq!(body["name"], "iniconfig", "{path}");
+                let expected_status = match prefix {
+                    "/status/quarantined/simple" => json!({"status": "quarantined"}),
+                    "/status/quarantined/reason/test-reason/simple" => {
+                        json!({"status": "quarantined", "reason": "test-reason"})
+                    }
+                    _ => Value::Null,
+                };
+                assert_eq!(body["project-status"], expected_status, "{path}");
+                if let Some(expected) = &previous {
+                    assert_eq!(&body, expected, "{path}");
+                } else {
+                    previous = Some(body);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn simple_api_routes_preserve_authentication() -> Result<()> {
+        let proxy = start().await;
+        let client = Client::builder().no_proxy().build()?;
+
+        for &(prefix, password) in SIMPLE_ROUTES {
+            if password.is_none() {
+                continue;
+            }
+            for trailing_slash in ["/", ""] {
+                let path = format!("{prefix}/iniconfig{trailing_slash}");
+                for password in [None, Some("wrong")] {
+                    let mut request = client.get(format!("{}{path}", proxy.uri()));
+                    if let Some(password) = password {
+                        request = request.basic_auth("public", Some(password));
+                    }
+                    let response = request.send().await?;
+                    assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+                    assert_eq!(
+                        response.headers()[reqwest::header::WWW_AUTHENTICATE],
+                        r#"Basic realm="authenticated""#,
+                        "{path}"
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn simple_api_routes_reject_invalid_package_paths() -> Result<()> {
+        let proxy = start().await;
+        let client = Client::builder().no_proxy().build()?;
+
+        for &(prefix, password) in SIMPLE_ROUTES {
+            for suffix in ["", "/", "//", "/iniconfig/child/", "/iniconfig//"] {
+                let path = format!("{prefix}{suffix}");
+                let mut request = client.get(format!("{}{path}", proxy.uri()));
+                if let Some(password) = password {
+                    request = request.basic_auth("public", Some(password));
+                }
+                let response = request.send().await?;
+                assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+            }
+        }
+
+        Ok(())
+    }
 }
