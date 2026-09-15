@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileWriteStr, PathChild, PathCreateDir};
 use async_zip::base::write::ZipFileWriter;
@@ -272,6 +272,14 @@ import iniconfig
           "path": "[CACHE_DIR]/environments-v2/script-[HASH]/[BIN]/[PYTHON]",
           "version": "3.12.[X]",
           "implementation": "cpython"
+        },
+        "packages": {
+          "installed+[CACHE_DIR]/environments-v2/script-[HASH]/[PYTHON-LIB]/site-packages/iniconfig-2.0.0.dist-info": {
+            "name": "iniconfig",
+            "version": "2.0.0",
+            "path": "[CACHE_DIR]/environments-v2/script-[HASH]/[PYTHON-LIB]/site-packages/iniconfig-2.0.0.dist-info",
+            "editable": false
+          }
         }
       },
       "script": {
@@ -447,6 +455,7 @@ fn workspace_metadata_script_includes_existing_environment() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         insta::assert_json_snapshot!(metadata["environment"], @r#"
         {
+          "packages": {},
           "python": {
             "implementation": "cpython",
             "path": "[CACHE_DIR]/environments-v2/script-[HASH]/[BIN]/[PYTHON]",
@@ -968,6 +977,136 @@ fn workspace_metadata_exact_sync_removes_extraneous_packages() -> Result<()> {
 }
 
 #[test]
+fn workspace_metadata_installed_packages_are_independent_of_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let locked = context
+        .temp_dir
+        .child("metadata_required-0.1.0-py3-none-any.whl");
+    write_wheel(
+        locked.path(),
+        "metadata-required",
+        "metadata_required-0.1.0",
+        &[("required_module.py", "")],
+    )?;
+    let locked_url = Url::from_file_path(locked.path())
+        .map_err(|()| anyhow::anyhow!("failed to convert wheel path to file URL"))?;
+
+    let installed = context
+        .temp_dir
+        .child("metadata_required-0.2.0-py3-none-any.whl");
+    write_wheel_with_metadata(
+        installed.path(),
+        "metadata-required",
+        "0.2.0",
+        "metadata_required-0.2.0",
+        "",
+        &[("required_module.py", "")],
+    )?;
+    let extraneous = context
+        .temp_dir
+        .child("metadata_extra-0.1.0-py3-none-any.whl");
+    write_wheel(
+        extraneous.path(),
+        "metadata-extra",
+        "metadata_extra-0.1.0",
+        &[("extra_module.py", "")],
+    )?;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "module-owner-root"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["metadata-required @ {locked_url}"]
+            "#
+        })?;
+    context.lock().assert().success();
+    context
+        .pip_install()
+        .arg(installed.path())
+        .arg(extraneous.path())
+        .assert()
+        .success();
+
+    let before = context
+        .pip_list()
+        .arg("--format")
+        .arg("json")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let assert = context
+        .workspace_metadata()
+        .arg("--frozen")
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    let packages = metadata["environment"]["packages"]
+        .as_object()
+        .context("missing installed package inventory")?;
+    for (id, package) in packages {
+        let path = package["path"]
+            .as_str()
+            .context("missing installed metadata path")?;
+        assert_eq!(id, &format!("installed+{path}"));
+        assert!(Path::new(path).is_dir());
+    }
+    let after = context
+        .pip_list()
+        .arg("--format")
+        .arg("json")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let locked_versions = metadata["resolution"]
+        .as_object()
+        .context("missing resolution")?
+        .values()
+        .filter(|package| package["name"] == "metadata-required")
+        .map(|package| &package["version"])
+        .collect::<Vec<_>>();
+
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(serde_json::json!({
+            "installed_packages": packages,
+            "inspection_changed_environment": before != after,
+            "locked_versions": locked_versions,
+        }), @r#"
+        {
+          "inspection_changed_environment": false,
+          "installed_packages": {
+            "installed+[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info": {
+              "editable": false,
+              "name": "metadata-extra",
+              "path": "[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info",
+              "version": "0.1.0"
+            },
+            "installed+[SITE_PACKAGES]/metadata_required-0.2.0.dist-info": {
+              "editable": false,
+              "name": "metadata-required",
+              "path": "[SITE_PACKAGES]/metadata_required-0.2.0.dist-info",
+              "version": "0.2.0"
+            }
+          },
+          "locked_versions": [
+            "0.1.0"
+          ]
+        }
+        "#);
+    });
+
+    Ok(())
+}
+
+#[test]
 fn workspace_metadata_includes_existing_environment() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_python_names()
@@ -1037,6 +1176,14 @@ dependencies = [
         }), @r#"
         {
           "environment": {
+            "packages": {
+              "installed+[SITE_PACKAGES]/installed_owner-0.1.0.dist-info": {
+                "editable": false,
+                "name": "installed-owner",
+                "path": "[SITE_PACKAGES]/installed_owner-0.1.0.dist-info",
+                "version": "0.1.0"
+              }
+            },
             "python": {
               "implementation": "cpython",
               "path": "[VENV]/[BIN]/[PYTHON]",
@@ -1127,6 +1274,26 @@ dependencies = [
           "path": "[VENV]/[BIN]/[PYTHON]",
           "version": "3.12.[X]",
           "implementation": "cpython"
+        },
+        "packages": {
+          "installed+[SITE_PACKAGES]/gpu_a-0.1.0.dist-info": {
+            "name": "gpu-a",
+            "version": "0.1.0",
+            "path": "[SITE_PACKAGES]/gpu_a-0.1.0.dist-info",
+            "editable": false
+          },
+          "installed+[SITE_PACKAGES]/gpu_b-0.1.0.dist-info": {
+            "name": "gpu-b",
+            "version": "0.1.0",
+            "path": "[SITE_PACKAGES]/gpu_b-0.1.0.dist-info",
+            "editable": false
+          },
+          "installed+[SITE_PACKAGES]/typing_extensions-0.1.0.dist-info": {
+            "name": "typing-extensions",
+            "version": "0.1.0",
+            "path": "[SITE_PACKAGES]/typing_extensions-0.1.0.dist-info",
+            "editable": false
+          }
         }
       },
       "workspace": {
