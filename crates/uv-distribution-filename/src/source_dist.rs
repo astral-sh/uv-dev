@@ -37,20 +37,7 @@ impl SourceDistFilename {
         extension: SourceDistExtension,
         package_name: &PackageName,
     ) -> Result<Self, SourceDistFilenameError> {
-        // Drop the extension (e.g., given `tar.gz`, drop `.tar.gz`).
-        if filename.len() <= extension.name().len() + 1 {
-            return Err(SourceDistFilenameError {
-                filename: filename.to_string(),
-                kind: SourceDistFilenameErrorKind::Extension,
-            });
-        }
-
-        let Some(stem) = filename.get(..filename.len() - (extension.name().len() + 1)) else {
-            return Err(SourceDistFilenameError {
-                filename: filename.to_string(),
-                kind: SourceDistFilenameErrorKind::Extension,
-            });
-        };
+        let stem = strip_extension(filename, extension)?;
 
         let package_name_len = package_name.as_ref().len();
         if stem.len() <= package_name_len + "-".len() {
@@ -104,15 +91,7 @@ impl SourceDistFilename {
             });
         };
 
-        // Drop the extension (e.g., given `tar.gz`, drop `.tar.gz`).
-        if filename.len() <= extension.name().len() + 1 {
-            return Err(SourceDistFilenameError {
-                filename: filename.to_string(),
-                kind: SourceDistFilenameErrorKind::Extension,
-            });
-        }
-
-        let stem = &filename[..(filename.len() - (extension.name().len() + 1))];
+        let stem = strip_extension(filename, extension)?;
 
         let Some((package_name, version)) = stem.rsplit_once('-') else {
             return Err(SourceDistFilenameError {
@@ -138,6 +117,24 @@ impl SourceDistFilename {
             extension,
         })
     }
+}
+
+/// Return the nonempty filename stem using the supplied extension's length.
+fn strip_extension(
+    filename: &str,
+    extension: SourceDistExtension,
+) -> Result<&str, SourceDistFilenameError> {
+    // Drop the extension (e.g., given `tar.gz`, drop `.tar.gz`).
+    let extension_len = extension.name().len() + 1;
+    let stem = if filename.len() > extension_len {
+        filename.get(..filename.len() - extension_len)
+    } else {
+        None
+    };
+    stem.ok_or_else(|| SourceDistFilenameError {
+        filename: filename.to_string(),
+        kind: SourceDistFilenameErrorKind::Extension,
+    })
 }
 
 impl Display for SourceDistFilename {
