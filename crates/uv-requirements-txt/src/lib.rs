@@ -396,6 +396,20 @@ impl RequirementsTxt {
                                         end,
                                     })?,
                             )
+                        } else if requirements_txt.starts_with("http://")
+                            || requirements_txt.starts_with("https://")
+                        {
+                            PathBuf::from(
+                                Url::parse(&requirements_txt.display().to_string())
+                                    .and_then(|url| url.join(filename.as_ref()))
+                                    .map_err(|err| RequirementsTxtParserError::Url {
+                                        source: DisplaySafeUrlError::Url(err).into(),
+                                        url: filename.to_string(),
+                                        start,
+                                        end,
+                                    })?
+                                    .as_str(),
+                            )
                         } else {
                             requirements_dir.join(filename.as_ref())
                         };
@@ -470,6 +484,20 @@ impl RequirementsTxt {
                                         start,
                                         end,
                                     })?,
+                            )
+                        } else if requirements_txt.starts_with("http://")
+                            || requirements_txt.starts_with("https://")
+                        {
+                            PathBuf::from(
+                                Url::parse(&requirements_txt.display().to_string())
+                                    .and_then(|url| url.join(filename.as_ref()))
+                                    .map_err(|err| RequirementsTxtParserError::Url {
+                                        source: DisplaySafeUrlError::Url(err).into(),
+                                        url: filename.to_string(),
+                                        start,
+                                        end,
+                                    })?
+                                    .as_str(),
                             )
                         } else {
                             requirements_dir.join(filename.as_ref())
