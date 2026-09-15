@@ -316,7 +316,6 @@ pub fn uninstall_egg(egg_info: &Path, distribution: impl Display) -> Result<Unin
                 Ok(()) => {
                     trace!("Removed file: {}", path.display());
                     file_count += 1;
-                    break;
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
                 Err(err) => return Err(err.into()),
@@ -460,6 +459,122 @@ mod tests {
 
     use crate::Layout;
     use crate::uninstall::{is_valid_top_level_entry, uninstall_egg, uninstall_wheel};
+
+    #[test]
+    fn test_uninstall_egg_info_adjacent_module_files() {
+        let extensions = ["py", "pyc", "pyo"];
+        for mask in 0..8 {
+            let venv = assert_fs::TempDir::new().unwrap();
+            let site_packages = venv.child("lib/python3.12/site-packages");
+            let egg_info = site_packages.child("adjacent_bytecode-0.1.0.egg-info");
+            egg_info.create_dir_all().unwrap();
+            egg_info
+                .child("top_level.txt")
+                .write_str("legacy_module\nshared_module\n")
+                .unwrap();
+            egg_info
+                .child("namespace_packages.txt")
+                .write_str("shared_module\n")
+                .unwrap();
+
+            let mut expected_files = 0;
+            for (index, extension) in extensions.iter().enumerate() {
+                if mask & (1 << index) != 0 {
+                    site_packages
+                        .child(format!("legacy_module.{extension}"))
+                        .write_str("inert fixture")
+                        .unwrap();
+                    expected_files += 1;
+                }
+                site_packages
+                    .child(format!("shared_module.{extension}"))
+                    .write_str("namespace sentinel")
+                    .unwrap();
+            }
+
+            let removed = uninstall_egg(egg_info.path(), "adjacent-bytecode 0.1.0").unwrap();
+            assert_eq!(removed.file_count, expected_files, "mask: {mask}");
+            assert_eq!(removed.dir_count, 1, "mask: {mask}");
+            assert!(!egg_info.exists());
+            for extension in extensions {
+                assert!(
+                    !site_packages
+                        .child(format!("legacy_module.{extension}"))
+                        .exists(),
+                    "mask: {mask}"
+                );
+                assert!(
+                    site_packages
+                        .child(format!("shared_module.{extension}"))
+                        .exists(),
+                    "mask: {mask}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_uninstall_egg_info_directory_precedence() {
+        let venv = assert_fs::TempDir::new().unwrap();
+        let site_packages = venv.child("lib/python3.12/site-packages");
+        let egg_info = site_packages.child("adjacent_bytecode-0.1.0.egg-info");
+        egg_info.create_dir_all().unwrap();
+        egg_info
+            .child("top_level.txt")
+            .write_str("legacy_module\n")
+            .unwrap();
+        let package = site_packages.child("legacy_module");
+        package
+            .child("__init__.py")
+            .write_str("inert fixture")
+            .unwrap();
+        for extension in ["py", "pyc", "pyo"] {
+            site_packages
+                .child(format!("legacy_module.{extension}"))
+                .write_str("adjacent sentinel")
+                .unwrap();
+        }
+
+        let removed = uninstall_egg(egg_info.path(), "adjacent-bytecode 0.1.0").unwrap();
+        assert_eq!(removed.file_count, 0);
+        assert_eq!(removed.dir_count, 2);
+        assert!(!package.exists());
+        assert!(!egg_info.exists());
+        for extension in ["py", "pyc", "pyo"] {
+            assert!(
+                site_packages
+                    .child(format!("legacy_module.{extension}"))
+                    .exists()
+            );
+        }
+    }
+
+    #[test]
+    fn test_uninstall_egg_info_adjacent_module_error() {
+        let venv = assert_fs::TempDir::new().unwrap();
+        let site_packages = venv.child("lib/python3.12/site-packages");
+        let egg_info = site_packages.child("adjacent_bytecode-0.1.0.egg-info");
+        egg_info.create_dir_all().unwrap();
+        egg_info
+            .child("top_level.txt")
+            .write_str("legacy_module\n")
+            .unwrap();
+        let source = site_packages.child("legacy_module.py");
+        source.write_str("inert fixture").unwrap();
+        let invalid_bytecode = site_packages.child("legacy_module.pyc");
+        invalid_bytecode.create_dir_all().unwrap();
+        let later_bytecode = site_packages.child("legacy_module.pyo");
+        later_bytecode.write_str("later sentinel").unwrap();
+
+        assert!(matches!(
+            uninstall_egg(egg_info.path(), "adjacent-bytecode 0.1.0"),
+            Err(crate::Error::Io(_))
+        ));
+        assert!(!source.exists());
+        assert!(invalid_bytecode.exists());
+        assert!(later_bytecode.exists());
+        assert!(egg_info.exists());
+    }
 
     #[test]
     fn test_top_level_entry_safe_name() {
