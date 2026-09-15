@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On x86_64 Linux, installed uv 0.12.14 with Python 3.11.16 in python:3.11-slim-bookworm reproduced the issue. `/usr/local/man` was a symlink to `share/man`; `uv pip install --system clevercsv==0.8.4` exited 2 with `The wheel is invalid: Cannot install into symlinked directory: /usr/local/man`. In the identical image, uv 0.12.13 installed the package successfully. Existing tests in `crates/uv/tests/pip_install/pip_install.rs` cover symlinks targeting external directories, but not an in-prefix scheme symlink like this one."
+}

@@ -6,11 +6,53 @@ Classification: bug
 
 ## Summary
 
-uv 0.12.14 rejects installation of a wheel whose `.data/data` contents map to an existing symlinked directory in the target installation scheme. The supplied reproduction installs `clevercsv==0.8.4` with `uv pip install --system` in Debian-based official Python images, where `/usr/local/man` is a relative symlink to `share/man`; uv fails with `The wheel is invalid: Cannot install into symlinked directory: /usr/local/man`. The reporter's version comparison says the same install succeeds through uv 0.12.13.
+The reported regression is reproducible. On x86_64 Linux, uv 0.12.14 fails to install `clevercsv==0.8.4` into the current official `python:3.11-slim-bookworm` image because the wheel's `.data/data` tree contains `man`, while the image has `/usr/local/man -> share/man`. The same installation succeeds with uv 0.12.13 in the identical Python image. This independently confirms the report outside its macOS/arm64 host and shows that the behavior is not specific to the reporter's architecture or uv's musl build.
 
-Repository evidence confirms the new failure path. astral-sh/uv#21569 added `ValidatedWheelDestination` and the exact error, including validation of a wheel's `.data/data` subtree against the installation scheme's data root. It merged after the 0.12.13 release and is present in 0.12.14. The validation rejects any existing destination directory symlink encountered for a wheel directory, without resolving the link and checking whether it remains inside the trusted installation prefix. The 0.12.14 release notes do not list astral-sh/uv#21569.
+Repository evidence is consistent with the observed version boundary. astral-sh/uv#21569 added `ValidatedWheelDestination` and the exact error, including validation of a wheel's `.data/data` subtree against the installation scheme's data root. It merged after the 0.12.13 release and is present in 0.12.14. The validation rejects any existing destination directory symlink encountered for a wheel directory, without resolving the link and checking whether it remains inside the trusted installation prefix. The 0.12.14 release notes do not list astral-sh/uv#21569.
 
 No existing issue or pull request was found that already tracks this specific 0.12.14 regression or fixes it.
+
+## Reproduction
+
+Outcome: **reproducible**.
+
+The installed uv executable on `PATH` was mounted read-only into a fresh container and given a container-local cache:
+
+```console
+$ uv --version
+uv 0.12.14 (x86_64-unknown-linux-gnu)
+$ docker run --rm \
+    --volume /opt/hostedtoolcache/uv/0.12.14/x86_64/uv:/tmp/uv:ro \
+    python:3.11-slim-bookworm \
+    sh -c 'python --version && uname -m && ls -ld /usr/local/man /usr/local/share/man && /tmp/uv --version && UV_CACHE_DIR=/tmp/uv-cache /tmp/uv pip install --system clevercsv==0.8.4'
+Python 3.11.16
+x86_64
+lrwxrwxrwx 1 root root    9 Aug 24 00:00 /usr/local/man -> share/man
+drwxr-xr-x 1 root root 4096 Sep  1 00:16 /usr/local/share/man
+uv 0.12.14 (x86_64-unknown-linux-gnu)
+Using Python 3.11.16 environment at: /usr/local
+Resolved 4 packages in [TIME]
+Prepared 3 packages in [TIME]
+error: Failed to install: clevercsv-0.8.4-cp311-cp311-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (clevercsv==0.8.4)
+  cause: The wheel is invalid: Cannot install into symlinked directory: /usr/local/man
+```
+
+The image digest used was `python:3.11-slim-bookworm@sha256:528257d48c1da0dcecc2e725d1ae34498d60c965f1241e39cd6a85a8859bdf84`. The command exited with status 2.
+
+For the control, the uv 0.12.13 binary was extracted into a temporary directory from `ghcr.io/astral-sh/uv:0.12.13@sha256:b485bd65cc2cf1c9a93b3554012c9c3778cf7b1b5fd3d3096ce9e1226c97e1e6` and mounted into the same Python image. With the same Python version, architecture, symlink, package version, and command, it exited successfully:
+
+```console
+uv 0.12.13 (x86_64-unknown-linux-musl)
+Using Python 3.11.16 environment at: /usr/local
+Resolved 4 packages in [TIME]
+Prepared 3 packages in [TIME]
+Installed 3 packages in [TIME]
+ + chardet==7.6.0
+ + clevercsv==0.8.4
+ + regex==2026.9.10
+```
+
+Existing integration coverage in `crates/uv/tests/pip_install/pip_install.rs` includes `reject_symlinked_wheel_package_directory`, `reject_symlinked_wheel_nested_package_directory`, `reject_symlinked_wheel_data_package_directory`, and `reject_symlinked_wheel_headers_destination`. Those tests construct destination symlinks to external temporary directories and verify that uv rejects the installation before writing through them. They do not cover a scheme directory such as `/usr/local/man -> share/man` whose resolved target remains inside the same installation prefix.
 
 ## Draft response
 
@@ -20,7 +62,7 @@ The next step is to add coverage for an existing scheme-directory symlink whose 
 
 ## Classification
 
-This is a **bug**, not a duplicate. The current source establishes that uv 0.12.14 unconditionally rejects a pre-existing directory symlink encountered beneath a wheel destination. In the reported standard system layout, that turns a valid wheel installation into a failure even though `/usr/local/man` resolves within `/usr/local`. The user-facing `The wheel is invalid` cause is also misleading because the rejection is determined by the destination layout, not malformed wheel contents.
+This is a **bug**, not a duplicate. The version-controlled reproduction establishes a regression in uv 0.12.14 on a standard official Python image. The current source shows that uv unconditionally rejects a pre-existing directory symlink encountered beneath a wheel destination. Here `/usr/local/man` resolves to `/usr/local/share/man`, still within `/usr/local`, and uv 0.12.13 installs the same wheel successfully. The user-facing `The wheel is invalid` cause is also misleading because the rejection is determined by the destination layout, not malformed wheel contents.
 
 astral-sh/uv#21569 is the causative historical change, but it does not track this regression and therefore is not a canonical duplicate. No open issue or pull request already tracks the same regression.
 
