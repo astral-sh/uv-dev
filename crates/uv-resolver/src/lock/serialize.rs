@@ -5,7 +5,7 @@ use rustc_hash::FxHashMap;
 use serde::Serialize;
 use toml_edit::Value;
 use toml_writer::{TomlWrite, WriteTomlValue};
-use uv_distribution_types::{RequiresPython, SimplifiedMarkerTree};
+use uv_distribution_types::{IndexFormat, RequiresPython, SimplifiedMarkerTree};
 use uv_fs::PortablePath;
 use uv_normalize::PackageName;
 use uv_pep508::MarkerTree;
@@ -139,7 +139,8 @@ fn write_options(writer: &mut LockWriter, options: &ResolverOptions) -> Result<(
         || options.prerelease.global != PrereleaseMode::default()
         || !options.prerelease.package.is_empty()
         || options.fork_strategy != ForkStrategy::default()
-        || !options.exclude_newer.is_empty();
+        || !options.exclude_newer.is_empty()
+        || !options.indexes.is_empty();
     if !has_options {
         return Ok(());
     }
@@ -174,6 +175,40 @@ fn write_options(writer: &mut LockWriter, options: &ResolverOptions) -> Result<(
         for (name, mode) in packages {
             writer.key_value(name.as_ref(), mode.to_string())?;
         }
+    }
+
+    if !options.indexes.is_empty() {
+        writer.key_start("indexes")?;
+        writer.array(&options.indexes, |writer, index| {
+            let mut first = true;
+            writer.start_inline_table();
+            match &index.url {
+                RegistrySource::Url(url) => {
+                    writer.inline_value(&mut first, "url", url.as_ref())?;
+                }
+                RegistrySource::Path(path) => {
+                    writer.inline_value(&mut first, "url", PortablePath::from(path).to_string())?;
+                }
+            }
+            if index.explicit {
+                writer.inline_value(&mut first, "explicit", true)?;
+            }
+            if index.default {
+                writer.inline_value(&mut first, "default", true)?;
+            }
+            if index.format == IndexFormat::Flat {
+                writer.inline_value(&mut first, "format", "flat")?;
+            }
+            if let Some(ignore_error_codes) = &index.ignore_error_codes {
+                writer.inline_key_start(&mut first, "ignore-error-codes")?;
+                writer.array(ignore_error_codes, |writer, status| {
+                    writer.value(status.as_u16())
+                })?;
+            }
+            writer.finish_inline_table(first);
+            Ok(())
+        })?;
+        writer.raw("\n");
     }
 
     if !exclude_newer.package.is_empty() {
