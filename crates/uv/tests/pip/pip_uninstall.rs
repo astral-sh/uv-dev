@@ -561,6 +561,46 @@ fn uninstall_record_path_traversal() -> Result<()> {
     Ok(())
 }
 
+/// A malformed RECORD directory entry must not recursively remove unrelated files.
+#[test]
+fn uninstall_record_directory_preserves_unrelated_files() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .init()
+        .arg("--lib")
+        .arg("evilpkg")
+        .assert()
+        .success();
+    context.pip_install().arg("./evilpkg").assert().success();
+
+    fs_err::create_dir_all(context.site_packages().join("unrelated"))?;
+    let unrelated = context.site_packages().join("unrelated/keep.py");
+    fs_err::write(&unrelated, "keep = True\n")?;
+
+    let record_file = context
+        .site_packages()
+        .join("evilpkg-0.1.0.dist-info/RECORD");
+    let record = fs_err::read_to_string(&record_file)?;
+    fs_err::write(&record_file, format!("{}\nunrelated,,0\n", record.trim()))?;
+
+    let init_py = context.site_packages().join("evilpkg/__init__.py");
+    uv_snapshot!(context.filters(), context.pip_uninstall().arg("evilpkg"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+     - evilpkg==0.1.0 (from file://[TEMP_DIR]/evilpkg)
+    ");
+
+    assert!(unrelated.exists());
+    assert!(!init_py.exists());
+
+    Ok(())
+}
+
 /// Egg `top_level.txt` entries must be top-level names, not paths.
 #[test]
 fn uninstall_egg_info_top_level_path_traversal() -> Result<()> {
