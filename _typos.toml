@@ -5,6 +5,8 @@ extend-exclude = [
     "test/ecosystem/**",
     "test/requirements/**/*.in",
     "crates/uv-build-frontend/src/pipreqs/mapping",
+    # Preserve cached distribution manifests without formatting.
+    "rust-toolchains/*.toml",
 ]
 ignore-hidden = false
 
