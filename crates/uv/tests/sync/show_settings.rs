@@ -3807,6 +3807,7 @@ fn preview_features() {
     +            ContentAddressedCache,
     +            MissingExcludeNewerPackageLock,
     +            BatchExport,
+    +            RemotePythonDownloadMetadata,
     +        ],
          },
          python_preference: Managed,
