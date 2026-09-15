@@ -50,6 +50,7 @@ use uv_normalize::{ExtraName, PackageName, PipGroupName};
 use uv_pypi_types::PyProjectToml;
 use uv_redacted::DisplaySafeUrl;
 use uv_requirements_txt::{RequirementsTxt, RequirementsTxtRequirement, SourceCache};
+use uv_resolver::PylockToml;
 use uv_scripts::{OverrideDependency, Pep723Metadata};
 use uv_warnings::warn_user;
 
@@ -415,20 +416,6 @@ impl RequirementsSpecification {
         let mut spec = Self::default();
         let mut cache = SourceCache::default();
 
-        // Disallow `pylock.toml` files as constraints.
-        if let Some(pylock_toml) = constraints.iter().find_map(|source| {
-            if let RequirementsSource::PylockToml(path) = source {
-                Some(path)
-            } else {
-                None
-            }
-        }) {
-            return Err(anyhow::anyhow!(
-                "Cannot use `{}` as a constraint file",
-                pylock_toml.user_display()
-            ));
-        }
-
         // Disallow `pylock.toml` files as overrides.
         if let Some(pylock_toml) = overrides.iter().find_map(|source| {
             if let RequirementsSource::PylockToml(path) = source {
@@ -597,6 +584,19 @@ impl RequirementsSpecification {
         // Read all constraints, treating both requirements _and_ constraints as constraints.
         // Overrides are ignored.
         for source in constraints {
+            // A `pylock.toml` file can be used as a constraint by extracting the pinned version
+            // (and marker) from each package as a `name == version` constraint.
+            if let RequirementsSource::PylockToml(path) = source {
+                let pylock = read_pylock_toml(path, client_builder, &mut cache).await?;
+                spec.constraints.extend(
+                    pylock
+                        .to_constraints()
+                        .into_iter()
+                        .map(NameRequirementSpecification::from),
+                );
+                continue;
+            }
+
             let source = Self::from_source_with_cache(source, client_builder, &mut cache).await?;
             for entry in source.requirements {
                 match entry.requirement {
@@ -733,6 +733,28 @@ pub struct GroupsSpecification {
     pub root: PathBuf,
     /// The enabled groups.
     pub groups: Vec<PipGroupName>,
+}
+
+/// Read and parse a `pylock.toml` file, fetching over HTTP(S) if necessary.
+async fn read_pylock_toml(
+    path: &Path,
+    client_builder: &BaseClientBuilder<'_>,
+    cache: &mut SourceCache,
+) -> Result<PylockToml> {
+    if !(path.starts_with("http://") || path.starts_with("https://") || path.exists()) {
+        return Err(anyhow::anyhow!("File not found: `{}`", path.user_display()));
+    }
+
+    let content = if let Some(content) = cache.get(path) {
+        content.clone()
+    } else {
+        let content = read_file(path, client_builder).await?;
+        cache.insert(path.to_path_buf(), content.clone());
+        content
+    };
+
+    toml::from_str::<PylockToml>(&content)
+        .with_context(|| format!("Not a valid `pylock.toml` file: `{}`", path.user_display()))
 }
 
 /// Read the contents of a path, fetching over HTTP(S) if necessary.

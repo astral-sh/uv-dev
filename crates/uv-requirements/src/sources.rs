@@ -132,16 +132,13 @@ impl RequirementsSource {
             .and_then(OsStr::to_str)
             .is_some_and(is_pylock_toml)
         {
-            return Err(anyhow::anyhow!(
-                "The file `{}` appears to be a `pylock.toml` file, but constraints must be specified in `requirements.txt` format",
-                path.user_display(),
-            ));
+            return Ok(Self::PylockToml(path));
         } else if path
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("toml"))
         {
             return Err(anyhow::anyhow!(
-                "The file `{}` appears to be a TOML file, but constraints must be specified in `requirements.txt` format",
+                "The file `{}` appears to be a TOML file, but constraints must be specified in `requirements.txt` format or as a `pylock.toml` file",
                 path.user_display(),
             ));
         }
