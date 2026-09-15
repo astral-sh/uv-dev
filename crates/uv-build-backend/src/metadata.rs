@@ -1254,6 +1254,7 @@ mod tests {
     use super::*;
     use indoc::{formatdoc, indoc};
     use insta::assert_snapshot;
+    use std::assert_matches;
     use std::iter;
     use tempfile::TempDir;
 
@@ -1448,6 +1449,87 @@ mod tests {
     }
 
     #[test]
+    fn import_entry_whitespace() {
+        for field in ["project.import-names", "project.import-namespaces"] {
+            for (value, base, is_private) in [
+                ("spam", "spam", false),
+                ("spam.eggs", "spam.eggs", false),
+                ("spam;private", "spam", true),
+                ("spam ; private", "spam", true),
+                ("spam\t; \tprivate \t", "spam", true),
+                ("spam.eggs \t; private \t", "spam.eggs", true),
+            ] {
+                let entry = parse_import_entry(value, field).unwrap();
+                assert_eq!(entry.base, base, "{field}: {value:?}");
+                assert_eq!(entry.is_private, is_private, "{field}: {value:?}");
+                let formatted = if is_private {
+                    format!("{base}; private")
+                } else {
+                    base.to_string()
+                };
+                assert_eq!(entry.to_string(), formatted, "{field}: {value:?}");
+            }
+
+            for (value, name) in [
+                (" spam", " spam"),
+                ("spam ", "spam "),
+                ("spam\t", "spam\t"),
+                (" spam ; private", " spam"),
+                ("spam. eggs ; private", "spam. eggs"),
+            ] {
+                let err = parse_import_entry(value, field).unwrap_err();
+                assert_eq!(
+                    err.to_string(),
+                    format!("`{field}` entry `{name}` has an invalid import name")
+                );
+                assert_matches!(
+                    err,
+                    ValidationError::InvalidImportName {
+                        field: actual_field,
+                        value: actual_value,
+                        ..
+                    } if actual_field == field && actual_value == name
+                );
+            }
+
+            assert_matches!(
+                parse_import_entry(" \t; private", field),
+                Err(ValidationError::EmptyImportName { field: actual_field })
+                    if actual_field == field
+            );
+        }
+    }
+
+    #[test]
+    fn import_entry_invalid_suffix() {
+        for field in ["project.import-names", "project.import-namespaces"] {
+            for (value, suffix) in [
+                ("spam;", ""),
+                ("spam; \t", ""),
+                ("spam; public", "public"),
+                ("spam; PRIVATE", "PRIVATE"),
+                ("spam; private; private", "private; private"),
+            ] {
+                let err = parse_import_entry(value, field).unwrap_err();
+                assert_eq!(
+                    err.to_string(),
+                    format!(
+                        "`{field}` entry `{value}` must end with `; private` or nothing, found `{suffix}`"
+                    )
+                );
+                assert_matches!(
+                    err,
+                    ValidationError::InvalidImportSuffix {
+                        field: actual_field,
+                        value: actual_value,
+                        suffix: actual_suffix,
+                    } if actual_field == field && actual_value == value && actual_suffix == suffix
+                );
+            }
+        }
+    }
+
+    #[test]
     fn import_names_empty_list() {
         let temp_dir = TempDir::new().unwrap();
         let contents = extend_project(indoc! {r"
@@ -1531,6 +1613,50 @@ mod tests {
         Invalid project metadata
           Caused by: `project.import-names` and `project.import-namespaces` must not both contain `spam`
         ");
+    }
+
+    #[test]
+    fn import_names_exact_overlap() {
+        let temp_dir = TempDir::new().unwrap();
+        for (first, second, name) in [
+            ("spam", "spam", "spam"),
+            ("spam \t; private", "spam", "spam"),
+            ("spam;private", "spam ; private", "spam"),
+            ("spam.eggs ; private", "spam.eggs", "spam.eggs"),
+        ] {
+            for (import_name, import_namespace) in [(first, second), (second, first)] {
+                let contents = extend_project(&format!(
+                    "import-names = [{import_name:?}]\nimport-namespaces = [{import_namespace:?}]"
+                ));
+                let pyproject_toml: PyProjectToml = toml::from_str(&contents).unwrap();
+                let err = pyproject_toml.to_metadata(temp_dir.path()).unwrap_err();
+                assert_matches!(
+                    err,
+                    Error::Validation(ValidationError::DuplicateImportAcross { name: actual_name })
+                        if actual_name == name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn import_names_nested_overlap() {
+        let temp_dir = TempDir::new().unwrap();
+        for (first, second) in [
+            ("spam", "spam.eggs"),
+            ("spam; private", "spam.eggs; private"),
+            ("spam.eggs", "spam.eggs.ham"),
+        ] {
+            for (import_name, import_namespace) in [(first, second), (second, first)] {
+                let contents = extend_project(&format!(
+                    "import-names = [{import_name:?}]\nimport-namespaces = [{import_namespace:?}]"
+                ));
+                let pyproject_toml: PyProjectToml = toml::from_str(&contents).unwrap();
+                let metadata = pyproject_toml.to_metadata(temp_dir.path()).unwrap();
+                assert_eq!(metadata.import_names, [import_name]);
+                assert_eq!(metadata.import_namespaces, [import_namespace]);
+            }
+        }
     }
 
     #[test]
