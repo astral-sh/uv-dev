@@ -1674,24 +1674,39 @@ impl Edges {
     fn map(&self, parent: NodeId, mut f: impl FnMut(NodeId) -> NodeId) -> Self {
         match self {
             Self::Version { edges: map } => Self::Version {
-                edges: map
-                    .iter()
-                    .cloned()
-                    .map(|(range, node)| (range, f(node.negate(parent))))
-                    .collect(),
+                edges: Self::map_ranges(map, parent, f),
             },
             Self::String { edges: map } => Self::String {
-                edges: map
-                    .iter()
-                    .cloned()
-                    .map(|(range, node)| (range, f(node.negate(parent))))
-                    .collect(),
+                edges: Self::map_ranges(map, parent, f),
             },
             Self::Boolean { high, low } => Self::Boolean {
                 low: f(low.negate(parent)),
                 high: f(high.negate(parent)),
             },
         }
+    }
+
+    fn map_ranges<T>(
+        edges: &SmallVec<(Ranges<T>, NodeId)>,
+        parent: NodeId,
+        mut f: impl FnMut(NodeId) -> NodeId,
+    ) -> SmallVec<(Ranges<T>, NodeId)>
+    where
+        T: Clone + Ord,
+    {
+        let mut mapped = SmallVec::new();
+        for (range, node) in edges {
+            let node = f(node.negate(parent));
+            match mapped.last_mut() {
+                Some((previous_range, previous))
+                    if *previous == node && can_conjoin(previous_range, range) =>
+                {
+                    *previous_range = previous_range.union(range);
+                }
+                _ => mapped.push((range.clone(), node)),
+            }
+        }
+        mapped
     }
 
     // Returns an iterator over all direct children of this node.
