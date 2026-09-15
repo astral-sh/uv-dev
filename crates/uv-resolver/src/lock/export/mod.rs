@@ -16,11 +16,11 @@ use uv_pep508::MarkerTree;
 use uv_pypi_types::ConflictItem;
 
 use crate::graph_ops::Reachable;
-pub use crate::lock::export::metadata::{Metadata, PythonReport};
 pub(crate) use crate::lock::export::metadata::{
-    MetadataNode, MetadataNodeId, MetadataNodeKind, MetadataScript, MetadataWorkspace,
-    MetadataWorkspaceMember,
+    MarkerTreeFormatter, MetadataNode, MetadataNodeId, MetadataNodeKind, MetadataScript,
+    MetadataWorkspace, MetadataWorkspaceMember,
 };
+pub use crate::lock::export::metadata::{Metadata, PythonReport};
 pub(crate) use crate::lock::export::pylock_toml::PylockTomlPackage;
 pub use crate::lock::export::pylock_toml::{PylockToml, PylockTomlError, PylockTomlErrorKind};
 pub use crate::lock::export::requirements_txt::RequirementsTxtExport;
