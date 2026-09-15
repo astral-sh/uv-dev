@@ -1007,7 +1007,9 @@ impl<'a> TildeVersionSpecifier<'a> {
 
     /// Create a new [`TildeVersionSpecifier`] from a [`VersionSpecifier`] reference.
     ///
-    /// See [`TildeVersionSpecifier::from_specifier`].
+    /// Returns [`None`] unless the specifier uses [`Operator::TildeEqual`], has exactly two or three
+    /// release components, and has no pre-release (including development), post-release, or local
+    /// component.
     pub fn from_specifier_ref(specifier: &'a VersionSpecifier) -> Option<Self> {
         TildeVersionSpecifier::new(Cow::Borrowed(specifier))
     }
