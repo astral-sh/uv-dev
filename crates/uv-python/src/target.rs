@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use uv_fs::{CWD, normalize_path};
 use uv_pypi_types::Scheme;
 
 /// A `--target` directory into which packages can be installed, separate from a virtual environment
@@ -38,6 +39,10 @@ impl Target {
 
 impl From<PathBuf> for Target {
     fn from(path: PathBuf) -> Self {
-        Self(path)
+        if normalize_path(&path).as_os_str().is_empty() {
+            Self(CWD.to_path_buf())
+        } else {
+            Self(path)
+        }
     }
 }
