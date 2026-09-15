@@ -1,0 +1,10 @@
+{
+  "related": {
+    "items": [],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for the exact identifiers “CSOAI,” “csoai-gspc-mcp,” “gspc-harness,” and “AI governance,” plus conceptual terms covering MCP, Model Context Protocol, AI agents, dependency governance, package policy, allow/deny controls, supply-chain security, SBOM, and Python package management. No uv command, version, platform, error, trigger, expected result, or actual result was provided for symptom- or fix-specific searching. Exact searches found only astral-sh/uv#21690 and no pull requests. astral-sh/uv#12500 was ruled out because it requests uv-native MCP tools; astral-sh/uv#12457 concerns dedicated CI compatibility testing for an MCP package; and astral-sh/uv#18717 concerns package-install denylist policy. None matches a concrete request in this report."
+  },
+  "type": "question",
+  "type_reason": "The report names an external MCP package and AI-governance harness but does not allege incorrect uv behavior or request a specific capability. Clarification is required before it can be classified as a bug or enhancement, and there is insufficient evidence for a duplicate classification.",
+  "summary": "No meaningful duplicate or related fixing pull request was found. The closest MCP and governance discussions have explicit scopes that differ from this report, which contains no actionable uv request.",
+  "draft_response": "Thanks for the links. This report does not describe an issue with uv or a specific change you would like uv to make. Could you clarify the uv-related request, including the uv command or workflow involved, the expected behavior, and what currently happens? If this is a feature proposal, please describe the capability and how it would integrate with uv."
+}
