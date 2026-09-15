@@ -28,6 +28,8 @@ mod resource_limits;
 mod self_install;
 #[cfg(feature = "self-update")]
 mod self_update;
+#[cfg(feature = "self-update")]
+mod self_update_native;
 
 #[cfg(not(windows))]
 mod update_shell;
