@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 19790,
+        "title": "\"Failed to discover local Python environment\" error from ty when running `uv check`",
+        "url": "https://github.com/astral-sh/uv/issues/19790",
+        "state": "open",
+        "reason": "astral-sh/uv#19790 has the same command contrast, but it is a separate invalid-environment failure: uv integration attempts to use `/usr/local` as a virtual environment, while astral-sh/uv#21720 successfully uses a valid Python 3.14 environment."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19655,
+        "title": "Set `TY_UV=1` when invoking `ty` through `uv check`",
+        "url": "https://github.com/astral-sh/uv/pull/19655",
+        "state": "merged",
+        "reason": "astral-sh/uv#19655 deliberately made `uv check` use ty's uv project-discovery path, explaining why its context differs from standalone `ty check` and `uv run ty check`."
+      },
+      {
+        "kind": "pull_request",
+        "number": 20643,
+        "title": "Include best-effort `environment` info by default in `uv workspace metadata`",
+        "url": "https://github.com/astral-sh/uv/pull/20643",
+        "state": "merged",
+        "reason": "astral-sh/uv#20643 deliberately exposes the selected environment and concrete interpreter in uv workspace metadata for ty under `uv check`. Current ty source consumes that interpreter version as uv-supplied configuration, which explains the observed Python 3.14 target."
+      }
+    ],
+    "search_scope": "No exact prior tracker or fix was found. Literal searches covered the full `not-subscriptable`/`typing.Union` diagnostic, `uv check` versus `ty check` and `uv run ty check`, `.venv`, `--python`, `--ty-version`, Python 3.14, and `requires-python`. Conceptual searches covered target Python/version, interpreter and virtual-environment discovery, `VIRTUAL_ENV`, `TY_UV`, workspace metadata, and ty/uv project integration. Open and closed issues and open, closed, and merged pull requests were searched; implementation and discussion chains for astral-sh/uv#19605, astral-sh/uv#19655, astral-sh/uv#19763, astral-sh/uv#20501, and astral-sh/uv#20643 were inspected. astral-sh/uv#19790 was ruled adjacent because its trigger and outcome are an invalid system-prefix-as-venv error. astral-sh/uv#21551 and astral-sh/uv#21211 concern exclusion/path selection and ty release cutoff selection, respectively."
+  },
+  "type": "question",
+  "type_reason": "The source establishes that the difference is current intended behavior, not that `requires-python` is ignored. `>=3.12` permits the selected Python 3.14 project environment; `uv check` deliberately opts into uv metadata and ty uses that environment's concrete interpreter version. Standalone ty instead derives its default target from the lower bound of `project.requires-python`. `--ty-version` only selects the ty executable. The report primarily asks why the results differ and does not establish incorrect behavior or request a specific behavior change.",
+  "summary": "No duplicate was found. Merged integration work astral-sh/uv#19655 and astral-sh/uv#20643 explains the difference: `uv check` gives ty the selected environment's interpreter, while standalone ty defaults from the `requires-python` lower bound. astral-sh/uv#19790 is adjacent but has a distinct invalid-environment failure.",
+  "draft_response": "`requires-python` is not being ignored here: `>=3.12` permits the Python 3.14 interpreter in `.venv`. `uv check` synchronizes and checks against its selected project environment, then enables ty's uv integration, which supplies that interpreter version as the target. Standalone `ty check` and `uv run ty check` do not enable that integration, so ty derives its default target from the lower bound of `project.requires-python` instead. `--ty-version` only selects the ty executable, so it does not affect the target Python version.\n\nTo check the Python 3.12 behavior with `uv check`, use `uv check --python 3.12`. If the type-checking target should remain 3.12 regardless of the selected environment, set `[tool.ty.environment] python-version = \"3.12\"`, which has higher precedence than uv-supplied environment metadata."
+}
