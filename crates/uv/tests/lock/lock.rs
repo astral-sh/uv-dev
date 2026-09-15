@@ -24551,6 +24551,49 @@ fn lock_exclude_unnecessary_python_forks() -> Result<()> {
     Ok(())
 }
 
+/// A dependency outside the Python/fork intersection can cause a false version conflict.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_requires_python_fork_marker_intersection() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = [
+                "project>1; (python_version < '3.12' and sys_platform == 'linux') or (python_version >= '3.12' and sys_platform == 'win32')",
+            ]
+
+            [tool.uv]
+            environments = ["sys_platform == 'linux'"]
+        "#})?;
+
+    let filters: Vec<_> = context
+        .filters()
+        .into_iter()
+        .chain([(
+            // This hint is only shown when the current platform doesn't match the target.
+            r"\nhint: The resolution failed for an environment that is not the current one[^\n]*\n",
+            "",
+        )])
+        .collect();
+
+    uv_snapshot!(filters, context.lock().arg("--no-index"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies for split (markers: sys_platform == 'linux')
+      cause: Because your project depends on itself at an incompatible version (project{sys_platform == 'win32'}>1), we can conclude that your project's requirements are unsatisfiable.
+
+    hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
+    ");
+
+    Ok(())
+}
+
 /// Lock with a user-provided constraint on the space of supported environments.
 #[cfg(feature = "test-universal")]
 #[test]
