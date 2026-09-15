@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -28,8 +29,11 @@ use uv_distribution_types::{
 use uv_distribution_types::{
     DerivationChain, DistributionMetadata, InstalledMetadata, Name, Resolution,
 };
+use uv_fs::link::LinkError;
 use uv_fs::{CWD, Simplified, normalize_path_under};
-use uv_install_wheel::{LinkMode, installed_dist_info_path, read_record_into_iter};
+use uv_install_wheel::{
+    Error as InstallWheelError, LinkMode, installed_dist_info_path, read_record_into_iter,
+};
 use uv_installer::{InstallationStrategy, Plan, Planner, Preparer, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
@@ -1140,7 +1144,8 @@ async fn execute_plan(
             // This technically can block the runtime, but we are on the main thread and
             // have no other running tasks at this point, so this lets us avoid spawning a blocking
             // task.
-            .install_blocking(installs)?;
+            .install_blocking(installs)
+            .map_err(|err| Error::from_install(err, venv.interpreter().is_system()))?;
 
         logger.on_install(installs.len(), start, printer, DryRun::Disabled)?;
     }
@@ -1422,6 +1427,9 @@ pub(crate) enum Error {
     #[error(transparent)]
     Anyhow(#[from] anyhow::Error),
 
+    #[error(transparent)]
+    SystemInstallPermissions(anyhow::Error),
+
     #[error("The environment is outdated; run `{}` to update the environment", "uv sync".cyan())]
     OutdatedEnvironment(Box<Changelog>),
 }
@@ -1447,6 +1455,7 @@ impl Error {
             | Self::Requirements(_)
             | Self::RequirementsWithContext { .. }
             | Self::Anyhow(_)
+            | Self::SystemInstallPermissions(_)
             | Self::OutdatedEnvironment(_)) => error,
         }
     }
@@ -1469,6 +1478,7 @@ impl Error {
             | Self::Io(_)
             | Self::Fmt(_)
             | Self::Anyhow(_)
+            | Self::SystemInstallPermissions(_)
             | Self::OutdatedEnvironment(_)) => error,
         }
     }
@@ -1483,7 +1493,25 @@ impl Error {
             Self::Requirements(error) | Self::RequirementsWithContext { source: error, .. } => {
                 error.is_user_failure()
             }
-            Self::Uninstall(_) | Self::Io(_) | Self::Fmt(_) | Self::Anyhow(_) => false,
+            Self::Uninstall(_)
+            | Self::Io(_)
+            | Self::Fmt(_)
+            | Self::Anyhow(_)
+            | Self::SystemInstallPermissions(_) => false,
+        }
+    }
+
+    /// Attach a hint only when installation failed to create a destination directory. Other I/O
+    /// errors can come from reading the cached wheel instead of writing to the environment.
+    fn from_install(err: anyhow::Error, is_system: bool) -> Self {
+        if is_system
+            && let Some(InstallWheelError::Copy(LinkError::CreateDir { err: source, .. })) =
+                err.downcast_ref::<InstallWheelError>()
+            && source.kind() == io::ErrorKind::PermissionDenied
+        {
+            Self::SystemInstallPermissions(err)
+        } else {
+            Self::Anyhow(err)
         }
     }
 }
@@ -1522,6 +1550,9 @@ impl uv_errors::Hinted for Error {
                     error.hints(),
                 )
             }
+            Self::SystemInstallPermissions(_) => uv_errors::Hints::from(
+                "It looks like you do not have permission to write to the system Python environment. Consider creating a virtual environment with `uv venv`, then retry the installation",
+            ),
             Self::Anyhow(err) => {
                 for cause in err.chain() {
                     if let Some(extra_err) = cause.downcast_ref::<ExtrasWithoutSourceError>() {
@@ -1558,5 +1589,111 @@ impl uv_errors::Hinted for ExtrasWithoutSourceError {
         } else {
             "Use `package[extra]` syntax instead"
         })
+    }
+}
+
+#[cfg(test)]
+mod install_error_tests {
+    use std::borrow::Cow;
+    use std::io;
+
+    use uv_fs::link::LinkError;
+    use uv_install_wheel::Error as WheelError;
+
+    use crate::commands::diagnostics::hints_for_error;
+
+    use super::Error;
+
+    fn destination_error(kind: io::ErrorKind) -> WheelError {
+        WheelError::Copy(LinkError::CreateDir {
+            path: "site-packages".into(),
+            err: io::Error::from(kind),
+        })
+    }
+
+    #[test]
+    fn system_install_permissions_hints() {
+        let cases = [
+            (
+                "system destination",
+                true,
+                destination_error(io::ErrorKind::PermissionDenied),
+            ),
+            (
+                "virtual environment",
+                false,
+                destination_error(io::ErrorKind::PermissionDenied),
+            ),
+            (
+                "target",
+                false,
+                destination_error(io::ErrorKind::PermissionDenied),
+            ),
+            (
+                "prefix",
+                false,
+                destination_error(io::ErrorKind::PermissionDenied),
+            ),
+            (
+                "cached wheel read",
+                true,
+                WheelError::Io(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "cached wheel read",
+                )),
+            ),
+            (
+                "ambiguous copy",
+                true,
+                WheelError::Copy(LinkError::Copy {
+                    to: "site-packages/example.py".into(),
+                    err: io::Error::from(io::ErrorKind::PermissionDenied),
+                }),
+            ),
+            (
+                "missing destination",
+                true,
+                destination_error(io::ErrorKind::NotFound),
+            ),
+            (
+                "other destination error",
+                true,
+                destination_error(io::ErrorKind::Other),
+            ),
+        ];
+        let mut outcomes = Vec::new();
+        for (name, is_system, error) in cases {
+            let error = anyhow::Error::new(error)
+                .context("Failed to install: example-1.0.0-py3-none-any.whl (example==1.0.0)");
+            let original_chain = error.chain().map(ToString::to_string).collect::<Vec<_>>();
+            let error = anyhow::Error::new(Error::from_install(error, is_system));
+            assert_eq!(
+                error.chain().map(ToString::to_string).collect::<Vec<_>>(),
+                original_chain,
+                "{name}"
+            );
+            let hints = hints_for_error(&error)
+                .into_iter()
+                .map(Cow::into_owned)
+                .collect::<Vec<_>>();
+            outcomes.push(format!(
+                "{name}: {}",
+                if hints.is_empty() {
+                    "none".to_string()
+                } else {
+                    hints.join("; ")
+                }
+            ));
+        }
+        insta::assert_snapshot!(outcomes.join("\n"), @"
+        system destination: It looks like you do not have permission to write to the system Python environment. Consider creating a virtual environment with `uv venv`, then retry the installation
+        virtual environment: none
+        target: none
+        prefix: none
+        cached wheel read: none
+        ambiguous copy: none
+        missing destination: none
+        other destination error: none
+        ");
     }
 }
