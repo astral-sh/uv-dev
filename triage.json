@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 21569,
+        "title": "Reject symlinked wheel installation destinations",
+        "url": "https://github.com/astral-sh/uv/pull/21569",
+        "state": "merged",
+        "reason": "astral-sh/uv#21569 added the destination validation and exact error path exercised here; it merged before the 0.12.14 release."
+      },
+      {
+        "kind": "issue",
+        "number": 21692,
+        "title": "0.12.14: `uv pip install --system` fails in official `python:*` Docker images — \"Cannot install into symlinked directory: /usr/local/man\"",
+        "url": "https://github.com/astral-sh/uv/issues/21692",
+        "state": "open",
+        "reason": "astral-sh/uv#21692 is a sibling 0.12.14 regression from the same validation change, but its trigger is an actual destination symlink rather than the lexical `.` root."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using the exact error, `--target=.` and `--target=./`, relative/current-directory targets, invalid wheel directories, destination traversal, symlink validation, normalized paths, and 0.12.14 fix-oriented terms. No existing tracker or fix for this exact regression was found. astral-sh/uv#21644 and astral-sh/uv#9656 were inspected but ruled out because they concern ZIP extraction and an invalid `.data/scripts` layout, respectively."
+  },
+  "type": "bug",
+  "type_reason": "This is an unintended 0.12.14 regression. Repository source confirms that `Target` retains the literal `.` path, while validation added by astral-sh/uv#21569 normalizes it to an empty root and rejects ordinary wheel directories beneath it. Equivalent absolute and non-dot relative targets work, and no existing issue or pull request tracks the same regression.",
+  "summary": "No duplicate was found. astral-sh/uv#21569 introduced the failing validation, while astral-sh/uv#21692 tracks a distinct adjacent regression from that change.",
+  "draft_response": "Thanks for the reproducer. This is an unintended regression in 0.12.14. `--target=.` remains a literal relative root, and the destination validation added by astral-sh/uv#21569 consequently rejects normal wheel directories beneath it. The equivalent absolute target works, so `--target=\"$PWD\"` is a workaround. We should normalize the target path before wheel validation and add regression coverage for the dot forms."
+}
