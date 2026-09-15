@@ -913,8 +913,16 @@ pub struct SelfInstallArgs {
     pub unmanaged: Option<PathBuf>,
 
     /// Do not add the installation directory to PATH.
-    #[arg(long, env = EnvVars::UV_NO_MODIFY_PATH)]
+    #[arg(long, env = EnvVars::UV_NO_MODIFY_PATH, value_parser = clap::builder::BoolishValueParser::new())]
     pub no_modify_path: bool,
+
+    /// Install without a receipt, disabling subsequent self-updates.
+    #[arg(long, env = EnvVars::UV_DISABLE_UPDATE, value_parser = clap::builder::BoolishValueParser::new())]
+    pub no_update: bool,
+
+    /// The GitHub repository that provides releases, as OWNER/REPOSITORY.
+    #[arg(long, hide = true)]
+    pub source_repository: Option<String>,
 }
 
 #[derive(Args, Debug)]

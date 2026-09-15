@@ -1340,6 +1340,10 @@ impl EnvVars {
     #[attr_added_in("0.5.0")]
     pub const UV_UNMANAGED_INSTALL: &'static str = "UV_UNMANAGED_INSTALL";
 
+    /// Install uv without a receipt, disabling subsequent self-updates.
+    #[attr_added_in("0.5.0")]
+    pub const UV_DISABLE_UPDATE: &'static str = "UV_DISABLE_UPDATE";
+
     /// The URL from which to download uv using the standalone installer. By default, installs from
     /// uv's GitHub Releases. `INSTALLER_DOWNLOAD_URL` is also supported as an alias, for backwards
     /// compatibility.
