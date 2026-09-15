@@ -1,6 +1,6 @@
 [package]
 name = "uv-checksum-authority-service"
-version = "0.0.80"
+version = "0.0.84"
 description = "Experimental signed checksum authority service for uv"
 edition = { workspace = true }
 rust-version = { workspace = true }

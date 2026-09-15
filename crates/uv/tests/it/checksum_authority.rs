@@ -85,6 +85,7 @@ fn wheel() -> Result<Vec<u8>> {
         &BTreeMap::new(),
         None,
         "py3-none-any",
+        &[],
     );
     assert_eq!(filename, WHEEL);
     Ok(bytes)
