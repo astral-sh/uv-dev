@@ -125,11 +125,16 @@ impl Binary {
                 Ok(urls)
             }
             Self::Uv => {
-                let canonical = format!(
-                    "{UV_GITHUB_URL_PREFIX}{version}/uv-{platform}.{}",
-                    format.extension()
+                let suffix = format!("{version}/uv-{platform}.{}", format.extension());
+                let mirror = format!(
+                    "{}{UV_MIRROR_SUFFIX}{suffix}",
+                    astral_mirror_base_url(astral_mirror_url)
                 );
-                Ok(vec![parse_url(canonical)?])
+                let mut urls = vec![parse_url(mirror)?];
+                if astral_mirror_url.is_none() {
+                    urls.push(parse_url(format!("{UV_GITHUB_URL_PREFIX}{suffix}"))?);
+                }
+                Ok(urls)
             }
         }
     }
@@ -195,7 +200,19 @@ impl Binary {
                 }
                 Ok(vec![canonical_url])
             }
-            Self::Uv => Ok(vec![canonical_url]),
+            Self::Uv => {
+                if let Some(suffix) = canonical_url.as_str().strip_prefix(UV_GITHUB_URL_PREFIX) {
+                    let mirror = parse_url(format!(
+                        "{}{UV_MIRROR_SUFFIX}{suffix}",
+                        astral_mirror_base_url(astral_mirror_url)
+                    ))?;
+                    if astral_mirror_url.is_some() {
+                        return Ok(vec![mirror]);
+                    }
+                    return Ok(vec![mirror, canonical_url]);
+                }
+                Ok(vec![canonical_url])
+            }
         }
     }
 
@@ -286,6 +303,8 @@ const TY_GITHUB_URL_PREFIX: &str = "https://github.com/astral-sh/ty/releases/dow
 
 /// The canonical GitHub URL prefix for uv releases.
 const UV_GITHUB_URL_PREFIX: &str = "https://github.com/astral-sh/uv/releases/download/";
+
+const UV_MIRROR_SUFFIX: &str = "/github/uv/releases/download/";
 
 /// The suffix appended to the Astral mirror base for Ruff releases.
 const RUFF_MIRROR_SUFFIX: &str = "/github/ruff/releases/download/";
@@ -520,6 +539,26 @@ pub async fn find_matching_version(
     let platform = Platform::from_env()?;
     let platform_name = platform.as_cargo_dist_triple();
 
+    find_matching_version_for_platform(
+        binary,
+        constraints,
+        exclude_newer,
+        &platform_name,
+        client,
+        retry_policy,
+    )
+    .await
+}
+
+/// Resolve a binary for an explicit release target rather than the detected host platform.
+async fn find_matching_version_for_platform(
+    binary: Binary,
+    constraints: Option<&uv_pep440::VersionSpecifiers>,
+    exclude_newer: Option<jiff::Timestamp>,
+    platform_name: &str,
+    client: &BaseClient,
+    retry_policy: &ExponentialBackoff,
+) -> Result<ResolvedVersion, Error> {
     let manifest_urls = binary.manifest_urls()?;
 
     fetch_with_url_fallback(
@@ -531,7 +570,7 @@ pub async fn find_matching_version(
                 binary,
                 constraints,
                 exclude_newer,
-                &platform_name,
+                platform_name,
                 url,
                 client,
             )
@@ -1015,10 +1054,58 @@ mod tests {
         assert_eq!(
             urls,
             vec![
+                "https://releases.astral.sh/github/uv/releases/download/0.6.0/uv-x86_64-unknown-linux-gnu.tar.gz".to_string(),
                 "https://github.com/astral-sh/uv/releases/download/0.6.0/uv-x86_64-unknown-linux-gnu.tar.gz"
                     .to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn uv_manifest_matches_explicit_target() {
+        let manifest: BinVersionInfo = serde_json::from_value(json!({
+            "version": "0.12.12",
+            "date": "2026-09-09T00:00:00Z",
+            "artifacts": [{
+                "platform": "x86_64-unknown-linux-musl",
+                "url": "https://github.com/astral-sh/uv/releases/download/0.12.12/uv-x86_64-unknown-linux-musl.tar.gz",
+                "archive_format": "tar.gz",
+                "sha256": "1234"
+            }]
+        })).unwrap();
+        let resolved = check_version_match(
+            Binary::Uv,
+            &manifest,
+            None,
+            None,
+            "x86_64-unknown-linux-musl",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(resolved.archive_format, ArchiveFormat::TarGz);
+        assert_eq!(resolved.artifact_urls.len(), 2);
+        assert!(
+            check_version_match(
+                Binary::Uv,
+                &manifest,
+                None,
+                None,
+                "x86_64-unknown-linux-gnu"
+            )
+            .unwrap()
+            .is_none()
+        );
+        let custom = Binary::Uv
+            .mirror_urls_with_astral_mirror(
+                resolved.artifact_urls[1].clone(),
+                Some("https://mirror.example.test"),
+            )
+            .unwrap();
+        assert_eq!(
+            custom[0].as_str(),
+            "https://mirror.example.test/github/uv/releases/download/0.12.12/uv-x86_64-unknown-linux-musl.tar.gz"
+        );
+        assert_eq!(custom.len(), 1);
     }
 
     #[test]
