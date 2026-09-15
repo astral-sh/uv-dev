@@ -562,10 +562,16 @@ impl From<&ParsedUrl> for DirectUrl {
     }
 }
 
+fn direct_url_string(url: &DisplaySafeUrl) -> String {
+    let mut url = url.clone();
+    url.remove_credentials();
+    url.to_string()
+}
+
 impl From<&ParsedPathUrl> for DirectUrl {
     fn from(value: &ParsedPathUrl) -> Self {
         Self::ArchiveUrl {
-            url: value.url.to_string(),
+            url: direct_url_string(&value.url),
             archive_info: ArchiveInfo {
                 hash: None,
                 hashes: None,
@@ -578,7 +584,7 @@ impl From<&ParsedPathUrl> for DirectUrl {
 impl From<&ParsedDirectoryUrl> for DirectUrl {
     fn from(value: &ParsedDirectoryUrl) -> Self {
         Self::LocalDirectory {
-            url: value.url.to_string(),
+            url: direct_url_string(&value.url),
             dir_info: DirInfo {
                 editable: value.editable,
             },
@@ -590,7 +596,7 @@ impl From<&ParsedDirectoryUrl> for DirectUrl {
 impl From<&ParsedArchiveUrl> for DirectUrl {
     fn from(value: &ParsedArchiveUrl) -> Self {
         Self::ArchiveUrl {
-            url: value.url.to_string(),
+            url: direct_url_string(&value.url),
             archive_info: ArchiveInfo {
                 hash: None,
                 hashes: None,
@@ -603,7 +609,7 @@ impl From<&ParsedArchiveUrl> for DirectUrl {
 impl From<&ParsedGitDirectoryUrl> for DirectUrl {
     fn from(value: &ParsedGitDirectoryUrl) -> Self {
         Self::VcsUrl {
-            url: value.url.url().to_string(),
+            url: direct_url_string(value.url.url()),
             vcs_info: VcsInfo {
                 vcs: VcsKind::Git,
                 commit_id: value.url.precise().as_ref().map(ToString::to_string),
@@ -619,7 +625,7 @@ impl From<&ParsedGitDirectoryUrl> for DirectUrl {
 impl From<&ParsedGitPathUrl> for DirectUrl {
     fn from(value: &ParsedGitPathUrl) -> Self {
         Self::VcsUrl {
-            url: value.url.url().to_string(),
+            url: direct_url_string(value.url.url()),
             vcs_info: VcsInfo {
                 vcs: VcsKind::Git,
                 commit_id: value.url.precise().as_ref().map(ToString::to_string),
@@ -702,9 +708,11 @@ impl From<ParsedGitDirectoryUrl> for DisplaySafeUrl {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use anyhow::Result;
 
-    use crate::{DirectUrl, parsed_url::ParsedUrl};
+    use crate::{DirectUrl, ParsedDirectoryUrl, parsed_url::ParsedUrl};
     use uv_redacted::DisplaySafeUrl;
 
     #[test]
@@ -756,6 +764,45 @@ mod tests {
             let actual = DisplaySafeUrl::try_from(&DirectUrl::from(&parsed_url))?;
             assert_eq!(expected, actual);
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn direct_url_removes_credentials() -> Result<()> {
+        let parsed_url = ParsedUrl::try_from(DisplaySafeUrl::parse(
+            "https://user:password@example.com/demo-1.0-py3-none-any.whl?X-Amz-Signature=signature",
+        )?)?;
+        assert_eq!(
+            serde_json::to_string(&DirectUrl::from(&parsed_url))?,
+            r#"{"url":"https://example.com/demo-1.0-py3-none-any.whl?X-Amz-Signature=****","archive_info":{}}"#
+        );
+
+        let parsed_url = ParsedDirectoryUrl::from_source(
+            PathBuf::from("/demo").into_boxed_path(),
+            None,
+            None,
+            DisplaySafeUrl::parse("https://user:password@example.com/demo")?,
+        );
+        assert_eq!(
+            serde_json::to_string(&DirectUrl::from(&parsed_url))?,
+            r#"{"url":"https://example.com/demo","dir_info":{}}"#
+        );
+
+        let parsed_url = ParsedUrl::try_from(DisplaySafeUrl::parse(
+            "git+ssh://user:password@example.com/demo.git",
+        )?)?;
+        assert_eq!(
+            serde_json::to_string(&DirectUrl::from(&parsed_url))?,
+            r#"{"url":"ssh://example.com/demo.git","vcs_info":{"vcs":"git"}}"#
+        );
+
+        let parsed_url =
+            ParsedUrl::try_from(DisplaySafeUrl::parse("git+ssh://git@example.com/demo.git")?)?;
+        assert_eq!(
+            serde_json::to_string(&DirectUrl::from(&parsed_url))?,
+            r#"{"url":"ssh://git@example.com/demo.git","vcs_info":{"vcs":"git"}}"#
+        );
 
         Ok(())
     }
