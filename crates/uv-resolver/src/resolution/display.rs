@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use owo_colors::OwoColorize;
 use petgraph::visit::EdgeRef;
 use petgraph::{Directed, Direction, Graph};
-use rustc_hash::{FxBuildHasher, FxHashMap};
+use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use uv_distribution_types::{DistributionMetadata, Name, SourceAnnotation, SourceAnnotations};
 use uv_normalize::PackageName;
@@ -362,6 +362,7 @@ fn combine_extras<'dist>(graph: &IntermediatePetGraph<'dist>) -> RequirementsTxt
 
     let mut next = RequirementsTxtGraph::with_capacity(graph.node_count(), graph.edge_count());
     let mut inverse = FxHashMap::with_capacity_and_hasher(graph.node_count(), FxBuildHasher);
+    let mut edges = FxHashSet::with_capacity_and_hasher(graph.edge_count(), FxBuildHasher);
 
     // Re-add the nodes to the reduced graph.
     for index in graph.node_indices() {
@@ -398,7 +399,9 @@ fn combine_extras<'dist>(graph: &IntermediatePetGraph<'dist>) -> RequirementsTxt
         let source = inverse[&version_marker(source_node)];
         let target = inverse[&version_marker(target_node)];
 
-        next.update_edge(source, target, ());
+        if edges.insert((source, target)) {
+            next.add_edge(source, target, ());
+        }
     }
 
     next
@@ -414,6 +417,7 @@ fn combine_extras<'dist>(graph: &IntermediatePetGraph<'dist>) -> RequirementsTxt
 fn strip_extras<'dist>(graph: &IntermediatePetGraph<'dist>) -> RequirementsTxtGraph<'dist> {
     let mut next = RequirementsTxtGraph::with_capacity(graph.node_count(), graph.edge_count());
     let mut inverse = FxHashMap::with_capacity_and_hasher(graph.node_count(), FxBuildHasher);
+    let mut edges = FxHashSet::with_capacity_and_hasher(graph.edge_count(), FxBuildHasher);
 
     // Re-add the nodes to the reduced graph.
     for index in graph.node_indices() {
@@ -455,8 +459,93 @@ fn strip_extras<'dist>(graph: &IntermediatePetGraph<'dist>) -> RequirementsTxtGr
         let source = inverse[&source_node.version_id()];
         let target = inverse[&target_node.version_id()];
 
-        next.update_edge(source, target, ());
+        if edges.insert((source, target)) {
+            next.add_edge(source, target, ());
+        }
     }
 
     next
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+    use std::sync::Arc;
+
+    use uv_distribution_filename::DistExtension;
+    use uv_distribution_types::{Dist, ResolvedDist};
+    use uv_normalize::ExtraName;
+    use uv_pep440::Version;
+    use uv_pep508::VerbatimUrl;
+    use uv_redacted::DisplaySafeUrl;
+
+    use super::*;
+
+    fn resolved_dist(name: &str) -> ResolvedDist {
+        let name = PackageName::from_str(name).expect("valid name");
+        let url = DisplaySafeUrl::parse(&format!(
+            "https://example.com/{name}-1.0.0-py3-none-any.whl"
+        ))
+        .expect("valid URL");
+        ResolvedDist::Installable {
+            dist: Arc::new(
+                Dist::from_http_url(
+                    name,
+                    VerbatimUrl::from_url(url.clone()),
+                    url,
+                    None,
+                    DistExtension::Wheel,
+                )
+                .expect("valid distribution"),
+            ),
+            version: Some(Version::from_str("1").expect("valid version")),
+        }
+    }
+
+    #[test]
+    fn duplicate_edges_are_deduplicated_when_extras_are_collapsed() {
+        let version = Version::from_str("1").expect("valid version");
+        let source = resolved_dist("source");
+        let target = resolved_dist("target");
+        let source_base = RequirementsTxtDist {
+            dist: &source,
+            version: &version,
+            hashes: &[],
+            markers: MarkerTree::TRUE,
+            extras: Vec::new(),
+        };
+        let source_extra = RequirementsTxtDist {
+            extras: vec![ExtraName::from_str("source-extra").expect("valid extra")],
+            ..source_base.clone()
+        };
+        let target_base = RequirementsTxtDist {
+            dist: &target,
+            version: &version,
+            hashes: &[],
+            markers: MarkerTree::TRUE,
+            extras: Vec::new(),
+        };
+        let target_extra = RequirementsTxtDist {
+            extras: vec![ExtraName::from_str("target-extra").expect("valid extra")],
+            ..target_base.clone()
+        };
+
+        let mut graph = IntermediatePetGraph::with_capacity(4, 2);
+        let source_base = graph.add_node(DisplayResolutionGraphNode::Dist(source_base));
+        let source_extra = graph.add_node(DisplayResolutionGraphNode::Dist(source_extra));
+        let target_base = graph.add_node(DisplayResolutionGraphNode::Dist(target_base));
+        let target_extra = graph.add_node(DisplayResolutionGraphNode::Dist(target_extra));
+        graph.add_edge(source_base, target_base, ());
+        graph.add_edge(source_extra, target_extra, ());
+
+        let combined = combine_extras(&graph);
+        assert_eq!(combined.node_count(), 2);
+        assert_eq!(combined.edge_count(), 1);
+        assert!(combined.node_weights().all(|dist| dist.extras.len() == 1));
+
+        let stripped = strip_extras(&graph);
+        assert_eq!(stripped.node_count(), 2);
+        assert_eq!(stripped.edge_count(), 1);
+        assert!(stripped.node_weights().all(|dist| dist.extras.is_empty()));
+    }
 }
