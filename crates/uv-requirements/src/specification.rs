@@ -225,8 +225,10 @@ impl RequirementsSpecification {
             constraints: requirements_txt
                 .constraints
                 .into_iter()
-                .map(Requirement::from)
-                .map(NameRequirementSpecification::from)
+                .map(|entry| NameRequirementSpecification {
+                    requirement: Requirement::from(entry.requirement),
+                    hashes: entry.hashes,
+                })
                 .collect(),
             index_url: requirements_txt.index_url.map(IndexUrl::from),
             extra_index_urls: requirements_txt
