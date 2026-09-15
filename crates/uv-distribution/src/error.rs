@@ -13,8 +13,9 @@ use uv_fs::Simplified;
 use uv_git::GitError;
 use uv_normalize::PackageName;
 use uv_pep440::{Version, VersionSpecifiers};
+use uv_pep508::{Pep508ErrorSource, VerbatimUrlError};
 use uv_platform_tags::Platform;
-use uv_pypi_types::{HashAlgorithm, HashDigest};
+use uv_pypi_types::{HashAlgorithm, HashDigest, ParsedUrlError};
 use uv_python::PythonVariant;
 use uv_redacted::DisplaySafeUrl;
 use uv_types::AnyErrorBuild;
@@ -270,9 +271,30 @@ impl uv_errors::Hinted for Error {
             Self::Build(err) => err.hints(),
             Self::Client(err) => uv_errors::Hinted::hints(err),
             Self::MetadataLowering(err) => err.hints(),
+            Self::Metadata(err) | Self::PkgInfo(err) | Self::PyprojectToml(err)
+                if is_relative_path_error(err) =>
+            {
+                uv_errors::Hints::from(
+                    "Relative paths are not supported in package metadata. Use an absolute `file://` URL or define a local project dependency in `[tool.uv.sources]`.",
+                )
+            }
             _ => uv_errors::Hints::none(),
         }
     }
+}
+
+/// Whether a metadata requirement contains a relative path with no directory to resolve it from.
+fn is_relative_path_error(err: &uv_pypi_types::MetadataError) -> bool {
+    let uv_pypi_types::MetadataError::Pep508Error(err) = err else {
+        return false;
+    };
+    let Pep508ErrorSource::UrlError(err) = &err.message else {
+        return false;
+    };
+    matches!(
+        err.as_ref(),
+        ParsedUrlError::VerbatimUrl(VerbatimUrlError::WorkingDirectory(_))
+    )
 }
 
 impl IsBuildBackendError for Error {
@@ -407,8 +429,107 @@ mod tests {
     use super::{Error, PythonVersion};
     use std::str::FromStr;
     use uv_distribution_filename::WheelFilename;
+    use uv_errors::Hinted;
+    use uv_pep508::{Pep508Error, Pep508ErrorSource, VerbatimUrlError};
     use uv_platform_tags::{Arch, Os, Platform};
+    use uv_pypi_types::{MetadataError, ParsedUrlError, ResolutionMetadata};
     use uv_python::PythonVariant;
+
+    fn invalid_requirement(requirement: &str) -> MetadataError {
+        ResolutionMetadata::parse_metadata(
+            format!(
+                "Metadata-Version: 2.2\nName: example\nVersion: 1.0.0\nRequires-Dist: {requirement}\n"
+            )
+            .as_bytes(),
+        )
+        .unwrap_err()
+    }
+
+    #[test]
+    fn relative_dependency_path_hints() {
+        type ErrorFactory = fn() -> MetadataError;
+        type ErrorWrapper = fn(MetadataError) -> Error;
+
+        let cases: [(&str, ErrorFactory, bool); 6] = [
+            (
+                "relative path",
+                || invalid_requirement("dependency @ ./scripts/path"),
+                true,
+            ),
+            (
+                "relative file URL",
+                || invalid_requirement("dependency @ file:./scripts/path"),
+                true,
+            ),
+            (
+                "invalid version",
+                || invalid_requirement("dependency<2.6>"),
+                false,
+            ),
+            (
+                "similarly worded parser error",
+                || {
+                    MetadataError::from(Pep508Error {
+                        message: Pep508ErrorSource::String(
+                            "relative path without a working directory: ./scripts/path".into(),
+                        ),
+                        start: 0,
+                        len: 0,
+                        input: String::new(),
+                    })
+                },
+                false,
+            ),
+            (
+                "other URL error",
+                || {
+                    MetadataError::from(Pep508Error {
+                        message: Pep508ErrorSource::UrlError(Box::new(
+                            ParsedUrlError::VerbatimUrl(VerbatimUrlError::UrlConversion(
+                                "./scripts/path".into(),
+                            )),
+                        )),
+                        start: 0,
+                        len: 0,
+                        input: String::new(),
+                    })
+                },
+                false,
+            ),
+            (
+                "missing field",
+                || MetadataError::FieldNotFound("version"),
+                false,
+            ),
+        ];
+        let wrappers: [(&str, ErrorWrapper); 3] = [
+            ("wheel", Error::Metadata),
+            ("PKG-INFO", Error::PkgInfo),
+            ("pyproject.toml", Error::PyprojectToml),
+        ];
+
+        for (case, metadata_error, expected) in cases {
+            for (wrapper, wrap) in wrappers {
+                let metadata_error = metadata_error();
+                let original = metadata_error.to_string();
+                let err = wrap(metadata_error);
+                assert_eq!(
+                    std::error::Error::source(&err).unwrap().to_string(),
+                    original,
+                    "{wrapper}: {case}"
+                );
+                let hints = err.hints().into_iter().collect::<Vec<_>>();
+                let expected = if expected {
+                    vec![
+                        "Relative paths are not supported in package metadata. Use an absolute `file://` URL or define a local project dependency in `[tool.uv.sources]`.",
+                    ]
+                } else {
+                    vec![]
+                };
+                assert_eq!(hints, expected, "{wrapper}: {case}");
+            }
+        }
+    }
 
     #[test]
     fn built_wheel_error_formats_freethreaded_python() {

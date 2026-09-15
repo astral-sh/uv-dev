@@ -964,10 +964,26 @@ fn python_source_path_from_record(
 
 #[cfg(test)]
 mod tests {
-    use super::{Error, python_source_path_from_record};
-    use insta::assert_snapshot;
     use std::path::{Path, PathBuf};
+
+    use insta::assert_snapshot;
+    use uv_errors::Hinted;
     use uv_normalize::PackageName;
+
+    use super::{Error, ExtrasWithoutSourceError, python_source_path_from_record};
+
+    #[test]
+    fn preserves_extras_without_source_hints() {
+        for (has_editable, expected) in [
+            (false, "Use `package[extra]` syntax instead"),
+            (true, "Use `<dir>[extra]` syntax or `-r <file>` instead"),
+        ] {
+            let err = Error::Anyhow(anyhow::Error::new(ExtrasWithoutSourceError {
+                has_editable,
+            }));
+            assert_eq!(err.hints().into_iter().collect::<Vec<_>>(), vec![expected]);
+        }
+    }
 
     #[test]
     fn record_python_sources_stay_in_site_packages() {
@@ -1523,12 +1539,21 @@ impl uv_errors::Hinted for Error {
                 )
             }
             Self::Anyhow(err) => {
+                let mut hints = uv_errors::Hints::none();
                 for cause in err.chain() {
                     if let Some(extra_err) = cause.downcast_ref::<ExtrasWithoutSourceError>() {
-                        return uv_errors::Hinted::hints(extra_err);
+                        hints.extend(uv_errors::Hinted::hints(extra_err));
+                    }
+                    if let Some(
+                        metadata_err @ (uv_distribution::Error::Metadata(_)
+                        | uv_distribution::Error::PkgInfo(_)
+                        | uv_distribution::Error::PyprojectToml(_)),
+                    ) = cause.downcast_ref::<uv_distribution::Error>()
+                    {
+                        hints.extend(uv_errors::Hinted::hints(metadata_err));
                     }
                 }
-                uv_errors::Hints::none()
+                hints
             }
             Self::Prepare(_)
             | Self::Uninstall(_)

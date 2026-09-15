@@ -226,6 +226,116 @@ dependencies = [
     Ok(())
 }
 
+/// Explain relative paths in package metadata without rejecting supported local dependency forms.
+#[cfg(feature = "test-universal")]
+#[test]
+fn compile_pyproject_relative_dependency_path() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "relative-dependency-example"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["uv-local-dependency @ ./scripts/path"]
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+
+        def get_requires_for_build_wheel(config_settings=None):
+            return []
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            dist_info = Path(metadata_directory) / "relative_dependency_example-0.1.0.dist-info"
+            dist_info.mkdir()
+            (dist_info / "METADATA").write_text(
+                "Metadata-Version: 2.2\n"
+                "Name: relative-dependency-example\n"
+                "Version: 0.1.0\n"
+                "Requires-Dist: uv-local-dependency @ ./scripts/path\n",
+                encoding="utf-8",
+            )
+            return dist_info.name
+
+        get_requires_for_build_editable = get_requires_for_build_wheel
+        prepare_metadata_for_build_editable = prepare_metadata_for_build_wheel
+    "#})?;
+
+    let compile = || {
+        let mut command = context.pip_compile();
+        command.args(["--offline", "--no-index", "--no-python-downloads"]);
+        command
+    };
+    uv_snapshot!(context.filters(), compile().arg("pyproject.toml"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse metadata from built wheel
+      cause: relative path without a working directory: ./scripts/path
+             uv-local-dependency @ ./scripts/path
+                                   ^^^^^^^^^^^^^^
+
+    hint: Relative paths are not supported in package metadata. Use an absolute `file://` URL or define a local project dependency in `[tool.uv.sources]`.
+    ");
+
+    let dependency = context.temp_dir.child("scripts/path");
+    dependency.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "uv-local-dependency"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+    "#})?;
+
+    // Absolute file URLs remain valid in package metadata.
+    let url = Url::from_directory_path(dependency.path()).unwrap();
+    pyproject_toml.write_str(&formatdoc! {r#"
+        [project]
+        name = "relative-dependency-example"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["uv-local-dependency @ {url}"]
+    "#})?;
+    compile()
+        .arg("pyproject.toml")
+        .arg("--no-build")
+        .assert()
+        .success();
+
+    // Requirements files have a working directory for their relative paths.
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("uv-local-dependency @ ./scripts/path\n")?;
+    compile()
+        .arg("requirements.in")
+        .arg("--no-build")
+        .assert()
+        .success();
+
+    // Project sources explicitly support paths relative to the project root.
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "relative-dependency-example"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["uv-local-dependency"]
+
+        [tool.uv.sources]
+        uv-local-dependency = { path = "scripts/path" }
+    "#})?;
+    compile()
+        .arg("pyproject.toml")
+        .arg("--no-build")
+        .assert()
+        .success();
+
+    Ok(())
+}
+
 /// Resolve a specific version of `anyio` from a `pyproject.toml` file. Despite the version being
 /// dynamic, we shouldn't need to build the package, since the requirements are static.
 #[test]
