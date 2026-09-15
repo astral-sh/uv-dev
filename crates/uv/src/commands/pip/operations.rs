@@ -11,11 +11,12 @@ use itertools::Itertools;
 use owo_colors::OwoColorize;
 use tracing::debug;
 
+use uv_auth::CredentialsCache;
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClient};
 use uv_configuration::{
     BuildOptions, Concurrency, Constraints, DependencyGroups, DryRun, ExcludeDependency, Excludes,
-    ExtrasSpecification, Override, Overrides, Reinstall, Upgrade,
+    ExtrasSpecification, NoSources, Override, Overrides, Reinstall, Upgrade,
 };
 use uv_dispatch::BuildDispatch;
 use uv_distribution::{DistributionDatabase, SourcedDependencyGroups};
@@ -51,6 +52,7 @@ use uv_resolver::{
 use uv_tool::InstalledTools;
 use uv_types::{BuildContext, HashStrategy, InFlight, InstalledPackagesProvider};
 use uv_warnings::warn_user;
+use uv_workspace::WorkspaceCache;
 
 use crate::commands::pip::loggers::{InstallLogger, ResolveLogger};
 use crate::commands::reporters::{InstallReporter, PrepareReporter, ResolverReporter};
@@ -98,6 +100,60 @@ pub(crate) async fn read_constraints(
             .await?
             .constraints,
     )
+}
+
+/// Resolve dependency groups into [`Requirement`]s, including any `tool.uv.sources` overrides.
+async fn resolve_dependency_groups(
+    groups: &BTreeMap<PathBuf, DependencyGroups>,
+    locations: &IndexLocations,
+    sources: &NoSources,
+    cache: &Cache,
+    workspace_cache: &WorkspaceCache,
+    credentials_cache: &CredentialsCache,
+) -> Result<Vec<Requirement>, Error> {
+    let mut requirements = Vec::new();
+    for (pyproject_path, groups) in groups {
+        let metadata = SourcedDependencyGroups::from_virtual_project(
+            pyproject_path,
+            None,
+            locations,
+            sources.clone(),
+            cache,
+            workspace_cache,
+            credentials_cache,
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to read dependency groups from: {}",
+                pyproject_path.display()
+            )
+        })?;
+
+        // Complain if dependency groups are named that don't appear.
+        for name in groups.explicit_names() {
+            if !metadata.dependency_groups.contains_key(name) {
+                Err(anyhow!(
+                    "The dependency group '{name}' was not found in the project: {}",
+                    pyproject_path.user_display()
+                ))?;
+            }
+        }
+        // Apply dependency-groups
+        for (group_name, group) in &metadata.dependency_groups {
+            if groups.contains(group_name) {
+                requirements.extend(group.iter().cloned().map(|group| Requirement {
+                    origin: Some(RequirementOrigin::Group(
+                        pyproject_path.clone(),
+                        metadata.name.clone(),
+                        group_name.clone(),
+                    )),
+                    ..group
+                }));
+            }
+        }
+    }
+    Ok(requirements)
 }
 
 /// Resolve a set of requirements, similar to running `pip compile`.
@@ -219,47 +275,17 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
             );
         }
 
-        for (pyproject_path, groups) in groups {
-            let metadata = SourcedDependencyGroups::from_virtual_project(
-                pyproject_path,
-                None,
+        requirements.extend(
+            resolve_dependency_groups(
+                groups,
                 build_dispatch.locations(),
-                build_dispatch.sources().clone(),
+                build_dispatch.sources(),
                 build_dispatch.cache(),
                 build_dispatch.workspace_cache(),
                 client.credentials_cache(),
             )
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to read dependency groups from: {}",
-                    pyproject_path.display()
-                )
-            })?;
-
-            // Complain if dependency groups are named that don't appear.
-            for name in groups.explicit_names() {
-                if !metadata.dependency_groups.contains_key(name) {
-                    Err(anyhow!(
-                        "The dependency group '{name}' was not found in the project: {}",
-                        pyproject_path.user_display()
-                    ))?;
-                }
-            }
-            // Apply dependency-groups
-            for (group_name, group) in &metadata.dependency_groups {
-                if groups.contains(group_name) {
-                    requirements.extend(group.iter().cloned().map(|group| Requirement {
-                        origin: Some(RequirementOrigin::Group(
-                            pyproject_path.clone(),
-                            metadata.name.clone(),
-                            group_name.clone(),
-                        )),
-                        ..group
-                    }));
-                }
-            }
-        }
+            .await?,
+        );
 
         requirements
     };
