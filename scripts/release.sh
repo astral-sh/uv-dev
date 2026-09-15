@@ -13,6 +13,9 @@ cd "$project_root"
 # Update the changelog
 uv run --locked --python 3.12 --only-group release rooster release "$@"
 
+# Ensure the release packages were bumped together.
+uv run --locked "$project_root/scripts/check_release_versions.py"
+
 # Bump library crate versions
 uv run "$project_root/scripts/bump-workspace-crate-versions.py"
 
