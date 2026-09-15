@@ -536,10 +536,7 @@ impl Workspace {
 
     /// Returns `true` if the workspace has a non-project root.
     pub fn is_non_project(&self) -> bool {
-        !self
-            .packages
-            .values()
-            .any(|member| *member.root() == self.install_path)
+        self.pyproject_toml.project.is_none()
     }
 
     /// Returns the set of all workspace members.
@@ -812,11 +809,7 @@ impl Workspace {
     pub fn workspace_dependency_groups(
         &self,
     ) -> Result<BTreeMap<GroupName, FlatDependencyGroup>, DependencyGroupError> {
-        if self
-            .packages
-            .values()
-            .any(|member| *member.root() == self.install_path)
-        {
+        if !self.is_non_project() {
             // If the workspace has an explicit root, the root is a member, so we don't need to
             // include any root-only requirements.
             Ok(BTreeMap::default())
@@ -2313,7 +2306,7 @@ impl VirtualProject {
 #[cfg(test)]
 #[cfg(unix)] // Avoid path escaping for the unit tests
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::env;
     use std::path::Path;
     use std::str::FromStr;
@@ -2824,6 +2817,64 @@ mod tests {
         assert_eq!(member_project.project_name(), &seeds);
         assert_eq!(member_project.workspace().packages().len(), 2);
         assert!(member_project.workspace().packages().contains_key(&seeds));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn workspace_root_project_is_always_a_member() -> Result<()> {
+        let root = tempfile::TempDir::new()?;
+        let root = ChildPath::new(root.path());
+
+        root.child("pyproject.toml").write_str(
+            r#"
+            [project]
+            name = "albatross"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            dev = ["iniconfig"]
+
+            [tool.uv.workspace]
+            members = ["packages/*"]
+            exclude = ["."]
+            "#,
+        )?;
+        root.child("packages")
+            .child("seeds")
+            .child("pyproject.toml")
+            .write_str(
+                r#"
+                [project]
+                name = "seeds"
+                version = "1.0.0"
+                requires-python = ">=3.12"
+                "#,
+            )?;
+
+        let cache = Cache::from_path(env::temp_dir().join("uv-workspace-cache"));
+        let root_name = PackageName::from_str("albatross")?;
+        for members in [
+            MemberDiscovery::All,
+            MemberDiscovery::None,
+            MemberDiscovery::Ignore(BTreeSet::from([root.as_ref().to_path_buf()])),
+        ] {
+            let workspace = Workspace::discover(
+                root.as_ref(),
+                &DiscoveryOptions {
+                    members,
+                    ..DiscoveryOptions::default()
+                },
+                &cache,
+                &WorkspaceCache::default(),
+            )
+            .await?;
+
+            assert!(!workspace.is_non_project());
+            assert!(workspace.packages().contains_key(&root_name));
+            assert!(workspace.workspace_dependency_groups()?.is_empty());
+        }
 
         Ok(())
     }
