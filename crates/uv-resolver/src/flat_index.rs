@@ -110,7 +110,7 @@ impl FlatDistributions {
                     filename,
                     file: Box::new(file),
                     index,
-                    size_is_authoritative: false,
+                    size_is_authoritative: true,
                 };
                 match self.0.entry(version) {
                     Entry::Occupied(mut entry) => {
@@ -135,7 +135,7 @@ impl FlatDistributions {
                     file: Box::new(file),
                     index,
                     wheels: vec![],
-                    size_is_authoritative: false,
+                    size_is_authoritative: true,
                 };
                 match self.0.entry(filename.version) {
                     Entry::Occupied(mut entry) => {

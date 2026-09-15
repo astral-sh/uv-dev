@@ -309,9 +309,9 @@ fn sync_relocatable_envs_default() -> Result<()> {
     Ok(())
 }
 
-/// Report incorrect registry sizes both before and after writing them to `uv.lock`.
+/// Reject incorrect registry sizes both before and after writing them to `uv.lock`.
 #[tokio::test]
-async fn sync_warns_registry_size_mismatches() -> Result<()> {
+async fn sync_rejects_registry_size_mismatches() -> Result<()> {
     let packages = PackseServer::new("simple/single-package.toml");
     let server = MockServer::start().await;
     let files = packages
@@ -367,26 +367,22 @@ async fn sync_warns_registry_size_mismatches() -> Result<()> {
     uv_snapshot!(context.filters(), context.pip_install().arg("a==1.0.0")
         .arg("--index-url").arg(format!("{}/simple/", server.uri()))
         .arg("--no-cache"), @"
-    exit_code: 0 (success)
+    exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    warning: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 921 bytes. This will become an error in a future release.
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + a==1.0.0
+    error: Failed to download `a==1.0.0`
+      cause: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 921 bytes
     ");
 
     context.reset_venv();
     uv_snapshot!(context.filters(), context.pip_install().arg("a==1.0.0")
         .arg("--index-url").arg(format!("{}/simple/", server.uri()))
         .arg("--no-binary").arg("a").arg("--no-cache"), @"
-    exit_code: 0 (success)
+    exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    warning: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 607 bytes. This will become an error in a future release.
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + a==1.0.0
+    error: Failed to download and build `a==1.0.0`
+      cause: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 607 bytes
     ");
     context.reset_venv();
     context
@@ -414,27 +410,32 @@ async fn sync_warns_registry_size_mismatches() -> Result<()> {
         .assert()
         .success();
 
-    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
-    assert_eq!(lock["package"][0]["sdist"]["size"].as_integer(), Some(1));
+    let lock = context.read("uv.lock");
+    let parsed: toml::Value = toml::from_str(&lock)?;
+    assert_eq!(parsed["package"][0]["sdist"]["size"].as_integer(), Some(1));
     assert_eq!(
-        lock["package"][0]["wheels"][0]["size"].as_integer(),
+        parsed["package"][0]["wheels"][0]["size"].as_integer(),
         Some(1)
     );
 
     // A fresh wheel download checks the size copied from the index.
     uv_snapshot!(context.filters(), context.sync().arg("--locked")
         .arg("--index-url").arg(packages.index_url()).arg("--no-cache"), @"
-    exit_code: 0 (success)
+    exit_code: 1 (failure)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    warning: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 921 bytes. This will become an error in a future release.
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + a==1.0.0
+    error: Failed to download `a==1.0.0`
+      cause: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 921 bytes
+
+    hint: `a` (v1.0.0) was included because `project` (v0.1.0) depends on `a`
     ");
 
-    // Populate the persistent cache and check its reuse without network access.
+    // Populate the cache with a valid size, then reject the original size without network access.
     context.reset_venv();
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&lock.replace("size = 1", "size = 921"))?;
     context
         .sync()
         .arg("--frozen")
@@ -443,13 +444,15 @@ async fn sync_warns_registry_size_mismatches() -> Result<()> {
         .assert()
         .success();
     context.reset_venv();
+    context.temp_dir.child("uv.lock").write_str(&lock)?;
     uv_snapshot!(context.filters(), context.sync().arg("--frozen")
         .arg("--index-url").arg(packages.index_url()).arg("--offline"), @"
-    exit_code: 0 (success)
+    exit_code: 1 (failure)
     ----- stderr -----
-    warning: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 921 bytes. This will become an error in a future release.
-    Installed 1 package in [TIME]
-     + a==1.0.0
+    error: Failed to download `a==1.0.0`
+      cause: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 921 bytes
+
+    hint: `a` (v1.0.0) was included because `project` (v0.1.0) depends on `a`
     ");
 
     // The source archive follows the same rules for fresh downloads and cache reuse.
@@ -457,15 +460,19 @@ async fn sync_warns_registry_size_mismatches() -> Result<()> {
     uv_snapshot!(context.filters(), context.sync().arg("--frozen")
         .arg("--index-url").arg(packages.index_url()).arg("--no-cache")
         .arg("--no-binary-package").arg("a"), @"
-    exit_code: 0 (success)
+    exit_code: 1 (failure)
     ----- stderr -----
-    warning: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 607 bytes. This will become an error in a future release.
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + a==1.0.0
+    error: Failed to download and build `a==1.0.0`
+      cause: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 607 bytes
+
+    hint: `a` (v1.0.0) was included because `project` (v0.1.0) depends on `a`
     ");
 
     context.reset_venv();
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&lock.replace("size = 1", "size = 607"))?;
     context
         .sync()
         .arg("--frozen")
@@ -476,14 +483,16 @@ async fn sync_warns_registry_size_mismatches() -> Result<()> {
         .assert()
         .success();
     context.reset_venv();
+    context.temp_dir.child("uv.lock").write_str(&lock)?;
     uv_snapshot!(context.filters(), context.sync().arg("--frozen")
         .arg("--index-url").arg(packages.index_url()).arg("--offline")
         .arg("--no-binary-package").arg("a"), @"
-    exit_code: 0 (success)
+    exit_code: 1 (failure)
     ----- stderr -----
-    warning: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 607 bytes. This will become an error in a future release.
-    Installed 1 package in [TIME]
-     + a==1.0.0
+    error: Failed to download and build `a==1.0.0`
+      cause: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 607 bytes
+
+    hint: `a` (v1.0.0) was included because `project` (v0.1.0) depends on `a`
     ");
 
     Ok(())
@@ -599,7 +608,7 @@ fn sync_locked_url_sdist_size() -> Result<()> {
     Ok(())
 }
 
-/// Report incorrect local-index wheel sizes during preparation and cache reuse.
+/// Reject incorrect local-index wheel sizes during preparation and cache reuse.
 #[test]
 fn sync_locked_local_wheel_size() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
@@ -645,12 +654,12 @@ fn sync_locked_local_wheel_size() -> Result<()> {
         .write_str(&lock.replace("size = 921", "size = 1"))?;
     uv_snapshot!(context.filters(), context.sync().arg("--frozen")
         .arg("--index-url").arg(server.index_url()), @"
-    exit_code: 0 (success)
+    exit_code: 1 (failure)
     ----- stderr -----
-    warning: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 921 bytes. This will become an error in a future release.
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + a==1.0.0
+    error: Failed to download `a==1.0.0`
+      cause: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 921 bytes
+
+    hint: `a` (v1.0.0) was included because `project` (v0.1.0) depends on `a`
     ");
 
     context.temp_dir.child("uv.lock").write_str(lock)?;
@@ -675,17 +684,18 @@ fn sync_locked_local_wheel_size() -> Result<()> {
         .child("uv.lock")
         .write_str(&lock.replace("size = 921", "size = 1"))?;
     uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--offline"), @"
-    exit_code: 0 (success)
+    exit_code: 1 (failure)
     ----- stderr -----
-    warning: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 921 bytes. This will become an error in a future release.
-    Installed 1 package in [TIME]
-     + a==1.0.0
+    error: Failed to download `a==1.0.0`
+      cause: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 921 bytes
+
+    hint: `a` (v1.0.0) was included because `project` (v0.1.0) depends on `a`
     ");
 
     Ok(())
 }
 
-/// Report incorrect local-index sdist sizes during preparation and cache reuse.
+/// Reject incorrect local-index sdist sizes during preparation and cache reuse.
 #[test]
 fn sync_locked_local_sdist_size() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
@@ -731,12 +741,12 @@ fn sync_locked_local_sdist_size() -> Result<()> {
         .write_str(&lock.replace("size = 607", "size = 1"))?;
     uv_snapshot!(context.filters(), context.sync().arg("--frozen")
         .arg("--index-url").arg(server.index_url()), @"
-    exit_code: 0 (success)
+    exit_code: 1 (failure)
     ----- stderr -----
-    warning: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 607 bytes. This will become an error in a future release.
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + a==1.0.0
+    error: Failed to download and build `a==1.0.0`
+      cause: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 607 bytes
+
+    hint: `a` (v1.0.0) was included because `project` (v0.1.0) depends on `a`
     ");
 
     context.temp_dir.child("uv.lock").write_str(lock)?;
@@ -761,11 +771,12 @@ fn sync_locked_local_sdist_size() -> Result<()> {
         .child("uv.lock")
         .write_str(&lock.replace("size = 607", "size = 1"))?;
     uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--offline"), @"
-    exit_code: 0 (success)
+    exit_code: 1 (failure)
     ----- stderr -----
-    warning: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 607 bytes. This will become an error in a future release.
-    Installed 1 package in [TIME]
-     + a==1.0.0
+    error: Failed to download and build `a==1.0.0`
+      cause: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 607 bytes
+
+    hint: `a` (v1.0.0) was included because `project` (v0.1.0) depends on `a`
     ");
 
     Ok(())
