@@ -190,6 +190,12 @@ jobs:
           [[ ! $has_build_skip_label && ! $has_build_skip_docker_label && ($docker_build_changed || $has_build_push_docker_label) ]] && build_docker=1
           [[ $has_build_push_docker_label ]] && push_docker=1
 
+          # uv-dev main follows uv. Keep the Rust cache-producing jobs, but skip
+          # downstream test matrices that reuse the development binaries.
+          if [[ "$GITHUB_REPOSITORY" == "astral-sh/uv-dev" && "$GITHUB_EVENT_NAME" == "push" && $on_main_branch ]]; then
+            unset test_smoke test_ecosystem test_integration test_system
+          fi
+
           # Output (convert 1/empty to true/false for GHA)
           out() { [[ "$2" ]] && echo "$1=true" || echo "$1=false"; }
           {
