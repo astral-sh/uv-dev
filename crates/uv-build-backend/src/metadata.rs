@@ -81,6 +81,10 @@ pub enum ValidationError {
         "Script entry point name `{0}` must include a non-dot character and consist only of letters, numbers, dots, underscores and dashes"
     )]
     InvalidScriptName(String),
+    #[error(
+        "Entrypoint name {0:?} must not start with `[`, contain `=`, or have leading or trailing whitespace"
+    )]
+    InvalidEntryPointName(String),
     #[error("Use `project.scripts` instead of `project.entry-points.console_scripts`")]
     ReservedScripts,
     #[error("Use `project.gui-scripts` instead of `project.entry-points.gui_scripts`")]
@@ -905,19 +909,22 @@ impl PyProjectToml {
         group: &str,
         entries: impl IntoIterator<Item = (&'a String, &'a String)>,
     ) -> Result<(), ValidationError> {
-        if !group
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_alphanumeric() || c == '_')
-            || !group
-                .chars()
-                .all(|c| c.is_alphanumeric() || c == '.' || c == '_')
-        {
+        if group.split('.').any(|part| {
+            part.is_empty()
+                || !part
+                    .chars()
+                    .all(|character| character.is_alphanumeric() || character == '_')
+        }) {
             return Err(ValidationError::InvalidGroup(group.to_string()));
         }
 
         let _ = writeln!(writer, "[{group}]");
         for (name, object_reference) in entries {
+            if name.is_empty() || name.starts_with('[') || name.contains('=') || name.trim() != name
+            {
+                return Err(ValidationError::InvalidEntryPointName(name.clone()));
+            }
+
             let compliant_name = name.chars().all(|character| {
                 character.is_alphanumeric() || matches!(character, '.' | '-' | '_')
             });
@@ -2043,6 +2050,68 @@ mod tests {
         "#
         });
         assert_snapshot!(script_error(&contents), @"Entrypoint groups must consist of letters and numbers separated by dots, invalid group: a@b");
+    }
+
+    #[test]
+    fn invalid_entry_point_group_dots() {
+        let errors = ["a.", "a..b"]
+            .into_iter()
+            .map(|group| {
+                let contents = extend_project(&formatdoc! {r#"
+                    [project.entry-points.{group:?}]
+                    foo = "bar"
+                "#});
+                script_error(&contents)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_snapshot!(errors, @r"
+        Entrypoint groups must consist of letters and numbers separated by dots, invalid group: a.
+        Entrypoint groups must consist of letters and numbers separated by dots, invalid group: a..b
+        ");
+    }
+
+    #[test]
+    fn valid_legacy_entry_point_names() {
+        let contents = extend_project(indoc! {r#"
+            [project.entry-points."project.plugins"]
+            "https://example/" = "project:plugin"
+            "material/search" = "project:search"
+            "my plugin" = "project:other"
+        "#});
+        let pyproject_toml: PyProjectToml = toml::from_str(&contents).unwrap();
+
+        assert_snapshot!(pyproject_toml.to_entry_points().unwrap().unwrap(), @r"
+        [project.plugins]
+        https://example/ = project:plugin
+        material/search = project:search
+        my plugin = project:other
+
+        ");
+    }
+
+    #[test]
+    fn invalid_entry_point_names() {
+        let errors = ["", "plugin=bad", " leading", "trailing ", "[plugin"]
+            .into_iter()
+            .map(|name| {
+                let contents = extend_project(&formatdoc! {r#"
+                    [project.entry-points."project.plugins"]
+                    {name:?} = "project:plugin"
+                "#});
+                script_error(&contents)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_snapshot!(errors, @r#"
+        Entrypoint name "" must not start with `[`, contain `=`, or have leading or trailing whitespace
+        Entrypoint name "plugin=bad" must not start with `[`, contain `=`, or have leading or trailing whitespace
+        Entrypoint name " leading" must not start with `[`, contain `=`, or have leading or trailing whitespace
+        Entrypoint name "trailing " must not start with `[`, contain `=`, or have leading or trailing whitespace
+        Entrypoint name "[plugin" must not start with `[`, contain `=`, or have leading or trailing whitespace
+        "#);
     }
 
     #[test]
