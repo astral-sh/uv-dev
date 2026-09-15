@@ -18,6 +18,9 @@ mod format;
 #[cfg(all(feature = "test-python", feature = "test-pypi", feature = "test-git"))]
 mod init;
 
+#[cfg(feature = "test-python")]
+mod python_version;
+
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod run;
 
