@@ -118,6 +118,7 @@ uv-cache-key = { workspace = true }
 uv-extract = { workspace = true }
 uv-checksum-authority = { workspace = true }
 uv-checksum-authority-service = { workspace = true }
+uv-distribution-filename = { workspace = true }
 uv-platform = { workspace = true }
 uv-publish = { workspace = true, features = ["test"] }
 uv-test = { workspace = true }

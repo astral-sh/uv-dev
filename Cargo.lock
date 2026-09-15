@@ -4063,6 +4063,7 @@ checksum = "219c5811de6525e5416c7d5d53bb656d3afdbc6c5af816e0802bcfa42dbdc1c3"
 dependencies = [
  "base64 0.22.1",
  "bytes",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2",
@@ -5810,16 +5811,15 @@ dependencies = [
  "indicatif",
  "indoc",
  "insta",
-  "itertools 0.14.0",
-  "owo-colors",
-  "predicates",
-  "regex",
-  "reqwest",
-  "ring",
-  "rmp-serde",
-  "rustc-hash",
-  "self-replace",
-  "serde",
+ "itertools 0.14.0",
+ "owo-colors",
+ "predicates",
+ "regex",
+ "reqwest",
+ "ring",
+ "rmp-serde",
+ "self-replace",
+ "serde",
  "serde_json",
  "sha2 0.11.0",
  "tar-codec",
@@ -5853,6 +5853,7 @@ dependencies = [
  "uv-console",
  "uv-dispatch",
  "uv-distribution",
+ "uv-distribution-filename",
  "uv-distribution-types",
  "uv-environment-operations",
  "uv-errors",
@@ -6286,7 +6287,7 @@ dependencies = [
 
 [[package]]
 name = "uv-checksum-authority"
-version = "0.0.80"
+version = "0.0.91"
 dependencies = [
  "base64 0.22.1",
  "fs-err",
@@ -6306,7 +6307,7 @@ dependencies = [
 
 [[package]]
 name = "uv-checksum-authority-service"
-version = "0.0.80"
+version = "0.0.91"
 dependencies = [
  "anyhow",
  "assert_cmd",
