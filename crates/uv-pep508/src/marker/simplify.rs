@@ -412,19 +412,19 @@ fn is_negation(left: &MarkerExpression, right: &MarkerExpression) -> bool {
         }
         MarkerExpression::VersionIn {
             key,
-            versions,
+            value,
             operator,
         } => {
             let MarkerExpression::VersionIn {
                 key: key2,
-                versions: versions2,
+                value: value2,
                 operator: operator2,
             } = right
             else {
                 return false;
             };
 
-            key == key2 && versions == versions2 && operator != operator2
+            key == key2 && value == value2 && operator != operator2
         }
         MarkerExpression::String {
             key,
