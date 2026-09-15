@@ -150,6 +150,18 @@ pub(crate) fn remove_entrypoints(tool: &Tool) {
     );
 }
 
+/// Return whether all executables recorded for a [`Tool`] exist in the configured bin directory.
+pub(crate) fn tool_entrypoints_are_fresh(tool: &Tool) -> bool {
+    let Ok(executable_directory) = uv_tool::tool_executable_dir() else {
+        return false;
+    };
+
+    tool.entrypoints().iter().all(|entrypoint| {
+        entrypoint.install_path.parent() == Some(executable_directory.as_path())
+            && entrypoint.install_path.exists()
+    })
+}
+
 /// Remove the entrypoints at the given paths.
 fn remove_entrypoint_paths<'a>(entrypoints: impl IntoIterator<Item = &'a Path>) {
     for executable in entrypoints {
