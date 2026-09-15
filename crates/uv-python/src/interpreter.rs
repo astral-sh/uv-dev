@@ -1,6 +1,8 @@
 use std::borrow::Cow;
+use std::collections::{BTreeMap, btree_map::Entry};
 use std::env::consts::ARCH;
 use std::fmt::{Display, Formatter};
+use std::iter::once;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 use std::str::FromStr;
@@ -106,7 +108,14 @@ impl Interpreter {
     pub fn clear_cache(executable: impl AsRef<Path>, cache: &Cache) -> Result<(), Error> {
         let absolute = std::path::absolute(executable.as_ref())?;
         let canonical = canonicalize_executable(&absolute)?;
-        let cache_entry = InterpreterInfo::cache_entry(&absolute, &canonical, cache);
+        let cache_entry = match InterpreterInfo::cache_entry(&absolute, &canonical, cache) {
+            Ok(cache_entry) => cache_entry,
+            Err(err) => {
+                // Queries also bypass the cache when their configuration cannot be read.
+                trace!("Could not identify interpreter cache entry: {err}");
+                return Ok(());
+            }
+        };
 
         match fs::remove_file(cache_entry.path()) {
             Ok(()) => Ok(()),
@@ -1131,12 +1140,42 @@ impl InterpreterInfo {
         Ok(())
     }
 
-    /// Return the cache entry for an interpreter's absolute and canonical executable paths.
-    fn cache_entry(absolute: &Path, canonical: &Path, cache: &Cache) -> CacheEntry {
+    /// Return the cache entry for an interpreter's executable paths and configuration.
+    fn cache_entry(absolute: &Path, canonical: &Path, cache: &Cache) -> io::Result<CacheEntry> {
         let python_executable = env::var_os(EnvVars::PYTHONEXECUTABLE).map(PathBuf::from);
         let pyvenv_launcher = env::var_os(EnvVars::PYVENV_LAUNCHER).map(PathBuf::from);
 
-        cache.entry(
+        // Python reads `pyvenv.cfg` beside its executable or one directory above it. Include
+        // both locations, including those selected by launcher overrides, without duplicating
+        // Python's configuration parser or its platform-specific lookup order. File contents
+        // distinguish configurations even when an environment is recreated within one timestamp
+        // tick or its Windows launcher retains the source executable's modification time.
+        let mut pyvenv_configurations = BTreeMap::new();
+        for executable in once(absolute)
+            .chain(once(canonical))
+            .chain(python_executable.as_deref())
+            .chain(pyvenv_launcher.as_deref())
+        {
+            let executable = std::path::absolute(executable)?;
+            for directory in executable
+                .parent()
+                .into_iter()
+                .flat_map(|directory| once(directory).chain(directory.parent()))
+            {
+                if let Entry::Vacant(entry) =
+                    pyvenv_configurations.entry(directory.join("pyvenv.cfg"))
+                {
+                    let content = match fs::read(entry.key()) {
+                        Ok(content) => Some(cache_digest(&content)),
+                        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+                        Err(err) => return Err(err),
+                    };
+                    entry.insert(content);
+                }
+            }
+        }
+
+        Ok(cache.entry(
             CacheBucket::Interpreter,
             // Shard interpreter metadata by host architecture, operating system, and version, to
             // invalidate the cache (e.g.) on OS upgrades.
@@ -1161,16 +1200,21 @@ impl InterpreterInfo {
             // without changing either executable path.
             format!(
                 "{}.msgpack",
-                cache_digest(&(absolute, canonical, &python_executable, &pyvenv_launcher))
+                cache_digest(&(
+                    absolute,
+                    canonical,
+                    &python_executable,
+                    &pyvenv_launcher,
+                    &pyvenv_configurations,
+                ))
             ),
-        )
+        ))
     }
 
     /// A wrapper around [`markers::query_interpreter_info`] to cache the computed markers.
     ///
-    /// Running a Python script is (relatively) expensive, and the markers won't change
-    /// unless the Python executable changes, so we use the executable's last modified
-    /// time as a cache key.
+    /// Running a Python script is relatively expensive. Cache the response by executable and
+    /// configuration, and validate it against the executable's timestamp.
     fn query_cached(executable: &Path, cache: &Cache) -> Result<Self, Error> {
         let absolute = std::path::absolute(executable)?;
 
@@ -1199,16 +1243,21 @@ impl InterpreterInfo {
         };
 
         let canonical = canonicalize_executable(&absolute).map_err(handle_io_error)?;
-        let cache_entry = Self::cache_entry(&absolute, &canonical, cache);
+        let cache_entry = Self::cache_entry(&absolute, &canonical, cache)
+            .inspect_err(|err| {
+                trace!("Could not identify interpreter cache entry: {err}");
+            })
+            .ok();
 
         // We check the timestamp of the canonicalized executable to check if an underlying
         // interpreter has been modified.
-        let modified = Timestamp::from_path(canonical).map_err(handle_io_error)?;
+        let modified = Timestamp::from_path(&canonical).map_err(handle_io_error)?;
 
         // Read from the cache.
-        if cache
-            .freshness(&cache_entry, None, None)
-            .is_ok_and(Freshness::is_fresh)
+        if let Some(cache_entry) = cache_entry.as_ref()
+            && cache
+                .freshness(cache_entry, None, None)
+                .is_ok_and(Freshness::is_fresh)
         {
             if let Ok(data) = fs::read(cache_entry.path()) {
                 match rmp_serde::from_slice::<CachedByTimestamp<Self>>(&data) {
@@ -1247,7 +1296,14 @@ impl InterpreterInfo {
 
         // If `executable` is a pyenv shim, a bash script that redirects to the activated
         // python executable at another path, we're not allowed to cache the interpreter info.
-        if is_same_file(executable, &info.sys_executable).unwrap_or(false) {
+        // Do not publish metadata under inputs that changed while Python was running.
+        if let Some(cache_entry) = cache_entry
+            && is_same_file(executable, &info.sys_executable).unwrap_or(false)
+            && let Ok(canonical) = canonicalize_executable(&absolute)
+            && Timestamp::from_path(&canonical).is_ok_and(|timestamp| timestamp == modified)
+            && Self::cache_entry(&absolute, &canonical, cache)
+                .is_ok_and(|current| current.path() == cache_entry.path())
+        {
             fs::create_dir_all(cache_entry.dir())?;
             write_atomic_sync(
                 cache_entry.path(),
@@ -1564,6 +1620,149 @@ mod tests {
             "..",
             "the updated interpreter metadata should be cached again"
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cache_invalidation_pyvenv_cfg() -> Result<()> {
+        for configuration_directory in ["", "bin"] {
+            let mock_dir = tempdir()?;
+            let bin = mock_dir.path().join("bin");
+            fs::create_dir(&bin)?;
+            let mocked_interpreter = bin.join("python");
+            let response_file = mock_dir.path().join("response.json");
+            let query_count = mock_dir.path().join("queries");
+            let configuration = mock_dir
+                .path()
+                .join(configuration_directory)
+                .join("pyvenv.cfg");
+
+            let mut response = serde_json::from_str::<Value>(mocked_interpreter_response())?;
+            response["sys_executable"] = serde_json::to_value(&mocked_interpreter)?;
+            fs::write(&response_file, serde_json::to_vec(&response)?)?;
+            fs::write(
+                &mocked_interpreter,
+                formatdoc! {r#"
+                    #!/bin/sh
+                    printf '.' >> "{}"
+                    cat "{}"
+                "#, query_count.display(), response_file.display()},
+            )?;
+            fs::set_permissions(
+                &mocked_interpreter,
+                std::os::unix::fs::PermissionsExt::from_mode(0o770),
+            )?;
+            let executable_timestamp = Timestamp::from_path(&mocked_interpreter)?;
+            let cache = Cache::temp()?.init().await?;
+            let original_version = Version::from_str("3.12.0")?;
+            let updated_version = Version::from_str("3.12.13")?;
+
+            assert_eq!(
+                Interpreter::query(&mocked_interpreter, &cache)?.python_version(),
+                &original_version
+            );
+            response["markers"]["implementation_version"] = "3.12.13".into();
+            response["markers"]["python_full_version"] = "3.12.13".into();
+            fs::write(&response_file, serde_json::to_vec(&response)?)?;
+            assert_eq!(
+                Interpreter::query(&mocked_interpreter, &cache)?.python_version(),
+                &original_version
+            );
+            assert_eq!(fs::read_to_string(&query_count)?, ".");
+
+            // A configuration appearing beside the unchanged executable must invalidate the cache.
+            fs::write(&configuration, "include-system-site-packages = true\n")?;
+            assert_eq!(
+                Interpreter::query(&mocked_interpreter, &cache)?.python_version(),
+                &updated_version
+            );
+            assert_eq!(fs::read_to_string(&query_count)?, "..");
+            Interpreter::query(&mocked_interpreter, &cache)?;
+            assert_eq!(fs::read_to_string(&query_count)?, "..");
+
+            // Changing only configuration contents must also invalidate the entry.
+            fs::write(&configuration, "include-system-site-packages = false\n")?;
+            Interpreter::query(&mocked_interpreter, &cache)?;
+            assert_eq!(fs::read_to_string(&query_count)?, "...");
+
+            // Eviction must use the same configuration-sensitive key as a normal query.
+            Interpreter::clear_cache(&mocked_interpreter, &cache)?;
+            Interpreter::query(&mocked_interpreter, &cache)?;
+            assert_eq!(fs::read_to_string(&query_count)?, "....");
+
+            // Removing the configuration returns to the original, configuration-free entry.
+            fs::remove_file(&configuration)?;
+            assert_eq!(
+                Interpreter::query(&mocked_interpreter, &cache)?.python_version(),
+                &original_version
+            );
+            assert_eq!(fs::read_to_string(&query_count)?, "....");
+
+            // An unreadable configuration must not be treated as an absent configuration.
+            fs::create_dir(&configuration)?;
+            assert_eq!(
+                Interpreter::query(&mocked_interpreter, &cache)?.python_version(),
+                &updated_version
+            );
+            Interpreter::query(&mocked_interpreter, &cache)?;
+            assert_eq!(fs::read_to_string(&query_count)?, "......");
+            assert_eq!(
+                Timestamp::from_path(&mocked_interpreter)?,
+                executable_timestamp
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cache_invalidation_pyvenv_cfg_changes_during_query() -> Result<()> {
+        let mock_dir = tempdir()?;
+        let mocked_interpreter = mock_dir.path().join("python");
+        let response_file = mock_dir.path().join("response.json");
+        let query_count = mock_dir.path().join("queries");
+        let configuration = mock_dir.path().join("pyvenv.cfg");
+
+        let mut response = serde_json::from_str::<Value>(mocked_interpreter_response())?;
+        response["sys_executable"] = serde_json::to_value(&mocked_interpreter)?;
+        fs::write(&response_file, serde_json::to_vec(&response)?)?;
+        fs::write(&configuration, "home = original\n")?;
+        fs::write(
+            &mocked_interpreter,
+            formatdoc! {r#"
+                #!/bin/sh
+                printf '.' >> "{}"
+                cat "{}"
+                printf 'home = changed\n' > "{}"
+            "#, query_count.display(), response_file.display(), configuration.display()},
+        )?;
+        fs::set_permissions(
+            &mocked_interpreter,
+            std::os::unix::fs::PermissionsExt::from_mode(0o770),
+        )?;
+        let cache = Cache::temp()?.init().await?;
+
+        assert_eq!(
+            Interpreter::query(&mocked_interpreter, &cache)?.python_version(),
+            &Version::from_str("3.12.0")?
+        );
+
+        // Restoring the earlier configuration must not recover metadata from the unstable query.
+        fs::write(&configuration, "home = original\n")?;
+        response["markers"]["implementation_version"] = "3.12.13".into();
+        response["markers"]["python_full_version"] = "3.12.13".into();
+        fs::write(&response_file, serde_json::to_vec(&response)?)?;
+        assert_eq!(
+            Interpreter::query(&mocked_interpreter, &cache)?.python_version(),
+            &Version::from_str("3.12.13")?
+        );
+        assert_eq!(fs::read_to_string(&query_count)?, "..");
+
+        // Once the configuration stops changing, metadata can be cached again.
+        Interpreter::query(&mocked_interpreter, &cache)?;
+        Interpreter::query(&mocked_interpreter, &cache)?;
+        assert_eq!(fs::read_to_string(&query_count)?, "...");
 
         Ok(())
     }
