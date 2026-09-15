@@ -13,6 +13,7 @@ use uv_fs::rename_with_retry;
 use uv_pypi_types::{HashAlgorithm, HashDigest};
 
 use crate::error::Error;
+use crate::size::ArchiveSizePolicy;
 
 /// The checks required before an extracted source archive can be persisted to the cache.
 pub(super) struct ArchiveValidation<'a> {
@@ -22,7 +23,7 @@ pub(super) struct ArchiveValidation<'a> {
     pub(super) hash_policy: ArchiveHashPolicy<'a>,
     /// Every digest from a cache revision being repaired must remain unchanged.
     pub(super) existing_hashes: &'a [HashDigest],
-    pub(super) expected_size: Option<u64>,
+    pub(super) size: ArchiveSizePolicy,
 }
 
 /// An extracted source archive that satisfies its requested size and hash checks.
@@ -70,19 +71,11 @@ impl ValidatedSourceArchive {
             .await
             .map_err(|err| Error::Extract(source.to_string(), err))?;
 
-        if !algorithms.is_empty() || validation.expected_size.is_some() {
+        if !algorithms.is_empty() || validation.size.is_some() {
             hasher.finish().await.map_err(Error::HashExhaustion)?;
         }
         let size = hasher.bytes_read();
-        if let Some(expected) = validation.expected_size
-            && size != expected
-        {
-            return Err(Error::MismatchedSize {
-                distribution: source.to_string(),
-                expected,
-                actual: size,
-            });
-        }
+        validation.size.check(source, size)?;
 
         let hashes = hashers
             .into_iter()
@@ -161,7 +154,7 @@ mod tests {
         extra_algorithms: &[],
         hash_policy: ArchiveHashPolicy::None,
         existing_hashes: &[],
-        expected_size: None,
+        size: ArchiveSizePolicy::None,
     };
 
     fn cache() -> Result<Cache> {
@@ -229,7 +222,11 @@ mod tests {
                 ..NO_VALIDATION
             },
             ArchiveValidation {
-                expected_size: Some(bytes.len() as u64),
+                size: ArchiveSizePolicy::Required(bytes.len() as u64),
+                ..NO_VALIDATION
+            },
+            ArchiveValidation {
+                size: ArchiveSizePolicy::Advisory(bytes.len() as u64),
                 ..NO_VALIDATION
             },
         ] {
@@ -253,7 +250,7 @@ mod tests {
                 reader(&[0xff; 512], &trailing_read),
                 ArchiveValidation {
                     extra_algorithms: &[HashAlgorithm::Sha256],
-                    expected_size: Some(1),
+                    size: ArchiveSizePolicy::Required(1),
                     ..NO_VALIDATION
                 },
             )

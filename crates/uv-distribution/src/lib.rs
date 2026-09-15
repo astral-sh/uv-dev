@@ -19,4 +19,5 @@ mod hash;
 mod index;
 mod metadata;
 mod reporter;
+mod size;
 mod source;

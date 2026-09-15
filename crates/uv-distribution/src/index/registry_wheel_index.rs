@@ -19,6 +19,7 @@ use uv_platform_tags::Tags;
 use uv_types::HashStrategy;
 
 use crate::index::cached_wheel::{CachedWheel, ResolvedWheel};
+use crate::size::ArchiveSizePolicy;
 use crate::source::{HTTP_REVISION, HttpRevisionPointer, LOCAL_REVISION, LocalRevisionPointer};
 
 /// An entry in the [`RegistryWheelIndex`].
@@ -134,6 +135,7 @@ impl<'a> RegistryWheelIndex<'a> {
         no_binary: bool,
     ) -> Option<&CachedRegistryDist> {
         let wheel = wheel.best_wheel();
+        let size_policy = ArchiveSizePolicy::registry(wheel.file.size, wheel.size_is_authoritative);
         self.get(&wheel.filename.name).find_map(|entry| {
             if !entry.matches_wheel(&wheel.index, &wheel.filename, no_build, no_binary) {
                 return None;
@@ -148,6 +150,11 @@ impl<'a> RegistryWheelIndex<'a> {
                 );
                 return None;
             }
+            if !entry.built
+                && let Some(actual) = entry.size
+            {
+                size_policy.warn(&entry.dist, actual);
+            }
             Some(&entry.dist)
         })
     }
@@ -159,6 +166,8 @@ impl<'a> RegistryWheelIndex<'a> {
         no_build: bool,
         no_binary: bool,
     ) -> Option<&CachedRegistryDist> {
+        let size_policy =
+            ArchiveSizePolicy::registry(source.file.size, source.size_is_authoritative);
         self.get(&source.name).find_map(|entry| {
             if !entry.matches_source(
                 &source.index,
@@ -178,6 +187,11 @@ impl<'a> RegistryWheelIndex<'a> {
                     entry.dist.filename, entry.size, entry.built,
                 );
                 return None;
+            }
+            if entry.built
+                && let Some(actual) = entry.size
+            {
+                size_policy.warn(source, actual);
             }
             Some(&entry.dist)
         })

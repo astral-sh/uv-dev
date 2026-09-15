@@ -6583,6 +6583,7 @@ dependencies = [
  "uv-python",
  "uv-redacted",
  "uv-types",
+ "uv-warnings",
  "uv-workspace",
  "walkdir",
 ]

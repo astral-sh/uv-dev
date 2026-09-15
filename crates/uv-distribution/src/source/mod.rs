@@ -33,8 +33,7 @@ use uv_distribution_filename::{SourceDistExtension, WheelFilename};
 use uv_distribution_types::{
     ArchiveHashPolicy, BuildInfo, BuildVariables, BuildableSource, ConfigSettings,
     DirectorySourceUrl, ExtraBuildRequirement, GitDirectorySourceUrl, GitPathSourceUrl, Hashed,
-    IndexUrl, PathSourceUrl, RemoteSource, RequirementSource, RequiresPython, SourceDist,
-    SourceUrl,
+    IndexUrl, PathSourceUrl, RequirementSource, RequiresPython, SourceDist, SourceUrl,
 };
 use uv_fs::{Simplified, rename_with_retry, write_atomic};
 use uv_git::{Fetch, GIT_LFS, GitError, GitHttpSettings, GitResolver};
@@ -51,6 +50,7 @@ use uv_workspace::pyproject::ToolUvSources;
 use crate::distribution_database::ManagedClient;
 use crate::error::Error;
 use crate::metadata::{ArchiveMetadata, GitWorkspaceMember, Metadata};
+use crate::size::ArchiveSizePolicy;
 use crate::source::built_wheel_metadata::{BuiltWheelFile, BuiltWheelMetadata};
 use crate::source::revision::Revision;
 use crate::source::validated_archive::{ArchiveValidation, ValidatedSourceArchive};
@@ -1010,15 +1010,10 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 CachedClientError::Client(err) => Error::Client(err),
             })?;
 
-        let expected_size = Self::expected_archive_size(source);
-        if let (Some(expected), Some(actual)) = (expected_size, revision.size())
-            && expected != actual
-        {
-            return Err(Error::MismatchedSize {
-                distribution: source.to_string(),
-                expected,
-                actual,
-            });
+        let size_policy = ArchiveSizePolicy::for_source(source);
+        let expected_size = size_policy.required();
+        if let Some(actual) = revision.size() {
+            size_policy.check(source, actual)?;
         }
 
         // If the archive is missing the required hashes or size, force a refresh.
@@ -1327,21 +1322,16 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
         // Read the existing metadata from the cache.
         let revision_entry = cache_shard.entry(LOCAL_REVISION);
-        let expected_size = Self::expected_archive_size(source);
+        let size_policy = ArchiveSizePolicy::for_source(source);
+        let expected_size = size_policy.required();
 
         // If the revision already exists, return it. There's no need to check for freshness, since
         // we use an exact timestamp.
         if let Some(pointer) = LocalRevisionPointer::read_from(&revision_entry)?
             && *pointer.cache_info() == cache_info
         {
-            if let (Some(expected), Some(actual)) = (expected_size, pointer.revision().size())
-                && expected != actual
-            {
-                return Err(Error::MismatchedSize {
-                    distribution: source.to_string(),
-                    expected,
-                    actual,
-                });
+            if let Some(actual) = pointer.revision().size() {
+                size_policy.check(source, actual)?;
             }
             if pointer.revision().has_digests(hashes)
                 && (expected_size.is_none() || pointer.revision().size().is_some())
@@ -2831,7 +2821,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .bytes_stream()
             .map_err(std::io::Error::other)
             .into_async_read();
-        let expected_size = Self::expected_archive_size(source);
+        let size = ArchiveSizePolicy::for_source(source);
 
         let archive = ValidatedSourceArchive::extract(
             reader.compat(),
@@ -2842,7 +2832,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 extra_algorithms: &[HashAlgorithm::Sha256],
                 hash_policy,
                 existing_hashes,
-                expected_size,
+                size,
             },
         )
         .instrument(info_span!("download_source_dist", source_dist = %source))
@@ -2878,28 +2868,11 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 extra_algorithms: &[],
                 hash_policy,
                 existing_hashes,
-                expected_size: Self::expected_archive_size(source),
+                size: ArchiveSizePolicy::for_source(source),
             },
         )
         .await?;
         Ok((archive.persist(target).await?.hashes, size))
-    }
-
-    /// Return the archive size that must be validated, excluding advisory index metadata.
-    fn expected_archive_size(source: &BuildableSource<'_>) -> Option<u64> {
-        match source {
-            BuildableSource::Dist(SourceDist::Registry(dist)) => {
-                dist.size_is_authoritative.then(|| dist.size()).flatten()
-            }
-            BuildableSource::Dist(SourceDist::DirectUrl(dist)) => dist.size(),
-            BuildableSource::Dist(
-                SourceDist::Path(_)
-                | SourceDist::Directory(_)
-                | SourceDist::GitPath(_)
-                | SourceDist::GitDirectory(_),
-            )
-            | BuildableSource::Url(_) => None,
-        }
     }
 
     /// For Git directories, we check them out into the cache, so we need to avoid workspace
