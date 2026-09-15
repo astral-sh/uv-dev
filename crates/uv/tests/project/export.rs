@@ -4,6 +4,7 @@ use anyhow::{Ok, Result};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
+#[cfg(feature = "test-universal")]
 use insta::assert_snapshot;
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 use std::path::Path;
