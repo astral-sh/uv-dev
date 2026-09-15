@@ -229,9 +229,10 @@ impl<'a> ComponentBuilder<'a> {
 
             if let Some(sdist) = &package.sdist {
                 if let (Some(url), Some(hash)) = (sdist.url(), sdist.hash()) {
-                    if let (Ok(uri), Some(cdx_hash)) =
-                        (Uri::try_from(url.to_string()), to_cyclonedx_hash(&hash.0))
-                    {
+                    if let (Ok(uri), Some(cdx_hash)) = (
+                        Uri::try_from(url.as_ref().to_owned()),
+                        to_cyclonedx_hash(&hash.0),
+                    ) {
                         external_references.push(ExternalReference {
                             url: ExternalReferenceUri::Url(uri),
                             comment: None,
@@ -244,9 +245,10 @@ impl<'a> ComponentBuilder<'a> {
 
             for wheel in &package.wheels {
                 if let (WheelWireSource::Url { url }, Some(hash)) = (&wheel.url, &wheel.hash) {
-                    if let (Ok(uri), Some(cdx_hash)) =
-                        (Uri::try_from(url.to_string()), to_cyclonedx_hash(&hash.0))
-                    {
+                    if let (Ok(uri), Some(cdx_hash)) = (
+                        Uri::try_from(url.as_ref().to_owned()),
+                        to_cyclonedx_hash(&hash.0),
+                    ) {
                         external_references.push(ExternalReference {
                             url: ExternalReferenceUri::Url(uri),
                             comment: None,
