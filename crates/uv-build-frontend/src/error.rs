@@ -302,19 +302,7 @@ impl Display for BuildBackendError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} ({})", self.message, self.exit_code)?;
 
-        let mut non_empty = false;
-
-        if self.stdout.iter().any(|line| !line.trim().is_empty()) {
-            write!(f, "\n\n{}\n{}", "[stdout]".red(), self.stdout.join("\n"))?;
-            non_empty = true;
-        }
-
-        if self.stderr.iter().any(|line| !line.trim().is_empty()) {
-            write!(f, "\n\n{}\n{}", "[stderr]".red(), self.stderr.join("\n"))?;
-            non_empty = true;
-        }
-
-        if non_empty {
+        if write_captured_output(f, &self.stdout, &self.stderr)? {
             writeln!(f)?;
         }
 
@@ -334,17 +322,25 @@ pub struct MissingHeaderError {
 impl Display for MissingHeaderError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} ({})", self.message, self.exit_code)?;
-
-        if self.stdout.iter().any(|line| !line.trim().is_empty()) {
-            write!(f, "\n\n{}\n{}", "[stdout]".red(), self.stdout.join("\n"))?;
-        }
-
-        if self.stderr.iter().any(|line| !line.trim().is_empty()) {
-            write!(f, "\n\n{}\n{}", "[stderr]".red(), self.stderr.join("\n"))?;
-        }
-
+        write_captured_output(f, &self.stdout, &self.stderr)?;
         Ok(())
     }
+}
+
+/// Write non-empty output sections, returning whether either section was emitted.
+fn write_captured_output(
+    f: &mut Formatter<'_>,
+    stdout: &[String],
+    stderr: &[String],
+) -> Result<bool, std::fmt::Error> {
+    let mut non_empty = false;
+    for (label, lines) in [("[stdout]", stdout), ("[stderr]", stderr)] {
+        if lines.iter().any(|line| !line.trim().is_empty()) {
+            write!(f, "\n\n{}\n{}", label.red(), lines.join("\n"))?;
+            non_empty = true;
+        }
+    }
+    Ok(non_empty)
 }
 
 impl Error {
@@ -466,6 +462,7 @@ impl Error {
 mod test {
     use std::assert_matches;
 
+    use super::{BuildBackendError, MissingHeaderCause, MissingHeaderError, MissingLibrary};
     use crate::{Error, PythonRunnerOutput};
     use indoc::indoc;
     use std::process::ExitStatus;
@@ -483,6 +480,77 @@ mod test {
             .replace("exit status: ", "exit code: ");
         let formatted = ErrorWithHints::new(formatted, err.hints()).to_string();
         anstream::adapter::strip_str(&formatted).to_string()
+    }
+
+    #[test]
+    fn captured_output_formatting() {
+        let cases: &[(&str, &[&str], &[&str], &str)] = &[
+            ("empty", &[], &[], ""),
+            ("whitespace", &[" \t", ""], &["\t"], ""),
+            (
+                "stdout",
+                &["first", "second"],
+                &[],
+                "\n\n[stdout]\nfirst\nsecond",
+            ),
+            ("stderr", &[], &["error"], "\n\n[stderr]\nerror"),
+            (
+                "both",
+                &["first"],
+                &["error"],
+                "\n\n[stdout]\nfirst\n\n[stderr]\nerror",
+            ),
+            (
+                "blank stdout",
+                &["", " "],
+                &["error"],
+                "\n\n[stderr]\nerror",
+            ),
+            (
+                "preserve lines",
+                &["", " first ", "\t", ""],
+                &["", "error", ""],
+                "\n\n[stdout]\n\n first \n\t\n\n\n[stderr]\n\nerror\n",
+            ),
+        ];
+        let normalize = |message: String| {
+            let message = message.replace("exit status: ", "exit code: ");
+            anstream::adapter::strip_str(&message).to_string()
+        };
+        let prefix = "Failed building wheel (exit code: 0)";
+        for &(name, stdout, stderr, sections) in cases {
+            let stdout: Vec<String> = stdout.iter().map(ToString::to_string).collect();
+            let stderr: Vec<String> = stderr.iter().map(ToString::to_string).collect();
+            let backend = BuildBackendError {
+                message: "Failed building wheel".to_string(),
+                exit_code: ExitStatus::default(),
+                stdout: stdout.clone(),
+                stderr: stderr.clone(),
+            };
+            let missing_header = MissingHeaderError {
+                message: "Failed building wheel".to_string(),
+                exit_code: ExitStatus::default(),
+                stdout,
+                stderr,
+                cause: MissingHeaderCause {
+                    missing_library: MissingLibrary::Header("example.h".to_string()),
+                    package_name: None,
+                    package_version: None,
+                    version_id: None,
+                },
+            };
+            let newline = if sections.is_empty() { "" } else { "\n" };
+            assert_eq!(
+                normalize(backend.to_string()),
+                format!("{prefix}{sections}{newline}"),
+                "backend: {name}"
+            );
+            assert_eq!(
+                normalize(missing_header.to_string()),
+                format!("{prefix}{sections}"),
+                "missing header: {name}"
+            );
+        }
     }
 
     #[test]
