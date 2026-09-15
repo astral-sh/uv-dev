@@ -480,7 +480,7 @@ fn lock_exclude_newer_package_relative() -> Result<()> {
 }
 
 /// Local dates in persistent configuration warn because their interpretation depends on the
-/// system timezone.
+/// system timezone. The warning suggests an equivalent timestamp that can be used on other systems.
 #[test]
 fn lock_exclude_newer_package_local_date_pyproject() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -494,18 +494,37 @@ fn lock_exclude_newer_package_local_date_pyproject() -> Result<()> {
         dependencies = ["iniconfig"]
 
         [tool.uv]
-        exclude-newer-package = { iniconfig = "2024-01-01" }
+        exclude-newer-package = { iniconfig = "2024-06-15" }
         "#,
     )?;
 
     uv_snapshot!(context.filters(), context
         .lock()
+        .env("TZ", "America/New_York")
         .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: `2024-01-01` is a local date without a timezone. `exclude-newer` values in persistent configuration should use a full timestamp with a timezone (for example, `2024-01-01T00:00:00Z`); local dates will be rejected in a future release
+    warning: `2024-06-15` is a local date without a timezone. `exclude-newer` values in persistent configuration should use a full timestamp with a timezone (use `2024-06-16T04:00:00Z` to retain the current cutoff); local dates will be rejected in a future release
     Resolved 2 packages in [TIME]
     "#);
+
+    let lock = context.read("uv.lock");
+    pyproject_toml.write_str(
+        &context
+            .read("pyproject.toml")
+            .replace("2024-06-15", "2024-06-16T04:00:00Z"),
+    )?;
+
+    uv_snapshot!(context.filters(), context
+        .lock()
+        .env("TZ", "Asia/Tokyo")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--locked"), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    "#);
+    assert_eq!(context.read("uv.lock"), lock);
 
     Ok(())
 }

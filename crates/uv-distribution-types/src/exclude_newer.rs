@@ -112,13 +112,16 @@ impl ExcludeNewerValue {
     /// Unlike command-line arguments, persistent configuration should not depend on the system
     /// time zone, so warn when local dates are used instead of explicit timestamps.
     fn from_persistent_str(input: &str) -> Result<Self, String> {
-        if input.parse::<jiff::civil::Date>().is_ok() {
+        let value = Self::from_str(input)?;
+        if let Self::Absolute(timestamp) = &value
+            && input.parse::<Timestamp>().is_err()
+        {
             warn_user_once!(
-                "`{input}` is a local date without a timezone. `exclude-newer` values in persistent configuration should use a full timestamp with a timezone (for example, `2024-01-01T00:00:00Z`); local dates will be rejected in a future release"
+                "`{input}` is a local date without a timezone. `exclude-newer` values in persistent configuration should use a full timestamp with a timezone (use `{timestamp}` to retain the current cutoff); local dates will be rejected in a future release"
             );
         }
 
-        Self::from_str(input)
+        Ok(value)
     }
 }
 
