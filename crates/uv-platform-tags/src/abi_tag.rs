@@ -224,6 +224,31 @@ impl std::fmt::Display for AbiTag {
     }
 }
 
+/// The context-independent reason that a compact ABI version could not be parsed.
+enum ParseVersionError {
+    MissingMajor,
+    InvalidMajor,
+    MissingMinor,
+    InvalidMinor,
+}
+
+/// Parse a compact version from a string (e.g., convert `39` into `(3, 9)`).
+fn parse_version(version: &str) -> Result<(u8, u8), ParseVersionError> {
+    let major = version
+        .as_bytes()
+        .first()
+        .ok_or(ParseVersionError::MissingMajor)?
+        .checked_sub(b'0')
+        .filter(|digit| *digit < 10)
+        .ok_or(ParseVersionError::InvalidMajor)?;
+    let minor = version
+        .get(1..)
+        .ok_or(ParseVersionError::MissingMinor)?
+        .parse::<u8>()
+        .map_err(|_| ParseVersionError::InvalidMinor)?;
+    Ok((major, minor))
+}
+
 impl FromStr for AbiTag {
     type Err = ParseAbiTagError;
 
@@ -235,31 +260,27 @@ impl FromStr for AbiTag {
             implementation: &'static str,
             full_tag: &str,
         ) -> Result<(u8, u8), ParseAbiTagError> {
-            let major = version_str
-                .as_bytes()
-                .first()
-                .ok_or_else(|| ParseAbiTagError::MissingMajorVersion {
-                    implementation,
-                    tag: full_tag.to_string(),
-                })?
-                .checked_sub(b'0')
-                .filter(|digit| *digit < 10)
-                .ok_or_else(|| ParseAbiTagError::InvalidMajorVersion {
-                    implementation,
-                    tag: full_tag.to_string(),
-                })?;
-            let minor = version_str
-                .get(1..)
-                .ok_or_else(|| ParseAbiTagError::MissingMinorVersion {
-                    implementation,
-                    tag: full_tag.to_string(),
-                })?
-                .parse::<u8>()
-                .map_err(|_| ParseAbiTagError::InvalidMinorVersion {
-                    implementation,
-                    tag: full_tag.to_string(),
-                })?;
-            Ok((major, minor))
+            parse_version(version_str).map_err(|err| {
+                let tag = full_tag.to_string();
+                match err {
+                    ParseVersionError::MissingMajor => ParseAbiTagError::MissingMajorVersion {
+                        implementation,
+                        tag,
+                    },
+                    ParseVersionError::InvalidMajor => ParseAbiTagError::InvalidMajorVersion {
+                        implementation,
+                        tag,
+                    },
+                    ParseVersionError::MissingMinor => ParseAbiTagError::MissingMinorVersion {
+                        implementation,
+                        tag,
+                    },
+                    ParseVersionError::InvalidMinor => ParseAbiTagError::InvalidMinorVersion {
+                        implementation,
+                        tag,
+                    },
+                }
+            })
         }
 
         /// Parse an implementation version from a string (e.g., convert `37` into `(3, 7)`).
@@ -268,31 +289,27 @@ impl FromStr for AbiTag {
             implementation: &'static str,
             full_tag: &str,
         ) -> Result<(u8, u8), ParseAbiTagError> {
-            let major = version_str
-                .as_bytes()
-                .first()
-                .ok_or_else(|| ParseAbiTagError::MissingImplMajorVersion {
-                    implementation,
-                    tag: full_tag.to_string(),
-                })?
-                .checked_sub(b'0')
-                .filter(|digit| *digit < 10)
-                .ok_or_else(|| ParseAbiTagError::InvalidImplMajorVersion {
-                    implementation,
-                    tag: full_tag.to_string(),
-                })?;
-            let minor = version_str
-                .get(1..)
-                .ok_or_else(|| ParseAbiTagError::MissingImplMinorVersion {
-                    implementation,
-                    tag: full_tag.to_string(),
-                })?
-                .parse::<u8>()
-                .map_err(|_| ParseAbiTagError::InvalidImplMinorVersion {
-                    implementation,
-                    tag: full_tag.to_string(),
-                })?;
-            Ok((major, minor))
+            parse_version(version_str).map_err(|err| {
+                let tag = full_tag.to_string();
+                match err {
+                    ParseVersionError::MissingMajor => ParseAbiTagError::MissingImplMajorVersion {
+                        implementation,
+                        tag,
+                    },
+                    ParseVersionError::InvalidMajor => ParseAbiTagError::InvalidImplMajorVersion {
+                        implementation,
+                        tag,
+                    },
+                    ParseVersionError::MissingMinor => ParseAbiTagError::MissingImplMinorVersion {
+                        implementation,
+                        tag,
+                    },
+                    ParseVersionError::InvalidMinor => ParseAbiTagError::InvalidImplMinorVersion {
+                        implementation,
+                        tag,
+                    },
+                }
+            })
         }
 
         if s == "none" {
@@ -525,6 +542,71 @@ mod tests {
 
         let err = AbiTag::from_str("cp39dd").unwrap_err();
         assert_snapshot!(err, @"Duplicate suffix `d` in CPython ABI tag: cp39dd");
+    }
+
+    #[test]
+    fn version_errors() {
+        let errors = [
+            "cp",
+            "cp3",
+            "cp3999",
+            "cpXY",
+            "pypy_",
+            "pypy_XY",
+            "pypy_3",
+            "pypy_3999",
+            "pypyX_pp",
+            "pypy3_pp73",
+            "pypy3999_pp73",
+            "pypy39_pp",
+            "pypy39_ppX",
+            "pypy39_pp3",
+            "pypy39_pp3999",
+            "graalpy_39_native",
+            "graalpyX_39_native",
+            "graalpy3_39_native",
+            "graalpy3999_39_native",
+            "graalpy39__native",
+            "graalpy39_X_native",
+            "graalpy39_3_native",
+            "graalpy39_3999_native",
+            "graalpy39__wrong",
+            "pyston__x86_64_linux_gnu",
+            "pyston_X_x86_64_linux_gnu",
+            "pyston_3_x86_64_linux_gnu",
+            "pyston_3999_x86_64_linux_gnu",
+        ]
+        .map(|tag| AbiTag::from_str(tag).unwrap_err().to_string());
+        assert_snapshot!(errors.join("\n"), @"
+        Missing major version in CPython ABI tag: cp
+        Invalid minor version in CPython ABI tag: cp3
+        Invalid minor version in CPython ABI tag: cp3999
+        Missing major version in CPython ABI tag: cpXY
+        Missing implementation major version in PyPy ABI tag: pypy_
+        Invalid implementation major version in PyPy ABI tag: pypy_XY
+        Invalid implementation minor version in PyPy ABI tag: pypy_3
+        Invalid implementation minor version in PyPy ABI tag: pypy_3999
+        Invalid major version in PyPy ABI tag: pypyX_pp
+        Invalid minor version in PyPy ABI tag: pypy3_pp73
+        Invalid minor version in PyPy ABI tag: pypy3999_pp73
+        Missing implementation major version in PyPy ABI tag: pypy39_pp
+        Invalid implementation major version in PyPy ABI tag: pypy39_ppX
+        Invalid implementation minor version in PyPy ABI tag: pypy39_pp3
+        Invalid implementation minor version in PyPy ABI tag: pypy39_pp3999
+        Missing implementation major version in GraalPy ABI tag: graalpy_39_native
+        Invalid implementation major version in GraalPy ABI tag: graalpyX_39_native
+        Invalid implementation minor version in GraalPy ABI tag: graalpy3_39_native
+        Invalid implementation minor version in GraalPy ABI tag: graalpy3999_39_native
+        Missing major version in GraalPy ABI tag: graalpy39__native
+        Invalid major version in GraalPy ABI tag: graalpy39_X_native
+        Invalid minor version in GraalPy ABI tag: graalpy39_3_native
+        Invalid minor version in GraalPy ABI tag: graalpy39_3999_native
+        Invalid GraalPy ABI tag format: graalpy39__wrong
+        Missing implementation major version in Pyston ABI tag: pyston__x86_64_linux_gnu
+        Invalid implementation major version in Pyston ABI tag: pyston_X_x86_64_linux_gnu
+        Invalid implementation minor version in Pyston ABI tag: pyston_3_x86_64_linux_gnu
+        Invalid implementation minor version in Pyston ABI tag: pyston_3999_x86_64_linux_gnu
+        ");
     }
 
     #[test]
