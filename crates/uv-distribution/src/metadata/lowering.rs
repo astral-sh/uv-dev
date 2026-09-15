@@ -211,8 +211,11 @@ impl LoweredRequirement {
                             marker,
                             ..
                         } => {
-                            let source =
-                                url_source(requirement, url, subdirectory.map(Box::<Path>::from))?;
+                            let source = url_source(
+                                requirement,
+                                url.into_url(),
+                                subdirectory.map(Box::<Path>::from),
+                            )?;
                             (source, marker)
                         }
                         Source::Path {
@@ -407,8 +410,11 @@ impl LoweredRequirement {
                             marker,
                             ..
                         } => {
-                            let source =
-                                url_source(requirement, url, subdirectory.map(Box::<Path>::from))?;
+                            let source = url_source(
+                                requirement,
+                                url.into_url(),
+                                subdirectory.map(Box::<Path>::from),
+                            )?;
                             (source, marker)
                         }
                         Source::Path {
