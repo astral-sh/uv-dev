@@ -5,7 +5,7 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{fixture::ChildPath, prelude::*};
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
-use predicates::{prelude::predicate, str::contains};
+use predicates::{prelude::PredicateBooleanExt, prelude::predicate, str::contains};
 use serde_json::json;
 use std::path::Path;
 use uv_fs::copy_dir_all;
@@ -4763,6 +4763,25 @@ fn run_remote_pep723_script() {
      + pygments==2.17.2
      + rich==13.7.1
     ");
+}
+
+/// URL schemes are case-insensitive, so uppercase remote scripts must not be spawned locally.
+#[test]
+fn run_remote_script_uppercase_scheme_offline() {
+    let context = uv_test::test_context!("3.12");
+
+    for url in ["HTTPS://example.com/main.py", "Http://example.com/main.py"] {
+        context
+            .run()
+            .arg("--offline")
+            .arg(url)
+            .assert()
+            .failure()
+            .stderr(
+                predicate::str::contains("Network connectivity is disabled")
+                    .and(predicate::str::contains("Failed to spawn").not()),
+            );
+    }
 }
 
 #[test]
