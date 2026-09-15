@@ -30,7 +30,7 @@ impl ProxyUrl {
 
     /// Constructs a [`reqwest::Proxy`] from this [`ProxyUrl`] for the given [`ProxyUrlKind`].
     pub fn as_proxy(&self, kind: ProxyUrlKind) -> Proxy {
-        // SAFETY: Constructing a [`Proxy`] from a [`Url`] is infallible.
+        // The same conversion was validated on construction.
         match kind {
             ProxyUrlKind::Http => Proxy::http(self.0.as_str())
                 .expect("Constructing a proxy from a url should never fail"),
@@ -88,7 +88,10 @@ impl TryFrom<Url> for ProxyUrl {
     fn try_from(url: Url) -> Result<Self, Self::Error> {
         let url = DisplaySafeUrl::from_url(url);
         match url.scheme() {
-            "http" | "https" | "socks5" | "socks5h" => Ok(Self(url)),
+            "http" | "https" | "socks5" | "socks5h" => {
+                Proxy::http(url.as_str()).map_err(|_| url::ParseError::EmptyHost)?;
+                Ok(Self(url))
+            }
             scheme => Err(ProxyUrlError::InvalidScheme {
                 scheme: scheme.to_string(),
                 url,
@@ -244,5 +247,109 @@ mod tests {
             result.unwrap_err().to_string(),
             @"invalid proxy URL: invalid international domain name"
         );
+    }
+
+    #[test]
+    fn reject_unconstructible_proxy_urls() {
+        for input in [
+            "socks5:!",
+            "socks5h:!",
+            "socks5:fixture-user:fixture-secret@proxy.invalid:!",
+        ] {
+            let url = Url::parse(input).unwrap();
+            assert!(!url.has_host());
+            assert!(Proxy::http(url.as_str()).is_err());
+            assert!(Proxy::https(url.as_str()).is_err());
+
+            for error in [
+                ProxyUrl::try_from(url).unwrap_err(),
+                ProxyUrl::from_str(input).unwrap_err(),
+            ] {
+                assert_matches!(
+                    &error,
+                    ProxyUrlError::InvalidUrl(url::ParseError::EmptyHost)
+                );
+                assert_eq!(error.to_string(), "invalid proxy URL: empty host");
+            }
+            assert_eq!(
+                serde_json::from_value::<ProxyUrl>(serde_json::Value::from(input))
+                    .unwrap_err()
+                    .to_string(),
+                "invalid proxy URL: empty host",
+            );
+        }
+    }
+
+    #[test]
+    fn preserve_proxy_fallback_and_serialization() {
+        for (input, stored) in [
+            (
+                "http://proxy.example.com:8080",
+                "http://proxy.example.com:8080/",
+            ),
+            (
+                "https://proxy.example.com:8080",
+                "https://proxy.example.com:8080/",
+            ),
+            ("socks5://proxy.example.com", "socks5://proxy.example.com"),
+            (
+                "socks5h://proxy.example.com:1080",
+                "socks5h://proxy.example.com:1080",
+            ),
+            ("proxy.example.com:8080", "http://proxy.example.com:8080/"),
+            ("proxy.example.com", "http://proxy.example.com/"),
+            ("socks5:1080", "socks5:1080"),
+            ("socks5h:1080", "socks5h:1080"),
+            ("http://[::1]:8080", "http://[::1]:8080/"),
+            ("https://[2001:db8::1]:8443", "https://[2001:db8::1]:8443/"),
+            ("socks5://[::1]:1080", "socks5://[::1]:1080"),
+            ("socks5h://[2001:db8::1]", "socks5h://[2001:db8::1]"),
+        ] {
+            let proxy = ProxyUrl::from_str(input).unwrap();
+            assert_eq!(proxy.to_string(), stored);
+            assert_eq!(
+                serde_json::to_value(&proxy).unwrap(),
+                serde_json::Value::from(stored),
+            );
+            assert_eq!(
+                ProxyUrl::try_from(Url::parse(stored).unwrap()).unwrap(),
+                proxy
+            );
+            assert_eq!(
+                serde_json::from_value::<ProxyUrl>(serde_json::Value::from(input)).unwrap(),
+                proxy,
+            );
+            for kind in [ProxyUrlKind::Http, ProxyUrlKind::Https] {
+                let _proxy = proxy.as_proxy(kind);
+            }
+        }
+
+        let input = "http://fixture-user:fixture-secret@proxy.example.com:8080";
+        let proxy = ProxyUrl::from_str(input).unwrap();
+        assert_eq!(
+            serde_json::to_value(&proxy).unwrap(),
+            serde_json::Value::from("http://fixture-user:fixture-secret@proxy.example.com:8080/"),
+        );
+        assert!(!proxy.to_string().contains("fixture-secret"));
+        assert!(!format!("{proxy:?}").contains("fixture-secret"));
+        for kind in [ProxyUrlKind::Http, ProxyUrlKind::Https] {
+            let _proxy = proxy.as_proxy(kind);
+        }
+    }
+
+    #[test]
+    fn proxy_validation_errors_are_url_free() {
+        let input = "socks5:fixture-user:fixture-secret@proxy.invalid:!";
+        for error in [
+            ProxyUrl::try_from(Url::parse(input).unwrap()).unwrap_err(),
+            ProxyUrl::from_str(input).unwrap_err(),
+        ] {
+            assert_eq!(error.to_string(), "invalid proxy URL: empty host");
+            assert_eq!(format!("{error:?}"), "InvalidUrl(EmptyHost)");
+            let source = std::error::Error::source(&error).unwrap();
+            assert_eq!(source.to_string(), "empty host");
+            assert_eq!(format!("{source:?}"), "EmptyHost");
+            assert!(source.source().is_none());
+        }
     }
 }
