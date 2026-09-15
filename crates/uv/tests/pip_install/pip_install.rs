@@ -427,20 +427,20 @@ fn install_target_current_directory() {
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix();
 
-    // A target of `.` should install into the current directory, but the normalized empty root
-    // rejects every wheel directory as escaping the destination (astral-sh/uv#21694).
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("iniconfig==2.0.0")
         .arg("--target")
         .arg("."), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
-    error: Failed to install: iniconfig-2.0.0-py3-none-any.whl (iniconfig==2.0.0)
-      cause: The wheel is invalid: Wheel directory entry escapes its destination: iniconfig-2.0.0.dist-info
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
     ");
+
+    assert!(context.temp_dir.child("iniconfig").is_dir());
 }
 
 /// Install into the current directory via `[tool.uv.pip]`.
@@ -458,18 +458,18 @@ fn install_target_current_directory_from_config() -> Result<()> {
         target = "."
     "#})?;
 
-    // A configured target of `.` has the same undesirable empty-root behavior
-    // (astral-sh/uv#21694).
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("iniconfig==2.0.0"), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
-    error: Failed to install: iniconfig-2.0.0-py3-none-any.whl (iniconfig==2.0.0)
-      cause: The wheel is invalid: Wheel directory entry escapes its destination: iniconfig-2.0.0.dist-info
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
     ");
+
+    assert!(context.temp_dir.child("iniconfig").is_dir());
 
     Ok(())
 }
