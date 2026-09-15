@@ -627,8 +627,9 @@ required-environments = [
 ]
 ```
 
-The `required-environments` setting is only relevant for packages that do not publish a source
-distribution (like PyTorch), as such packages can _only_ be installed on environments covered by the
-set of pre-built binary distributions (wheels) published by that package.
+For packages that publish a source distribution, `required-environments` also prefers an allowed
+version that provides a wheel for the required environment. Packages without source
+distributions (like PyTorch) can _only_ be installed on environments covered by the published
+wheels.
 
 See the [resolution documentation](../resolution.md#required-environments) for more.

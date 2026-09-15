@@ -204,6 +204,25 @@ ignoring Linux and Windows). On the other hand,
 source distribution include a wheel for macOS in order to be installable (and would fail if no such
 wheel is available).
 
+For packages that include a source distribution, required environments also act as a soft
+preference when updating an existing lockfile. If a pinned version has no wheel for a required
+environment, uv prefers an allowed version that does. If no such version can be selected, uv keeps
+the existing version and falls back to the source distribution. This can be useful when preparing
+for a new Python version incrementally, since constraints on known holdouts continue to be
+respected:
+
+```toml title="pyproject.toml"
+[project]
+requires-python = ">=3.12"
+
+[tool.uv]
+required-environments = ["python_version == '3.13'"]
+constraint-dependencies = ["known-holdout<2"]
+```
+
+This preference is based on wheel tags and `Requires-Python` metadata; it does not consider Trove
+classifiers or guarantee runtime compatibility.
+
 In practice, `required-environments` can be useful for declaring explicit support for non-latest
 platforms, since this often requires backtracking past the latest published versions of those
 packages. For example, to guarantee that any built distribution-only packages includes support for
