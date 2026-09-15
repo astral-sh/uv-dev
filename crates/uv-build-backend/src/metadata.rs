@@ -601,7 +601,9 @@ impl PyProjectToml {
 
         let (license, license_expression, license_files) = self.license_metadata(root)?;
 
-        // TODO(konsti): https://peps.python.org/pep-0753/#label-normalization (Draft)
+        // PEP 753 assigns label normalization to metadata consumers, not producers.
+        // Preserve the labels from `project.urls`.
+        // See: https://peps.python.org/pep-0753/#metadata-producers
         let project_urls = ProjectUrls::new(self.project.urls.clone().unwrap_or_default());
 
         let extras = self
@@ -1299,6 +1301,43 @@ mod tests {
         Name: Hello-World
         Version: 0.1.0
         ");
+    }
+
+    #[test]
+    fn project_url_labels_are_preserved() {
+        let temp_dir = TempDir::new().unwrap();
+        let contents = extend_project(indoc! {r#"
+            [project.urls]
+            "Homepage" = "https://example.invalid/home"
+            "Home-page" = "https://example.invalid/other-home"
+            "Download" = "https://example.invalid/download"
+            "Build Status!" = "https://example.invalid/status"
+        "#});
+        let pyproject_toml: PyProjectToml = toml::from_str(&contents).unwrap();
+        let metadata = pyproject_toml.to_metadata(temp_dir.path()).unwrap();
+
+        assert_snapshot!(metadata.core_metadata_format(), @"
+        Metadata-Version: 2.3
+        Name: hello-world
+        Version: 0.1.0
+        Project-URL: Homepage, https://example.invalid/home
+        Project-URL: Home-page, https://example.invalid/other-home
+        Project-URL: Download, https://example.invalid/download
+        Project-URL: Build Status!, https://example.invalid/status
+        ");
+
+        let metadata_json = serde_json::to_value(&metadata).unwrap();
+        assert_eq!(
+            metadata_json["project_urls"],
+            serde_json::json!({
+                "Homepage": "https://example.invalid/home",
+                "Home-page": "https://example.invalid/other-home",
+                "Download": "https://example.invalid/download",
+                "Build Status!": "https://example.invalid/status",
+            })
+        );
+        assert_eq!(metadata_json["home_page"], serde_json::Value::Null);
+        assert_eq!(metadata_json["download_url"], serde_json::Value::Null);
     }
 
     #[test]
