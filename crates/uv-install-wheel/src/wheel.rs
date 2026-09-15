@@ -239,10 +239,22 @@ impl ValidatedWheelDestination {
                 };
                 match fs::symlink_metadata(&target) {
                     Ok(metadata) if metadata.file_type().is_symlink() => {
-                        return Err(Error::InvalidWheel(format!(
-                            "Cannot install into symlinked directory: {}",
-                            target.simplified_display()
-                        )));
+                        // A destination symlink is safe when its resolved target remains within the
+                        // installation root. Unresolvable links are rejected because their final
+                        // destination cannot be validated.
+                        let resolves_within_root = if let Ok(target) = target.simple_canonicalize()
+                            && let Ok(root) = root.simple_canonicalize()
+                        {
+                            target.starts_with(root)
+                        } else {
+                            false
+                        };
+                        if !resolves_within_root {
+                            return Err(Error::InvalidWheel(format!(
+                                "Cannot install into symlinked directory: {}",
+                                target.simplified_display()
+                            )));
+                        }
                     }
                     Ok(_) => {}
                     Err(err) if err.kind() == io::ErrorKind::NotFound => {

@@ -14440,10 +14440,10 @@ fn reject_symlinked_wheel_data_package_directory() -> Result<()> {
     Ok(())
 }
 
-/// Wheel data installation currently rejects a symlink that remains within the scheme root.
+/// Wheel data installation allows a symlink that remains within the scheme root.
 #[cfg(unix)]
 #[test]
-fn reject_in_prefix_symlinked_wheel_data_directory() -> Result<()> {
+fn install_in_prefix_symlinked_wheel_data_directory() -> Result<()> {
     let context = uv_test::test_context!("3.11");
     let wheel = context.temp_dir.join("foo-0.1.0-py3-none-any.whl");
     let data_path = "foo-0.1.0.data/data/man/man1/foo.1";
@@ -14475,18 +14475,28 @@ fn reject_in_prefix_symlinked_wheel_data_directory() -> Result<()> {
     fs_err::create_dir_all(context.venv.join("share/man"))?;
     symlink("share/man", context.venv.join("man"))?;
 
-    // This link remains within the installation prefix, so rejecting the wheel is undesirable.
-    // See astral-sh/uv#21692.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--link-mode")
         .arg("copy")
         .arg(&wheel), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
-    error: Failed to install: foo-0.1.0-py3-none-any.whl (foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl))
-      cause: The wheel is invalid: Cannot install into symlinked directory: [VENV]/man
+    Installed 1 package in [TIME]
+     + foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl)
+    ");
+
+    context
+        .venv
+        .child("share/man/man1/foo.1")
+        .assert("foo manual\n");
+
+    uv_snapshot!(context.filters(), context.pip_uninstall().arg("foo"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+     - foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl)
     ");
 
     context
