@@ -530,6 +530,90 @@ fn workspace_metadata_script_exact_sync_removes_extraneous_packages() -> Result<
 }
 
 #[test]
+fn workspace_metadata_script_reuses_environment_discovery() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let script = context.temp_dir.child("script.py");
+    script.write_str(
+        r#"# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+"#,
+    )?;
+
+    context
+        .workspace_metadata()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--sync")
+        .assert()
+        .success();
+
+    let mut environment_checks = Vec::new();
+    for sync in [false, true] {
+        let mut command = context.workspace_metadata();
+        command
+            .arg("--script")
+            .arg(script.path())
+            .arg("--preview-features")
+            .arg("workspace-metadata")
+            .env(EnvVars::RUST_LOG, "uv_python::environment=debug");
+        if sync {
+            command.arg("--sync");
+        }
+
+        let output = command.assert().success();
+        let stderr = String::from_utf8(output.get_output().stderr.clone())?;
+        let checks = stderr
+            .lines()
+            .filter(|line| line.starts_with("DEBUG Checking for Python environment at:"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        environment_checks.push(format!(
+            "{}:\n{checks}",
+            if sync { "sync" } else { "read-only" }
+        ));
+    }
+
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_snapshot!(environment_checks.join("\n"), @r#"
+        read-only:
+        DEBUG Checking for Python environment at: `[CACHE_DIR]/environments-v2/script-[HASH]`
+        sync:
+        DEBUG Checking for Python environment at: `[CACHE_DIR]/environments-v2/script-[HASH]`
+        "#);
+    });
+
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_script_does_not_create_environment_when_resolution_fails() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let script = context.temp_dir.child("script.py");
+    script.write_str(
+        r#"# /// script
+# requires-python = ">=3.12"
+# dependencies = ["missing-metadata-dependency==1.0.0"]
+# ///
+"#,
+    )?;
+
+    context
+        .workspace_metadata()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--sync")
+        .arg("--offline")
+        .assert()
+        .failure();
+
+    assert!(!context.cache_dir.child("environments-v2").exists());
+
+    Ok(())
+}
+
+#[test]
 fn workspace_metadata_script_dependency_edges() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -1056,6 +1140,79 @@ dependencies = [
     });
 
     context.pip_show().arg("missing-owner").assert().failure();
+
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_project_reuses_environment_discovery() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"[project]
+name = "project"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+"#,
+    )?;
+    context.lock().assert().success();
+
+    let mut environment_checks = Vec::new();
+    for sync in [false, true] {
+        let mut command = context.workspace_metadata();
+        command
+            .arg("--preview-features")
+            .arg("workspace-metadata")
+            .env(EnvVars::RUST_LOG, "uv_python::environment=debug");
+        if sync {
+            command.arg("--sync");
+        }
+
+        let output = command.assert().success();
+        let stderr = String::from_utf8(output.get_output().stderr.clone())?;
+        let checks = stderr
+            .lines()
+            .filter(|line| line.starts_with("DEBUG Checking for Python environment at:"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        environment_checks.push(format!(
+            "{}:\n{checks}",
+            if sync { "sync" } else { "read-only" }
+        ));
+    }
+
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_snapshot!(environment_checks.join("\n"), @r#"
+        read-only:
+        DEBUG Checking for Python environment at: `.venv`
+        sync:
+        DEBUG Checking for Python environment at: `.venv`
+        "#);
+    });
+
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_project_does_not_create_environment_when_resolution_fails() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"[project]
+name = "project"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["missing-metadata-dependency==1.0.0"]
+"#,
+    )?;
+
+    context
+        .workspace_metadata()
+        .arg("--sync")
+        .arg("--offline")
+        .assert()
+        .failure();
+
+    assert!(!context.temp_dir.child(".venv").exists());
 
     Ok(())
 }
