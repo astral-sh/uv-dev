@@ -5336,7 +5336,9 @@ fn python_install_pyodide() {
     ");
 }
 
-fn python_build_variant_revision_context() -> anyhow::Result<(TestContext, ChildPath)> {
+fn python_build_variant_revision_context(
+    build_variant: &str,
+) -> anyhow::Result<(TestContext, ChildPath)> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -5345,7 +5347,7 @@ fn python_build_variant_revision_context() -> anyhow::Result<(TestContext, Child
     let stock_key = format!("cpython-3.13.7-{platform}");
     context.python_install().arg(&stock_key).assert().success();
 
-    // Use a real Python archive for the replacement, with custom revision metadata.
+    // Use a real Python archive for the replacement, with test revision metadata.
     let metadata: serde_json::Value = serde_json::from_str(&fs_err::read_to_string(
         context
             .workspace_root
@@ -5355,15 +5357,15 @@ fn python_build_variant_revision_context() -> anyhow::Result<(TestContext, Child
         .get(stock_key.replace("-macos-", "-darwin-"))
         .context("The stock download is in the bundled catalog")?
         .clone();
-    // Make the custom build the default so unqualified and custom requests can overlap.
+    // Make the variant the default so unqualified and explicit variant requests can overlap.
     stock_entry["default"] = serde_json::json!(false);
     let mut entry = stock_entry.clone();
-    entry["build_variant"] = serde_json::json!("custom");
+    entry["build_variant"] = serde_json::json!(build_variant);
     entry["default"] = serde_json::json!(true);
     entry["build"] = serde_json::json!("20260901");
 
-    let custom_key = format!("cpython-3.13.7+custom-{platform}");
-    let installation = context.temp_dir.child("managed").child(&custom_key);
+    let variant_key = format!("cpython-3.13.7+{build_variant}-{platform}");
+    let installation = context.temp_dir.child("managed").child(&variant_key);
     fs_err::rename(
         context.temp_dir.child("managed").child(&stock_key),
         installation.path(),
@@ -5375,16 +5377,16 @@ fn python_build_variant_revision_context() -> anyhow::Result<(TestContext, Child
         "version": 1,
         "downloads": {
             (stock_key): stock_entry,
-            (custom_key): entry
+            (variant_key): entry
         }
     });
     let catalog = context.temp_dir.child("python-downloads.json");
     catalog.write_str(&serde_json::to_string(&metadata)?)?;
     let context = context.with_env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, catalog.path());
-    // Update the executable links after moving the stock installation to its custom key.
+    // Update the executable links after moving the stock installation to its variant key.
     context
         .python_install()
-        .arg("3.13.7+custom")
+        .arg(format!("3.13.7+{build_variant}"))
         .arg("--force")
         .assert()
         .success();
@@ -5410,7 +5412,7 @@ fn track_python_build_compilation(installation: &ChildPath) -> anyhow::Result<()
 
 #[test]
 fn python_install_build_variant_revision() -> anyhow::Result<()> {
-    let (context, installation) = python_build_variant_revision_context()?;
+    let (context, installation) = python_build_variant_revision_context("custom")?;
     let marker = installation.child("marker");
     let build = installation.child("BUILD");
 
@@ -5473,7 +5475,7 @@ fn python_install_build_variant_revision() -> anyhow::Result<()> {
 #[test]
 fn python_install_build_variant_revision_overlapping_requests() -> anyhow::Result<()> {
     for requests in [["3.13", "3.13+custom"], ["3.13+custom", "3.13"]] {
-        let (context, installation) = python_build_variant_revision_context()?;
+        let (context, installation) = python_build_variant_revision_context("custom")?;
 
         // The unqualified request reuses revision A while the custom request replaces it with B.
         allow_duplicates! {
@@ -5505,7 +5507,7 @@ fn python_install_build_variant_revision_overlapping_requests() -> anyhow::Resul
 
 #[test]
 fn python_install_build_variant_revision_compile_bytecode() -> anyhow::Result<()> {
-    let (context, installation) = python_build_variant_revision_context()?;
+    let (context, installation) = python_build_variant_revision_context("custom")?;
     let context = context
         .with_concurrent_installs("1")
         .with_filtered_compiled_file_count();
@@ -5540,7 +5542,7 @@ fn python_install_build_variant_revision_compile_bytecode() -> anyhow::Result<()
 #[test]
 fn python_install_build_variant_revision_compile_bytecode_downloads_disabled() -> anyhow::Result<()>
 {
-    let (context, installation) = python_build_variant_revision_context()?;
+    let (context, installation) = python_build_variant_revision_context("custom")?;
     let context = context.with_filtered_compiled_file_count();
     track_python_build_compilation(&installation)?;
 
@@ -5567,7 +5569,7 @@ fn python_install_build_variant_revision_compile_bytecode_downloads_disabled() -
 
 #[test]
 fn python_run_build_variant_revision() -> anyhow::Result<()> {
-    let (context, installation) = python_build_variant_revision_context()?;
+    let (context, installation) = python_build_variant_revision_context("custom")?;
     let marker = installation.child("marker");
     let build = installation.child("BUILD");
 
@@ -5612,7 +5614,7 @@ fn python_run_build_variant_revision() -> anyhow::Result<()> {
 
 #[test]
 fn python_project_build_variant_revision() -> anyhow::Result<()> {
-    let (context, installation) = python_build_variant_revision_context()?;
+    let (context, installation) = python_build_variant_revision_context("custom")?;
     let context = context
         .with_filtered_python_names()
         .with_filtered_python_sources()
@@ -5717,8 +5719,70 @@ fn python_project_build_variant_revision() -> anyhow::Result<()> {
 }
 
 #[test]
+fn python_project_optimization_build_revision() -> anyhow::Result<()> {
+    for build_variant in ["pgo", "lto", "pgo+lto", "lto+pgo", "noopt"] {
+        let (context, installation) = python_build_variant_revision_context(build_variant)?;
+        // Explicit build variants use UV_PYTHON_BUILD for revision selection.
+        let context = context.with_env(EnvVars::UV_PYTHON_CPYTHON_BUILD, "missing-build");
+        context
+            .temp_dir
+            .child("pyproject.toml")
+            .write_str(indoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.13"
+            dependencies = []
+        "#})?;
+        let request = format!("3.13.7+{build_variant}");
+        context
+            .sync()
+            .arg("--python")
+            .arg(&request)
+            .assert()
+            .success();
+
+        let marker = installation.child("marker");
+        marker.assert(predicate::path::exists());
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), context.run().arg("--python").arg(&request)
+                .args(["python", "-c",
+                    "import sys; from pathlib import Path; print((Path(sys.base_prefix) / 'BUILD').read_text().strip())"])
+                .env(EnvVars::UV_PYTHON_BUILD, "20260901"), @"
+            exit_code: 0 (success)
+            ----- stdout -----
+            20260901
+
+            ----- stderr -----
+            Using CPython 3.13.7
+            Removed virtual environment at: .venv
+            Creating virtual environment at: .venv
+            Resolved 1 package in [TIME]
+            Checked in [TIME]
+            ");
+        }
+        marker.assert(predicate::path::missing());
+
+        // Once the requested revision is installed, reuse the environment.
+        marker.touch()?;
+        let environment_marker = context.venv.child("marker");
+        environment_marker.touch()?;
+        context
+            .sync()
+            .arg("--python")
+            .arg(&request)
+            .env(EnvVars::UV_PYTHON_BUILD, "20260901")
+            .assert()
+            .success();
+        marker.assert(predicate::path::exists());
+        environment_marker.assert(predicate::path::exists());
+    }
+    Ok(())
+}
+
+#[test]
 fn python_script_build_variant_revision() -> anyhow::Result<()> {
-    let (context, installation) = python_build_variant_revision_context()?;
+    let (context, installation) = python_build_variant_revision_context("custom")?;
     context.temp_dir.child("script.py").write_str(indoc! {r#"
         # /// script
         # requires-python = ">=3.13"
@@ -5760,7 +5824,7 @@ fn python_script_build_variant_revision() -> anyhow::Result<()> {
 #[tokio::test]
 async fn python_build_variant_revision_download_failure() -> anyhow::Result<()> {
     for automatic in [false, true] {
-        let (context, installation) = python_build_variant_revision_context()?;
+        let (context, installation) = python_build_variant_revision_context("custom")?;
         track_python_build_compilation(&installation)?;
         let context = context.with_http_retries("0");
         let server = MockServer::start().await;
