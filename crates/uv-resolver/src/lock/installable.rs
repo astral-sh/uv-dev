@@ -314,7 +314,7 @@ trait InstallableExt<'lock>: Installable<'lock> {
         if has_conflicts {
             for dist in roots.iter().copied() {
                 // Track the activated extras.
-                if groups.prod() {
+                if groups.includes_non_group_dependencies() {
                     activated_projects.push(&dist.id.name);
                     for extra in extras.extra_names(dist.optional_dependencies.keys()) {
                         activated_extras.push((&dist.id.name, extra));
@@ -344,7 +344,9 @@ trait InstallableExt<'lock>: Installable<'lock> {
             // Add the workspace package to the graph.
             let package_index = self.lock().by_id[&dist.id];
             let index = petgraph.add_node(
-                if root_kind == InstallableRootKind::Production && groups.prod() {
+                if root_kind == InstallableRootKind::Production
+                    && groups.includes_non_group_dependencies()
+                {
                     self.package_to_node(dist, tags, build_options, install_options, marker_env)?
                 } else {
                     self.non_installable_node(dist, tags, marker_env)?
@@ -361,7 +363,9 @@ trait InstallableExt<'lock>: Installable<'lock> {
 
         // Add the workspace dependencies to the queue.
         for (dist, package_index, index, root_kind) in initialized_roots {
-            if root_kind == InstallableRootKind::Production && groups.prod() {
+            if root_kind == InstallableRootKind::Production
+                && groups.includes_non_group_dependencies()
+            {
                 // Push its dependencies onto the queue.
                 queue.push_back((package_index, None));
                 add_reachability(
@@ -428,7 +432,9 @@ trait InstallableExt<'lock>: Installable<'lock> {
                         // member. If it was omitted due to, e.g., `--only-dev`, but is itself
                         // referenced as a development dependency, then we need to re-enable it.
                         let node = &mut petgraph[index];
-                        if !groups.prod() || matches!(node, Node::Dist { install: false, .. }) {
+                        if !groups.includes_non_group_dependencies()
+                            || matches!(node, Node::Dist { install: false, .. })
+                        {
                             *node = self.package_to_node(
                                 dep_dist,
                                 tags,
@@ -502,7 +508,7 @@ trait InstallableExt<'lock>: Installable<'lock> {
 
                 // Add the package to the graph.
                 let package_index = self.lock().by_id[&dist.id];
-                let index = petgraph.add_node(if groups.prod() {
+                let index = petgraph.add_node(if groups.includes_non_group_dependencies() {
                     self.package_to_node(dist, tags, build_options, install_options, marker_env)?
                 } else {
                     self.non_installable_node(dist, tags, marker_env)?
@@ -582,7 +588,7 @@ trait InstallableExt<'lock>: Installable<'lock> {
                         // member. If it was omitted due to, e.g., `--only-dev`, but is itself
                         // referenced as a development dependency, then we need to re-enable it.
                         let node = &mut petgraph[index];
-                        if !groups.prod() {
+                        if !groups.includes_non_group_dependencies() {
                             *node = self.package_to_node(
                                 dist,
                                 tags,

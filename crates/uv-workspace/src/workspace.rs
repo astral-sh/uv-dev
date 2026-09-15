@@ -762,9 +762,10 @@ impl Workspace {
         for (name, member) in self.packages() {
             // Get the top-level requires-python for this package, which is always active
             //
-            // Arguably we could check groups.prod() to disable this, since, the requires-python
-            // of the project is *technically* not relevant if you're doing `--only-group`, but,
-            // that would be a big surprising change, so let's *not* do that until someone asks!
+            // Arguably we could check groups.includes_non_group_dependencies() to disable this,
+            // since the requires-python of the project is *technically* not relevant if you're
+            // doing `--only-group`, but that would be a big surprising change, so let's *not* do
+            // that until someone asks!
             let top_requires = member
                 .pyproject_toml()
                 .project
