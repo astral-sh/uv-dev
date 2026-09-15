@@ -58,8 +58,9 @@ pub(crate) struct PubGrubReportFormatter<'a> {
 
 /// Render a PubGrub report without recursive tree traversal.
 ///
-/// This preserves the output and shared-node reference behavior of
-/// [`pubgrub::DefaultStringReporter`], whose recursive entry point is private.
+/// A missing direct requirement has a concise explanation. Other proofs preserve the output and
+/// shared-node reference behavior of [`pubgrub::DefaultStringReporter`], whose recursive entry
+/// point is private.
 pub(crate) fn report(
     derivation_tree: &ErrorTree,
     formatter: &PubGrubReportFormatter<'_>,
@@ -67,6 +68,9 @@ pub(crate) fn report(
     match derivation_tree {
         DerivationTree::External(external) => formatter.format_external(external),
         DerivationTree::Derived(derived) => {
+            if let Some(report) = formatter.explain_missing_root_package(derived) {
+                return report;
+            }
             let mut reporter = IterativeReporter::default();
             reporter.build(derived, formatter);
             reporter.lines.join("\n")
@@ -551,6 +555,70 @@ impl ReportFormatter<PubGrubPackage, Range<Version>, UnavailableReason>
 }
 
 impl PubGrubReportFormatter<'_> {
+    /// Explain a missing direct requirement without repeating the unsatisfiable root conclusion.
+    /// Keep shared nodes, workspace roots, and more complicated proofs unchanged.
+    fn explain_missing_root_package(&self, current: &ReportDerived) -> Option<String> {
+        if !self.workspace_members.is_empty() || current.shared_id.is_some() {
+            return None;
+        }
+        let mut terms = current.terms.iter();
+        let (root, Term::Positive(root_versions)) = terms.next()? else {
+            return None;
+        };
+        let PubGrubPackageInner::Root(None) = &**root else {
+            return None;
+        };
+        if root_versions.is_empty() || terms.next().is_some() {
+            return None;
+        }
+
+        let (DerivationTree::External(first), DerivationTree::External(second)) =
+            (current.cause1.as_ref(), current.cause2.as_ref())
+        else {
+            return None;
+        };
+        let ((unavailable @ External::Custom(..), dependency @ External::FromDependencyOf(..))
+        | (dependency @ External::FromDependencyOf(..), unavailable @ External::Custom(..))) =
+            (first, second)
+        else {
+            return None;
+        };
+        let External::Custom(
+            package,
+            unavailable_versions,
+            UnavailableReason::Package(UnavailablePackage::NotFound),
+        ) = unavailable
+        else {
+            return None;
+        };
+        let External::FromDependencyOf(dependent, versions, required, requested) = dependency
+        else {
+            return None;
+        };
+        if dependent != root
+            || versions != root_versions
+            || required != package
+            || requested.is_empty()
+            || !requested.subset_of(unavailable_versions)
+        {
+            return None;
+        }
+        let PubGrubPackageInner::Package {
+            extra: None,
+            group: None,
+            marker,
+            ..
+        } = &**package
+        else {
+            return None;
+        };
+        if !marker.is_true() {
+            return None;
+        }
+
+        Some(format!("{}.", self.format_external(unavailable)))
+    }
+
     /// Return the formatting for "the root package requires", if the given
     /// package is the root package.
     ///
@@ -2840,6 +2908,338 @@ mod tests {
                 python_requirement: &self.python_requirement,
                 workspace_members: &self.workspace_members,
                 tags: None,
+            }
+        }
+    }
+
+    fn missing_package_root() -> (PubGrubPackage, Range<Version>) {
+        (
+            PubGrubPackageInner::Root(None).into(),
+            Range::singleton(Version::new([0_u64])),
+        )
+    }
+
+    fn missing_package_proof(
+        package: PubGrubPackage,
+        requested: Range<Version>,
+        unavailable: Range<Version>,
+        reason: UnavailableReason,
+    ) -> ReportDerived {
+        let (root, root_versions) = missing_package_root();
+        ReportDerived {
+            terms: Map::from_iter([(root.clone(), Term::Positive(root_versions.clone()))]),
+            shared_id: None,
+            cause1: ErrorTree::External(External::Custom(package.clone(), unavailable, reason))
+                .into(),
+            cause2: ErrorTree::External(External::FromDependencyOf(
+                root,
+                root_versions,
+                package,
+                requested,
+            ))
+            .into(),
+        }
+    }
+
+    fn missing_root_package(
+        requested: Range<Version>,
+        unavailable: Range<Version>,
+    ) -> ReportDerived {
+        missing_package_proof(
+            PubGrubPackage::base("missing-package".parse().expect("valid package name")),
+            requested,
+            unavailable,
+            UnavailableReason::Package(UnavailablePackage::NotFound),
+        )
+    }
+
+    #[test]
+    fn explains_a_missing_direct_package_without_a_root_conclusion() {
+        let fixture = FormatterFixture::new();
+        let formatter = fixture.formatter();
+        let tree = missing_root_package(Range::full(), Range::full());
+        let original = ErrorTree::Derived(tree.clone());
+        insta::assert_snapshot!(DefaultStringReporter::report_with_formatter(&original, &formatter), @"Because missing-package was not found in the package registry and you require missing-package, we can conclude that your requirements are unsatisfiable.");
+        insta::assert_snapshot!(report(&original, &formatter), @"missing-package was not found in the package registry.");
+
+        let mut reversed = tree;
+        std::mem::swap(&mut reversed.cause1, &mut reversed.cause2);
+        let reversed = ErrorTree::Derived(reversed);
+        insta::assert_snapshot!(DefaultStringReporter::report_with_formatter(&reversed, &formatter), @"Because you require missing-package and missing-package was not found in the package registry, we can conclude that your requirements are unsatisfiable.");
+        assert_eq!(report(&reversed, &formatter), report(&original, &formatter));
+
+        let singleton = Range::singleton(Version::new([2_u64]));
+        let bounded = Range::from_range_bounds((
+            Bound::Included(Version::new([1_u64])),
+            Bound::Excluded(Version::new([3_u64])),
+        ));
+        let disjoint = singleton.union(&Range::singleton(Version::new([4_u64])));
+        for (requested, unavailable) in [
+            (singleton.clone(), singleton.clone()),
+            (singleton, bounded.clone()),
+            (bounded.clone(), bounded),
+            (disjoint.clone(), disjoint),
+            (Range::full(), Range::full()),
+        ] {
+            for reverse in [false, true] {
+                let mut tree = missing_root_package(requested.clone(), unavailable.clone());
+                if reverse {
+                    std::mem::swap(&mut tree.cause1, &mut tree.cause2);
+                }
+                let tree = ErrorTree::Derived(tree);
+                assert_eq!(
+                    report(&tree, &formatter),
+                    "missing-package was not found in the package registry."
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn preserves_other_missing_package_proof_shapes() {
+        let fixture = FormatterFixture::new();
+        let formatter = fixture.formatter();
+        let base = missing_root_package(Range::full(), Range::full());
+        let (root, root_versions) = missing_package_root();
+        let package = PubGrubPackage::base("missing-package".parse().expect("valid package name"));
+        let other = PubGrubPackage::base("other-package".parse().expect("valid package name"));
+        let with_dependency = |dependent, versions, required, requested| ReportDerived {
+            cause2: ErrorTree::External(External::FromDependencyOf(
+                dependent, versions, required, requested,
+            ))
+            .into(),
+            ..base.clone()
+        };
+        let mut cases = vec![
+            (
+                "shared terminal",
+                ReportDerived {
+                    shared_id: Some(1),
+                    ..base.clone()
+                },
+            ),
+            (
+                "wrong package",
+                with_dependency(
+                    root.clone(),
+                    root_versions.clone(),
+                    other.clone(),
+                    Range::full(),
+                ),
+            ),
+            (
+                "wrong dependent",
+                with_dependency(
+                    other.clone(),
+                    root_versions.clone(),
+                    package.clone(),
+                    Range::full(),
+                ),
+            ),
+            (
+                "wrong root range",
+                with_dependency(
+                    root.clone(),
+                    Range::singleton(Version::new([1_u64])),
+                    package.clone(),
+                    Range::full(),
+                ),
+            ),
+            (
+                "empty requested range",
+                missing_root_package(Range::empty(), Range::full()),
+            ),
+            (
+                "uncovered requested range",
+                missing_root_package(Range::full(), Range::singleton(Version::new([1_u64]))),
+            ),
+            (
+                "empty unavailable range",
+                missing_root_package(Range::singleton(Version::new([1_u64])), Range::empty()),
+            ),
+        ];
+        for (name, terms) in [
+            ("no conclusion", Map::default()),
+            (
+                "negative root conclusion",
+                Map::from_iter([(root.clone(), Term::Negative(root_versions.clone()))]),
+            ),
+            (
+                "non-root conclusion",
+                Map::from_iter([(package.clone(), Term::Positive(Range::full()))]),
+            ),
+            (
+                "empty root range",
+                Map::from_iter([(root.clone(), Term::Positive(Range::empty()))]),
+            ),
+            (
+                "multiple terms",
+                Map::from_iter([
+                    (root.clone(), Term::Positive(root_versions.clone())),
+                    (package.clone(), Term::Positive(Range::full())),
+                ]),
+            ),
+        ] {
+            cases.push((
+                name,
+                ReportDerived {
+                    terms,
+                    ..base.clone()
+                },
+            ));
+        }
+        let named_root: PubGrubPackage =
+            PubGrubPackageInner::Root(Some("project".parse().expect("valid package name"))).into();
+        cases.push((
+            "named root",
+            ReportDerived {
+                terms: Map::from_iter([(
+                    named_root.clone(),
+                    Term::Positive(root_versions.clone()),
+                )]),
+                ..with_dependency(
+                    named_root,
+                    root_versions.clone(),
+                    package.clone(),
+                    Range::full(),
+                )
+            },
+        ));
+
+        let transitive = ReportDerived {
+            terms: Map::from_iter([(other.clone(), Term::Positive(Range::full()))]),
+            ..with_dependency(other.clone(), Range::full(), package.clone(), Range::full())
+        };
+        cases.push((
+            "nested transitive dependency",
+            ReportDerived {
+                cause1: ErrorTree::Derived(transitive).into(),
+                ..with_dependency(root, root_versions, other, Range::full())
+            },
+        ));
+        cases.push((
+            "two unavailable causes",
+            ReportDerived {
+                cause2: base.cause1.clone(),
+                ..base.clone()
+            },
+        ));
+
+        for (name, tree) in cases {
+            for reverse in [false, true] {
+                let mut tree = tree.clone();
+                if reverse {
+                    std::mem::swap(&mut tree.cause1, &mut tree.cause2);
+                }
+                let tree = ErrorTree::Derived(tree);
+                assert_eq!(
+                    report(&tree, &formatter),
+                    DefaultStringReporter::report_with_formatter(&tree, &formatter),
+                    "{name}, reverse={reverse}"
+                );
+            }
+        }
+        let external = ErrorTree::External(External::Custom(
+            package,
+            Range::full(),
+            UnavailableReason::Package(UnavailablePackage::NotFound),
+        ));
+        insta::assert_snapshot!(report(&external, &formatter), @"missing-package was not found in the package registry");
+    }
+
+    #[test]
+    fn preserves_other_missing_package_contexts_and_reasons() {
+        let fixture = FormatterFixture::new();
+        let formatter = fixture.formatter();
+        let name: PackageName = "missing-package".parse().expect("valid package name");
+        let package = PubGrubPackage::base(name.clone());
+        let mut cases = Vec::new();
+        for reason in [
+            UnavailableReason::Package(UnavailablePackage::Offline),
+            UnavailableReason::Package(UnavailablePackage::NoIndex),
+            UnavailableReason::Package(UnavailablePackage::Network(StatusCode::UNAUTHORIZED)),
+            UnavailableReason::Version(UnavailableVersion::Offline),
+        ] {
+            cases.push(missing_package_proof(
+                package.clone(),
+                Range::full(),
+                Range::full(),
+                reason,
+            ));
+        }
+        for package in [
+            PubGrubPackageInner::Package {
+                name: name.clone(),
+                extra: Some("feature".parse().expect("valid extra name")),
+                group: None,
+                marker: MarkerTree::TRUE,
+            },
+            PubGrubPackageInner::Package {
+                name: name.clone(),
+                extra: None,
+                group: Some("dev".parse().expect("valid group name")),
+                marker: MarkerTree::TRUE,
+            },
+            PubGrubPackageInner::Package {
+                name: name.clone(),
+                extra: None,
+                group: None,
+                marker: "sys_platform == 'win32'".parse().expect("valid marker"),
+            },
+            PubGrubPackageInner::Extra {
+                name: name.clone(),
+                extra: "feature".parse().expect("valid extra name"),
+                marker: MarkerTree::TRUE,
+            },
+            PubGrubPackageInner::Group {
+                name: name.clone(),
+                group: "dev".parse().expect("valid group name"),
+                marker: MarkerTree::TRUE,
+            },
+            PubGrubPackageInner::Marker {
+                name: name.clone(),
+                marker: MarkerTree::TRUE,
+            },
+            PubGrubPackageInner::System(name),
+            PubGrubPackageInner::Python(PubGrubPython::Target),
+        ] {
+            cases.push(missing_package_proof(
+                package.into(),
+                Range::full(),
+                Range::full(),
+                UnavailableReason::Package(UnavailablePackage::NotFound),
+            ));
+        }
+        for tree in cases {
+            for reverse in [false, true] {
+                let mut tree = tree.clone();
+                if reverse {
+                    std::mem::swap(&mut tree.cause1, &mut tree.cause2);
+                }
+                let tree = ErrorTree::Derived(tree);
+                assert_eq!(
+                    report(&tree, &formatter),
+                    DefaultStringReporter::report_with_formatter(&tree, &formatter)
+                );
+            }
+        }
+        for members in [vec!["project"], vec!["project", "other-project"]] {
+            let mut fixture = FormatterFixture::new();
+            fixture.workspace_members = members
+                .into_iter()
+                .map(|name| name.parse().expect("valid package name"))
+                .collect();
+            let formatter = fixture.formatter();
+            for reverse in [false, true] {
+                let mut tree = missing_root_package(Range::full(), Range::full());
+                if reverse {
+                    std::mem::swap(&mut tree.cause1, &mut tree.cause2);
+                }
+                let tree = ErrorTree::Derived(tree);
+                assert_eq!(
+                    report(&tree, &formatter),
+                    DefaultStringReporter::report_with_formatter(&tree, &formatter)
+                );
             }
         }
     }
