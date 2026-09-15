@@ -1,0 +1,13 @@
+{
+  "outcome": "fixed",
+  "summary": "Current-directory target paths now resolve to the working directory before wheel destination validation, preventing valid wheel directories from being rejected. The regression tests now verify successful installs through both the command-line and configuration forms.",
+  "validation": [
+    "Parent current-directory target integration tests",
+    "Relative-target bytecode integration test",
+    "Symlinked destination rejection integration test",
+    "Target install/upgrade pip-sync round trip",
+    "Rust formatting check",
+    "uv-python clippy with warnings denied"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/1808"
+}

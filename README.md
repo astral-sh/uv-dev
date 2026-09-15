@@ -54,13 +54,32 @@ The command exited with status 2. Targeted comparison runs produced:
 | 0.12.14 | absolute temporary-directory path | Exit 0; installed `annotated-types==0.8.0` |
 | 0.12.13 | `.` | Exit 0; installed `annotated-types==0.8.0` |
 
-Existing integration coverage in `crates/uv/tests/pip_install/pip_install.rs` includes
+The neighboring integration coverage in `crates/uv/tests/pip_install/pip_install.rs` includes
 `compile_bytecode_for_relative_install_root`, which verifies a non-dot relative target (`target`),
 and the astral-sh/uv#21569 symlink-rejection tests such as
-`reject_symlinked_wheel_package_directory`. None of the target tests inspected passes `.` or `./`
-as the installation target, so they do not cover this regression.
+`reject_symlinked_wheel_package_directory`. Those tests do not exercise `.` or `./`; the parent
+regression tests described below provide the current-directory coverage.
 
 An absolute target such as `--target="$PWD"` is an observed workaround on uv 0.12.14.
+
+## Fix
+
+Outcome: fixed in the checkout.
+
+The root cause is that [`Target`] retained current-directory spellings such as `.` unchanged. Wheel
+destination validation normalizes that root to an empty path, and [`normalize_path_under`] rejects
+an empty root, so ordinary wheel directories were incorrectly classified as escaping the target.
+`Target::from` now resolves target paths that normalize to the current directory to [`CWD`]. Other
+relative and absolute target paths remain unchanged, and the symlink-destination checks continue to
+operate on non-empty roots.
+
+The parent integration tests in `crates/uv/tests/pip_install/pip_install.rs` now require successful
+installation into the current directory for both `--target=.` and `target = "."` in
+`[tool.uv.pip]`, and assert that the installed package directory exists. Focused validation passed
+for both updated regressions, the existing non-dot relative-target bytecode test, the existing
+symlinked wheel-destination rejection test, and the pip-sync relative-target install/upgrade/script
+round trip. The changed Rust files were formatted with `cargo fmt --all` using the available stable
+rustfmt, and focused clippy checks for `uv-python` passed with warnings denied.
 
 ## Related
 
@@ -71,3 +90,5 @@ An absolute target such as `--target="$PWD"` is an observed workaround on uv 0.1
 - astral-sh/uv#21692 — a sibling uv 0.12.14 regression in the same destination-validation area.
   Its trigger is a pre-existing `/usr/local/man` symlink and its error is `Cannot install into
   symlinked directory`, so it is distinct from the literal-dot target failure.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/1808
