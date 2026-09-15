@@ -302,6 +302,21 @@ searching for an installation as described above. See the
 [pip-compatible virtual environment discovery](../pip/environments.md#discovery-of-python-environments)
 documentation for details.
 
+!!! note
+
+    `uv venv` excludes interpreters identified as belonging to a virtual environment from normal
+    discovery, even if they are on the `PATH`. This can affect some Nix-provided Python environments,
+    which report different [`sys.prefix` and `sys.base_prefix`](https://docs.python.org/3/library/venv.html#how-venvs-work)
+    values. To select such an interpreter explicitly, pass its absolute executable path with
+    [`--python`](../reference/cli.md#uv-venv--python):
+
+    ```console
+    $ uv venv --python /path/to/python
+    ```
+
+    A version or executable-name request still uses normal discovery. The new virtual environment
+    is created from the selected interpreter's base Python installation.
+
 When performing discovery, non-executable files will be ignored. Each discovered executable is
 queried for metadata to ensure it meets the [requested Python version](#requesting-a-version). If
 the query fails, the executable will be skipped. If the executable satisfies the request, it is used
