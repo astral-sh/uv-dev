@@ -595,6 +595,10 @@ pub enum Commands {
     #[command(hide = true)]
     Clean(CleanArgs),
     /// Generate shell completion
+    ///
+    /// The completion script is written to standard output. See
+    /// <https://docs.astral.sh/uv/getting-started/installation/#shell-autocompletion> for
+    /// shell-specific installation instructions.
     #[command(alias = "--generate-shell-completion", hide = true)]
     GenerateShellCompletion(GenerateShellCompletionArgs),
     /// Display documentation for a command.
