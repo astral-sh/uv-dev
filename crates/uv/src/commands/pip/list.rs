@@ -49,7 +49,7 @@ pub(crate) async fn pip_list(
     exclude_newer: ExcludeNewer,
     dependency_metadata: &DependencyMetadata,
     python: Option<&str>,
-    system: bool,
+    environment_preference: EnvironmentPreference,
     target: Option<Target>,
     prefix: Option<Prefix>,
     cache: &Cache,
@@ -63,8 +63,8 @@ pub(crate) async fn pip_list(
     // Detect the current Python interpreter.
     let environment = PythonEnvironment::find(
         &python.map(PythonRequest::parse).unwrap_or_default(),
-        EnvironmentPreference::from_system_flag(system, false),
-        PythonPreference::default().with_system_flag(system),
+        environment_preference,
+        PythonPreference::default().with_environment_preference(environment_preference),
         cache,
     )?;
 

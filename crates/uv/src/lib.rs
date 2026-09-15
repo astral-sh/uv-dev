@@ -50,6 +50,7 @@ use uv_static::EnvVars;
 use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 
+use crate::commands::pip::EnvironmentValidation;
 use crate::commands::{
     ExitStatus, ParsedRunCommand, ProjectError, RunCommand, ScriptPath, ToolRunCommand, UvError,
 };
@@ -805,7 +806,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.settings.annotation_style,
                 args.settings.link_mode,
                 args.settings.python,
-                args.settings.system,
+                args.settings.environment_preference,
                 globals.python_preference,
                 globals.concurrency,
                 globals.quiet > 0,
@@ -888,10 +889,10 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.settings.python_platform,
                 globals.python_downloads,
                 args.settings.install_mirrors,
-                args.settings.strict,
+                EnvironmentValidation::from_args(args.settings.strict),
                 args.settings.exclude_newer,
                 args.settings.python,
-                args.settings.system,
+                args.settings.environment_preference,
                 args.settings.break_system_packages,
                 args.settings.target,
                 args.settings.prefix,
@@ -1051,11 +1052,11 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.settings.python_platform,
                 globals.python_downloads,
                 args.settings.install_mirrors,
-                args.settings.strict,
+                EnvironmentValidation::from_args(args.settings.strict),
                 args.settings.exclude_newer,
                 args.settings.sources,
                 args.settings.python,
-                args.settings.system,
+                args.settings.environment_preference,
                 args.settings.break_system_packages,
                 args.settings.target,
                 args.settings.prefix,
@@ -1095,7 +1096,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             commands::pip_uninstall(
                 &sources,
                 args.settings.python,
-                args.settings.system,
+                args.settings.environment_preference,
                 args.settings.break_system_packages,
                 args.settings.target,
                 args.settings.prefix,
@@ -1124,7 +1125,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.settings.strict,
                 &args.settings.dependency_metadata,
                 args.settings.python.as_deref(),
-                args.settings.system,
+                args.settings.environment_preference,
                 args.settings.target,
                 args.settings.prefix,
                 args.paths,
@@ -1160,7 +1161,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.settings.exclude_newer,
                 &args.settings.dependency_metadata,
                 args.settings.python.as_deref(),
-                args.settings.system,
+                args.settings.environment_preference,
                 args.settings.target,
                 args.settings.prefix,
                 &cache,
@@ -1184,7 +1185,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.settings.strict,
                 &args.settings.dependency_metadata,
                 args.settings.python.as_deref(),
-                args.settings.system,
+                args.settings.environment_preference,
                 args.settings.target,
                 args.settings.prefix,
                 args.files,
@@ -1220,7 +1221,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.settings.exclude_newer,
                 &args.settings.dependency_metadata,
                 args.settings.python.as_deref(),
-                args.settings.system,
+                args.settings.environment_preference,
                 &cache,
                 printer,
             )
@@ -1239,7 +1240,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
 
             commands::pip_check(
                 args.settings.python.as_deref(),
-                args.settings.system,
+                args.settings.environment_preference,
                 args.settings.python_version.as_ref(),
                 args.settings.python_platform.as_ref(),
                 &args.settings.dependency_metadata,
@@ -1948,7 +1949,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                     args.show_version,
                     args.resolve_links,
                     args.no_project,
-                    args.system,
+                    args.environment_preference,
                     config_discovery,
                     globals.python_preference,
                     args.python_downloads_json_url.as_deref(),
