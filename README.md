@@ -15,6 +15,24 @@ The linked project's public metadata describes a Python AI-governance measuremen
 MCP server. That establishes what the linked project is, but not what change or support is sought
 from uv. No existing uv issue or pull request was found that tracks the same unstated request.
 
+## Reproduction
+
+Outcome: `needs_more_information`.
+
+No meaningful behavioral reproduction can be constructed from the report. It contains no uv
+command, project or workspace configuration, dependency specification, platform, uv or Python
+version, error output, expected behavior, or actual behavior. The installed environment has uv
+0.12.14 on x86_64 Linux with Python 3.12.3, but running an arbitrary command in that environment
+would not test a reported claim. A repository search also found no references to `CSOAI`,
+`csoai-gspc-mcp`, `gspc-harness`, or “AI governance” that supply an implied uv workflow or existing
+test case.
+
+To investigate further, the reporter needs to provide the exact uv command and inputs, a minimal
+`pyproject.toml` or other relevant configuration, the uv and Python versions and platform, the
+observed output or error, and the expected result. If the report is instead a feature proposal,
+it needs to state the requested capability and how it should integrate with uv; no behavioral
+reproduction applies until that scope is defined.
+
 ## Draft response
 
 Thanks for the links. This report does not describe an issue with uv or a specific change you would

@@ -1,0 +1,4 @@
+{
+  "reproduction": "needs_more_information",
+  "reason": "astral-sh/uv#21690 provides no uv command, configuration, versions, platform, expected result, actual result, or error. It only names an npm package and repository, so no meaningful behavioral reproduction can be constructed. Further investigation requires the exact uv workflow and inputs, minimal project configuration, environment details, observed output, and expected behavior—or a concrete description of the requested uv integration."
+}
