@@ -968,12 +968,6 @@ pub fn replace_link_to_executable(
     }
 }
 
-// TODO(zanieb): Only used in tests now.
-/// Generate a platform portion of a key from the environment.
-pub fn platform_key_from_env() -> Result<String, Error> {
-    Ok(Platform::from_env()?.to_string().to_lowercase())
-}
-
 impl fmt::Display for ManagedPythonInstallation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
