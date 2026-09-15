@@ -124,13 +124,13 @@ pub enum ValidationError {
 pub enum DirectBuildIncompatibility {
     #[error("its `pyproject.toml` failed to parse: {0}")]
     PyprojectToml(String),
-    #[error("`build_system.build-backend` is not `uv_build`, but `{0}`")]
+    #[error("`build-system.build-backend` is not `uv_build`, but `{0}`")]
     WrongBackend(String),
     #[error("`build-system.requires` is not exactly `uv_build`, but `{0}`")]
     MultipleRequires(String),
     #[error("`build-system.requires` is not `uv_build`, but `{0}`")]
     WrongPackage(PackageName),
-    #[error("`build_system.requires` uses a URL requirement")]
+    #[error("`build-system.requires` uses a URL requirement")]
     UrlRequirement,
     #[error("`uv_build{0}` is not a known compatible range")]
     IncompatibleRange(VersionSpecifiers),
@@ -1185,7 +1185,7 @@ impl BuildSystem {
         let mut warnings = Vec::new();
         if self.build_backend.as_deref() != Some("uv_build") {
             warnings.push(format!(
-                r#"`build_system.build-backend` was expected to be `"uv_build"`, not `"{}"`"#,
+                r#"`build-system.build-backend` was expected to be `"uv_build"`, not `"{}"`"#,
                 self.build_backend.clone().unwrap_or_default()
             ));
         }
@@ -1221,7 +1221,7 @@ impl BuildSystem {
                 if !specifier.contains(&uv_version) {
                     // This is allowed to happen when testing prereleases, but we should still warn.
                     warnings.push(format!(
-                        "`build_system.requires = [\"{uv_requirement}\"]` does not contain the \
+                        "`build-system.requires = [\"{uv_requirement}\"]` does not contain the \
                         current uv version {uv_version}",
                     ));
                 }
@@ -1235,7 +1235,7 @@ impl BuildSystem {
             let next_minor = uv_version.release().get(1).copied().unwrap_or_default() + 1;
             let next_breaking = Version::new([0, next_minor]);
             warnings.push(format!(
-                "`build_system.requires = [\"{}\"]` is missing an \
+                "`build-system.requires = [\"{}\"]` is missing an \
                 upper bound on the `uv_build` version such as `<{next_breaking}`. \
                 Without bounding the `uv_build` version, the source distribution will break \
                 when a future, breaking version of `uv_build` is released.",
@@ -1765,8 +1765,29 @@ mod tests {
             pyproject_toml
                 .check_build_system("0.4.15+test", BuildKind::Sdist)
                 .join("\n"),
-            @r#"`build_system.requires = ["uv_build"]` is missing an upper bound on the `uv_build` version such as `<0.5`. Without bounding the `uv_build` version, the source distribution will break when a future, breaking version of `uv_build` is released."#
+            @r#"`build-system.requires = ["uv_build"]` is missing an upper bound on the `uv_build` version such as `<0.5`. Without bounding the `uv_build` version, the source distribution will break when a future, breaking version of `uv_build` is released."#
         );
+    }
+
+    #[test]
+    fn build_system_incompatible_version() -> Result<(), toml::de::Error> {
+        let contents = indoc! {r#"
+            [project]
+            name = "hello-world"
+            version = "0.1.0"
+
+            [build-system]
+            requires = ["uv_build>=0.5,<0.6"]
+            build-backend = "uv_build"
+        "#};
+        let pyproject_toml: PyProjectToml = toml::from_str(contents)?;
+        assert_snapshot!(
+            pyproject_toml
+                .check_build_system("0.4.15+test", BuildKind::Wheel)
+                .join("\n"),
+            @r#"`build-system.requires = ["uv-build>=0.5,<0.6"]` does not contain the current uv version 0.4.15+test"#
+        );
+        Ok(())
     }
 
     #[test]
@@ -1825,7 +1846,7 @@ mod tests {
             pyproject_toml
                 .check_build_system("0.4.15+test", BuildKind::Wheel)
                 .join("\n"),
-            @r#"`build_system.build-backend` was expected to be `"uv_build"`, not `"setuptools"`"#
+            @r#"`build-system.build-backend` was expected to be `"uv_build"`, not `"setuptools"`"#
         );
     }
 
@@ -2122,7 +2143,7 @@ mod tests {
         .unwrap();
         assert_snapshot!(
             check_direct_build(temp_dir.path(), "0.10.0").unwrap_err(),
-            @"`build_system.build-backend` is not `uv_build`, but `setuptools`"
+            @"`build-system.build-backend` is not `uv_build`, but `setuptools`"
         );
     }
 
@@ -2188,7 +2209,7 @@ mod tests {
         .unwrap();
         assert_snapshot!(
             check_direct_build(temp_dir.path(), "0.10.0").unwrap_err(),
-            @"`build_system.requires` uses a URL requirement"
+            @"`build-system.requires` uses a URL requirement"
         );
     }
 
