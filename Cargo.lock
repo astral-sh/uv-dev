@@ -4026,6 +4026,7 @@ checksum = "219c5811de6525e5416c7d5d53bb656d3afdbc6c5af816e0802bcfa42dbdc1c3"
 dependencies = [
  "base64 0.22.1",
  "bytes",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2",
@@ -6192,7 +6193,7 @@ dependencies = [
 
 [[package]]
 name = "uv-checksum-authority"
-version = "0.0.80"
+version = "0.0.86"
 dependencies = [
  "base64 0.22.1",
  "fs-err",
@@ -6212,7 +6213,7 @@ dependencies = [
 
 [[package]]
 name = "uv-checksum-authority-service"
-version = "0.0.80"
+version = "0.0.86"
 dependencies = [
  "anyhow",
  "assert_cmd",

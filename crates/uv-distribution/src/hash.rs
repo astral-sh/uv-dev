@@ -31,7 +31,7 @@ pub(crate) fn matches_authority(
         && hashes.iter().any(|hash| {
             hash.algorithm() == HashAlgorithm::Sha256
                 && hash
-                    .digest
+                    .digest()
                     .parse::<Sha256Digest>()
                     .is_ok_and(|digest| digest == record.sha256())
         })
