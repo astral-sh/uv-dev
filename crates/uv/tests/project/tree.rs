@@ -1687,6 +1687,60 @@ fn outdated_exclude_newer_relative() -> Result<()> {
     Ok(())
 }
 
+/// Test that `uv tree --outdated` uses the current absolute `exclude-newer` cutoff instead of the
+/// cutoff recorded in the lockfile.
+#[cfg(feature = "test-universal")]
+#[test]
+fn outdated_exclude_newer_current() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["idna"]
+    "#,
+    )?;
+
+    // idna 3.7 was uploaded on 2024-04-11, so the initial cutoff selects idna 3.6.
+    uv_snapshot!(context.filters(), context
+        .lock()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--exclude-newer")
+        .arg("2024-04-10T00:00:00Z"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    let lock = context.read("uv.lock");
+
+    // The later cutoff does not rewrite the valid lock, but it does admit idna 3.7 when looking
+    // for newer versions.
+    uv_snapshot!(context.filters(), context
+        .tree()
+        .arg("--outdated")
+        .arg("--universal")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--exclude-newer")
+        .arg("2024-04-12T00:00:00Z"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    └── idna v3.6 (latest: v3.7)
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    assert_eq!(context.read("uv.lock"), lock);
+
+    Ok(())
+}
+
 /// Exclude a dependency only when it is declared by a matching package version.
 #[test]
 fn scoped_exclude_dependencies() -> Result<()> {
