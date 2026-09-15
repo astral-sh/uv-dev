@@ -490,7 +490,9 @@ impl TryFrom<usize> for TagPriority {
     /// Create a [`TagPriority`] from a `usize`, where higher `usize` values are given higher
     /// priority.
     fn try_from(priority: usize) -> Result<Self, TagsError> {
-        match u32::try_from(priority).and_then(|priority| NonZeroU32::try_from(1 + priority)) {
+        match u32::try_from(priority)
+            .and_then(|priority| NonZeroU32::try_from(priority.wrapping_add(1)))
+        {
             Ok(priority) => Ok(Self(priority)),
             Err(err) => Err(TagsError::InvalidPriority(priority, err)),
         }
@@ -1172,6 +1174,8 @@ impl IosMultiarch {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use insta::{assert_debug_snapshot, assert_snapshot};
 
     use super::*;
@@ -3068,5 +3072,56 @@ mod tests {
                 )
             );
         }
+    }
+
+    #[test]
+    fn test_tag_priority_valid_boundaries() -> Result<(), TagsError> {
+        let zero = TagPriority::try_from(0)?;
+        let one = TagPriority::try_from(1)?;
+        assert_eq!(zero.0.get(), 1);
+        assert_eq!(one.0.get(), 2);
+        assert!(zero < one);
+
+        if let Ok(highest) = usize::try_from(u32::MAX - 1) {
+            let highest = TagPriority::try_from(highest)?;
+            assert_eq!(highest.0.get(), u32::MAX);
+            assert!(one < highest);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_tag_priority_rejects_overflow() -> Result<(), Box<dyn Error>> {
+        let Ok(maximum) = usize::try_from(u32::MAX) else {
+            return Ok(());
+        };
+
+        for priority in [Some(maximum), maximum.checked_add(1), Some(usize::MAX)]
+            .into_iter()
+            .flatten()
+        {
+            let error = TagPriority::try_from(priority)
+                .err()
+                .ok_or("overflowing tag priority was accepted")?;
+            let expected_source = if priority == maximum {
+                NonZeroU32::try_from(0_u32)
+                    .err()
+                    .ok_or("zero was accepted as a nonzero integer")?
+            } else {
+                u32::try_from(priority)
+                    .err()
+                    .ok_or("out-of-range priority was accepted as u32")?
+            };
+            match error {
+                TagsError::InvalidPriority(actual, source) => {
+                    assert_eq!(actual, priority);
+                    assert_eq!(source, expected_source);
+                }
+                other => return Err(other.into()),
+            }
+        }
+
+        Ok(())
     }
 }
