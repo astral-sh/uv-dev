@@ -11,6 +11,8 @@ on:
         required: true
         type: string
 
+cache-mode: none
+
 env:
   ACTIONS_CACHE_MODE: none
   UV_LOCKED: 1
