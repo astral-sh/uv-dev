@@ -14,7 +14,8 @@ use uv_pypi_types::{DirectUrl, Metadata10};
 use crate::linker::{InstallState, LinkMode, link_wheel_files};
 use crate::wheel::{
     LibKind, ValidatedWheel, WheelFile, dist_info_metadata, find_dist_info, install_data,
-    parse_scripts, read_record, write_installer_metadata, write_record, write_script_entrypoints,
+    parse_scripts, read_record, validate_script_entrypoints, write_installer_metadata,
+    write_record, write_script_entrypoints,
 };
 use crate::{Error, Layout};
 
@@ -82,6 +83,10 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
         }
     }
 
+    let (console_scripts, gui_scripts) =
+        parse_scripts(wheel, &dist_info_prefix, None, layout.python_version.1)?;
+    validate_script_entrypoints(layout, &console_scripts, &gui_scripts)?;
+
     // We're going step by step though
     // https://packaging.python.org/en/latest/specifications/binary-distribution-format/#installing-a-wheel-distribution-1-0-py32-none-any-whl
     // > 1.a Parse distribution-1.0.dist-info/WHEEL.
@@ -96,9 +101,6 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
     // Read the RECORD file.
     let mut record_file = File::open(wheel.join(format!("{dist_info_prefix}.dist-info/RECORD")))?;
     let mut record = read_record(&mut record_file)?;
-
-    let (console_scripts, gui_scripts) =
-        parse_scripts(wheel, &dist_info_prefix, None, layout.python_version.1)?;
 
     if console_scripts.is_empty() && gui_scripts.is_empty() {
         trace!(?name, "No entrypoints");
