@@ -54,11 +54,23 @@ Installed 3 packages in [TIME]
 
 Existing integration coverage in `crates/uv/tests/pip_install/pip_install.rs` includes `reject_symlinked_wheel_package_directory`, `reject_symlinked_wheel_nested_package_directory`, `reject_symlinked_wheel_data_package_directory`, and `reject_symlinked_wheel_headers_destination`. Those tests construct destination symlinks to external temporary directories and verify that uv rejects the installation before writing through them. They do not cover a scheme directory such as `/usr/local/man -> share/man` whose resolved target remains inside the same installation prefix.
 
+## Fix
+
+Outcome: **fixed**.
+
+The root cause was the unconditional rejection of every existing destination-directory symlink encountered while validating a wheel subtree. The validation already has a trusted installation root, but it inspected only the destination's file type and never resolved the link to determine whether it crossed that boundary.
+
+`crates/uv-install-wheel/src/wheel.rs` now canonicalizes both an encountered symlink and its installation root. It permits the symlink only when the resolved destination remains within that canonical root. Links that resolve outside the root, and links whose destinations cannot be resolved, continue to produce the existing invalid-wheel error.
+
+The parent regression in `crates/uv/tests/pip_install/pip_install.rs` now expects the `.data/data/man` wheel to install successfully through `man -> share/man`, checks the installed manual-page contents, uninstalls the distribution, and verifies that the data file is removed. No separate manifestation warranted another test: purelib, platlib, data, package, nested-package, and headers destinations all use the same `ValidatedWheelDestination` consumer, while the adjacent uninstall path is covered by the round trip in the updated parent test.
+
+Focused debug-profile validation passed for the updated install/uninstall regression and for all five neighboring `symlinked_wheel` integration tests. The latter retain coverage that package, nested-package, wheel-data, and headers symlinks pointing to external directories are rejected. `cargo fmt` and focused Clippy validation for `uv-install-wheel` also passed with the repository's Rust 1.98.1 stable toolchain.
+
 ## Draft response
 
-Thanks for the detailed reproduction. astral-sh/uv#21569 introduced the destination-symlink check in uv 0.12.14 to prevent a wheel payload from being written outside its installation environment. The current check also rejects `/usr/local/man` without considering that its relative target, `/usr/local/share/man`, remains within the same installation prefix, so this is a regression rather than an invalid wheel.
+Thanks for the detailed reproduction. astral-sh/uv#21569 introduced the destination-symlink check in uv 0.12.14 to prevent a wheel payload from being written outside its installation environment. The check also rejected `/usr/local/man` without considering that its relative target, `/usr/local/share/man`, remains within the same installation prefix, so this was a regression rather than an invalid wheel.
 
-The next step is to add coverage for an existing scheme-directory symlink whose resolved target stays within the prefix and adjust the validation without weakening the outside-prefix protection. In the meantime, replacing `/usr/local/man` with a directory or pinning uv 0.12.13 are the available workarounds from the reproduction.
+The validation now resolves destination links and allows them only when their targets remain within the installation root. Regression coverage verifies installation and uninstallation through the standard in-prefix layout while retaining the existing rejection tests for links that escape the environment.
 
 ## Classification
 
@@ -82,3 +94,5 @@ The strongest ruled-out candidates were:
 - astral-sh/uv#18942, which protects uninstall operations from malicious `RECORD` entries outside an environment. It is part of the broader environment-boundary work referenced by astral-sh/uv#21569, but it does not produce or track this install-time regression.
 
 Current tests added by astral-sh/uv#21569 cover rejecting symlinked package, nested package, data-package, and headers destinations when those links point to external directories. They do not cover a standard installation-scheme directory symlink whose resolved target remains within the same trusted prefix.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/1806

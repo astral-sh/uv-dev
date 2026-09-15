@@ -1,0 +1,12 @@
+{
+  "outcome": "fixed",
+  "summary": "Wheel installation now permits destination symlinks whose resolved targets remain within the installation root while continuing to reject escaping or unresolvable links. The regression test now verifies successful man-page installation and uninstall cleanup through an in-prefix symlink.",
+  "validation": [
+    "cargo test --package uv --test pip_install install_in_prefix_symlinked_wheel_data_directory",
+    "cargo test --package uv --test pip_install symlinked_wheel",
+    "rustup run stable cargo clippy --package uv-install-wheel --all-targets -- -D warnings",
+    "rustup run stable cargo fmt --all -- --check",
+    "git diff --check"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/1806"
+}
