@@ -29,14 +29,14 @@ impl Os {
     }
 
     /// Whether this OS can run the other OS.
-    pub fn supports(&self, other: Self) -> bool {
+    pub(crate) fn supports(self, other: Self) -> bool {
         // Emscripten can run on any OS
         if other.is_emscripten() {
             return true;
         }
 
         // Otherwise, we require an exact match
-        *self == other
+        *self == *other
     }
 }
 
