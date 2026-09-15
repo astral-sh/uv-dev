@@ -40,9 +40,10 @@ use uv_client::BaseClientBuilder;
 use uv_configuration::{
     DependencyGroups, ExcludeDependency, NoBinary, NoBuild, Override, PackageOverride,
 };
+use uv_distribution::{LoweredRequirement, LoweringContext};
 use uv_distribution_types::{Index, Requirement};
 use uv_distribution_types::{
-    IndexUrl, NameRequirementSpecification, UnresolvedRequirement,
+    IndexLocations, IndexUrl, NameRequirementSpecification, UnresolvedRequirement,
     UnresolvedRequirementSpecification,
 };
 use uv_fs::{CWD, Simplified};
@@ -99,28 +100,65 @@ impl RequirementsSpecification {
     pub async fn from_source(
         source: &RequirementsSource,
         client_builder: &BaseClientBuilder<'_>,
+        lowering_context: LoweringContext<'_>,
     ) -> Result<Self> {
-        Self::from_source_with_cache(source, client_builder, &mut SourceCache::default()).await
+        Self::from_source_with_cache(
+            source,
+            client_builder,
+            lowering_context,
+            &mut SourceCache::default(),
+        )
+        .await
     }
 
     /// Create a [`RequirementsSpecification`] from PEP 723 script metadata.
-    fn from_pep723_metadata(metadata: &Pep723Metadata) -> Self {
-        let requirements = metadata
-            .dependencies
-            .as_ref()
-            .map(|dependencies| {
-                dependencies
-                    .iter()
-                    .map(|dependency| {
-                        UnresolvedRequirementSpecification::from(Requirement::from(
-                            dependency.to_owned(),
-                        ))
-                    })
-                    .collect::<Vec<UnresolvedRequirementSpecification>>()
-            })
-            .unwrap_or_default();
+    async fn from_pep723_metadata(
+        metadata: &Pep723Metadata,
+        path: &Path,
+        lowering_context: LoweringContext<'_>,
+    ) -> Result<Self> {
+        let tool_uv = metadata.tool.as_ref().and_then(|tool| tool.uv.as_ref());
+        let empty_sources = BTreeMap::default();
+        let sources = tool_uv
+            .and_then(|tool_uv| tool_uv.sources.as_ref())
+            .unwrap_or(&empty_sources);
+        let indexes = tool_uv
+            .and_then(|tool_uv| tool_uv.top_level.index.as_deref())
+            .unwrap_or(&[]);
+        let locations = IndexLocations::new(indexes.to_vec(), Vec::new(), false);
+        let script_dir = if path.starts_with("http://") || path.starts_with("https://") {
+            CWD.to_path_buf()
+        } else {
+            std::path::absolute(path)?
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| CWD.to_path_buf())
+        };
 
-        if let Some(tool_uv) = metadata.tool.as_ref().and_then(|tool| tool.uv.as_ref()) {
+        let mut requirements = Vec::new();
+        for dependency in metadata.dependencies.iter().flatten() {
+            requirements.extend(
+                LoweredRequirement::from_non_workspace_requirement(
+                    dependency.to_owned(),
+                    &script_dir,
+                    sources,
+                    indexes,
+                    &locations,
+                    lowering_context.cache(),
+                    lowering_context.workspace_cache(),
+                    lowering_context.credentials_cache(),
+                )
+                .await
+                .map(|requirement| {
+                    requirement.map(|requirement| {
+                        UnresolvedRequirementSpecification::from(requirement.into_inner())
+                    })
+                })
+                .collect::<Result<Vec<UnresolvedRequirementSpecification>, _>>()?,
+            );
+        }
+
+        if let Some(tool_uv) = tool_uv {
             let constraints = tool_uv
                 .constraint_dependencies
                 .as_ref()
@@ -157,7 +195,7 @@ impl RequirementsSpecification {
                 })
                 .collect();
 
-            Self {
+            Ok(Self {
                 requirements,
                 constraints,
                 override_dependencies,
@@ -199,12 +237,12 @@ impl RequirementsSpecification {
                         .unwrap_or_default(),
                 ),
                 ..Self::default()
-            }
+            })
         } else {
-            Self {
+            Ok(Self {
                 requirements,
                 ..Self::default()
-            }
+            })
         }
     }
 
@@ -252,6 +290,7 @@ impl RequirementsSpecification {
     async fn from_source_with_cache(
         source: &RequirementsSource,
         client_builder: &BaseClientBuilder<'_>,
+        lowering_context: LoweringContext<'_>,
         cache: &mut SourceCache,
     ) -> Result<Self> {
         Ok(match source {
@@ -330,7 +369,7 @@ impl RequirementsSpecification {
                     Err(err) => return Err(err.into()),
                 };
 
-                Self::from_pep723_metadata(&metadata)
+                Self::from_pep723_metadata(&metadata, path, lowering_context).await?
             }
             RequirementsSource::SetupPy(path) => {
                 if !path.is_file() {
@@ -379,7 +418,7 @@ impl RequirementsSpecification {
 
                 // Detect if it's a PEP 723 script.
                 if let Some(metadata) = Pep723Metadata::parse(content.as_bytes())? {
-                    Self::from_pep723_metadata(&metadata)
+                    Self::from_pep723_metadata(&metadata, path, lowering_context).await?
                 } else {
                     // If it's not a PEP 723 script, assume it's a `requirements.txt` file.
                     let requirements_txt =
@@ -411,6 +450,7 @@ impl RequirementsSpecification {
         excludes: &[RequirementsSource],
         groups: Option<&GroupsSpecification>,
         client_builder: &BaseClientBuilder<'_>,
+        lowering_context: LoweringContext<'_>,
     ) -> Result<Self> {
         let mut spec = Self::default();
         let mut cache = SourceCache::default();
@@ -541,7 +581,9 @@ impl RequirementsSpecification {
         // Resolve sources into specifications so we know their `source_tree`.
         let mut requirement_sources = Vec::new();
         for source in requirements {
-            let source = Self::from_source_with_cache(source, client_builder, &mut cache).await?;
+            let source =
+                Self::from_source_with_cache(source, client_builder, lowering_context, &mut cache)
+                    .await?;
             requirement_sources.push(source);
         }
 
@@ -597,7 +639,9 @@ impl RequirementsSpecification {
         // Read all constraints, treating both requirements _and_ constraints as constraints.
         // Overrides are ignored.
         for source in constraints {
-            let source = Self::from_source_with_cache(source, client_builder, &mut cache).await?;
+            let source =
+                Self::from_source_with_cache(source, client_builder, lowering_context, &mut cache)
+                    .await?;
             for entry in source.requirements {
                 match entry.requirement {
                     UnresolvedRequirement::Named(requirement) => {
@@ -637,7 +681,9 @@ impl RequirementsSpecification {
         // Read all overrides, treating both requirements _and_ overrides as overrides.
         // Constraints are ignored.
         for source in overrides {
-            let source = Self::from_source_with_cache(source, client_builder, &mut cache).await?;
+            let source =
+                Self::from_source_with_cache(source, client_builder, lowering_context, &mut cache)
+                    .await?;
             spec.overrides.extend(source.requirements);
             spec.overrides.extend(source.overrides);
             spec.override_dependencies
@@ -664,7 +710,9 @@ impl RequirementsSpecification {
 
         // Collect excludes.
         for source in excludes {
-            let source = Self::from_source_with_cache(source, client_builder, &mut cache).await?;
+            let source =
+                Self::from_source_with_cache(source, client_builder, lowering_context, &mut cache)
+                    .await?;
             for req_spec in source.requirements {
                 match req_spec.requirement {
                     UnresolvedRequirement::Named(requirement) => {
@@ -695,8 +743,18 @@ impl RequirementsSpecification {
     pub async fn from_simple_sources(
         requirements: &[RequirementsSource],
         client_builder: &BaseClientBuilder<'_>,
+        lowering_context: LoweringContext<'_>,
     ) -> Result<Self> {
-        Self::from_sources(requirements, &[], &[], &[], None, client_builder).await
+        Self::from_sources(
+            requirements,
+            &[],
+            &[],
+            &[],
+            None,
+            client_builder,
+            lowering_context,
+        )
+        .await
     }
 
     /// Initialize a [`RequirementsSpecification`] from a list of [`Requirement`], including
