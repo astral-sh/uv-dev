@@ -455,6 +455,14 @@ The uv Python distributions are self-contained, highly-portable, and performant.
 built from source, as in tools like `pyenv`, doing so requires preinstalled system dependencies, and
 creating optimized, performant builds (e.g., with PGO and LTO enabled) is very slow.
 
+On macOS, these builds do not link to Homebrew's OpenSSL. A package compiled from source may still
+be unable to find `openssl/crypto.h` after installing `openssl@3`, because Homebrew's paths are not
+necessarily in the compiler's default search paths. Configure that package's build with the needed
+include, library, or `pkg-config` paths; see
+[Homebrew's keg-only dependency guidance](https://docs.brew.sh/How-to-Build-Software-Outside-Homebrew-with-Homebrew-keg-only-Dependencies)
+and
+[build-failure troubleshooting](../reference/troubleshooting/build-failures.md#header-or-library-is-missing).
+
 These distributions have some behavior quirks, generally as a consequence of portability; see the
 [`python-build-standalone` quirks](https://gregoryszorc.com/docs/python-build-standalone/main/quirks.html)
 documentation for details.
