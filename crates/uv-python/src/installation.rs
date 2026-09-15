@@ -18,7 +18,8 @@ use uv_platform::{Arch, Libc, Os, Platform};
 
 use crate::discovery::{
     EnvironmentPreference, PythonRequest, VersionRequest, find_best_python_installation,
-    find_python_installation, find_python_installation_with_catalog, parse_python_variants,
+    find_python_installation, find_python_installation_with_cached_catalog,
+    find_python_installation_with_catalog, parse_python_variants,
 };
 use crate::downloads::{
     DownloadResult, ManagedPythonDownload, ManagedPythonDownloadList, PythonDownloadRequest,
@@ -150,14 +151,28 @@ impl PythonInstallation {
         cache: &Cache,
         python_downloads_json_url: Option<&str>,
     ) -> Result<Self, Error> {
-        let installation = Self::find_existing(request, environments, preference, cache)?;
-        if !installation.is_managed() || PythonDownloadRequest::from_request(request).is_none() {
-            return Ok(installation);
+        if PythonDownloadRequest::from_request(request).is_none() {
+            return Self::find_existing(request, environments, preference, cache);
         }
-        let download_list =
-            ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url)
-                .await?;
-        Self::find(request, environments, preference, &download_list, cache)
+        match Self::find_existing(request, environments, preference, cache) {
+            Ok(installation) if !installation.is_managed() => return Ok(installation),
+            Err(err) if !preference.allows_managed() => return Err(err),
+            Ok(_) | Err(Error::MissingPython(..)) => {}
+            Err(Error::Discovery(err)) if !err.is_critical() => {}
+            Err(err) => return Err(err),
+        }
+        let (result, download_list) = find_python_installation_with_cached_catalog(
+            request,
+            environments,
+            preference,
+            client_builder,
+            cache,
+            python_downloads_json_url,
+        )
+        .await?;
+        let installation = result?;
+        installation.warn_if_outdated_prerelease(request, &download_list);
+        Ok(installation)
     }
 
     /// Find or download a [`PythonInstallation`] that satisfies a requested version, if the request
@@ -227,11 +242,20 @@ impl PythonInstallation {
             Err(err) => return Err(err),
         }
 
-        let download_list =
-            ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url)
-                .await?;
-        let err = match Self::find(request, environments, preference, &download_list, cache) {
-            Ok(installation) => return Ok(installation),
+        let (result, download_list) = find_python_installation_with_cached_catalog(
+            request,
+            environments,
+            preference,
+            client_builder,
+            cache,
+            python_downloads_json_url,
+        )
+        .await?;
+        let err = match result {
+            Ok(installation) => {
+                installation.warn_if_outdated_prerelease(request, &download_list);
+                return Ok(installation);
+            }
             Err(err) => err,
         };
 
@@ -565,9 +589,14 @@ impl PythonInstallation {
             return Ok(());
         }
 
-        let download_list =
-            ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url)
-                .await?;
+        let download_list = if let Some(download_list) =
+            ManagedPythonDownloadList::from_cache(client_builder, cache, python_downloads_json_url)
+                .await?
+        {
+            download_list
+        } else {
+            ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url).await?
+        };
         self.warn_if_outdated_prerelease(request, &download_list);
 
         Ok(())
