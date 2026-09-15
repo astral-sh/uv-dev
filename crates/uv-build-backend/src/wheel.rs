@@ -333,7 +333,7 @@ fn write_data_files<'data>(
     pyproject_toml: &PyProjectToml,
     data: impl Iterator<Item = (&'static str, &'data Path)>,
     exclude_matcher: &GlobSet,
-    wheel_writer: &mut impl DirectoryWriter,
+    wheel_writer: &mut dyn DirectoryWriter,
 ) -> Result<(), Error> {
     let canonical_source_tree = source_tree.simple_canonicalize()?;
 
@@ -551,7 +551,7 @@ fn wheel_subdir_from_globs(
     src: &Path,
     target: &str,
     globs: impl IntoIterator<Item = impl AsRef<str>>,
-    wheel_writer: &mut impl DirectoryWriter,
+    wheel_writer: &mut dyn DirectoryWriter,
     // For error messages
     globs_field: &str,
     exclude_matcher: Option<(&GlobSet, &Path)>,
