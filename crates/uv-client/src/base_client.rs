@@ -1,6 +1,5 @@
 use std::env;
 use std::fmt::{Debug, Write};
-use std::num::ParseIntError;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTimeError};
 
@@ -1227,13 +1226,6 @@ where
         }
         unreachable!("urls must not be empty");
     }
-}
-
-// TODO(konsti): Remove once we find a native home for `retries_from_env`
-#[derive(Debug, Error)]
-pub enum RetryParsingError {
-    #[error("Failed to parse `UV_HTTP_RETRIES`")]
-    ParseInt(#[from] ParseIntError),
 }
 
 #[cfg(test)]

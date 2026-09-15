@@ -33,7 +33,7 @@ use uv_auth::{Credentials, Realm};
 use uv_cache::{Cache, Refresh};
 use uv_client::{
     BaseClient, ClientBuildError, DEFAULT_MAX_REDIRECTS, MetadataFormat, OwnedArchive,
-    ProblemDetails, RegistryClientBuilder, RequestBuilder, RetryParsingError, RetryState,
+    ProblemDetails, RegistryClientBuilder, RequestBuilder, RetryState,
 };
 use uv_configuration::{KeyringProviderType, TrustedPublishing};
 use uv_distribution_filename::{DistFilename, SourceDistExtension, SourceDistFilename};
@@ -91,8 +91,6 @@ pub enum PublishError {
     },
     #[error("Hash is missing in index for {0}")]
     MissingHash(Box<DistFilename>),
-    #[error(transparent)]
-    RetryParsing(#[from] RetryParsingError),
 }
 
 /// Failure to get the metadata for a specific file.
