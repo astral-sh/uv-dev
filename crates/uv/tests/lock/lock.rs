@@ -21261,6 +21261,38 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     Resolved 9 packages in [TIME]
     ");
 
+    let lock = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--index-url").arg(server.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 9 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: The existing lockfile uses the `lock-without-metadata` preview format, but that preview feature is not enabled. To keep using this format, pass `--preview-features lock-without-metadata`.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--locked")
+        .arg("--only-group")
+        .arg("dev")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("python")
+        .arg("-c")
+        .arg("pass"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 9 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: The existing lockfile uses the `lock-without-metadata` preview format, but that preview feature is not enabled. To keep using this format, pass `--preview-features lock-without-metadata`.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+
     pyproject_toml.write_str(&original_pyproject.replace("six>=2", "six>=3"))?;
     uv_snapshot!(context.filters(), context.lock()
         .arg("--preview-features")
