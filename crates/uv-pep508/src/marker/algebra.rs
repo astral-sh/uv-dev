@@ -64,7 +64,8 @@ use crate::marker::lowering::{
 };
 use crate::marker::tree::ContainerOperator;
 use crate::{
-    ExtraOperator, MarkerExpression, MarkerOperator, MarkerValueString, MarkerValueVersion,
+    ExtraOperator, MarkerEnvironment, MarkerExpression, MarkerOperator, MarkerValueString,
+    MarkerValueVersion, MarkerWarningKind, Reporter, TracingReporter,
 };
 
 /// The global node interner.
@@ -723,6 +724,108 @@ impl InternerGuard<'_> {
             let children = node.children.map(i, |node| self.only_extras(node));
             self.create_node(node.var.clone(), children)
         }
+    }
+
+    /// Evaluates all non-`extra` nodes in this tree for the given environment.
+    ///
+    /// PEP 751 list expressions are evaluated with empty `extras` and `dependency_groups`.
+    pub(crate) fn only_extras_for_environment(
+        &mut self,
+        i: NodeId,
+        env: &MarkerEnvironment,
+    ) -> NodeId {
+        let mut cache = FxHashMap::default();
+        self.only_extras_for_environment_cached(i, env, &mut cache)
+    }
+
+    fn only_extras_for_environment_cached(
+        &mut self,
+        i: NodeId,
+        env: &MarkerEnvironment,
+        cache: &mut FxHashMap<NodeId, NodeId>,
+    ) -> NodeId {
+        if matches!(i, NodeId::TRUE | NodeId::FALSE) {
+            return i;
+        }
+        if let Some(&cached) = cache.get(&i) {
+            return cached;
+        }
+
+        let node = self.shared.node(i);
+        let result = match (&node.var, &node.children) {
+            (Variable::Version(key), Edges::Version { edges }) => edges
+                .iter()
+                .find_map(|(range, child)| {
+                    range
+                        .contains(env.get_version(*key))
+                        .then_some(child.negate(i))
+                })
+                .map_or(NodeId::FALSE, |child| {
+                    self.only_extras_for_environment_cached(child, env, cache)
+                }),
+            (Variable::String(key), Edges::String { edges }) => {
+                let value = env.get_string(*key);
+                edges
+                    .iter()
+                    .find_map(|(range, child)| {
+                        if matches!(
+                            key,
+                            CanonicalMarkerValueString::PlatformRelease
+                                | CanonicalMarkerValueString::PlatformVersion
+                        ) && range.as_singleton().is_none()
+                            && let Some((start, end)) = range.bounding_range()
+                        {
+                            if let Bound::Included(bound) | Bound::Excluded(bound) = start {
+                                TracingReporter.report(
+                                    MarkerWarningKind::LexicographicComparison,
+                                    format!("Comparing {value} and {bound} lexicographically"),
+                                );
+                            }
+                            if let Bound::Included(bound) | Bound::Excluded(bound) = end {
+                                TracingReporter.report(
+                                    MarkerWarningKind::LexicographicComparison,
+                                    format!("Comparing {value} and {bound} lexicographically"),
+                                );
+                            }
+                        }
+                        range.contains(value).then_some(child.negate(i))
+                    })
+                    .map_or(NodeId::FALSE, |child| {
+                        self.only_extras_for_environment_cached(child, env, cache)
+                    })
+            }
+            (Variable::In { key, value }, Edges::Boolean { high, low }) => {
+                let child = if value.contains(env.get_string(*key)) {
+                    high
+                } else {
+                    low
+                };
+                self.only_extras_for_environment_cached(child.negate(i), env, cache)
+            }
+            (Variable::Contains { key, value }, Edges::Boolean { high, low }) => {
+                let child = if env.get_string(*key).contains(value.as_str()) {
+                    high
+                } else {
+                    low
+                };
+                self.only_extras_for_environment_cached(child.negate(i), env, cache)
+            }
+            (Variable::List(CanonicalMarkerListPair::Arbitrary { .. }), Edges::Boolean { .. }) => {
+                NodeId::FALSE
+            }
+            (Variable::List(_), Edges::Boolean { low, .. }) => {
+                self.only_extras_for_environment_cached(low.negate(i), env, cache)
+            }
+            (Variable::Extra(_), children) => {
+                let children = children.map(i, |child| {
+                    self.only_extras_for_environment_cached(child, env, cache)
+                });
+                self.create_node(node.var.clone(), children)
+            }
+            _ => NodeId::FALSE,
+        };
+        cache.insert(i, result);
+        result
     }
 
     /// Simplify this tree by *assuming* that the Python version range provided
