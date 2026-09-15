@@ -28,6 +28,10 @@ $ docker run --rm -it ghcr.io/astral-sh/uv:debian uv --help
 
 ### Available images
 
+The release images are also published to [Docker Hub](https://hub.docker.com/r/astral/uv) with the
+same tags. The examples below use GitHub Container Registry, but you can replace
+`ghcr.io/astral-sh/uv` with `docker.io/astral/uv`, e.g., `docker.io/astral/uv:0.12.12`.
+
 The following distroless images are available:
 
 - `ghcr.io/astral-sh/uv:latest`
