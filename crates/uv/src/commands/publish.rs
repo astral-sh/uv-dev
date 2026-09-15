@@ -350,7 +350,12 @@ async fn gather_credentials(
     .await?
     {
         TrustedPublishResult::Configured(token) => {
-            return Ok((publish_url, PublishingCredentials::TrustedPublishing(token)));
+            let credentials =
+                Credentials::basic(Some("__token__".to_string()), Some(token.to_string()))?;
+            return Ok((
+                publish_url,
+                PublishingCredentials::TrustedPublishing { token, credentials },
+            ));
         }
         TrustedPublishResult::Skipped => None,
         TrustedPublishResult::Ignored(err) => Some(err),
@@ -427,7 +432,7 @@ async fn gather_credentials(
         }
     }
 
-    let credentials = Credentials::basic(username, password);
+    let credentials = Credentials::basic(username, password)?;
 
     Ok((publish_url, PublishingCredentials::Supplied(credentials)))
 }

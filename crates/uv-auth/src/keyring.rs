@@ -223,10 +223,11 @@ impl KeyringProvider {
         };
         // And fallback to a check for the host
         if credentials.is_none() {
+            let host = url.host_str()?;
             let host = if let Some(port) = url.port() {
-                format!("{}:{}", url.host_str()?, port)
+                format!("{host}:{port}")
             } else {
-                url.host_str()?.to_string()
+                host.to_string()
             };
             trace!("Checking keyring for host {host}");
             credentials = match self.backend {
@@ -259,7 +260,15 @@ impl KeyringProvider {
             }
         }
 
-        credentials.map(|(username, password)| Credentials::basic(Some(username), Some(password)))
+        credentials.and_then(|(username, password)| {
+            match Credentials::basic(Some(username), Some(password)) {
+                Ok(credentials) => Some(credentials),
+                Err(err) => {
+                    warn!("Ignoring invalid credentials from keyring: {err}");
+                    None
+                }
+            }
+        })
     }
 
     #[instrument(skip(self))]
@@ -497,10 +506,9 @@ mod tests {
             keyring
                 .fetch(DisplaySafeUrl::ref_cast(&url), Some("user"))
                 .await,
-            Some(Credentials::basic(
-                Some("user".to_string()),
-                Some("password".to_string())
-            ))
+            Some(
+                Credentials::basic(Some("user".to_string()), Some("password".to_string())).unwrap()
+            )
         );
         assert_eq!(
             keyring
@@ -509,10 +517,9 @@ mod tests {
                     Some("user")
                 )
                 .await,
-            Some(Credentials::basic(
-                Some("user".to_string()),
-                Some("password".to_string())
-            ))
+            Some(
+                Credentials::basic(Some("user".to_string()), Some("password".to_string())).unwrap()
+            )
         );
     }
 
@@ -540,19 +547,18 @@ mod tests {
                     Some("user")
                 )
                 .await,
-            Some(Credentials::basic(
-                Some("user".to_string()),
-                Some("password".to_string())
-            ))
+            Some(
+                Credentials::basic(Some("user".to_string()), Some("password".to_string())).unwrap()
+            )
         );
         assert_eq!(
             keyring
                 .fetch(DisplaySafeUrl::ref_cast(&url), Some("user"))
                 .await,
-            Some(Credentials::basic(
-                Some("user".to_string()),
-                Some("other-password".to_string())
-            ))
+            Some(
+                Credentials::basic(Some("user".to_string()), Some("other-password".to_string()))
+                    .unwrap()
+            )
         );
         assert_eq!(
             keyring
@@ -561,10 +567,10 @@ mod tests {
                     Some("user")
                 )
                 .await,
-            Some(Credentials::basic(
-                Some("user".to_string()),
-                Some("other-password".to_string())
-            ))
+            Some(
+                Credentials::basic(Some("user".to_string()), Some("other-password".to_string()))
+                    .unwrap()
+            )
         );
     }
 
@@ -577,10 +583,9 @@ mod tests {
             .await;
         assert_eq!(
             credentials,
-            Some(Credentials::basic(
-                Some("user".to_string()),
-                Some("password".to_string())
-            ))
+            Some(
+                Credentials::basic(Some("user".to_string()), Some("password".to_string())).unwrap()
+            )
         );
     }
 
@@ -591,10 +596,9 @@ mod tests {
         let credentials = keyring.fetch(DisplaySafeUrl::ref_cast(&url), None).await;
         assert_eq!(
             credentials,
-            Some(Credentials::basic(
-                Some("user".to_string()),
-                Some("password".to_string())
-            ))
+            Some(
+                Credentials::basic(Some("user".to_string()), Some("password".to_string())).unwrap()
+            )
         );
     }
 
@@ -626,10 +630,9 @@ mod tests {
             .await;
         assert_eq!(
             credentials,
-            Some(Credentials::basic(
-                Some("user".to_string()),
-                Some("password".to_string())
-            ))
+            Some(
+                Credentials::basic(Some("user".to_string()), Some("password".to_string())).unwrap()
+            )
         );
     }
 
