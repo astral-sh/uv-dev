@@ -35,7 +35,7 @@ use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, Conflicts};
 use uv_python::managed::{ManagedPythonInstallation, PythonMinorVersionLink};
 use uv_python::{
-    BrokenLink, ConfigDiscovery, EnvironmentPreference, Interpreter, InvalidEnvironmentKind,
+    ConfigDiscovery, EnvironmentPreference, Interpreter, InvalidEnvironmentKind,
     LenientImplementationName, PythonDownloads, PythonEnvironment, PythonInstallation,
     PythonPreference, PythonRequest, PythonSource, PythonVariant, PythonVersionFile,
     VersionFileDiscoveryOptions, VersionRequest,
@@ -1077,22 +1077,17 @@ fn existing_project_environment(
         Err(uv_python::Error::Query(uv_python::InterpreterError::NotFound(_))) => {
             return Ok(None);
         }
-        Err(uv_python::Error::Query(uv_python::InterpreterError::BrokenLink(BrokenLink {
-            path,
-            unix,
-            venv: _,
-        }))) => {
-            if unix {
-                let target_path = fs_err::read_link(&path)?;
+        Err(uv_python::Error::Query(uv_python::InterpreterError::BrokenLink(broken_link))) => {
+            if let Some(target_path) = broken_link.missing_target() {
                 warn_user!(
                     "Ignoring existing virtual environment linked to non-existent Python interpreter: {} -> {}",
-                    path.user_display().cyan(),
+                    broken_link.path.user_display().cyan(),
                     target_path.user_display().cyan(),
                 );
             } else {
                 warn_user!(
                     "Ignoring existing virtual environment linked to non-existent Python interpreter: {}",
-                    path.user_display().cyan(),
+                    broken_link.path.user_display().cyan(),
                 );
             }
             return Ok(None);
