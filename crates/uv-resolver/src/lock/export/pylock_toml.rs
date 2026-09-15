@@ -882,6 +882,7 @@ impl<'lock> PylockToml {
         let attestation_identities = vec![];
 
         // Convert each node to a `pylock.toml`-style package.
+        let editable = editable.map(EditableMode::lookup);
         let mut packages = Vec::with_capacity(nodes.len());
         for node in nodes {
             let package = node.package;
@@ -963,7 +964,8 @@ impl<'lock> PylockToml {
                             .into_boxed_path(),
                     ),
                     editable: match editable
-                        .and_then(|editable| editable.for_package(&package.id.name))
+                        .as_ref()
+                        .and_then(|editable| editable(&package.id.name))
                     {
                         None => sdist.editable,
                         Some(false) => None,
