@@ -30,7 +30,7 @@ cargo dev generate-json-schema
 echo "Checking crates.io publish setup..."
 crates_policies="$(mktemp -d)"
 trap 'rm -rf "$crates_policies"' EXIT
-git clone --depth=1 --quiet https://github.com/astral-sh/crates-policies.git "$crates_policies"
+git clone --branch main --single-branch --depth=1 --quiet https://github.com/astral-sh/crates-policies.git "$crates_policies"
 uv run --default-index https://pypi.org/simple "$crates_policies/check.py" "$project_root"
 
 echo "Creating release branch..."
