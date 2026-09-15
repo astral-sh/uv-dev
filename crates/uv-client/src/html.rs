@@ -1186,7 +1186,7 @@ mod tests {
     "#;
         let base = DisplaySafeUrl::parse("https://download.pytorch.org/whl/jinja2/").unwrap();
         let result = SimpleDetailHTML::parse(text, &base).unwrap_err();
-        insta::assert_snapshot!(result, @"Unsupported hash algorithm (expected one of: `md5`, `sha256`, `sha384`, `sha512`, or `blake2b`) on: `blake2=6088930bfe239f0e6710546ab9c19c9ef35e29792895fed6e6e31a023a182a61`");
+        insta::assert_snapshot!(result, @"Unsupported hash algorithm (expected one of: `sha256`, `sha384`, `sha512`, or `blake2b`) on: `blake2=6088930bfe239f0e6710546ab9c19c9ef35e29792895fed6e6e31a023a182a61`");
     }
 
     #[test]

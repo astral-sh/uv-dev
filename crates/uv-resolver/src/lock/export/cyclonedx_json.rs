@@ -499,7 +499,6 @@ enum PackageType<'a> {
 /// Convert an internal [`HashDigest`] into a `CycloneDX` [`Hash`].
 fn to_cyclonedx_hash(hash: &HashDigest) -> Option<Hash> {
     let alg = match hash.algorithm() {
-        UvHashAlgorithm::Md5 => HashAlgorithm::MD5,
         UvHashAlgorithm::Sha256 => HashAlgorithm::SHA_256,
         UvHashAlgorithm::Sha384 => HashAlgorithm::SHA_384,
         UvHashAlgorithm::Sha512 => HashAlgorithm::SHA_512,
