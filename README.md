@@ -10,7 +10,7 @@ The reported regression is reproducible. On x86_64 Linux, uv 0.12.14 fails to in
 
 Repository evidence is consistent with the observed version boundary. astral-sh/uv#21569 added `ValidatedWheelDestination` and the exact error, including validation of a wheel's `.data/data` subtree against the installation scheme's data root. It merged after the 0.12.13 release and is present in 0.12.14. The validation rejects any existing destination directory symlink encountered for a wheel directory, without resolving the link and checking whether it remains inside the trusted installation prefix. The 0.12.14 release notes do not list astral-sh/uv#21569.
 
-No existing issue or pull request was found that already tracks this specific 0.12.14 regression or fixes it.
+No pre-existing issue or pull request was found that already tracked this specific 0.12.14 regression. A subsequent implementation is recorded in astral-sh/uv-dev#1806, and maintainer konstin confirmed that the fix was released in uv 0.12.15.
 
 ## Reproduction
 
@@ -58,6 +58,8 @@ Existing integration coverage in `crates/uv/tests/pip_install/pip_install.rs` in
 
 Outcome: **fixed**.
 
+Maintainer konstin confirmed in astral-sh/uv#21692 that the regression is fixed in uv 0.12.15. The associated implementation is recorded in astral-sh/uv-dev#1806.
+
 The root cause was the unconditional rejection of every existing destination-directory symlink encountered while validating a wheel subtree. The validation already has a trusted installation root, but it inspected only the destination's file type and never resolved the link to determine whether it crossed that boundary.
 
 `crates/uv-install-wheel/src/wheel.rs` now canonicalizes both an encountered symlink and its installation root. It permits the symlink only when the resolved destination remains within that canonical root. Links that resolve outside the root, and links whose destinations cannot be resolved, continue to produce the existing invalid-wheel error.
@@ -76,16 +78,17 @@ The validation now resolves destination links and allows them only when their ta
 
 This is a **bug**, not a duplicate. The version-controlled reproduction establishes a regression in uv 0.12.14 on a standard official Python image. The current source shows that uv unconditionally rejects a pre-existing directory symlink encountered beneath a wheel destination. Here `/usr/local/man` resolves to `/usr/local/share/man`, still within `/usr/local`, and uv 0.12.13 installs the same wheel successfully. The user-facing `The wheel is invalid` cause is also misleading because the rejection is determined by the destination layout, not malformed wheel contents.
 
-astral-sh/uv#21569 is the causative historical change, but it does not track this regression and therefore is not a canonical duplicate. No open issue or pull request already tracks the same regression.
+astral-sh/uv#21569 is the causative historical change, but it did not track this regression and therefore was not a canonical duplicate. No pre-existing issue or pull request tracked the regression when it was reported; the subsequent fix is recorded in astral-sh/uv-dev#1806.
 
 ## Related
 
 - astral-sh/uv#21569 — **merged pull request, “Reject symlinked wheel installation destinations.”** This is the closest result and the direct source of the behavior. It added the exact error and validates `.data/data` destinations to prevent installation through directory symlinks that could redirect writes outside the environment. Its implementation does not distinguish `/usr/local/man -> share/man`, whose resolved target remains under the installation prefix. It merged on 2026-09-10 after uv 0.12.13 was released and shipped in uv 0.12.14 on 2026-09-15.
+- astral-sh/uv-dev#1806 — **open implementation pull request, “Allow wheel installation through in-prefix directory symlinks.”** It records the fix that permits resolved destinations within the installation root while retaining rejection of escaping or unresolvable links. Although this pull request remains open, a maintainer confirmed the fix is included in uv 0.12.15.
 - astral-sh/uv#21255 — **open issue, “uv sync and uv pip install fails for packages with console scripts when the venv contains a `lib` to `usr/lib` symlink.”** This is adjacent symlink-related installer work, but not the same problem. It predates uv 0.12.14, uses a synthetic venv merged-`/usr` layout, and concerns relative console-script path calculation that ends in a metadata lookup failure. Its open proposed fix, astral-sh/uv#21256, normalizes or resolves script paths; it does not address `.data/data` destination validation.
 
 ## Search and supporting evidence
 
-Searches covered open and closed issues and open, closed-unmerged, and merged pull requests. Literal searches used the exact error, `/usr/local/man`, `share/man`, `.data/data`, and `uv pip install --system`. Conceptual searches covered wheel data files, mapped installation destinations, symlinked scheme roots, links that remain within a prefix versus links that escape an environment, official Python Docker layouts, and man pages. Fix-oriented searches checked merged work behind 0.12.14 and newer open or merged pull requests.
+Initial searches covered open and closed issues and open, closed-unmerged, and merged pull requests. Literal searches used the exact error, `/usr/local/man`, `share/man`, `.data/data`, and `uv pip install --system`. Conceptual searches covered wheel data files, mapped installation destinations, symlinked scheme roots, links that remain within a prefix versus links that escape an environment, official Python Docker layouts, and man pages. No pre-existing tracker was found; astral-sh/uv-dev#1806 was created subsequently to record the fix.
 
 The strongest ruled-out candidates were:
 
@@ -94,5 +97,3 @@ The strongest ruled-out candidates were:
 - astral-sh/uv#18942, which protects uninstall operations from malicious `RECORD` entries outside an environment. It is part of the broader environment-boundary work referenced by astral-sh/uv#21569, but it does not produce or track this install-time regression.
 
 Current tests added by astral-sh/uv#21569 cover rejecting symlinked package, nested package, data-package, and headers destinations when those links point to external directories. They do not cover a standard installation-scheme directory symlink whose resolved target remains within the same trusted prefix.
-
-Pull request: https://github.com/astral-sh/uv-dev/pull/1806
