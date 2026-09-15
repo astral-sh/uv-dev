@@ -210,22 +210,6 @@ reason = "read by generated activation scripts"
 [[override]]
 lint = "hawk::dead_public"
 crate = "uv_static"
-item = "env_vars::EnvVars::UV_UNMANAGED_INSTALL"
-kind = "inherent_associated_constant"
-level = "expect"
-reason = "read by the standalone installer"
-
-[[override]]
-lint = "hawk::dead_public"
-crate = "uv_static"
-item = "env_vars::EnvVars::UV_NO_MODIFY_PATH"
-kind = "inherent_associated_constant"
-level = "expect"
-reason = "read by the standalone installer"
-
-[[override]]
-lint = "hawk::dead_public"
-crate = "uv_static"
 item = "env_vars::EnvVars::AWS_ACCESS_KEY_ID"
 kind = "inherent_associated_constant"
 level = "expect"
