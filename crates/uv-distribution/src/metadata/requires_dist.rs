@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
 use std::slice;
 
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use uv_auth::CredentialsCache;
 use uv_cache::Cache;
@@ -15,7 +15,9 @@ use uv_workspace::pyproject::{Sources, ToolUvSources};
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, ProjectWorkspace, WorkspaceCache};
 
 use crate::Metadata;
-use crate::metadata::{GitWorkspaceMember, LoweredRequirement, MetadataError};
+use crate::metadata::{
+    GitWorkspaceMember, LoweredRequirement, MetadataError, source_group_requirements,
+};
 
 #[derive(Debug, Clone)]
 pub struct RequiresDist {
@@ -247,11 +249,46 @@ impl RequiresDist {
         metadata: &uv_pypi_types::RequiresDist,
         dependency_groups: &FlatDependencyGroups,
     ) -> Result<(), MetadataError> {
+        let extra_sources = sources
+            .iter()
+            .filter_map(|(name, sources)| {
+                let extras = sources
+                    .iter()
+                    .filter_map(|source| source.extra())
+                    .collect::<FxHashSet<_>>();
+                (!extras.is_empty()).then_some((name, extras))
+            })
+            .collect::<FxHashMap<_, _>>();
+
+        let provides_extra = if extra_sources.is_empty() {
+            FxHashSet::default()
+        } else {
+            metadata.provides_extra.iter().collect::<FxHashSet<_>>()
+        };
+        let mut extra_requirements = FxHashMap::<&PackageName, FxHashSet<_>>::default();
+        if !extra_sources.is_empty() {
+            for requirement in &metadata.requires_dist {
+                let Some(extras) = extra_sources.get(&requirement.name) else {
+                    continue;
+                };
+                if let Some(extra) = requirement.marker.top_level_extra_name()
+                    && extras.contains(extra.as_ref())
+                {
+                    extra_requirements
+                        .entry(&requirement.name)
+                        .or_default()
+                        .insert(extra);
+                }
+            }
+        }
+
+        let group_requirements = source_group_requirements(sources, dependency_groups);
+
         for (name, sources) in sources {
             for source in sources.iter() {
                 if let Some(extra) = source.extra() {
                     // If the extra doesn't exist at all, error.
-                    if !metadata.provides_extra.contains(extra) {
+                    if !provides_extra.contains(extra) {
                         return Err(MetadataError::MissingSourceExtra(
                             name.clone(),
                             extra.clone(),
@@ -259,10 +296,10 @@ impl RequiresDist {
                     }
 
                     // If there is no such requirement with the extra, error.
-                    if !metadata.requires_dist.iter().any(|requirement| {
-                        requirement.name == *name
-                            && requirement.marker.top_level_extra_name().as_deref() == Some(extra)
-                    }) {
+                    if !extra_requirements
+                        .get(name)
+                        .is_some_and(|extras| extras.contains(extra))
+                    {
                         return Err(MetadataError::IncompleteSourceExtra(
                             name.clone(),
                             extra.clone(),
@@ -272,7 +309,7 @@ impl RequiresDist {
 
                 if let Some(group) = source.group() {
                     // If the group doesn't exist at all, error.
-                    let Some(flat_group) = dependency_groups.get(group) else {
+                    let Some(requirements) = group_requirements.get(group) else {
                         return Err(MetadataError::MissingSourceGroup(
                             name.clone(),
                             group.clone(),
@@ -280,11 +317,7 @@ impl RequiresDist {
                     };
 
                     // If there is no such requirement with the group, error.
-                    if !flat_group
-                        .requirements
-                        .iter()
-                        .any(|requirement| requirement.name == *name)
-                    {
+                    if !requirements.contains(name) {
                         return Err(MetadataError::IncompleteSourceGroup(
                             name.clone(),
                             group.clone(),
@@ -762,6 +795,69 @@ mod test {
         "};
 
         assert_snapshot!(format_err(input).await, @"error: No `project` table found in: [PATH]/pyproject.toml");
+    }
+
+    #[tokio::test]
+    async fn many_scoped_sources() {
+        const COUNT: usize = 512;
+
+        let mut input = String::from(indoc! {r#"
+            [project]
+            name = "foo"
+            version = "0.0.0"
+            requires-python = ">=3.12"
+            dependencies = []
+
+            [project.optional-dependencies]
+            extra = [
+        "#});
+        for index in 0..COUNT {
+            let _ = writeln!(input, r#"  "extra-{index}; sys_platform == 'linux'","#);
+            let _ = writeln!(input, r#"  "extra-{index}; sys_platform != 'linux'","#);
+        }
+        input.push_str(indoc! {r"
+            ]
+
+            [dependency-groups]
+            group = [
+        "});
+        for index in 0..COUNT {
+            let _ = writeln!(input, r#"  "group-{index}; sys_platform == 'linux'","#);
+            let _ = writeln!(input, r#"  "group-{index}; sys_platform != 'linux'","#);
+        }
+        input.push_str(indoc! {r"
+            ]
+
+            [tool.uv.sources]
+        "});
+        for index in 0..COUNT {
+            let _ = writeln!(
+                input,
+                r#"extra-{index} = {{ index = "local", extra = "extra" }}"#
+            );
+            let _ = writeln!(
+                input,
+                r#"group-{index} = {{ index = "local", group = "group" }}"#
+            );
+        }
+        input.push_str(indoc! {r#"
+
+            [[tool.uv.index]]
+            name = "local"
+            url = "https://example.com/simple"
+            explicit = true
+        "#});
+
+        let temp_dir = TempDir::new().unwrap();
+        let actual = requires_dist_from_pyproject_toml(temp_dir.path(), &input)
+            .await
+            .unwrap();
+
+        assert_eq!(actual.requires_dist.len(), COUNT * 2);
+        assert_eq!(
+            actual.dependency_groups[&"group".parse().unwrap()].len(),
+            COUNT * 2
+        );
     }
 
     #[test]
