@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Result, bail};
 use owo_colors::OwoColorize;
+use rustc_hash::FxHashSet;
 use tracing::{debug, warn};
 
 use uv_cache::{Cache, CacheBucket, WheelCache};
@@ -869,9 +870,32 @@ impl Plan {
         // If any remote distributions are not matched, but are already installed, ensure that
         // they're uninstalled as part of the right plan. (Uninstalling them as part of the left
         // plan risks uninstalling them from the environment _prior_ to the replacement being built.)
-        let (left_reinstalls, right_reinstalls) = reinstalls
-            .into_iter()
-            .partition::<Vec<_>, _>(|dist| !right_remote.iter().any(|d| d.name() == dist.name()));
+        let should_index = right_remote.len() > 8 && reinstalls.len() > 32;
+        let mut right_remote_names = None;
+        let (left_reinstalls, right_reinstalls) =
+            reinstalls.into_iter().partition::<Vec<_>, _>(|dist| {
+                if !should_index {
+                    return !right_remote
+                        .iter()
+                        .any(|remote| remote.name() == dist.name());
+                }
+
+                if right_remote
+                    .first()
+                    .is_some_and(|remote| remote.name() == dist.name())
+                {
+                    return false;
+                }
+
+                !right_remote_names
+                    .get_or_insert_with(|| {
+                        right_remote
+                            .iter()
+                            .map(|remote| remote.name())
+                            .collect::<FxHashSet<_>>()
+                    })
+                    .contains(dist.name())
+            });
 
         // If the right plan is non-empty, then remove extraneous distributions as part of the
         // right plan, so they're present until the very end. Otherwise, we risk removing extraneous
@@ -910,7 +934,150 @@ impl Plan {
 mod tests {
     use super::*;
     use std::str::FromStr;
+    use uv_distribution_filename::{DistExtension, SourceDistExtension};
+    use uv_distribution_types::{InstalledDistKind, InstalledRegistryDist};
+    use uv_pep440::Version;
+    use uv_pep508::VerbatimUrl;
     use uv_platform_tags::{Arch, Os, Platform, TagsOptions};
+
+    fn remote_dist(name: &str) -> Arc<Dist> {
+        let url = VerbatimUrl::parse_url(format!("https://example.org/{name}-1.0.0.tar.gz"))
+            .expect("valid source URL");
+        Arc::new(
+            Dist::from_http_url(
+                PackageName::from_str(name).expect("valid package name"),
+                url.clone(),
+                url.to_url(),
+                None,
+                DistExtension::Source(SourceDistExtension::TarGz),
+            )
+            .expect("valid source distribution"),
+        )
+    }
+
+    fn installed_dist(name: &str, version: &str) -> InstalledDist {
+        InstalledDist::from(InstalledDistKind::Registry(InstalledRegistryDist {
+            name: PackageName::from_str(name).expect("valid package name"),
+            version: Version::from_str(version).expect("valid version"),
+            path: PathBuf::from(format!("{name}-{version}.dist-info")).into_boxed_path(),
+            cache_info: None,
+            build_info: None,
+        }))
+    }
+
+    #[test]
+    fn partition_reinstalls_matching_and_unrelated() {
+        let mut remote = Vec::new();
+        for index in 0..40 {
+            remote.push(remote_dist(&format!("shared-{index:02}")));
+            if index % 8 == 0 {
+                remote.push(remote_dist(&format!("isolated-{index:02}")));
+            }
+        }
+        remote.push(remote_dist("SHARED_07"));
+
+        let mut reinstalls = vec![installed_dist("unrelated-first", "1")];
+        for index in 0..40 {
+            reinstalls.push(installed_dist(&format!("shared-{index:02}"), "1"));
+            if index % 8 == 0 {
+                reinstalls.push(installed_dist(&format!("isolated-{index:02}"), "1"));
+            }
+        }
+        reinstalls.push(installed_dist("shared_07", "2"));
+        reinstalls.push(installed_dist("unrelated-last", "1"));
+
+        let (left, right) = Plan {
+            remote,
+            reinstalls,
+            extraneous: vec![installed_dist("extraneous", "1")],
+            ..Plan::default()
+        }
+        .partition(|name| name.as_str().starts_with("isolated-"));
+
+        assert_eq!(left.remote.len(), 5);
+        assert_eq!(right.remote.len(), 41);
+        assert_eq!(right.remote[0].name().as_str(), "shared-00");
+        assert_eq!(right.remote[40].name().as_str(), "shared-07");
+        assert_eq!(left.reinstalls.len(), 7);
+        assert_eq!(left.reinstalls[0].name().as_str(), "unrelated-first");
+        assert_eq!(left.reinstalls[6].name().as_str(), "unrelated-last");
+        assert_eq!(right.reinstalls.len(), 41);
+        assert_eq!(right.reinstalls[0].name().as_str(), "shared-00");
+        assert_eq!(right.reinstalls[40].name().as_str(), "shared-07");
+        assert_eq!(right.reinstalls[40].version().to_string(), "2");
+        assert!(left.extraneous.is_empty());
+        assert_eq!(right.extraneous.len(), 1);
+    }
+
+    #[test]
+    fn partition_reinstalls_asymmetric_small() {
+        for (right_count, reinstall_count) in [(8, 64), (64, 32)] {
+            let remote = (0..right_count)
+                .map(|index| remote_dist(&format!("shared-{index:02}")))
+                .collect();
+            let reinstalls = (0..reinstall_count)
+                .map(|index| {
+                    if index % 2 == 0 {
+                        installed_dist(&format!("shared-{:02}", index % right_count), "1")
+                    } else {
+                        installed_dist(&format!("unrelated-{index:02}"), "1")
+                    }
+                })
+                .collect();
+
+            let (left, right) = Plan {
+                remote,
+                reinstalls,
+                extraneous: vec![installed_dist("extraneous", "1")],
+                ..Plan::default()
+            }
+            .partition(|_| false);
+
+            assert!(left.remote.is_empty());
+            assert_eq!(right.remote.len(), right_count);
+            assert_eq!(left.reinstalls.len(), reinstall_count / 2);
+            assert_eq!(right.reinstalls.len(), reinstall_count / 2);
+            assert!(
+                left.reinstalls
+                    .iter()
+                    .all(|dist| dist.name().as_str().starts_with("unrelated-"))
+            );
+            assert!(
+                right
+                    .reinstalls
+                    .iter()
+                    .all(|dist| dist.name().as_str().starts_with("shared-"))
+            );
+            assert!(left.extraneous.is_empty());
+            assert_eq!(right.extraneous.len(), 1);
+        }
+
+        let (left, right) = Plan {
+            reinstalls: vec![installed_dist("unrelated", "1")],
+            extraneous: vec![installed_dist("extraneous", "1")],
+            ..Plan::default()
+        }
+        .partition(|_| false);
+        assert_eq!(left.reinstalls.len(), 1);
+        assert!(right.reinstalls.is_empty());
+        assert_eq!(left.extraneous.len(), 1);
+        assert!(right.extraneous.is_empty());
+
+        let (left, right) = Plan {
+            remote: (0..64)
+                .map(|index| remote_dist(&format!("shared-{index:02}")))
+                .collect(),
+            reinstalls: (0..64)
+                .map(|index| installed_dist("shared_00", &format!("{index}.0")))
+                .collect(),
+            ..Plan::default()
+        }
+        .partition(|_| false);
+        assert!(left.reinstalls.is_empty());
+        assert_eq!(right.reinstalls.len(), 64);
+        assert_eq!(right.reinstalls[0].version().to_string(), "0.0");
+        assert_eq!(right.reinstalls[63].version().to_string(), "63.0");
+    }
 
     #[test]
     fn test_abi3_on_free_threaded_python_hint() {
