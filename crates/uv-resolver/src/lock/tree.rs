@@ -20,11 +20,13 @@ use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::Version;
 use uv_pep508::MarkerTree;
 use uv_pypi_types::ResolverMarkerEnvironment;
+use uv_types::OnceQueue;
 
 use crate::lock::export::{
     MetadataNode, MetadataNodeId, MetadataNodeKind, MetadataScript, MetadataWorkspace,
     MetadataWorkspaceMember,
 };
+use crate::lock::walk::LockWalker;
 use crate::lock::{Package, PackageId, PackageIndex};
 use crate::{ConflictMarker, Lock, PackageMap, UniversalMarker};
 
@@ -117,8 +119,7 @@ impl<'env> TreeDisplay<'env> {
         let mut graph =
             Graph::<Node, Edge, petgraph::Directed>::with_capacity(size_guess, size_guess);
         let mut inverse = vec![None; size_guess];
-        let mut queue: VecDeque<(PackageIndex, Option<&ExtraName>)> = VecDeque::new();
-        let mut seen = FxHashSet::default();
+        let mut walker = LockWalker::new(lock);
 
         let root = graph.add_node(Node::Root);
 
@@ -142,15 +143,11 @@ impl<'env> TreeDisplay<'env> {
 
             if groups.prod() {
                 // Push its dependencies on the queue.
-                if seen.insert((package_index, None)) {
-                    queue.push_back((package_index, None));
-                }
+                walker.push(package_index, None);
 
                 // Push any extras on the queue.
                 for extra in dist.optional_dependencies.keys() {
-                    if seen.insert((package_index, Some(extra))) {
-                        queue.push_back((package_index, Some(extra)));
-                    }
+                    walker.push(package_index, Some(extra));
                 }
             }
 
@@ -193,14 +190,7 @@ impl<'env> TreeDisplay<'env> {
                 );
 
                 // Push its dependencies on the queue.
-                if seen.insert((dep.index, None)) {
-                    queue.push_back((dep.index, None));
-                }
-                for extra in &dep.extra {
-                    if seen.insert((dep.index, Some(extra))) {
-                        queue.push_back((dep.index, Some(extra)));
-                    }
-                }
+                walker.push_dependency(dep);
             }
         }
 
@@ -212,39 +202,47 @@ impl<'env> TreeDisplay<'env> {
         //    `[project]` table, since those roots are not workspace members, but they _can_ define
         //    dependencies.
         // - `dependencies` in PEP 723 scripts.
-        {
-            // Index the lockfile by name.
-            let by_name: FxHashMap<_, Vec<_>> = {
-                lock.packages().iter().enumerate().fold(
-                    FxHashMap::with_capacity_and_hasher(lock.len(), FxBuildHasher),
-                    |mut map, (index, package)| {
-                        map.entry(&package.id.name)
-                            .or_default()
-                            .push(PackageIndex(index));
-                        map
-                    },
-                )
-            };
+        // Identify any requirements attached to the workspace itself.
+        for requirement in lock.requirements() {
+            for (package_index, package) in lock.packages_for_requirement(requirement) {
+                let Some(marker) = Lock::root_requirement_marker_intersection(requirement, package)
+                else {
+                    continue;
+                };
+                if markers.is_some_and(|markers| !marker.evaluate(markers, &[])) {
+                    continue;
+                }
+                // Add the package to the graph.
+                let index = *inverse[package_index.0]
+                    .get_or_insert_with(|| graph.add_node(Node::Package(package_index)));
 
-            // Identify any requirements attached to the workspace itself.
-            for requirement in lock.requirements() {
-                for &package_index in by_name.get(&requirement.name).into_iter().flatten() {
-                    let package = lock.package(package_index);
-                    // Determine whether this entry is "relevant" for the requirement, by intersecting
-                    // the markers.
-                    let marker = if package.fork_markers.is_empty() {
-                        requirement.marker
-                    } else {
-                        let mut combined = MarkerTree::FALSE;
-                        for fork_marker in &package.fork_markers {
-                            combined = combined.or(fork_marker.pep508());
-                        }
-                        combined = combined.and(requirement.marker);
-                        combined
-                    };
-                    if marker.is_false() {
+                // Add an edge from the root.
+                graph.add_edge(
+                    root,
+                    index,
+                    Edge::Prod(
+                        Some(RequestedExtras::Requirement(requirement.extras.as_ref())),
+                        UniversalMarker::from_combined(marker),
+                    ),
+                );
+
+                // Push its dependencies on the queue.
+                walker.push_package(package_index, &requirement.extras);
+            }
+        }
+
+        // Identify any dependency groups attached to the workspace itself.
+        for (group, requirements) in lock.dependency_groups() {
+            if !groups.contains(group) {
+                continue;
+            }
+            for requirement in requirements {
+                for (package_index, package) in lock.packages_for_requirement(requirement) {
+                    let Some(marker) =
+                        Lock::root_requirement_marker_intersection(requirement, package)
+                    else {
                         continue;
-                    }
+                    };
                     if markers.is_some_and(|markers| !marker.evaluate(markers, &[])) {
                         continue;
                     }
@@ -256,97 +254,26 @@ impl<'env> TreeDisplay<'env> {
                     graph.add_edge(
                         root,
                         index,
-                        Edge::Prod(
+                        Edge::Dev(
+                            group,
                             Some(RequestedExtras::Requirement(requirement.extras.as_ref())),
                             UniversalMarker::from_combined(marker),
                         ),
                     );
 
                     // Push its dependencies on the queue.
-                    if seen.insert((package_index, None)) {
-                        queue.push_back((package_index, None));
-                    }
-                    for extra in &*requirement.extras {
-                        if seen.insert((package_index, Some(extra))) {
-                            queue.push_back((package_index, Some(extra)));
-                        }
-                    }
-                }
-            }
-
-            // Identify any dependency groups attached to the workspace itself.
-            for (group, requirements) in lock.dependency_groups() {
-                if !groups.contains(group) {
-                    continue;
-                }
-                for requirement in requirements {
-                    for &package_index in by_name.get(&requirement.name).into_iter().flatten() {
-                        let package = lock.package(package_index);
-                        // Determine whether this entry is "relevant" for the requirement, by intersecting
-                        // the markers.
-                        let marker = if package.fork_markers.is_empty() {
-                            requirement.marker
-                        } else {
-                            let mut combined = MarkerTree::FALSE;
-                            for fork_marker in &package.fork_markers {
-                                combined = combined.or(fork_marker.pep508());
-                            }
-                            combined = combined.and(requirement.marker);
-                            combined
-                        };
-                        if marker.is_false() {
-                            continue;
-                        }
-                        if markers.is_some_and(|markers| !marker.evaluate(markers, &[])) {
-                            continue;
-                        }
-                        // Add the package to the graph.
-                        let index = *inverse[package_index.0]
-                            .get_or_insert_with(|| graph.add_node(Node::Package(package_index)));
-
-                        // Add an edge from the root.
-                        graph.add_edge(
-                            root,
-                            index,
-                            Edge::Dev(
-                                group,
-                                Some(RequestedExtras::Requirement(requirement.extras.as_ref())),
-                                UniversalMarker::from_combined(marker),
-                            ),
-                        );
-
-                        // Push its dependencies on the queue.
-                        if seen.insert((package_index, None)) {
-                            queue.push_back((package_index, None));
-                        }
-                        for extra in &*requirement.extras {
-                            if seen.insert((package_index, Some(extra))) {
-                                queue.push_back((package_index, Some(extra)));
-                            }
-                        }
-                    }
+                    walker.push_package(package_index, &requirement.extras);
                 }
             }
         }
 
         // Create all the relevant nodes.
-        while let Some((package_index, extra)) = queue.pop_front() {
+        while let Some(visit) = walker.pop() {
+            let package_index = visit.index;
+            let extra = visit.extra;
             let index = inverse[package_index.0].expect("queued package has a graph node");
-            let package = lock.package(package_index);
 
-            let deps = if let Some(extra) = extra {
-                Either::Left(
-                    package
-                        .optional_dependencies
-                        .get(extra)
-                        .into_iter()
-                        .flatten(),
-                )
-            } else {
-                Either::Right(package.dependencies.iter())
-            };
-
-            for dep in deps {
+            for dep in visit.dependencies {
                 if prune.contains(&dep.package_id.name) {
                     continue;
                 }
@@ -380,20 +307,13 @@ impl<'env> TreeDisplay<'env> {
                 );
 
                 // Push its dependencies on the queue.
-                if seen.insert((dep.index, None)) {
-                    queue.push_back((dep.index, None));
-                }
-                for extra in &dep.extra {
-                    if seen.insert((dep.index, Some(extra))) {
-                        queue.push_back((dep.index, Some(extra)));
-                    }
-                }
+                walker.push_dependency(dep);
             }
         }
 
         // Filter the graph to remove any unreachable nodes.
         {
-            let mut reachable = graph
+            let mut queue = graph
                 .node_indices()
                 .filter(|index| match graph[*index] {
                     Node::Package(package_index) => {
@@ -401,17 +321,15 @@ impl<'env> TreeDisplay<'env> {
                     }
                     Node::Root => true,
                 })
-                .collect::<FxHashSet<_>>();
-            let mut stack = reachable.iter().copied().collect::<VecDeque<_>>();
-            while let Some(node) = stack.pop_front() {
+                .collect::<OnceQueue<_>>();
+            while let Some(node) = queue.pop() {
                 for edge in graph.edges_directed(node, Direction::Outgoing) {
-                    if reachable.insert(edge.target()) {
-                        stack.push_back(edge.target());
-                    }
+                    queue.push(edge.target());
                 }
             }
 
             // Remove the unreachable nodes from the graph.
+            let reachable = queue.into_seen();
             graph.retain_nodes(|_, index| reachable.contains(&index));
         }
 
@@ -422,7 +340,7 @@ impl<'env> TreeDisplay<'env> {
 
         // Filter the graph to those nodes reachable from the target packages.
         if !packages.is_empty() {
-            let mut reachable = graph
+            let mut queue = graph
                 .node_indices()
                 .filter(|index| {
                     let Node::Package(package_index) = graph[*index] else {
@@ -430,17 +348,15 @@ impl<'env> TreeDisplay<'env> {
                     };
                     packages.contains(&lock.package(package_index).id.name)
                 })
-                .collect::<FxHashSet<_>>();
-            let mut stack = reachable.iter().copied().collect::<VecDeque<_>>();
-            while let Some(node) = stack.pop_front() {
+                .collect::<OnceQueue<_>>();
+            while let Some(node) = queue.pop() {
                 for edge in graph.edges_directed(node, Direction::Outgoing) {
-                    if reachable.insert(edge.target()) {
-                        stack.push_back(edge.target());
-                    }
+                    queue.push(edge.target());
                 }
             }
 
             // Remove the unreachable nodes from the graph.
+            let reachable = queue.into_seen();
             graph.retain_nodes(|_, index| reachable.contains(&index));
         }
 
