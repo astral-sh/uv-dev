@@ -34,7 +34,7 @@ use uv_workspace::pyproject_mut::AddBoundsKind;
 
 use crate::{EnvironmentOptions, FilesystemOptions};
 
-/// A `pyproject.toml` with an (optional) `[tool.uv]` section.
+/// A `pyproject.toml` file with an optional `[tool.uv]` section.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct PyProjectToml {
@@ -48,26 +48,26 @@ pub(crate) struct Tools {
     pub(crate) uv: Option<Options>,
 }
 
-/// A `pyproject.toml` with an (optional) `[tool.uv.required-version]`.
+/// A `pyproject.toml` file with an optional `[tool.uv.required-version]` setting.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct PyProjectRequiredVersionToml {
     pub(crate) tool: Option<RequiredVersionTools>,
 }
 
-/// A `[tool]` section containing only the fields required for `required-version` discovery.
+/// A `[tool]` section with only the fields needed to find `required-version`.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct RequiredVersionTools {
     pub(crate) uv: Option<RequiredVersionOptions>,
 }
 
-/// The minimal `[tool.uv]` subset required to enforce `required-version` before full parsing.
+/// The `[tool.uv]` fields needed to enforce `required-version` before parsing the full file.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct RequiredVersionOptions {
     pub(crate) required_version: Option<RequiredVersion>,
 }
 
-/// A `uv.toml` containing only the fields required for `required-version` discovery.
+/// A `uv.toml` file with only the fields needed to find `required-version`.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct UvRequiredVersionToml {
@@ -102,41 +102,37 @@ pub struct Options {
     #[option_group]
     pub pip: Option<PipOptions>,
 
-    /// The keys to consider when caching builds for the project.
+    /// The keys that determine when to rebuild the project.
     ///
-    /// Cache keys enable you to specify the files or directories that should trigger a rebuild when
-    /// modified. By default, uv will rebuild a project whenever the `pyproject.toml`, `setup.py`,
-    /// or `setup.cfg` files in the project directory are modified, or if a `src` directory is
-    /// added or removed, i.e.:
+    /// Use cache keys to select the files and directories that trigger a rebuild when they change.
+    /// By default, uv rebuilds a project when `pyproject.toml`, `setup.py`, or `setup.cfg` changes
+    /// in the project directory. It also rebuilds the project when a `src` directory is added or
+    /// removed:
     ///
     /// ```toml
     /// cache-keys = [{ file = "pyproject.toml" }, { file = "setup.py" }, { file = "setup.cfg" }, { dir = "src" }]
     /// ```
     ///
-    /// As an example: if a project uses dynamic metadata to read its dependencies from a
-    /// `requirements.txt` file, you can specify `cache-keys = [{ file = "requirements.txt" }, { file = "pyproject.toml" }]`
-    /// to ensure that the project is rebuilt whenever the `requirements.txt` file is modified (in
-    /// addition to watching the `pyproject.toml`).
+    /// For example, a project can read dynamic dependency metadata from `requirements.txt`. Set
+    /// `cache-keys = [{ file = "requirements.txt" }, { file = "pyproject.toml" }]` to rebuild the
+    /// project when either file changes.
     ///
-    /// Globs are supported, following the syntax of the [`glob`](https://docs.rs/glob/0.3.1/glob/struct.Pattern.html)
-    /// crate. For example, to invalidate the cache whenever a `.toml` file in the project directory
-    /// or any of its subdirectories is modified, you can specify `cache-keys = [{ file = "**/*.toml" }]`.
-    /// Note that the use of globs can be expensive, as uv may need to walk the filesystem to
-    /// determine whether any files have changed.
+    /// Globs use the syntax of the [`glob`](https://docs.rs/glob/0.3.1/glob/struct.Pattern.html)
+    /// crate. Set `cache-keys = [{ file = "**/*.toml" }]` to invalidate the cache when a `.toml`
+    /// file changes in the project directory or a subdirectory. Globs can be slow because uv may
+    /// need to search the filesystem for changed files.
     ///
-    /// Cache keys can also include version control information. For example, if a project uses
-    /// `setuptools_scm` to read its version from a Git commit, you can specify `cache-keys = [{ git = { commit = true }, { file = "pyproject.toml" }]`
-    /// to include the current Git commit hash in the cache key (in addition to the
-    /// `pyproject.toml`). Git tags are also supported via `cache-keys = [{ git = { commit = true, tags = true } }]`.
+    /// Cache keys can include version control information. If a project uses `setuptools_scm` to
+    /// read its version from a Git commit, set `cache-keys = [{ git = { commit = true }, { file = "pyproject.toml" }]`
+    /// to include the current Git commit hash and `pyproject.toml` in the cache key. To also
+    /// include Git tags, use `cache-keys = [{ git = { commit = true, tags = true } }]`.
     ///
-    /// Cache keys can also include environment variables. For example, if a project relies on
-    /// `MACOSX_DEPLOYMENT_TARGET` or other environment variables to determine its behavior, you can
-    /// specify `cache-keys = [{ env = "MACOSX_DEPLOYMENT_TARGET" }]` to invalidate the cache
-    /// whenever the environment variable changes.
+    /// Cache keys can also include environment variables. For example, set
+    /// `cache-keys = [{ env = "MACOSX_DEPLOYMENT_TARGET" }]` to invalidate the cache when
+    /// `MACOSX_DEPLOYMENT_TARGET` changes.
     ///
-    /// Cache keys only affect the project defined by the `pyproject.toml` in which they're
-    /// specified (as opposed to, e.g., affecting all members in a workspace), and all paths and
-    /// globs are interpreted as relative to the project directory.
+    /// Cache keys affect only the project defined by their `pyproject.toml`. They do not affect
+    /// other workspace members. Paths and globs are relative to the project directory.
     #[option(
         default = r#"[{ file = "pyproject.toml" }, { file = "setup.py" }, { file = "setup.cfg" }]"#,
         value_type = "list[dict]",
@@ -147,8 +143,8 @@ pub struct Options {
     pub cache_keys: Option<Vec<CacheKey>>,
 
     // NOTE(charlie): These fields are shared with `ToolUv` in
-    // `crates/uv-workspace/src/pyproject.rs`. The documentation lives on that struct.
-    // They're respected in both `pyproject.toml` and `uv.toml` files.
+    // `crates/uv-workspace/src/pyproject.rs`, where they are documented.
+    // They apply to both `pyproject.toml` and `uv.toml` files.
     #[cfg_attr(feature = "schemars", schemars(skip))]
     pub override_dependencies: Option<Vec<OverrideDependency>>,
 
@@ -167,9 +163,9 @@ pub struct Options {
     #[cfg_attr(feature = "schemars", schemars(skip))]
     pub required_environments: Option<SupportedEnvironments>,
 
-    // NOTE(charlie): These fields should be kept in-sync with `ToolUv` in
-    // `crates/uv-workspace/src/pyproject.rs`. The documentation lives on that struct.
-    // They're only respected in `pyproject.toml` files, and should be rejected in `uv.toml` files.
+    // NOTE(charlie): Keep these fields in sync with `ToolUv` in
+    // `crates/uv-workspace/src/pyproject.rs`, where they are documented.
+    // They apply only to `pyproject.toml` files and must be rejected in `uv.toml` files.
     #[cfg_attr(feature = "schemars", schemars(skip))]
     pub(crate) conflicts: Option<serde::de::IgnoredAny>,
 
@@ -199,7 +195,7 @@ pub struct Options {
 }
 
 impl Options {
-    /// Construct an [`Options`] with the given global and top-level settings.
+    /// Create [`Options`] from the given global and top-level settings.
     pub fn simple(globals: GlobalOptions, top_level: ResolverInstallerSchema) -> Self {
         Self {
             globals,
@@ -252,18 +248,17 @@ impl Options {
     }
 }
 
-/// Global settings, relevant to all invocations.
+/// Global settings that apply to all commands.
 #[derive(Debug, Clone, Default, Deserialize, CombineOptions, OptionsMetadata)]
 #[serde(try_from = "GlobalOptionsWire", rename_all = "kebab-case")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schemars", schemars(!try_from))]
 pub struct GlobalOptions {
-    /// Enforce a requirement on the version of uv.
+    /// Set a version requirement for uv.
     ///
-    /// If the version of uv does not meet the requirement at runtime, uv will exit
-    /// with an error.
+    /// If the uv version does not meet the requirement, uv exits with an error.
     ///
-    /// Accepts a [PEP 440](https://peps.python.org/pep-0440/) specifier, like `==0.5.0` or `>=0.5.0`.
+    /// Use a [PEP 440](https://peps.python.org/pep-0440/) specifier, such as `==0.5.0` or `>=0.5.0`.
     #[option(
         default = "null",
         value_type = "str",
@@ -274,7 +269,7 @@ pub struct GlobalOptions {
     pub required_version: Option<RequiredVersion>,
     /// Whether to load TLS certificates from the platform's native certificate store.
     ///
-    /// By default, uv uses bundled Mozilla root certificates. When enabled, this loads
+    /// By default, uv uses bundled Mozilla root certificates. Enable this setting to use
     /// certificates from the platform's native certificate store instead.
     #[option(
         default = "false",
@@ -287,7 +282,7 @@ pub struct GlobalOptions {
     pub system_certs: Option<bool>,
     /// Whether to load TLS certificates from the platform's native certificate store.
     ///
-    /// By default, uv uses bundled Mozilla root certificates. When enabled, this loads
+    /// By default, uv uses bundled Mozilla root certificates. Enable this setting to use
     /// certificates from the platform's native certificate store instead.
     ///
     /// (Deprecated: use `system-certs` instead.)
@@ -301,7 +296,7 @@ pub struct GlobalOptions {
         "#
     )]
     pub native_tls: Option<bool>,
-    /// Disable network access, relying only on locally cached data and locally available files.
+    /// Disable network access. Use only cached data and local files.
     #[option(
         default = "false",
         value_type = "bool",
@@ -310,8 +305,7 @@ pub struct GlobalOptions {
         "#
     )]
     pub offline: Option<bool>,
-    /// Avoid reading from or writing to the cache, instead using a temporary directory for the
-    /// duration of the operation.
+    /// Do not read from or write to the cache. Use a temporary directory for the operation.
     #[option(
         default = "false",
         value_type = "bool",
@@ -338,8 +332,7 @@ pub struct GlobalOptions {
     #[serde(flatten)]
     pub preview: Option<PreviewOption>,
 
-    /// Whether to prefer using Python installations that are already present on the system, or
-    /// those that are downloaded and installed by uv.
+    /// Whether to prefer existing system Python installations or installations managed by uv.
     #[option(
         default = "\"managed\"",
         value_type = "str",
@@ -359,8 +352,7 @@ pub struct GlobalOptions {
         possible_values = true
     )]
     pub python_downloads: Option<PythonDownloads>,
-    /// The maximum number of in-flight concurrent downloads that uv will perform at any given
-    /// time.
+    /// The maximum number of downloads that uv runs at the same time.
     #[option(
         default = "50",
         value_type = "int",
@@ -369,8 +361,7 @@ pub struct GlobalOptions {
         "#
     )]
     pub concurrent_downloads: Option<NonZeroUsize>,
-    /// The maximum number of source distributions that uv will build concurrently at any given
-    /// time.
+    /// The maximum number of source distributions that uv builds at the same time.
     ///
     /// Defaults to the number of available CPU cores.
     #[option(
@@ -381,7 +372,7 @@ pub struct GlobalOptions {
         "#
     )]
     pub concurrent_builds: Option<NonZeroUsize>,
-    /// The number of threads used when installing and unzipping packages.
+    /// The number of threads that install and unzip packages.
     ///
     /// Defaults to the number of available CPU cores.
     #[option(
@@ -412,7 +403,7 @@ pub struct GlobalOptions {
         "#
     )]
     pub https_proxy: Option<ProxyUrl>,
-    /// A list of hosts to exclude from proxying.
+    /// Hosts that do not use a proxy.
     #[option(
         default = "None",
         value_type = "list[str]",
@@ -422,14 +413,14 @@ pub struct GlobalOptions {
         "#
     )]
     pub no_proxy: Option<Vec<String>>,
-    /// Allow insecure connections to host.
+    /// Allow insecure connections to a host.
     ///
-    /// Expects to receive either a hostname (e.g., `localhost`), a host-port pair (e.g.,
-    /// `localhost:8080`), or a URL (e.g., `https://localhost`).
+    /// Use a hostname such as `localhost`, a host and port such as `localhost:8080`, or a URL such
+    /// as `https://localhost`.
     ///
-    /// WARNING: Hosts included in this list will not be verified against the system's certificate
-    /// store. Only use `--allow-insecure-host` in a secure network with verified sources, as it
-    /// bypasses SSL verification and could expose you to MITM attacks.
+    /// WARNING: uv does not check these hosts against the system certificate store. Use
+    /// `--allow-insecure-host` only on a secure network with verified sources. This setting
+    /// bypasses SSL verification and can expose you to MITM attacks.
     #[option(
         default = "[]",
         value_type = "list[str]",
@@ -440,8 +431,8 @@ pub struct GlobalOptions {
     pub allow_insecure_host: Option<Vec<TrustedHost>>,
 }
 
-/// Like [`GlobalOptions`], but with any `#[serde(flatten)]` fields inlined.
-/// This improves line/column information in error messages.
+/// [`GlobalOptions`] with `#[serde(flatten)]` fields inlined.
+/// This improves line and column information in error messages.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct GlobalOptionsWire {
@@ -555,7 +546,7 @@ fn rebase_indexes(
     Ok(())
 }
 
-/// Settings relevant to all installer operations.
+/// Settings for all package installation operations.
 #[derive(Debug, Clone, Default, CombineOptions)]
 pub struct InstallerOptions {
     index: Option<Vec<Index>>,
@@ -648,7 +639,7 @@ impl From<IndexOptions> for PipOptions {
     }
 }
 
-/// Settings relevant to all resolver operations.
+/// Settings for all dependency resolution operations.
 #[derive(Debug, Clone, Default, CombineOptions)]
 pub struct ResolverOptions {
     pub indexes: IndexOptions,
@@ -685,8 +676,8 @@ impl ResolverOptions {
     }
 }
 
-/// Shared settings, relevant to all operations that must resolve and install dependencies. The
-/// union of [`InstallerOptions`] and [`ResolverOptions`].
+/// Settings for operations that resolve and install dependencies.
+/// Combines [`InstallerOptions`] and [`ResolverOptions`].
 #[derive(Debug, Clone, Default, CombineOptions)]
 pub struct ResolverInstallerOptions {
     pub indexes: IndexOptions,
@@ -832,17 +823,16 @@ impl ResolverInstallerSchema {
 pub struct ResolverInstallerSchema {
     /// The package indexes to use when resolving dependencies.
     ///
-    /// Accepts either a repository compliant with [PEP 503](https://peps.python.org/pep-0503/)
-    /// (the simple repository API), or a local directory laid out in the same format.
+    /// Use a repository that follows [PEP 503](https://peps.python.org/pep-0503/) (the simple
+    /// repository API), or a local directory that uses the same format.
     ///
-    /// Indexes are considered in the order in which they're defined, such that the first-defined
-    /// index has the highest priority. Further, the indexes provided by this setting are given
-    /// higher priority than any indexes specified via [`index_url`](#index-url) or
-    /// [`extra_index_url`](#extra-index-url). uv will only consider the first index that contains
-    /// a given package, unless an alternative [index strategy](#index-strategy) is specified.
+    /// uv searches indexes in their defined order. The first index has the highest priority.
+    /// These indexes have higher priority than indexes from [`index_url`](#index-url) or
+    /// [`extra_index_url`](#extra-index-url). Unless you select another
+    /// [index strategy](#index-strategy), uv uses only the first index that contains a package.
     ///
-    /// If an index is marked as `explicit = true`, it will be used exclusively for those
-    /// dependencies that select it explicitly via `[tool.uv.sources]`, as in:
+    /// If an index has `explicit = true`, uv uses it only for dependencies that select it in
+    /// `[tool.uv.sources]`:
     ///
     /// ```toml
     /// [[tool.uv.index]]
@@ -854,9 +844,8 @@ pub struct ResolverInstallerSchema {
     /// torch = { index = "pytorch" }
     /// ```
     ///
-    /// If an index is marked as `default = true`, it will be moved to the end of the prioritized list, such that it is
-    /// given the lowest priority when resolving packages. Additionally, marking an index as default will disable the
-    /// PyPI default index.
+    /// If an index has `default = true`, uv moves it to the end of the list. The index then has the
+    /// lowest priority. A default index also disables the default PyPI index.
     #[option(
         default = "\"[]\"",
         value_type = "dict",
@@ -867,13 +856,13 @@ pub struct ResolverInstallerSchema {
         "#
     )]
     pub index: Option<Vec<Index>>,
-    /// The URL of the Python package index (by default: <https://pypi.org/simple>).
+    /// The Python package index URL. Defaults to <https://pypi.org/simple>.
     ///
-    /// Accepts either a repository compliant with [PEP 503](https://peps.python.org/pep-0503/)
-    /// (the simple repository API), or a local directory laid out in the same format.
+    /// Use a repository that follows [PEP 503](https://peps.python.org/pep-0503/) (the simple
+    /// repository API), or a local directory that uses the same format.
     ///
-    /// The index provided by this setting is given lower priority than any indexes specified via
-    /// [`extra_index_url`](#extra-index-url) or [`index`](#index).
+    /// This index has lower priority than indexes from [`extra_index_url`](#extra-index-url) or
+    /// [`index`](#index).
     ///
     /// (Deprecated: use `index` instead.)
     #[option(
@@ -884,17 +873,15 @@ pub struct ResolverInstallerSchema {
         "#
     )]
     pub index_url: Option<PipIndex>,
-    /// Extra URLs of package indexes to use, in addition to `--index-url`.
+    /// Additional package index URLs to use with `--index-url`.
     ///
-    /// Accepts either a repository compliant with [PEP 503](https://peps.python.org/pep-0503/)
-    /// (the simple repository API), or a local directory laid out in the same format.
+    /// Use a repository that follows [PEP 503](https://peps.python.org/pep-0503/) (the simple
+    /// repository API), or a local directory that uses the same format.
     ///
-    /// All indexes provided via this flag take priority over the index specified by
-    /// [`index_url`](#index-url) or [`index`](#index) with `default = true`. When multiple indexes
-    /// are provided, earlier values take priority.
+    /// These indexes have higher priority than [`index_url`](#index-url) and any [`index`](#index)
+    /// with `default = true`. Earlier indexes have higher priority.
     ///
-    /// To control uv's resolution strategy when multiple indexes are present, see
-    /// [`index_strategy`](#index-strategy).
+    /// Use [`index_strategy`](#index-strategy) to control how uv searches multiple indexes.
     ///
     /// (Deprecated: use `index` instead.)
     #[option(
@@ -905,8 +892,8 @@ pub struct ResolverInstallerSchema {
         "#
     )]
     pub extra_index_url: Option<Vec<PipExtraIndex>>,
-    /// Ignore all registry indexes (e.g., PyPI), instead relying on direct URL dependencies and
-    /// those provided via `--find-links`.
+    /// Ignore all registry indexes, including PyPI. Use only direct URL dependencies and
+    /// dependencies from `--find-links`.
     #[option(
         default = "false",
         value_type = "bool",
@@ -915,14 +902,12 @@ pub struct ResolverInstallerSchema {
         "#
     )]
     pub no_index: Option<bool>,
-    /// Locations to search for candidate distributions, in addition to those found in the registry
-    /// indexes.
+    /// Additional locations to search for distributions outside the registry indexes.
     ///
-    /// If a path, the target must be a directory that contains packages as wheel files (`.whl`) or
-    /// source distributions (e.g., `.tar.gz` or `.zip`) at the top level.
+    /// A path must point to a directory with wheels (`.whl`) or source distributions (`.tar.gz` or
+    /// `.zip`) at its top level.
     ///
-    /// If a URL, the page must contain a flat list of links to package files adhering to the
-    /// formats described above.
+    /// A URL must point to a page with a flat list of links to those package file formats.
     #[option(
         default = "[]",
         value_type = "list[str]",
@@ -931,12 +916,11 @@ pub struct ResolverInstallerSchema {
         "#
     )]
     pub find_links: Option<Vec<PipFindLinks>>,
-    /// The strategy to use when resolving against multiple index URLs.
+    /// The strategy for resolving packages from multiple indexes.
     ///
-    /// By default, uv will stop at the first index on which a given package is available, and
-    /// limit resolutions to those present on that first index (`first-index`). This prevents
-    /// "dependency confusion" attacks, whereby an attacker can upload a malicious package under the
-    /// same name to an alternate index.
+    /// By default, uv uses only the first index that contains a package (`first-index`). This
+    /// prevents "dependency confusion" attacks, in which an attacker uploads a malicious package
+    /// with the same name to another index.
     #[option(
         default = "\"first-index\"",
         value_type = "str",
@@ -946,10 +930,10 @@ pub struct ResolverInstallerSchema {
         possible_values = true
     )]
     pub index_strategy: Option<IndexStrategy>,
-    /// Attempt to use `keyring` for authentication for index URLs.
+    /// Use `keyring` to authenticate with package indexes.
     ///
-    /// At present, only `--keyring-provider subprocess` is supported, which configures uv to
-    /// use the `keyring` CLI to handle authentication.
+    /// Only `--keyring-provider subprocess` is supported. It uses the `keyring` CLI for
+    /// authentication.
     #[option(
         default = "\"disabled\"",
         value_type = "str",
@@ -958,10 +942,9 @@ pub struct ResolverInstallerSchema {
         "#
     )]
     pub keyring_provider: Option<KeyringProviderType>,
-    /// The strategy to use when selecting between the different compatible versions for a given
-    /// package requirement.
+    /// The strategy for selecting a compatible package version.
     ///
-    /// By default, uv will use the latest compatible version of each package (`highest`).
+    /// By default, uv uses the latest compatible version of each package (`highest`).
     #[option(
         default = "\"highest\"",
         value_type = "str",
@@ -973,9 +956,8 @@ pub struct ResolverInstallerSchema {
     pub resolution: Option<ResolutionMode>,
     /// The strategy to use when considering pre-release versions.
     ///
-    /// By default, uv will prefer stable candidates, falling back to pre-releases only after every
-    /// stable candidate that satisfies the active constraints is rejected
-    /// (`if-necessary`).
+    /// By default, uv prefers stable versions. It selects a pre-release only after every stable
+    /// version that meets the active constraints is rejected (`if-necessary`).
     #[option(
         default = "\"if-necessary\"",
         value_type = "str",
@@ -987,8 +969,8 @@ pub struct ResolverInstallerSchema {
     pub prerelease: Option<PrereleaseMode>,
     /// The strategy to use when considering pre-release versions for specific packages.
     ///
-    /// Package-specific modes take precedence over the global [`prerelease`](#prerelease) mode.
-    /// Accepts a dictionary mapping package names to any supported pre-release mode.
+    /// Package-specific modes take priority over the global [`prerelease`](#prerelease) mode.
+    /// Use a dictionary that maps package names to supported pre-release modes.
     #[option(
         default = "{}",
         value_type = "dict",
@@ -1000,13 +982,11 @@ pub struct ResolverInstallerSchema {
     /// The strategy to use when selecting multiple versions of a given package across Python
     /// versions and platforms.
     ///
-    /// By default, uv will optimize for selecting the latest version of each package for each
-    /// supported Python version (`requires-python`), while minimizing the number of selected
-    /// versions across platforms.
+    /// By default, uv selects the latest package version for each supported Python version
+    /// (`requires-python`). It also minimizes the number of versions across platforms.
     ///
-    /// Under `fewest`, uv will minimize the number of selected versions for each package,
-    /// preferring older versions that are compatible with a wider range of supported Python
-    /// versions or platforms.
+    /// With `fewest`, uv minimizes the number of versions for each package. It prefers older
+    /// versions that support more Python versions or platforms.
     #[option(
         default = "\"requires-python\"",
         value_type = "str",
@@ -1016,16 +996,15 @@ pub struct ResolverInstallerSchema {
         possible_values = true
     )]
     pub fork_strategy: Option<ForkStrategy>,
-    /// Pre-defined static metadata for dependencies of the project (direct or transitive). When
-    /// provided, enables the resolver to use the specified metadata instead of querying the
-    /// registry or building the relevant package from source.
+    /// Static metadata for direct or transitive project dependencies. uv uses this metadata
+    /// instead of querying the registry or building the package from source.
     ///
-    /// Metadata should be provided in adherence with the [Metadata 2.3](https://packaging.python.org/en/latest/specifications/core-metadata/)
-    /// standard, though only the following fields are respected:
+    /// The metadata should follow the [Metadata 2.3](https://packaging.python.org/en/latest/specifications/core-metadata/)
+    /// standard. uv uses only these fields:
     ///
     /// - `name`: The name of the package.
-    /// - (Optional) `version`: The version of the package. If omitted, the metadata will be applied
-    ///   to all versions of the package.
+    /// - (Optional) `version`: The package version. If omitted, the metadata applies to all
+    ///   versions of the package.
     /// - (Optional) `requires-dist`: The dependencies of the package (e.g., `werkzeug>=0.14`).
     /// - (Optional) `requires-python`: The Python version required by the package (e.g., `>=3.10`).
     /// - (Optional) `provides-extra`: The extras provided by the package.
@@ -1039,8 +1018,8 @@ pub struct ResolverInstallerSchema {
         "#
     )]
     pub dependency_metadata: Option<Vec<StaticMetadata>>,
-    /// Settings to pass to the [PEP 517](https://peps.python.org/pep-0517/) build backend,
-    /// specified as `KEY=VALUE` pairs.
+    /// Settings to pass to the [PEP 517](https://peps.python.org/pep-0517/) build backend as
+    /// `KEY=VALUE` pairs.
     #[option(
         default = "{}",
         value_type = "dict",
@@ -1049,10 +1028,10 @@ pub struct ResolverInstallerSchema {
         "#
     )]
     pub config_settings: Option<ConfigSettings>,
-    /// Settings to pass to the [PEP 517](https://peps.python.org/pep-0517/) build backend for specific packages,
-    /// specified as `KEY=VALUE` pairs.
+    /// Settings to pass to the [PEP 517](https://peps.python.org/pep-0517/) build backend for
+    /// specific packages as `KEY=VALUE` pairs.
     ///
-    /// Accepts a map from package names to string key-value pairs.
+    /// Use a map from package names to string key-value pairs.
     #[option(
         default = "{}",
         value_type = "dict",
@@ -1063,8 +1042,8 @@ pub struct ResolverInstallerSchema {
     pub config_settings_package: Option<PackageConfigSettings>,
     /// Disable isolation when building source distributions.
     ///
-    /// Assumes that build dependencies specified by [PEP 518](https://peps.python.org/pep-0518/)
-    /// are already installed.
+    /// Requires the build dependencies from [PEP 518](https://peps.python.org/pep-0518/) to
+    /// already be installed.
     #[option(
         default = "false",
         value_type = "bool",
@@ -1075,8 +1054,8 @@ pub struct ResolverInstallerSchema {
     pub no_build_isolation: Option<bool>,
     /// Disable isolation when building source distributions for a specific package.
     ///
-    /// Assumes that the packages' build dependencies specified by [PEP 518](https://peps.python.org/pep-0518/)
-    /// are already installed.
+    /// Requires the packages' build dependencies from [PEP 518](https://peps.python.org/pep-0518/)
+    /// to already be installed.
     #[option(
         default = "[]",
         value_type = "list[str]",
@@ -1087,9 +1066,8 @@ pub struct ResolverInstallerSchema {
     pub no_build_isolation_package: Option<Vec<PackageName>>,
     /// Additional build dependencies for packages.
     ///
-    /// This allows extending the PEP 517 build environment for the project's dependencies with
-    /// additional packages. This is useful for packages that assume the presence of packages like
-    /// `pip`, and do not declare them as build dependencies.
+    /// Add packages to the PEP 517 build environments of project dependencies. Use this for
+    /// packages that require dependencies such as `pip` but do not declare them.
     #[option(
         default = "[]",
         value_type = "dict",
@@ -1100,8 +1078,7 @@ pub struct ResolverInstallerSchema {
     pub extra_build_dependencies: Option<ExtraBuildDependencies>,
     /// Extra environment variables to set when building certain packages.
     ///
-    /// Environment variables will be added to the environment when building the
-    /// specified packages.
+    /// uv adds these variables to the environment when it builds the specified packages.
     #[option(
         default = r#"{}"#,
         value_type = r#"dict[str, dict[str, str]]"#,
@@ -1110,18 +1087,16 @@ pub struct ResolverInstallerSchema {
         "#
     )]
     pub extra_build_variables: Option<ExtraBuildVariables>,
-    /// Limit candidate packages to those that were uploaded prior to the given date.
+    /// Select only package files uploaded before the given date.
     ///
-    /// The date is compared against the upload time of each individual distribution artifact
-    /// (i.e., when each file was uploaded to the package index), not the release date of the
-    /// package version.
+    /// uv compares the date with the upload time of each distribution file. It does not use the
+    /// release date of the package version.
     ///
-    /// Accepts RFC 3339 timestamps (e.g., `2006-12-02T02:07:43Z`), a "friendly" duration (e.g.,
-    /// `24 hours`, `1 week`, `30 days`), or an ISO 8601 duration (e.g., `PT24H`, `P7D`, `P30D`).
+    /// Use an RFC 3339 timestamp such as `2006-12-02T02:07:43Z`, a duration such as `24 hours`,
+    /// `1 week`, or `30 days`, or an ISO 8601 duration such as `PT24H`, `P7D`, or `P30D`.
     ///
-    /// Durations do not respect semantics of the local time zone and are always resolved to a fixed
-    /// number of seconds assuming that a day is 24 hours (e.g., DST transitions are ignored).
-    /// Calendar units such as months and years are not allowed.
+    /// uv converts durations to a fixed number of seconds and treats each day as 24 hours.
+    /// It ignores local time zones and daylight saving time. Months and years are not allowed.
     ///
     /// Set to `false` to disable `exclude-newer`.
     #[option(
@@ -1132,19 +1107,17 @@ pub struct ResolverInstallerSchema {
         "#
     )]
     pub exclude_newer: Option<ExcludeNewerOverride>,
-    /// Limit candidate packages for specific packages to those that were uploaded prior to the
-    /// given date.
+    /// For specific packages, select only package files uploaded before the given date.
     ///
-    /// Accepts a dictionary format of `PACKAGE = "DATE"` pairs, where `DATE` is an RFC 3339
-    /// timestamp (e.g., `2006-12-02T02:07:43Z`), a "friendly" duration (e.g., `24 hours`, `1 week`,
-    /// `30 days`), or a ISO 8601 duration (e.g., `PT24H`, `P7D`, `P30D`).
+    /// Use a dictionary of `PACKAGE = "DATE"` pairs. `DATE` can be an RFC 3339 timestamp such as
+    /// `2006-12-02T02:07:43Z`, a duration such as `24 hours`, `1 week`, or `30 days`, or an ISO
+    /// 8601 duration such as `PT24H`, `P7D`, or `P30D`.
     ///
-    /// Durations do not respect semantics of the local time zone and are always resolved to a fixed
-    /// number of seconds assuming that a day is 24 hours (e.g., DST transitions are ignored).
-    /// Calendar units such as months and years are not allowed.
+    /// uv converts durations to a fixed number of seconds and treats each day as 24 hours.
+    /// It ignores local time zones and daylight saving time. Months and years are not allowed.
     ///
     /// Set a package to `false` to exempt it from the global [`exclude-newer`](#exclude-newer)
-    /// constraint entirely.
+    /// constraint.
     #[option(
         default = "None",
         value_type = "dict",
@@ -1155,12 +1128,10 @@ pub struct ResolverInstallerSchema {
     pub exclude_newer_package: Option<ExcludeNewerPackage>,
     /// The method to use when installing packages from the global cache.
     ///
-    /// Defaults to `clone` (also known as Copy-on-Write) on macOS and Linux, and `hardlink` on
-    /// Windows.
+    /// Defaults to `clone` (Copy-on-Write) on macOS and Linux, and `hardlink` on Windows.
     ///
-    /// WARNING: The use of symlink link mode is discouraged, as they create tight coupling between
-    /// the cache and the target environment. For example, clearing the cache (`uv cache clean`)
-    /// will break all installed packages by way of removing the underlying source files. Use
+    /// WARNING: Symlinks connect the target environment to the cache. If you clear the cache with
+    /// `uv cache clean`, uv removes the source files and breaks the installed packages. Use
     /// symlinks with caution.
     #[option(
         default = "\"clone\" (macOS, Linux) or \"hardlink\" (Windows)",
@@ -1173,14 +1144,12 @@ pub struct ResolverInstallerSchema {
     pub link_mode: Option<LinkMode>,
     /// Compile Python files to bytecode after installation.
     ///
-    /// By default, uv does not compile Python (`.py`) files to bytecode (`__pycache__/*.pyc`);
-    /// instead, compilation is performed lazily the first time a module is imported. For use-cases
-    /// in which start time is critical, such as CLI applications and Docker containers, this option
-    /// can be enabled to trade longer installation times for faster start times.
+    /// By default, uv does not compile Python (`.py`) files to bytecode (`__pycache__/*.pyc`).
+    /// Python compiles each module when it is first imported. Enable this setting to trade longer
+    /// installation times for faster startup in CLI applications and Docker containers.
     ///
-    /// When enabled, uv will process the entire site-packages directory (including packages that
-    /// are not being modified by the current operation) for consistency. Like pip, it will also
-    /// ignore errors.
+    /// When enabled, uv processes the entire site-packages directory. This includes packages that
+    /// the current operation does not change. Like pip, uv ignores errors.
     #[option(
         default = "false",
         value_type = "bool",
@@ -1189,9 +1158,8 @@ pub struct ResolverInstallerSchema {
         "#
     )]
     pub compile_bytecode: Option<bool>,
-    /// Ignore the `tool.uv.sources` table when resolving dependencies. Used to lock against the
-    /// standards-compliant, publishable package metadata, as opposed to using any local or Git
-    /// sources.
+    /// Ignore `tool.uv.sources` when resolving dependencies. Lock against standards-compliant,
+    /// publishable package metadata instead of local or Git sources.
     #[option(
         default = "false",
         value_type = "bool",
@@ -1209,7 +1177,7 @@ pub struct ResolverInstallerSchema {
         "#
     )]
     pub no_sources_package: Option<Vec<PackageName>>,
-    /// Allow package upgrades, ignoring pinned versions in any existing output file.
+    /// Allow package upgrades and ignore pinned versions in an existing output file.
     #[option(
         default = "false",
         value_type = "bool",
@@ -1218,10 +1186,10 @@ pub struct ResolverInstallerSchema {
         "#
     )]
     pub upgrade: Option<bool>,
-    /// Allow upgrades for a specific package, ignoring pinned versions in any existing output
+    /// Allow upgrades for a specific package and ignore pinned versions in an existing output
     /// file.
     ///
-    /// Accepts both standalone package names (`ruff`) and version specifiers (`ruff<0.5.0`).
+    /// Use a package name such as `ruff` or a version specifier such as `ruff<0.5.0`.
     #[option(
         default = "[]",
         value_type = "list[str]",
@@ -1230,7 +1198,7 @@ pub struct ResolverInstallerSchema {
         "#
     )]
     pub upgrade_package: Option<Vec<Requirement<VerbatimParsedUrl>>>,
-    /// Reinstall all packages, regardless of whether they're already installed. Implies `refresh`.
+    /// Reinstall all packages, including installed packages. Implies `refresh`.
     #[option(
         default = "false",
         value_type = "bool",
@@ -1239,8 +1207,7 @@ pub struct ResolverInstallerSchema {
         "#
     )]
     pub reinstall: Option<bool>,
-    /// Reinstall a specific package, regardless of whether it's already installed. Implies
-    /// `refresh-package`.
+    /// Reinstall a specific package, even if it is already installed. Implies `refresh-package`.
     #[option(
         default = "[]",
         value_type = "list[str]",
@@ -1249,12 +1216,12 @@ pub struct ResolverInstallerSchema {
         "#
     )]
     pub reinstall_package: Option<Vec<PackageName>>,
-    /// Don't build source distributions.
+    /// Do not build source distributions.
     ///
-    /// When enabled, uv will reuse cached wheels from previously built source distributions, but
-    /// operations that require building a source distribution will exit with an error. First-party
-    /// packages, such as projects in the workspace, will still be built. uv will also still build
-    /// editable requirements, and their build backends may run arbitrary Python code.
+    /// uv reuses cached wheels from previous source builds. Operations that require a new source
+    /// build exit with an error. uv still builds first-party packages, such as projects in the
+    /// workspace. uv may also build editable requirements, and their build backends may run
+    /// arbitrary Python code.
     #[option(
         default = "false",
         value_type = "bool",
@@ -1263,9 +1230,9 @@ pub struct ResolverInstallerSchema {
         "#
     )]
     pub no_build: Option<bool>,
-    /// Don't build source distributions for a specific package.
+    /// Do not build source distributions for a specific package.
     ///
-    /// First-party packages, such as projects in the workspace, will still be built.
+    /// uv still builds first-party packages, such as projects in the workspace.
     #[option(
         default = "[]",
         value_type = "list[str]",
@@ -1274,10 +1241,10 @@ pub struct ResolverInstallerSchema {
         "#
     )]
     pub no_build_package: Option<Vec<PackageName>>,
-    /// Don't install pre-built wheels.
+    /// Do not install pre-built wheels.
     ///
-    /// The given packages will be built and installed from source. The resolver will still use
-    /// pre-built wheels to extract package metadata, if available.
+    /// uv builds and installs the packages from source. The resolver still uses available
+    /// pre-built wheels to extract package metadata.
     #[option(
         default = "false",
         value_type = "bool",
@@ -1286,7 +1253,7 @@ pub struct ResolverInstallerSchema {
         "#
     )]
     pub no_binary: Option<bool>,
-    /// Don't install pre-built wheels for a specific package.
+    /// Do not install pre-built wheels for a specific package.
     #[option(
         default = "[]",
         value_type = "list[str]",
@@ -1295,18 +1262,16 @@ pub struct ResolverInstallerSchema {
         "#
     )]
     pub no_binary_package: Option<Vec<PackageName>>,
-    /// The backend to use when fetching packages in the PyTorch ecosystem.
+    /// The backend for packages in the PyTorch ecosystem.
     ///
-    /// When set, uv will ignore the configured index URLs for packages in the PyTorch ecosystem,
-    /// and will instead use the defined backend.
+    /// When set, uv ignores the configured index URLs for PyTorch packages and uses this backend.
     ///
-    /// For example, when set to `cpu`, uv will use the CPU-only PyTorch index; when set to `cu126`,
-    /// uv will use the PyTorch index for CUDA 12.6.
+    /// For example, `cpu` uses the CPU-only PyTorch index, and `cu126` uses the PyTorch index for
+    /// CUDA 12.6.
     ///
-    /// The `auto` mode will attempt to detect the appropriate PyTorch index based on the currently
-    /// installed CUDA drivers.
+    /// The `auto` mode tries to detect the PyTorch index from the installed CUDA drivers.
     ///
-    /// This setting is only respected by `uv pip` commands.
+    /// This setting applies only to `uv pip` commands.
     ///
     /// This option is in preview and may change in any future release.
     #[option(
@@ -1319,18 +1284,20 @@ pub struct ResolverInstallerSchema {
     pub torch_backend: Option<TorchMode>,
 }
 
-/// Shared settings, relevant to all operations that might create managed python installations.
+/// Settings for operations that create managed Python installations.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, CombineOptions, OptionsMetadata)]
 #[serde(rename_all = "kebab-case")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PythonInstallMirrors {
     /// Mirror URL for downloading managed Python installations.
     ///
-    /// By default, managed Python installations are downloaded from [`python-build-standalone`](https://github.com/astral-sh/python-build-standalone).
-    /// This variable can be set to a mirror URL to use a different source for Python installations.
-    /// The provided URL will replace `https://github.com/astral-sh/python-build-standalone/releases/download` in, e.g., `https://github.com/astral-sh/python-build-standalone/releases/download/20240713/cpython-3.12.4%2B20240713-aarch64-apple-darwin-install_only.tar.gz`.
+    /// By default, uv downloads managed Python installations from
+    /// [`python-build-standalone`](https://github.com/astral-sh/python-build-standalone).
+    /// Set this variable to a mirror URL to use another source. The URL replaces
+    /// `https://github.com/astral-sh/python-build-standalone/releases/download` in URLs such as
+    /// `https://github.com/astral-sh/python-build-standalone/releases/download/20240713/cpython-3.12.4%2B20240713-aarch64-apple-darwin-install_only.tar.gz`.
     ///
-    /// Distributions can be read from a local directory by using the `file://` URL scheme.
+    /// Use a `file://` URL to read distributions from a local directory.
     #[option(
         default = "None",
         value_type = "str",
@@ -1342,12 +1309,12 @@ pub struct PythonInstallMirrors {
     pub python_install_mirror: Option<String>,
     /// Mirror URL to use for downloading managed PyPy installations.
     ///
-    /// By default, managed PyPy installations are downloaded from [downloads.python.org](https://downloads.python.org/).
-    /// This variable can be set to a mirror URL to use a different source for PyPy installations.
-    /// The provided URL will replace `https://downloads.python.org/pypy` in, e.g., `https://downloads.python.org/pypy/pypy3.8-v7.3.7-osx64.tar.bz2`.
+    /// By default, uv downloads managed PyPy installations from
+    /// [downloads.python.org](https://downloads.python.org/). Set this variable to a mirror URL to
+    /// use another source. The URL replaces `https://downloads.python.org/pypy` in URLs such as
+    /// `https://downloads.python.org/pypy/pypy3.8-v7.3.7-osx64.tar.bz2`.
     ///
-    /// Distributions can be read from a
-    /// local directory by using the `file://` URL scheme.
+    /// Use a `file://` URL to read distributions from a local directory.
     #[option(
         default = "None",
         value_type = "str",
@@ -1358,7 +1325,7 @@ pub struct PythonInstallMirrors {
     )]
     pub pypy_install_mirror: Option<String>,
 
-    /// URL pointing to JSON of custom Python installations.
+    /// The URL of a JSON file that defines custom Python installations.
     #[option(
         default = "None",
         value_type = "str",
@@ -1383,20 +1350,18 @@ impl PythonInstallMirrors {
     }
 }
 
-/// Settings that are specific to the `uv pip` command-line interface.
+/// Settings for the `uv pip` command-line interface.
 ///
-/// These values will be ignored when running commands outside the `uv pip` namespace (e.g.,
-/// `uv lock`, `uvx`).
+/// Other commands, such as `uv lock` and `uvx`, ignore these settings.
 #[derive(Debug, Clone, Default, Deserialize, CombineOptions, OptionsMetadata)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PipOptions {
-    /// The Python interpreter into which packages should be installed.
+    /// The Python interpreter for package installation.
     ///
-    /// By default, uv installs into the virtual environment in the current working directory or
-    /// any parent directory. The `--python` option allows you to specify a different interpreter,
-    /// which is intended for use in continuous integration (CI) environments or other automated
-    /// workflows.
+    /// By default, uv installs into a virtual environment in the current directory or a parent
+    /// directory. Use `--python` to select another interpreter for continuous integration (CI)
+    /// environments or other automated workflows.
     ///
     /// Supported formats:
     /// - `3.10` looks for an installed Python 3.10 in the registry on Windows (see
@@ -1413,12 +1378,11 @@ pub struct PipOptions {
     pub python: Option<String>,
     /// Install packages into the system Python environment.
     ///
-    /// By default, uv installs into the virtual environment in the current working directory or
-    /// any parent directory. The `--system` option instructs uv to instead use the first Python
-    /// found in the system `PATH`.
+    /// By default, uv installs into a virtual environment in the current directory or a parent
+    /// directory. Use `--system` to select the first Python interpreter in the system `PATH`.
     ///
-    /// WARNING: `--system` is intended for use in continuous integration (CI) environments and
-    /// should be used with caution, as it can modify the system Python installation.
+    /// WARNING: `--system` is intended for continuous integration (CI) environments. Use it with
+    /// caution because it can modify the system Python installation.
     #[option(
         default = "false",
         value_type = "bool",
@@ -1429,10 +1393,9 @@ pub struct PipOptions {
     pub system: Option<bool>,
     /// Allow uv to modify an `EXTERNALLY-MANAGED` Python installation.
     ///
-    /// WARNING: `--break-system-packages` is intended for use in continuous integration (CI)
-    /// environments, when installing into Python installations that are managed by an external
-    /// package manager, like `apt`. It should be used with caution, as such Python installations
-    /// explicitly recommend against modifications by other package managers (like uv or pip).
+    /// WARNING: `--break-system-packages` is intended for continuous integration (CI) environments
+    /// that use Python installations managed by tools such as `apt`. Use it with caution. These
+    /// installations recommend against changes from other package managers, including uv and pip.
     #[option(
         default = "false",
         value_type = "bool",
@@ -1441,8 +1404,8 @@ pub struct PipOptions {
         "#
     )]
     pub break_system_packages: Option<bool>,
-    /// Install packages into the specified directory, rather than into the virtual or system Python
-    /// environment. The packages will be installed at the top-level of the directory.
+    /// Install packages at the top level of the specified directory instead of a virtual or
+    /// system Python environment.
     #[option(
         default = "None",
         value_type = "str",
@@ -1451,13 +1414,12 @@ pub struct PipOptions {
         "#
     )]
     pub target: Option<PathBuf>,
-    /// Install packages into `lib`, `bin`, and other top-level folders under the specified
-    /// directory, as if a virtual environment were present at that location.
+    /// Install packages into `lib`, `bin`, and other top-level directories under the specified
+    /// path, as if it contained a virtual environment.
     ///
-    /// In general, prefer the use of `--python` to install into an alternate environment, as
-    /// scripts and other artifacts installed via `--prefix` will reference the installing
-    /// interpreter, rather than any interpreter added to the `--prefix` directory, rendering them
-    /// non-portable.
+    /// Prefer `--python` when installing into another environment. Scripts and other artifacts
+    /// installed with `--prefix` reference the installing interpreter, not an interpreter in the
+    /// prefix directory. This makes them non-portable.
     #[option(
         default = "None",
         value_type = "str",
@@ -1469,13 +1431,12 @@ pub struct PipOptions {
     #[serde(skip)]
     #[cfg_attr(feature = "schemars", schemars(skip))]
     pub index: Option<Vec<Index>>,
-    /// The URL of the Python package index (by default: <https://pypi.org/simple>).
+    /// The Python package index URL. Defaults to <https://pypi.org/simple>.
     ///
-    /// Accepts either a repository compliant with [PEP 503](https://peps.python.org/pep-0503/)
-    /// (the simple repository API), or a local directory laid out in the same format.
+    /// Use a repository that follows [PEP 503](https://peps.python.org/pep-0503/) (the simple
+    /// repository API), or a local directory that uses the same format.
     ///
-    /// The index provided by this setting is given lower priority than any indexes specified via
-    /// [`extra_index_url`](#extra-index-url).
+    /// This index has lower priority than indexes from [`extra_index_url`](#extra-index-url).
     #[option(
         default = "\"https://pypi.org/simple\"",
         value_type = "str",
@@ -1484,16 +1445,15 @@ pub struct PipOptions {
         "#
     )]
     pub index_url: Option<PipIndex>,
-    /// Extra URLs of package indexes to use, in addition to `--index-url`.
+    /// Additional package index URLs to use with `--index-url`.
     ///
-    /// Accepts either a repository compliant with [PEP 503](https://peps.python.org/pep-0503/)
-    /// (the simple repository API), or a local directory laid out in the same format.
+    /// Use a repository that follows [PEP 503](https://peps.python.org/pep-0503/) (the simple
+    /// repository API), or a local directory that uses the same format.
     ///
-    /// All indexes provided via this flag take priority over the index specified by
-    /// [`index_url`](#index-url). When multiple indexes are provided, earlier values take priority.
+    /// These indexes have higher priority than [`index_url`](#index-url). Earlier indexes have
+    /// higher priority.
     ///
-    /// To control uv's resolution strategy when multiple indexes are present, see
-    /// [`index_strategy`](#index-strategy).
+    /// Use [`index_strategy`](#index-strategy) to control how uv searches multiple indexes.
     #[option(
         default = "[]",
         value_type = "list[str]",
@@ -1502,8 +1462,8 @@ pub struct PipOptions {
         "#
     )]
     pub extra_index_url: Option<Vec<PipExtraIndex>>,
-    /// Ignore all registry indexes (e.g., PyPI), instead relying on direct URL dependencies and
-    /// those provided via `--find-links`.
+    /// Ignore all registry indexes, including PyPI. Use only direct URL dependencies and
+    /// dependencies from `--find-links`.
     #[option(
         default = "false",
         value_type = "bool",
@@ -1512,14 +1472,12 @@ pub struct PipOptions {
         "#
     )]
     pub no_index: Option<bool>,
-    /// Locations to search for candidate distributions, in addition to those found in the registry
-    /// indexes.
+    /// Additional locations to search for distributions outside the registry indexes.
     ///
-    /// If a path, the target must be a directory that contains packages as wheel files (`.whl`) or
-    /// source distributions (e.g., `.tar.gz` or `.zip`) at the top level.
+    /// A path must point to a directory with wheels (`.whl`) or source distributions (`.tar.gz` or
+    /// `.zip`) at its top level.
     ///
-    /// If a URL, the page must contain a flat list of links to package files adhering to the
-    /// formats described above.
+    /// A URL must point to a page with a flat list of links to those package file formats.
     #[option(
         default = "[]",
         value_type = "list[str]",
@@ -1528,12 +1486,11 @@ pub struct PipOptions {
         "#
     )]
     pub find_links: Option<Vec<PipFindLinks>>,
-    /// The strategy to use when resolving against multiple index URLs.
+    /// The strategy for resolving packages from multiple indexes.
     ///
-    /// By default, uv will stop at the first index on which a given package is available, and
-    /// limit resolutions to those present on that first index (`first-index`). This prevents
-    /// "dependency confusion" attacks, whereby an attacker can upload a malicious package under the
-    /// same name to an alternate index.
+    /// By default, uv uses only the first index that contains a package (`first-index`). This
+    /// prevents "dependency confusion" attacks, in which an attacker uploads a malicious package
+    /// with the same name to another index.
     #[option(
         default = "\"first-index\"",
         value_type = "str",
@@ -1543,10 +1500,10 @@ pub struct PipOptions {
         possible_values = true
     )]
     pub index_strategy: Option<IndexStrategy>,
-    /// Attempt to use `keyring` for authentication for index URLs.
+    /// Use `keyring` to authenticate with package indexes.
     ///
-    /// At present, only `--keyring-provider subprocess` is supported, which configures uv to
-    /// use the `keyring` CLI to handle authentication.
+    /// Only `--keyring-provider subprocess` is supported. It uses the `keyring` CLI for
+    /// authentication.
     #[option(
         default = "disabled",
         value_type = "str",
@@ -1555,11 +1512,11 @@ pub struct PipOptions {
         "#
     )]
     pub keyring_provider: Option<KeyringProviderType>,
-    /// Don't build source distributions.
+    /// Do not build source distributions.
     ///
-    /// When enabled, uv will reuse cached wheels from previously built source distributions, but
-    /// operations that require building a source distribution will exit with an error. uv may
-    /// still build editable requirements, and their build backends may run arbitrary Python code.
+    /// uv reuses cached wheels from previous source builds. Operations that require a new source
+    /// build exit with an error. uv may still build editable requirements, and their build
+    /// backends may run arbitrary Python code.
     ///
     /// Alias for `--only-binary :all:`.
     #[option(
@@ -1570,13 +1527,13 @@ pub struct PipOptions {
         "#
     )]
     pub no_build: Option<bool>,
-    /// Don't install pre-built wheels.
+    /// Do not install pre-built wheels.
     ///
-    /// The given packages will be built and installed from source. The resolver will still use
-    /// pre-built wheels to extract package metadata, if available.
+    /// uv builds and installs the packages from source. The resolver still uses available
+    /// pre-built wheels to extract package metadata.
     ///
-    /// Multiple packages may be provided. Disable binaries for all packages with `:all:`.
-    /// Clear previously specified packages with `:none:`.
+    /// You may specify multiple packages. Use `:all:` to disable binaries for every package. Use
+    /// `:none:` to clear previous package selections.
     #[option(
         default = "[]",
         value_type = "list[str]",
@@ -1585,15 +1542,14 @@ pub struct PipOptions {
         "#
     )]
     pub no_binary: Option<Vec<PackageNameSpecifier>>,
-    /// Only use pre-built wheels; don't build source distributions.
+    /// Use only pre-built wheels. Do not build source distributions.
     ///
-    /// When enabled, uv will reuse cached wheels from previously built source distributions, but
-    /// operations that require building a source distribution for the given packages will exit
-    /// with an error. uv may still build editable requirements, and their build backends may run
-    /// arbitrary Python code.
+    /// uv reuses cached wheels from previous source builds. Operations that require a new source
+    /// build for the selected packages exit with an error. uv may still build editable
+    /// requirements, and their build backends may run arbitrary Python code.
     ///
-    /// Multiple packages may be provided. Disable binaries for all packages with `:all:`.
-    /// Clear previously specified packages with `:none:`.
+    /// You may specify multiple packages. Use `:all:` to disable binaries for every package. Use
+    /// `:none:` to clear previous package selections.
     #[option(
         default = "[]",
         value_type = "list[str]",
@@ -1604,8 +1560,8 @@ pub struct PipOptions {
     pub only_binary: Option<Vec<PackageNameSpecifier>>,
     /// Disable isolation when building source distributions.
     ///
-    /// Assumes that build dependencies specified by [PEP 518](https://peps.python.org/pep-0518/)
-    /// are already installed.
+    /// Requires the build dependencies from [PEP 518](https://peps.python.org/pep-0518/) to
+    /// already be installed.
     #[option(
         default = "false",
         value_type = "bool",
@@ -1616,8 +1572,8 @@ pub struct PipOptions {
     pub no_build_isolation: Option<bool>,
     /// Disable isolation when building source distributions for a specific package.
     ///
-    /// Assumes that the packages' build dependencies specified by [PEP 518](https://peps.python.org/pep-0518/)
-    /// are already installed.
+    /// Requires the packages' build dependencies from [PEP 518](https://peps.python.org/pep-0518/)
+    /// to already be installed.
     #[option(
         default = "[]",
         value_type = "list[str]",
@@ -1628,9 +1584,8 @@ pub struct PipOptions {
     pub no_build_isolation_package: Option<Vec<PackageName>>,
     /// Additional build dependencies for packages.
     ///
-    /// This allows extending the PEP 517 build environment for the project's dependencies with
-    /// additional packages. This is useful for packages that assume the presence of packages like
-    /// `pip`, and do not declare them as build dependencies.
+    /// Add packages to the PEP 517 build environments of project dependencies. Use this for
+    /// packages that require dependencies such as `pip` but do not declare them.
     #[option(
         default = "[]",
         value_type = "dict",
@@ -1641,8 +1596,7 @@ pub struct PipOptions {
     pub extra_build_dependencies: Option<ExtraBuildDependencies>,
     /// Extra environment variables to set when building certain packages.
     ///
-    /// Environment variables will be added to the environment when building the
-    /// specified packages.
+    /// uv adds these variables to the environment when it builds the specified packages.
     #[option(
         default = r#"{}"#,
         value_type = r#"dict[str, dict[str, str]]"#,
@@ -1651,8 +1605,7 @@ pub struct PipOptions {
         "#
     )]
     pub extra_build_variables: Option<ExtraBuildVariables>,
-    /// Validate the Python environment, to detect packages with missing dependencies and other
-    /// issues.
+    /// Check the Python environment for missing package dependencies and other issues.
     #[option(
         default = "false",
         value_type = "bool",
@@ -1661,7 +1614,7 @@ pub struct PipOptions {
         "#
     )]
     pub strict: Option<bool>,
-    /// Include optional dependencies from the specified extra; may be provided more than once.
+    /// Include optional dependencies from the specified extra. You may specify multiple extras.
     ///
     /// Only applies to `pyproject.toml`, `setup.py`, and `setup.cfg` sources.
     #[option(
@@ -1683,7 +1636,7 @@ pub struct PipOptions {
         "#
     )]
     pub all_extras: Option<bool>,
-    /// Exclude the specified optional dependencies if `all-extras` is supplied.
+    /// Exclude the specified optional dependencies when `all-extras` is set.
     #[option(
         default = "[]",
         value_type = "list[str]",
@@ -1693,8 +1646,8 @@ pub struct PipOptions {
         "#
     )]
     pub no_extra: Option<Vec<ExtraName>>,
-    /// Ignore package dependencies, instead only add those packages explicitly listed
-    /// on the command line to the resulting requirements file.
+    /// Ignore package dependencies. Add only packages from the command line to the requirements
+    /// file.
     #[option(
         default = "false",
         value_type = "bool",
@@ -1703,7 +1656,7 @@ pub struct PipOptions {
         "#
     )]
     pub no_deps: Option<bool>,
-    /// Include the following dependency groups.
+    /// Include the specified dependency groups.
     #[option(
         default = "None",
         value_type = "list[str]",
@@ -1712,8 +1665,8 @@ pub struct PipOptions {
         "#
     )]
     pub group: Option<Vec<PipGroupName>>,
-    /// Allow `uv pip sync` with empty requirements, which will clear the environment of all
-    /// packages.
+    /// Allow `uv pip sync` to accept empty requirements and remove all packages from the
+    /// environment.
     #[option(
         default = "false",
         value_type = "bool",
@@ -1722,10 +1675,9 @@ pub struct PipOptions {
         "#
     )]
     pub allow_empty_requirements: Option<bool>,
-    /// The strategy to use when selecting between the different compatible versions for a given
-    /// package requirement.
+    /// The strategy for selecting a compatible package version.
     ///
-    /// By default, uv will use the latest compatible version of each package (`highest`).
+    /// By default, uv uses the latest compatible version of each package (`highest`).
     #[option(
         default = "\"highest\"",
         value_type = "str",
@@ -1737,9 +1689,8 @@ pub struct PipOptions {
     pub resolution: Option<ResolutionMode>,
     /// The strategy to use when considering pre-release versions.
     ///
-    /// By default, uv will prefer stable candidates, falling back to pre-releases only after every
-    /// stable candidate that satisfies the active constraints is rejected
-    /// (`if-necessary`).
+    /// By default, uv prefers stable versions. It selects a pre-release only after every stable
+    /// version that meets the active constraints is rejected (`if-necessary`).
     #[option(
         default = "\"if-necessary\"",
         value_type = "str",
@@ -1755,13 +1706,11 @@ pub struct PipOptions {
     /// The strategy to use when selecting multiple versions of a given package across Python
     /// versions and platforms.
     ///
-    /// By default, uv will optimize for selecting the latest version of each package for each
-    /// supported Python version (`requires-python`), while minimizing the number of selected
-    /// versions across platforms.
+    /// By default, uv selects the latest package version for each supported Python version
+    /// (`requires-python`). It also minimizes the number of versions across platforms.
     ///
-    /// Under `fewest`, uv will minimize the number of selected versions for each package,
-    /// preferring older versions that are compatible with a wider range of supported Python
-    /// versions or platforms.
+    /// With `fewest`, uv minimizes the number of versions for each package. It prefers older
+    /// versions that support more Python versions or platforms.
     #[option(
         default = "\"requires-python\"",
         value_type = "str",
@@ -1771,16 +1720,15 @@ pub struct PipOptions {
         possible_values = true
     )]
     pub fork_strategy: Option<ForkStrategy>,
-    /// Pre-defined static metadata for dependencies of the project (direct or transitive). When
-    /// provided, enables the resolver to use the specified metadata instead of querying the
-    /// registry or building the relevant package from source.
+    /// Static metadata for direct or transitive project dependencies. uv uses this metadata
+    /// instead of querying the registry or building the package from source.
     ///
-    /// Metadata should be provided in adherence with the [Metadata 2.3](https://packaging.python.org/en/latest/specifications/core-metadata/)
-    /// standard, though only the following fields are respected:
+    /// The metadata should follow the [Metadata 2.3](https://packaging.python.org/en/latest/specifications/core-metadata/)
+    /// standard. uv uses only these fields:
     ///
     /// - `name`: The name of the package.
-    /// - (Optional) `version`: The version of the package. If omitted, the metadata will be applied
-    ///   to all versions of the package.
+    /// - (Optional) `version`: The package version. If omitted, the metadata applies to all
+    ///   versions of the package.
     /// - (Optional) `requires-dist`: The dependencies of the package (e.g., `werkzeug>=0.14`).
     /// - (Optional) `requires-python`: The Python version required by the package (e.g., `>=3.10`).
     /// - (Optional) `provides-extra`: The extras provided by the package.
@@ -1796,8 +1744,7 @@ pub struct PipOptions {
     pub dependency_metadata: Option<Vec<StaticMetadata>>,
     /// Write the requirements generated by `uv pip compile` to the given `requirements.txt` file.
     ///
-    /// If the file already exists, the existing versions will be preferred when resolving
-    /// dependencies, unless `--upgrade` is also specified.
+    /// If the file exists, uv prefers its package versions unless `--upgrade` is set.
     #[option(
         default = "None",
         value_type = "str",
@@ -1808,9 +1755,9 @@ pub struct PipOptions {
     pub output_file: Option<PathBuf>,
     /// Include extras in the output file.
     ///
-    /// By default, uv strips extras, as any packages pulled in by the extras are already included
-    /// as dependencies in the output file directly. Further, output files generated with
-    /// `--no-strip-extras` cannot be used as constraints files in `install` and `sync` invocations.
+    /// By default, uv removes extras because their packages already appear as dependencies in the
+    /// output file. Files created with `--no-strip-extras` cannot be used as constraint files with
+    /// `install` or `sync`.
     #[option(
         default = "false",
         value_type = "bool",
@@ -1821,8 +1768,8 @@ pub struct PipOptions {
     pub no_strip_extras: Option<bool>,
     /// Include environment markers in the output file generated by `uv pip compile`.
     ///
-    /// By default, uv strips environment markers, as the resolution generated by `compile` is
-    /// only guaranteed to be correct for the target environment.
+    /// By default, uv removes environment markers. The resolution is guaranteed to be correct
+    /// only for the target environment.
     #[option(
         default = "false",
         value_type = "bool",
@@ -1831,8 +1778,7 @@ pub struct PipOptions {
         "#
     )]
     pub no_strip_markers: Option<bool>,
-    /// Exclude comment annotations indicating the source of each package from the output file
-    /// generated by `uv pip compile`.
+    /// Omit package source comments from the file generated by `uv pip compile`.
     #[option(
         default = "false",
         value_type = "bool",
@@ -1841,7 +1787,7 @@ pub struct PipOptions {
         "#
     )]
     pub no_annotate: Option<bool>,
-    /// Exclude the comment header at the top of output file generated by `uv pip compile`.
+    /// Omit the header comment from the file generated by `uv pip compile`.
     #[option(
         default = r#"false"#,
         value_type = "bool",
@@ -1850,9 +1796,9 @@ pub struct PipOptions {
         "#
     )]
     pub no_header: Option<bool>,
-    /// The header comment to include at the top of the output file generated by `uv pip compile`.
+    /// The header comment for the file generated by `uv pip compile`.
     ///
-    /// Used to reflect custom build scripts and commands that wrap `uv pip compile`.
+    /// Use this to identify a custom build script or command that wraps `uv pip compile`.
     #[option(
         default = "None",
         value_type = "str",
@@ -1870,8 +1816,8 @@ pub struct PipOptions {
         "#
     )]
     pub generate_hashes: Option<bool>,
-    /// Settings to pass to the [PEP 517](https://peps.python.org/pep-0517/) build backend,
-    /// specified as `KEY=VALUE` pairs.
+    /// Settings to pass to the [PEP 517](https://peps.python.org/pep-0517/) build backend as
+    /// `KEY=VALUE` pairs.
     #[option(
         default = "{}",
         value_type = "dict",
@@ -1880,8 +1826,8 @@ pub struct PipOptions {
         "#
     )]
     pub config_settings: Option<ConfigSettings>,
-    /// Settings to pass to the [PEP 517](https://peps.python.org/pep-0517/) build backend for specific packages,
-    /// specified as `KEY=VALUE` pairs.
+    /// Settings to pass to the [PEP 517](https://peps.python.org/pep-0517/) build backend for
+    /// specific packages as `KEY=VALUE` pairs.
     #[option(
         default = "{}",
         value_type = "dict",
@@ -1890,11 +1836,11 @@ pub struct PipOptions {
         "#
     )]
     pub config_settings_package: Option<PackageConfigSettings>,
-    /// The minimum Python version that should be supported by the resolved requirements (e.g.,
-    /// `3.8` or `3.8.17`).
+    /// The minimum Python version that the resolved requirements support, such as `3.8` or
+    /// `3.8.17`.
     ///
-    /// If a patch version is omitted, the minimum patch version is assumed. For example, `3.8` is
-    /// mapped to `3.8.0`.
+    /// If you omit the patch version, uv uses the minimum patch version. For example, `3.8` means
+    /// `3.8.0`.
     #[option(
         default = "None",
         value_type = "str",
@@ -1903,11 +1849,10 @@ pub struct PipOptions {
         "#
     )]
     pub python_version: Option<PythonVersion>,
-    /// The platform for which requirements should be resolved.
+    /// The target platform for dependency resolution.
     ///
-    /// Represented as a "target triple", a string that describes the target platform in terms of
-    /// its CPU, vendor, and operating system name, like `x86_64-unknown-linux-gnu` or
-    /// `aarch64-apple-darwin`.
+    /// Use a "target triple" that identifies the CPU, vendor, and operating system. Examples
+    /// include `x86_64-unknown-linux-gnu` and `aarch64-apple-darwin`.
     #[option(
         default = "None",
         value_type = "str",
@@ -1916,13 +1861,11 @@ pub struct PipOptions {
         "#
     )]
     pub python_platform: Option<TargetTriple>,
-    /// Perform a universal resolution, attempting to generate a single `requirements.txt` output
-    /// file that is compatible with all operating systems, architectures, and Python
-    /// implementations.
+    /// Create one `requirements.txt` file that works across operating systems, architectures, and
+    /// Python implementations.
     ///
-    /// In universal mode, the current Python version (or user-provided `--python-version`) will be
-    /// treated as a lower bound. For example, `--universal --python-version 3.7` would produce a
-    /// universal resolution for Python 3.7 and later.
+    /// In universal mode, the current Python version or `--python-version` is the lower bound.
+    /// For example, `--universal --python-version 3.7` resolves for Python 3.7 and later.
     #[option(
         default = "false",
         value_type = "bool",
@@ -1931,18 +1874,16 @@ pub struct PipOptions {
         "#
     )]
     pub universal: Option<bool>,
-    /// Limit candidate packages to those that were uploaded prior to a given point in time.
+    /// Select only package files uploaded before the given time.
     ///
-    /// The date is compared against the upload time of each individual distribution artifact
-    /// (i.e., when each file was uploaded to the package index), not the release date of the
-    /// package version.
+    /// uv compares the time with the upload time of each distribution file. It does not use the
+    /// release date of the package version.
     ///
-    /// Accepts RFC 3339 timestamps (e.g., `2006-12-02T02:07:43Z`), a "friendly" duration (e.g.,
-    /// `24 hours`, `1 week`, `30 days`), or an ISO 8601 duration (e.g., `PT24H`, `P7D`, `P30D`).
+    /// Use an RFC 3339 timestamp such as `2006-12-02T02:07:43Z`, a duration such as `24 hours`,
+    /// `1 week`, or `30 days`, or an ISO 8601 duration such as `PT24H`, `P7D`, or `P30D`.
     ///
-    /// Durations do not respect semantics of the local time zone and are always resolved to a fixed
-    /// number of seconds assuming that a day is 24 hours (e.g., DST transitions are ignored).
-    /// Calendar units such as months and years are not allowed.
+    /// uv converts durations to a fixed number of seconds and treats each day as 24 hours.
+    /// It ignores local time zones and daylight saving time. Months and years are not allowed.
     ///
     /// Set to `false` to disable `exclude-newer`.
     #[option(
@@ -1953,18 +1894,17 @@ pub struct PipOptions {
         "#
     )]
     pub exclude_newer: Option<ExcludeNewerOverride>,
-    /// Limit candidate packages for specific packages to those that were uploaded prior to the given date.
+    /// For specific packages, select only package files uploaded before the given date.
     ///
-    /// Accepts a dictionary format of `PACKAGE = "DATE"` pairs, where `DATE` is an RFC 3339
-    /// timestamp (e.g., `2006-12-02T02:07:43Z`), a "friendly" duration (e.g., `24 hours`, `1 week`,
-    /// `30 days`), or a ISO 8601 duration (e.g., `PT24H`, `P7D`, `P30D`).
+    /// Use a dictionary of `PACKAGE = "DATE"` pairs. `DATE` can be an RFC 3339 timestamp such as
+    /// `2006-12-02T02:07:43Z`, a duration such as `24 hours`, `1 week`, or `30 days`, or an ISO
+    /// 8601 duration such as `PT24H`, `P7D`, or `P30D`.
     ///
-    /// Durations do not respect semantics of the local time zone and are always resolved to a fixed
-    /// number of seconds assuming that a day is 24 hours (e.g., DST transitions are ignored).
-    /// Calendar units such as months and years are not allowed.
+    /// uv converts durations to a fixed number of seconds and treats each day as 24 hours.
+    /// It ignores local time zones and daylight saving time. Months and years are not allowed.
     ///
     /// Set a package to `false` to exempt it from the global [`exclude-newer`](#exclude-newer)
-    /// constraint entirely.
+    /// constraint.
     #[option(
         default = "None",
         value_type = "dict",
@@ -1973,8 +1913,8 @@ pub struct PipOptions {
         "#
     )]
     pub exclude_newer_package: Option<ExcludeNewerPackage>,
-    /// Specify a package to omit from the output resolution. Its dependencies will still be
-    /// included in the resolution. Equivalent to pip-compile's `--unsafe-package` option.
+    /// Omit a package from the output resolution but keep its dependencies. Equivalent to the
+    /// pip-compile `--unsafe-package` option.
     #[option(
         default = "[]",
         value_type = "list[str]",
@@ -2010,12 +1950,10 @@ pub struct PipOptions {
         "#
     )]
     pub emit_build_options: Option<bool>,
-    /// Whether to emit a marker string indicating the conditions under which the set of pinned
-    /// dependencies is valid.
+    /// Whether to emit a marker that identifies when the pinned dependencies are valid.
     ///
-    /// The pinned dependencies may be valid even when the marker expression is
-    /// false, but when the expression is true, the requirements are known to
-    /// be correct.
+    /// The pinned dependencies may also be valid when the marker is false. When the marker is
+    /// true, the requirements are guaranteed to be correct.
     #[option(
         default = "false",
         value_type = "bool",
@@ -2024,8 +1962,8 @@ pub struct PipOptions {
         "#
     )]
     pub emit_marker_expression: Option<bool>,
-    /// Include comment annotations indicating the index used to resolve each package (e.g.,
-    /// `# from https://pypi.org/simple`).
+    /// Include a comment that identifies each package's index, such as
+    /// `# from https://pypi.org/simple`.
     #[option(
         default = "false",
         value_type = "bool",
@@ -2034,8 +1972,7 @@ pub struct PipOptions {
         "#
     )]
     pub emit_index_annotation: Option<bool>,
-    /// The style of the annotation comments included in the output file, used to indicate the
-    /// source of each package.
+    /// The comment style for package sources in the output file.
     #[option(
         default = "\"split\"",
         value_type = "str",
@@ -2047,12 +1984,10 @@ pub struct PipOptions {
     pub annotation_style: Option<AnnotationStyle>,
     /// The method to use when installing packages from the global cache.
     ///
-    /// Defaults to `clone` (also known as Copy-on-Write) on macOS and Linux, and `hardlink` on
-    /// Windows.
+    /// Defaults to `clone` (Copy-on-Write) on macOS and Linux, and `hardlink` on Windows.
     ///
-    /// WARNING: The use of symlink link mode is discouraged, as they create tight coupling between
-    /// the cache and the target environment. For example, clearing the cache (`uv cache clean`)
-    /// will break all installed packages by way of removing the underlying source files. Use
+    /// WARNING: Symlinks connect the target environment to the cache. If you clear the cache with
+    /// `uv cache clean`, uv removes the source files and breaks the installed packages. Use
     /// symlinks with caution.
     #[option(
         default = "\"clone\" (macOS, Linux) or \"hardlink\" (Windows)",
@@ -2065,14 +2000,12 @@ pub struct PipOptions {
     pub link_mode: Option<LinkMode>,
     /// Compile Python files to bytecode after installation.
     ///
-    /// By default, uv does not compile Python (`.py`) files to bytecode (`__pycache__/*.pyc`);
-    /// instead, compilation is performed lazily the first time a module is imported. For use-cases
-    /// in which start time is critical, such as CLI applications and Docker containers, this option
-    /// can be enabled to trade longer installation times for faster start times.
+    /// By default, uv does not compile Python (`.py`) files to bytecode (`__pycache__/*.pyc`).
+    /// Python compiles each module when it is first imported. Enable this setting to trade longer
+    /// installation times for faster startup in CLI applications and Docker containers.
     ///
-    /// When enabled, uv will process the entire site-packages directory (including packages that
-    /// are not being modified by the current operation) for consistency. Like pip, it will also
-    /// ignore errors.
+    /// When enabled, uv processes the entire site-packages directory. This includes packages that
+    /// the current operation does not change. Like pip, uv ignores errors.
     #[option(
         default = "false",
         value_type = "bool",
@@ -2083,16 +2016,16 @@ pub struct PipOptions {
     pub compile_bytecode: Option<bool>,
     /// Require a matching hash for each requirement.
     ///
-    /// Hash-checking mode is all or nothing. If enabled, _all_ requirements must be provided
-    /// with a corresponding hash or set of hashes. Additionally, if enabled, _all_ requirements
-    /// must either be pinned to exact versions (e.g., `==1.0.0`), or be specified via direct URL.
+    /// Hash-checking mode applies to _all_ requirements. Each requirement must have one or more
+    /// matching hashes. Each requirement must also use an exact version such as `==1.0.0` or a
+    /// direct URL.
     ///
-    /// Hash-checking mode introduces a number of additional constraints:
+    /// Hash-checking mode has these additional constraints:
     ///
     /// - Git dependencies are not supported.
     /// - Editable installations are not supported.
-    /// - Local dependencies are not supported, unless they point to a specific wheel (`.whl`) or
-    ///   source archive (`.zip`, `.tar.gz`), as opposed to a directory.
+    /// - Local dependencies must point to a wheel (`.whl`) or source archive (`.zip`, `.tar.gz`),
+    ///   not a directory.
     #[option(
         default = "false",
         value_type = "bool",
@@ -2101,11 +2034,10 @@ pub struct PipOptions {
         "#
     )]
     pub require_hashes: Option<bool>,
-    /// Validate any hashes provided in the requirements file.
+    /// Check hashes in the requirements file.
     ///
-    /// Unlike `--require-hashes`, `--verify-hashes` does not require that all requirements have
-    /// hashes; instead, it will limit itself to verifying the hashes of those requirements that do
-    /// include them.
+    /// Unlike `--require-hashes`, `--verify-hashes` does not require every requirement to have a
+    /// hash. It checks only requirements that include hashes.
     #[option(
         default = "true",
         value_type = "bool",
@@ -2114,9 +2046,8 @@ pub struct PipOptions {
         "#
     )]
     pub verify_hashes: Option<bool>,
-    /// Ignore the `tool.uv.sources` table when resolving dependencies. Used to lock against the
-    /// standards-compliant, publishable package metadata, as opposed to using any local or Git
-    /// sources.
+    /// Ignore `tool.uv.sources` when resolving dependencies. Lock against standards-compliant,
+    /// publishable package metadata instead of local or Git sources.
     #[option(
         default = "false",
         value_type = "bool",
@@ -2134,7 +2065,7 @@ pub struct PipOptions {
         "#
     )]
     pub no_sources_package: Option<Vec<PackageName>>,
-    /// Allow package upgrades, ignoring pinned versions in any existing output file.
+    /// Allow package upgrades and ignore pinned versions in an existing output file.
     #[option(
         default = "false",
         value_type = "bool",
@@ -2143,10 +2074,10 @@ pub struct PipOptions {
         "#
     )]
     pub upgrade: Option<bool>,
-    /// Allow upgrades for a specific package, ignoring pinned versions in any existing output
+    /// Allow upgrades for a specific package and ignore pinned versions in an existing output
     /// file.
     ///
-    /// Accepts both standalone package names (`ruff`) and version specifiers (`ruff<0.5.0`).
+    /// Use a package name such as `ruff` or a version specifier such as `ruff<0.5.0`.
     #[option(
         default = "[]",
         value_type = "list[str]",
@@ -2155,7 +2086,7 @@ pub struct PipOptions {
         "#
     )]
     pub upgrade_package: Option<Vec<Requirement<VerbatimParsedUrl>>>,
-    /// Reinstall all packages, regardless of whether they're already installed. Implies `refresh`.
+    /// Reinstall all packages, including installed packages. Implies `refresh`.
     #[option(
         default = "false",
         value_type = "bool",
@@ -2164,8 +2095,7 @@ pub struct PipOptions {
         "#
     )]
     pub reinstall: Option<bool>,
-    /// Reinstall a specific package, regardless of whether it's already installed. Implies
-    /// `refresh-package`.
+    /// Reinstall a specific package, even if it is already installed. Implies `refresh-package`.
     #[option(
         default = "[]",
         value_type = "list[str]",
@@ -2174,18 +2104,16 @@ pub struct PipOptions {
         "#
     )]
     pub reinstall_package: Option<Vec<PackageName>>,
-    /// The backend to use when fetching packages in the PyTorch ecosystem.
+    /// The backend for packages in the PyTorch ecosystem.
     ///
-    /// When set, uv will ignore the configured index URLs for packages in the PyTorch ecosystem,
-    /// and will instead use the defined backend.
+    /// When set, uv ignores the configured index URLs for PyTorch packages and uses this backend.
     ///
-    /// For example, when set to `cpu`, uv will use the CPU-only PyTorch index; when set to `cu126`,
-    /// uv will use the PyTorch index for CUDA 12.6.
+    /// For example, `cpu` uses the CPU-only PyTorch index, and `cu126` uses the PyTorch index for
+    /// CUDA 12.6.
     ///
-    /// The `auto` mode will attempt to detect the appropriate PyTorch index based on the currently
-    /// installed CUDA drivers.
+    /// The `auto` mode tries to detect the PyTorch index from the installed CUDA drivers.
     ///
-    /// This setting is only respected by `uv pip` commands.
+    /// This setting applies only to `uv pip` commands.
     ///
     /// This option is in preview and may change in any future release.
     #[option(
@@ -2833,8 +2761,7 @@ impl TryFrom<OptionsWire> for Options {
 #[serde(rename_all = "kebab-case")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PublishOptions {
-    /// The URL for publishing packages to the Python package index (by default:
-    /// <https://upload.pypi.org/legacy/>).
+    /// The URL for publishing packages. Defaults to <https://upload.pypi.org/legacy/>.
     #[option(
         default = "\"https://upload.pypi.org/legacy/\"",
         value_type = "str",
@@ -2846,10 +2773,10 @@ pub struct PublishOptions {
 
     /// Configure trusted publishing.
     ///
-    /// By default, uv checks for trusted publishing when running in a supported environment, but
-    /// ignores it if it isn't configured.
+    /// By default, uv checks for trusted publishing in supported environments. If trusted
+    /// publishing is not configured, uv ignores it.
     ///
-    /// uv's supported environments for trusted publishing include GitHub Actions and GitLab CI/CD.
+    /// Supported environments include GitHub Actions and GitLab CI/CD.
     #[option(
         default = "automatic",
         value_type = "str",
@@ -2861,15 +2788,15 @@ pub struct PublishOptions {
 
     /// Check an index URL for existing files to skip duplicate uploads.
     ///
-    /// This option allows retrying publishing that failed after only some, but not all files have
-    /// been uploaded, and handles error due to parallel uploads of the same file.
+    /// Use this option to retry a partial upload. It also handles concurrent uploads of the same
+    /// file.
     ///
-    /// Before uploading, the index is checked. If the exact same file already exists in the index,
-    /// the file will not be uploaded. If an error occurred during the upload, the index is checked
-    /// again, to handle cases where the identical file was uploaded twice in parallel.
+    /// Before each upload, uv checks the index. If the same file is already present, uv skips it.
+    /// If an upload fails, uv checks the index again because another process may have uploaded the
+    /// same file.
     ///
-    /// The exact behavior will vary based on the index. When uploading to PyPI, uploading the same
-    /// file succeeds even without `--check-url`, while most other indexes error.
+    /// Behavior depends on the index. PyPI accepts an identical upload without `--check-url`, but
+    /// most other indexes return an error.
     ///
     /// The index must provide one of the supported hashes (SHA-256, SHA-384, or SHA-512).
     #[option(
@@ -2888,12 +2815,10 @@ pub struct PublishOptions {
 pub struct AddOptions {
     /// The default version specifier when adding a dependency.
     ///
-    /// When adding a dependency to the project, if no constraint or URL is provided, a constraint
-    /// is added based on the latest compatible version of the package. By default, a lower bound
-    /// constraint is used, e.g., `>=1.2.3`.
+    /// If a dependency has no constraint or URL, uv adds a constraint based on its latest
+    /// compatible version. By default, uv uses a lower bound such as `>=1.2.3`.
     ///
-    /// When `--frozen` is provided, no resolution is performed, and dependencies are always added
-    /// without constraints.
+    /// With `--frozen`, uv does not resolve dependencies and adds them without constraints.
     ///
     /// This option is in preview and may change in any future release.
     #[option(
@@ -2931,10 +2856,9 @@ pub struct AuditOptions {
     )]
     pub malware_check_url: Option<DisplaySafeUrl>,
 
-    /// A list of vulnerability IDs to ignore during auditing.
+    /// Vulnerability IDs to ignore during an audit.
     ///
-    /// Vulnerabilities matching any of the provided IDs (including aliases) will be excluded from
-    /// the audit results.
+    /// uv excludes vulnerabilities that match these IDs or their aliases from the audit results.
     #[option(
         default = "[]",
         value_type = "list[str]",
@@ -2944,11 +2868,10 @@ pub struct AuditOptions {
     )]
     pub ignore: Option<Vec<String>>,
 
-    /// A list of vulnerability IDs to ignore during auditing, but only while no fix is available.
+    /// Vulnerability IDs to ignore during an audit until a fix is available.
     ///
-    /// Vulnerabilities matching any of the provided IDs (including aliases) will be excluded from
-    /// the audit results as long as they have no known fix versions. Once a fix version becomes
-    /// available, the vulnerability will be reported again.
+    /// uv excludes vulnerabilities that match these IDs or their aliases while no fixed version is
+    /// available. When a fixed version becomes available, uv reports the vulnerability again.
     #[option(
         default = "[]",
         value_type = "list[str]",
@@ -2963,7 +2886,7 @@ pub struct AuditOptions {
 pub struct MalwareCheckSettings {
     /// Whether the malware check is enabled.
     pub enabled: bool,
-    /// The OSV-shaped service URL to use for malware checks.
+    /// The URL of the OSV-compatible service for malware checks.
     pub malware_check_url: Option<DisplaySafeUrl>,
 }
 
@@ -2988,7 +2911,7 @@ impl MalwareCheckSettings {
     }
 }
 
-/// Represents the `preview-features` configuration option.
+/// The `preview-features` configuration option.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schemars", schemars(untagged))]
@@ -2997,8 +2920,8 @@ pub enum PreviewFeaturesOption {
     Features(Vec<MaybePreviewFeature>),
 }
 
-// A derived `#[serde(untagged)]` implementation collapses detailed type and element errors into
-// "data did not match any variant", so use a type-directed visitor to preserve useful diagnostics.
+// A derived `#[serde(untagged)]` implementation replaces detailed type and element errors with
+// "data did not match any variant". Use a type-directed visitor to preserve specific errors.
 impl<'de> Deserialize<'de> for PreviewFeaturesOption {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -3020,16 +2943,16 @@ impl<'de> Deserialize<'de> for PreviewFeaturesOption {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schemars", schemars(rename_all = "kebab-case"))]
 struct PreviewOptionsDefinition {
-    // This legacy setting remains supported and included in the JSON schema, but is omitted from
-    // option metadata so the generated settings reference documents only `preview-features`.
-    /// Whether to enable all experimental, preview features.
+    // Keep this legacy setting in the JSON schema, but omit it from option metadata. The generated
+    // settings reference then documents only `preview-features`.
+    /// Whether to enable all experimental preview features.
     ///
     /// Use `preview-features` instead.
     #[deprecated(note = "use `preview-features` instead")]
     preview: Option<bool>,
-    /// Whether to enable specific or all experimental preview features.
+    /// Whether to enable specific preview features or all preview features.
     ///
-    /// Unknown feature names are ignored with a warning.
+    /// uv ignores unknown feature names and reports a warning.
     #[option(
         default = "false",
         value_type = "bool | list[str]",
@@ -3042,12 +2965,12 @@ struct PreviewOptionsDefinition {
     preview_features: Option<PreviewFeaturesOption>,
 }
 
-/// Represents the user's preview configuration from either `preview` or `preview-features`.
+/// The user's preview configuration from `preview` or `preview-features`.
 #[derive(Debug, Clone)]
 pub enum PreviewOption {
-    /// Whether to enable all experimental, preview features.
+    /// Whether to enable all experimental preview features.
     Preview(bool),
-    /// Whether to enable specific or all experimental preview features.
+    /// Whether to enable specific preview features or all preview features.
     PreviewFeatures(PreviewFeaturesOption),
 }
 
