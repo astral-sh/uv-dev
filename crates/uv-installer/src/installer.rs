@@ -1,7 +1,5 @@
-use std::convert;
 use std::sync::Arc;
 
-use anyhow::{Context, Error, Result};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use tokio::sync::oneshot;
 use tracing::{instrument, warn};
@@ -12,6 +10,29 @@ use uv_distribution_types::CachedDist;
 use uv_install_wheel::{Layout, LinkMode};
 use uv_preview::Preview;
 use uv_python::PythonEnvironment;
+
+/// A failure while installing resolved wheels.
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
+    #[error("Failed to install: {filename} ({0})", filename = _0.filename())]
+    Install(Box<CachedDist>, #[source] Box<uv_install_wheel::Error>),
+    #[error(
+        "Symlink-based installation is not supported with `--no-cache`. The created environment will be rendered unusable by the removal of the cache."
+    )]
+    NoCacheSymlink,
+    #[error("`install_blocking` task panicked")]
+    Thread,
+}
+
+impl Error {
+    /// Return whether this is an expected user-facing failure.
+    pub fn is_user_failure(&self) -> bool {
+        match self {
+            Self::Install(_, error) => error.is_user_failure(),
+            Self::NoCacheSymlink | Self::Thread => false,
+        }
+    }
+}
 
 pub struct Installer<'a> {
     venv: &'a PythonEnvironment,
@@ -84,7 +105,7 @@ impl<'a> Installer<'a> {
 
     /// Install a set of wheels into a Python virtual environment.
     #[instrument(skip_all, fields(num_wheels = %wheels.len()))]
-    pub async fn install(self, wheels: Vec<CachedDist>) -> Result<Vec<CachedDist>> {
+    pub async fn install(self, wheels: Vec<CachedDist>) -> Result<Vec<CachedDist>, Error> {
         let Self {
             venv,
             cache,
@@ -95,12 +116,8 @@ impl<'a> Installer<'a> {
             preview,
         } = self;
 
-        if cache.is_some_and(Cache::is_temporary) {
-            if link_mode.is_symlink() {
-                return Err(anyhow::anyhow!(
-                    "Symlink-based installation is not supported with `--no-cache`. The created environment will be rendered unusable by the removal of the cache."
-                ));
-            }
+        if cache.is_some_and(Cache::is_temporary) && link_mode.is_symlink() {
+            return Err(Error::NoCacheSymlink);
         }
 
         let (tx, rx) = oneshot::channel();
@@ -125,20 +142,14 @@ impl<'a> Installer<'a> {
             let _ = tx.send(result);
         });
 
-        rx.await
-            .map_err(|_| anyhow::anyhow!("`install_blocking` task panicked"))
-            .and_then(convert::identity)
+        rx.await.map_err(|_| Error::Thread)?
     }
 
     /// Install a set of wheels into a Python virtual environment synchronously.
     #[instrument(skip_all, fields(num_wheels = %wheels.len()))]
-    pub fn install_blocking(self, wheels: Vec<CachedDist>) -> Result<Vec<CachedDist>> {
-        if self.cache.is_some_and(Cache::is_temporary) {
-            if self.link_mode.is_symlink() {
-                return Err(anyhow::anyhow!(
-                    "Symlink-based installation is not supported with `--no-cache`. The created environment will be rendered unusable by the removal of the cache."
-                ));
-            }
+    pub fn install_blocking(self, wheels: Vec<CachedDist>) -> Result<Vec<CachedDist>, Error> {
+        if self.cache.is_some_and(Cache::is_temporary) && self.link_mode.is_symlink() {
+            return Err(Error::NoCacheSymlink);
         }
 
         install(
@@ -165,7 +176,7 @@ fn install(
     relocatable: bool,
     installer_metadata: bool,
     preview: Preview,
-) -> Result<Vec<CachedDist>> {
+) -> Result<Vec<CachedDist>, Error> {
     // Initialize the threadpool with the user settings.
     initialize_rayon_once();
     let state = uv_install_wheel::InstallState::new(preview);
@@ -190,7 +201,7 @@ fn install(
             link_mode,
             &state,
         )
-        .with_context(|| format!("Failed to install: {} ({wheel})", wheel.filename()))?;
+        .map_err(|error| Error::Install(Box::new(wheel.clone()), Box::new(error)))?;
 
         if let Some(reporter) = reporter.as_ref() {
             reporter.on_install_progress(wheel);
