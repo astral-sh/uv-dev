@@ -74,5 +74,6 @@ jobs:
       - name: Import public main profiles
         if: ${{ steps.source.outputs.run-id != '' }}
         env:
+          GH_TOKEN: ${{ github.token }}
           SOURCE_RUN: ${{ steps.source.outputs.run-id }}
         run: uv run --script scripts/codspeed-profiles.py import "$RUNNER_TEMP/codspeed-profiles" "$SOURCE_RUN" "$SOURCE_SHA"

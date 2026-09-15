@@ -36,9 +36,48 @@ from pathlib import Path
 UPLOAD_URL = "https://api.codspeed.io/upload"
 SOURCE_REPOSITORY = "astral-sh/uv"
 DESTINATION_REPOSITORY = "astral-sh/uv-dev"
-EXECUTORS = {"simulation": "valgrind", "walltime": "walltime"}
+MAX_WALLTIME_SHARDS = 8
+WALLTIME_SHARDS = tuple(
+    f"walltime-{index}" for index in range(1, MAX_WALLTIME_SHARDS + 1)
+)
+EXECUTORS = {"simulation": "valgrind", "walltime": "walltime"} | {
+    mode: "walltime" for mode in WALLTIME_SHARDS
+}
 ARTIFACTS = {mode: f"codspeed-profiles-{mode}" for mode in EXECUTORS}
-SOURCE_JOBS = {"bench / simulated", "bench / walltime on aarch64 linux"}
+REQUIRED_MODES = {"simulation", "walltime"}
+SOURCE_JOBS = {
+    "simulation": "bench / simulated",
+    "walltime": "bench / walltime on aarch64 linux",
+}
+
+
+def expected_source_jobs(present: set[str]) -> dict[str, str] | None:
+    """Accept the legacy walltime job or one complete, consistently sized shard set."""
+    expected = {"simulation": SOURCE_JOBS["simulation"]}
+    shards = {}
+    totals = set()
+    for name in present:
+        if match := re.fullmatch(
+            r"bench / walltime on aarch64 linux \((\d+)/(\d+)\)", name
+        ):
+            index, total = map(int, match.groups())
+            shards[index] = name
+            totals.add(total)
+    if shards:
+        if len(totals) != 1:
+            return None
+        total = next(iter(totals))
+        if not 1 <= total <= MAX_WALLTIME_SHARDS or set(shards) != set(
+            range(1, total + 1)
+        ):
+            return None
+        expected.update({f"walltime-{index}": name for index, name in shards.items()})
+    elif SOURCE_JOBS["walltime"] not in present:
+        return None
+    expected.update(
+        {mode: name for mode, name in SOURCE_JOBS.items() if name in present}
+    )
+    return expected
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -331,15 +370,19 @@ def find_source_run(sha: str, run_id: str | None = None) -> str | None:
             f"repos/{SOURCE_REPOSITORY}/actions/runs/{source_run}/jobs?per_page=100",
             "jobs",
         )
+        expected = expected_source_jobs({job["name"] for job in jobs})
         successful = {job["name"] for job in jobs if job["conclusion"] == "success"}
-        if not SOURCE_JOBS <= successful:
+        if expected is None or not set(expected.values()) <= successful:
             continue
         artifacts = github_items(
             f"repos/{SOURCE_REPOSITORY}/actions/runs/{source_run}/artifacts?per_page=100",
             "artifacts",
         )
         available = {item["name"] for item in artifacts if not item["expired"]}
-        if set(ARTIFACTS.values()) <= available:
+        if {ARTIFACTS[mode] for mode in expected} <= available and not any(
+            artifact in available and mode not in expected
+            for mode, artifact in ARTIFACTS.items()
+        ):
             return source_run
     return None
 
@@ -360,7 +403,9 @@ def commit_is_mirrored(sha: str) -> bool:
     return comparison is not None and comparison["status"] in {"ahead", "identical"}
 
 
-def destination_metadata(source: dict, environment: Mapping[str, str]) -> dict:
+def destination_metadata(
+    source: dict, environment: Mapping[str, str], *, part: str | None = None
+) -> dict:
     repository = environment["GITHUB_REPOSITORY"]
     if repository != DESTINATION_REPOSITORY:
         raise ValueError("Only uv-dev may import benchmark profiles")
@@ -386,7 +431,7 @@ def destination_metadata(source: dict, environment: Mapping[str, str]) -> dict:
         },
         runPart={
             "runId": run_id,
-            "runPartId": f"{job}-{executor}",
+            "runPartId": f"{job}-{part or executor}",
             "jobName": job,
             "metadata": {"executor": executor},
         },
@@ -412,14 +457,28 @@ def oidc_token() -> str:
 
 
 def import_profiles(directory: Path, source_run: str, source_sha: str) -> None:
+    jobs = github_items(
+        f"repos/{SOURCE_REPOSITORY}/actions/runs/{source_run}/jobs?per_page=100",
+        "jobs",
+    )
+    expected = expected_source_jobs({job["name"] for job in jobs})
+    successful = {job["name"] for job in jobs if job["conclusion"] == "success"}
+    if expected is None or not set(expected.values()) <= successful:
+        raise ValueError("The source benchmark jobs are incomplete")
     prepared = []
     for mode, artifact in ARTIFACTS.items():
         bundle = directory / artifact
+        if mode not in expected:
+            if bundle.exists():
+                raise ValueError("Unexpected source benchmark profile")
+            continue
         source = json.loads((bundle / "metadata.json").read_text())
         profile = bundle / "profile.tar"
         verify_source(source, source_sha, source_run, mode)
         verify_profile(profile, source)
-        metadata = destination_metadata(source, os.environ)
+        metadata = destination_metadata(
+            source, os.environ, part=mode if mode not in REQUIRED_MODES else None
+        )
         prepared.append((mode, profile, metadata))
     for mode, profile, metadata in prepared:
         response = upload_request(metadata, oidc_token())
