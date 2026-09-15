@@ -329,6 +329,14 @@ kind = "inherent_method"
 level = "expect"
 reason = "retained as a public pyvenv.cfg editing helper"
 
+[[override]]
+lint = "hawk::unnecessary_public"
+crate = "uv_pep440"
+item = "version_specifier::VersionSpecifier::less_than_equal_version"
+kind = "inherent_method"
+level = "expect"
+reason = "kept public alongside the other VersionSpecifier comparison constructors"
+
 [[exclude]]
 crate = "uv_extract"
 module = "dirhash"
