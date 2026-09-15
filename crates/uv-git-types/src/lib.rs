@@ -106,6 +106,8 @@ pub struct GitUrl {
     reference: GitReference,
     /// The precise commit to use, if known.
     precise: Option<GitOid>,
+    /// A default port that was explicitly specified in the source URL.
+    explicit_default_port: Option<u16>,
     /// Git LFS configuration for this repository.
     lfs: GitLfs,
 }
@@ -152,6 +154,7 @@ impl GitUrl {
             url,
             reference,
             precise: None,
+            explicit_default_port: None,
             lfs,
         };
         match precise {
@@ -207,6 +210,38 @@ impl GitUrl {
         self.precise
     }
 
+    /// Return the default port that was explicitly specified in the source URL.
+    pub fn explicit_default_port(&self) -> Option<u16> {
+        self.explicit_default_port
+    }
+
+    /// Set the default port that was explicitly specified in the source URL.
+    #[must_use]
+    pub fn with_explicit_default_port(mut self, port: Option<u16>) -> Self {
+        self.explicit_default_port = port;
+        self
+    }
+
+    /// Return a URL string with an explicitly specified default port restored.
+    pub fn transport_url(&self, url: &DisplaySafeUrl) -> String {
+        let Some(port) = self.explicit_default_port else {
+            return url.as_str().to_string();
+        };
+        let value = url.as_str();
+        let Some(authority_start) = value.find("://").map(|index| index + 3) else {
+            return value.to_string();
+        };
+        let authority_end = value[authority_start..]
+            .find(['/', '?', '#'])
+            .map_or(value.len(), |index| authority_start + index);
+
+        format!(
+            "{}:{port}{}",
+            &value[..authority_end],
+            &value[authority_end..]
+        )
+    }
+
     /// Return the Git LFS configuration.
     pub fn lfs(&self) -> GitLfs {
         self.lfs
@@ -225,6 +260,7 @@ impl PartialEq for GitUrl {
         self.repository == other.repository
             && self.reference == other.reference
             && self.precise == other.precise
+            && self.explicit_default_port == other.explicit_default_port
             && self.lfs == other.lfs
     }
 }
@@ -243,6 +279,7 @@ impl Ord for GitUrl {
             .cmp(&other.repository)
             .then_with(|| self.reference.cmp(&other.reference))
             .then_with(|| self.precise.cmp(&other.precise))
+            .then_with(|| self.explicit_default_port.cmp(&other.explicit_default_port))
             .then_with(|| self.lfs.cmp(&other.lfs))
     }
 }
@@ -252,6 +289,7 @@ impl std::hash::Hash for GitUrl {
         self.repository.hash(state);
         self.reference.hash(state);
         self.precise.hash(state);
+        self.explicit_default_port.hash(state);
         self.lfs.hash(state);
     }
 }
@@ -261,6 +299,22 @@ impl TryFrom<DisplaySafeUrl> for GitUrl {
 
     /// Initialize a [`GitUrl`] source from a URL.
     fn try_from(mut url: DisplaySafeUrl) -> Result<Self, Self::Error> {
+        let explicit_default_port = match (url.scheme(), url.port()) {
+            ("git+http", Some(80)) => Some(80),
+            ("git+https", Some(443)) => Some(443),
+            _ => None,
+        };
+        if let Some(scheme) = url.scheme().strip_prefix("git+").map(str::to_string) {
+            let value = url
+                .as_str()
+                .strip_prefix("git+")
+                .unwrap_or(url.as_str())
+                .to_string();
+            let original = url.clone();
+            url = DisplaySafeUrl::parse(&value)
+                .map_err(|_| GitUrlParseError::UnsupportedGitScheme(scheme, original))?;
+        }
+
         // Remove any query parameters and fragments.
         url.set_fragment(None);
         url.set_query(None);
@@ -283,7 +337,9 @@ impl TryFrom<DisplaySafeUrl> for GitUrl {
         }
 
         // TODO(samypr100): GitLfs::from_env() for now unless we want to support parsing lfs=true
-        Self::from_reference(url, reference, GitLfs::from_env())
+        let mut git = Self::from_reference(url, reference, GitLfs::from_env())?;
+        git.explicit_default_port = explicit_default_port;
+        Ok(git)
     }
 }
 
@@ -462,6 +518,32 @@ mod tests {
 
         let git = GitUrl::try_from(url)?;
         assert_eq!(git.reference().as_str(), Some("refs/pull/493/head@1#2%"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_explicit_default_port() -> Result<(), Box<dyn std::error::Error>> {
+        for (input, normalized, transport, port) in [
+            (
+                "git+https://example.com:443/pkg.git",
+                "https://example.com/pkg.git",
+                "https://example.com:443/pkg.git",
+                443,
+            ),
+            (
+                "git+http://example.com:80/pkg.git",
+                "http://example.com/pkg.git",
+                "http://example.com:80/pkg.git",
+                80,
+            ),
+        ] {
+            let git = GitUrl::try_from(DisplaySafeUrl::parse(input)?)?;
+
+            assert_eq!(git.url().as_str(), normalized);
+            assert_eq!(git.explicit_default_port(), Some(port));
+            assert_eq!(git.transport_url(git.url()), transport);
+        }
 
         Ok(())
     }
