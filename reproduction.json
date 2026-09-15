@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with uv 0.12.15, ty 0.0.81, and CPython 3.14.7, an isolated project using `requires-python = \">=3.12\"` reproduced the report. After `uv sync --python 3.14`, `.venv/bin/ty check` and `uv run ty check` passed, while `uv check --ty-version 0.0.81` reported the stated `not-subscriptable` diagnostic. `uv check --python 3.12 --ty-version 0.0.81` passed, and changing `requires-python` to `>=3.14` made standalone ty report the diagnostic. Verbose output showed standalone ty targeting Python 3.12 and uv-integrated ty targeting Python 3.14."
+}
