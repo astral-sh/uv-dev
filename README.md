@@ -2,7 +2,7 @@
 
 Issue: astral-sh/uv#21602
 
-Classification: duplicate of astral-sh/uv#10428; exact parser-error mechanism needs more information
+Classification: duplicate of astral-sh/uv#10428; external AV false positive with no repository-side fix identified
 
 ## Summary
 
@@ -42,6 +42,11 @@ It is not established how Defender produces the observed `Invoke-Expression` par
 reporter's suggestions that it truncates or rewrites the command are hypotheses, not findings. The
 successful invocation without `-ExecutionPolicy ByPass` suggests that exact command shape affects
 Defender's heuristic, but does not explain the transformation.
+
+The maintainer considers this an antivirus false positive and does not see a repository-side action.
+The recommended escalation is through a Microsoft vendor relationship, if available. uv binaries
+are now code-signed, but that does not help this case because Defender is acting on the PowerShell
+installer command/script rather than an unsigned uv binary.
 
 The final mirror response currently has no `Content-Type` header. That is a useful diagnostic lead,
 not a confirmed cause: PowerShell Core 6.0.0 and 7.6.5 both materialized the same live response as
@@ -161,7 +166,11 @@ identified Windows 11 Enterprise LTSC 2009, build 10.0.26100, and reported that 
 `-ExecutionPolicy ByPass` makes the same installation pipeline succeed. They later supplied a
 Windows Defender Protection History record showing that Defender blocked and removed the exact
 failing command as `#CleanNotToMoac`. The remaining uncertainty is how that intervention surfaces
-as the reported PowerShell parser errors, not whether endpoint security acted on the command.
+as the reported PowerShell parser errors, not whether endpoint security acted on the command. The
+maintainer identified the event as an AV false positive, stated that there is little the project can
+do directly, and suggested reporting the product bug to Microsoft through any available vendor
+relationship. They also clarified that recent uv binary code signing does not cover the installer
+script and therefore does not address this detection.
 
 ## Classification
 
@@ -175,6 +184,11 @@ The successful maintainer tests on Windows PowerShell 5.1.26100.6584 and 5.1.261
 out a general PowerShell-version incompatibility. The unexplained parser-error presentation is
 useful additional evidence for the canonical security-software discussion, but does not require a
 separate tracker unless it persists without a corresponding Defender intervention.
+
+The maintainer's disposition is that this is external antivirus behavior without an identified uv
+change that would resolve it. Code signing the uv executables does not change the trust treatment of
+the PowerShell installer script. Further action belongs in the canonical astral-sh/uv#10428
+discussion or with Microsoft rather than in a separate PowerShell compatibility issue.
 
 ## Related
 
@@ -208,6 +222,8 @@ separate tracker unless it persists without a corresponding Defender interventio
   reporter says the installation succeeds when only `-ExecutionPolicy ByPass` is removed.
 - Windows Defender Protection History records a severe `#CleanNotToMoac` detection for the exact
   failing command, with status `Removed` and a potentially unwanted behavior description.
+- The maintainer classifies the detection as an AV false positive with no clear repository-side
+  remedy and notes that uv binary code signing does not apply to the installer script.
 - The claim that Defender truncates or rewrites the command is unconfirmed; the screenshot records
   the intervention but not how it leads to the parser errors.
 - The reporter's locally saved, comment-removed copy succeeded, but that experiment changed both
