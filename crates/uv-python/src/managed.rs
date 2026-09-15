@@ -1033,6 +1033,31 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn replace_link_to_executable_preserves_destination_on_failure() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let link = temp_dir.path().join("python");
+        fs_err::write(&link, b"original executable")?;
+
+        let invalid_executable = temp_dir.path().join("invalid\0executable");
+        let error =
+            replace_link_to_executable(&link, PythonExecutable::console(&invalid_executable))
+                .expect_err("an embedded NUL cannot form a symlink target");
+        let Error::LinkExecutable(error) = error else {
+            anyhow::bail!("unexpected error: {error:?}");
+        };
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(fs_err::read(&link)?, b"original executable");
+
+        let executable = temp_dir.path().join("replacement");
+        fs_err::write(&executable, b"replacement executable")?;
+        replace_link_to_executable(&link, PythonExecutable::console(&executable))?;
+        assert_eq!(fs_err::read_link(&link)?, executable);
+        assert_eq!(fs_err::read(&link)?, b"replacement executable");
+        Ok(())
+    }
+
+    #[test]
     fn test_is_upgrade_of_same_version() {
         let installation = create_test_installation(
             ImplementationName::CPython,
