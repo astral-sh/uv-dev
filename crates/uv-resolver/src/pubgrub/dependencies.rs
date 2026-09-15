@@ -7,8 +7,9 @@ use uv_distribution_types::{IndexMetadata, Requirement, RequirementSource};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::RequirementOrigin;
-use uv_pypi_types::{ConflictItemRef, Conflicts, VerbatimParsedUrl};
+use uv_pypi_types::{ConflictItem, ConflictItemRef, VerbatimParsedUrl};
 
+use crate::FxHashbrownSet;
 use crate::pubgrub::{PubGrubPackage, PubGrubPackageInner, Range};
 use crate::resolver::UnsatisfiableRequirement;
 
@@ -112,7 +113,7 @@ impl PubGrubDependency {
     /// requirement details instead. The resolver attaches them to the parent package as the
     /// reason that package cannot be selected.
     pub(crate) fn from_requirements<'a>(
-        conflicts: &Conflicts,
+        conflict_items: &FxHashbrownSet<ConflictItem>,
         requirements: impl IntoIterator<Item = Cow<'a, Requirement>>,
         group_name: Option<&'a GroupName>,
         parent_package: Option<&'a PubGrubPackage>,
@@ -120,7 +121,7 @@ impl PubGrubDependency {
         let mut dependencies = Vec::new();
         for requirement in requirements {
             dependencies.extend(Self::from_requirement(
-                conflicts,
+                conflict_items,
                 requirement,
                 group_name,
                 parent_package,
@@ -130,7 +131,7 @@ impl PubGrubDependency {
     }
 
     fn from_requirement<'a>(
-        conflicts: &Conflicts,
+        conflict_items: &FxHashbrownSet<ConflictItem>,
         requirement: Cow<'a, Requirement>,
         group_name: Option<&'a GroupName>,
         parent_package: Option<&'a PubGrubPackage>,
@@ -159,11 +160,9 @@ impl PubGrubDependency {
             // place? Well, that's part of an optimization[1].
             //
             // [1]: https://github.com/astral-sh/uv/pull/9540
-            let base = if requirement
-                .extras
-                .iter()
-                .any(|extra| conflicts.contains(&requirement.name, extra))
-            {
+            let base = if requirement.extras.iter().any(|extra| {
+                conflict_items.contains(&ConflictItemRef::from((&requirement.name, extra)))
+            }) {
                 Either::Left(iter::once((None, None)))
             } else {
                 Either::Right(iter::empty())
@@ -172,11 +171,9 @@ impl PubGrubDependency {
                 Box::into_iter(requirement.extras.clone()).map(|extra| (Some(extra), None)),
             )))
         } else if !requirement.groups.is_empty() {
-            let base = if requirement
-                .groups
-                .iter()
-                .any(|group| conflicts.contains(&requirement.name, group))
-            {
+            let base = if requirement.groups.iter().any(|group| {
+                conflict_items.contains(&ConflictItemRef::from((&requirement.name, group)))
+            }) {
                 Either::Left(iter::once((None, None)))
             } else {
                 Either::Right(iter::empty())
@@ -310,5 +307,237 @@ impl PubGrubRequirement {
             source: DependencySource::from_requirement(requirement),
             version: Range::from(specifier.clone()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::str::FromStr;
+
+    use uv_distribution_types::IndexUrl;
+    use uv_pep508::MarkerTree;
+    use uv_pypi_types::{ConflictSet, Conflicts};
+
+    use super::*;
+
+    fn requirement(extras: &[&str], groups: &[&str]) -> Requirement {
+        let project = PackageName::from_str("workspace-root").unwrap();
+        let group = GroupName::from_str("dev").unwrap();
+        Requirement {
+            name: PackageName::from_str("demo-pkg").unwrap(),
+            extras: extras
+                .iter()
+                .map(|extra| ExtraName::from_str(extra).unwrap())
+                .collect(),
+            groups: groups
+                .iter()
+                .map(|group| GroupName::from_str(group).unwrap())
+                .collect(),
+            marker: MarkerTree::from_str("python_version >= '3.10'").unwrap(),
+            source: RequirementSource::Registry {
+                specifier: VersionSpecifiers::from_str(">=1.2,<2").unwrap(),
+                index: Some(IndexMetadata::from(
+                    IndexUrl::from_str("https://example.invalid/simple").unwrap(),
+                )),
+                conflict: None,
+            },
+            origin: Some(RequirementOrigin::Group(
+                PathBuf::from("pyproject.toml"),
+                Some(project),
+                group,
+            )),
+        }
+    }
+
+    fn build_conflict_items(sets: Vec<Vec<ConflictItem>>) -> FxHashbrownSet<ConflictItem> {
+        let mut conflicts = Conflicts::empty();
+        for set in sets {
+            conflicts.push(ConflictSet::try_from(set).unwrap());
+        }
+        conflicts
+            .iter()
+            .flat_map(|set| set.iter().cloned())
+            .collect()
+    }
+
+    fn variants(dependencies: &[PubGrubDependency]) -> Vec<(Option<String>, Option<String>)> {
+        dependencies
+            .iter()
+            .map(|dependency| {
+                (
+                    dependency.package.extra().map(ToString::to_string),
+                    dependency.package.group().map(ToString::to_string),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn indexed_conflicts_preserve_extra_edges_and_source() {
+        let package = PackageName::from_str("demo-pkg").unwrap();
+        let other = PackageName::from_str("other-pkg").unwrap();
+        let first = ExtraName::from_str("first-extra").unwrap();
+        let second = ExtraName::from_str("second-extra").unwrap();
+        let set = vec![
+            ConflictItem::from((package.clone(), first)),
+            ConflictItem::from((package.clone(), second)),
+            ConflictItem::from((other, ExtraName::from_str("first-extra").unwrap())),
+        ];
+        let conflict_items = build_conflict_items(vec![set.clone(), set]);
+        assert_eq!(conflict_items.len(), 3);
+
+        let requirement = requirement(
+            &[
+                "missing-extra",
+                "first_extra",
+                "second-extra",
+                "second-extra",
+            ],
+            &["ignored-group"],
+        );
+        let dependencies = PubGrubDependency::from_requirements(
+            &conflict_items,
+            [Cow::Borrowed(&requirement)],
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            variants(&dependencies),
+            vec![
+                (None, None),
+                (Some("missing-extra".to_string()), None),
+                (Some("first-extra".to_string()), None),
+                (Some("second-extra".to_string()), None),
+                (Some("second-extra".to_string()), None),
+            ]
+        );
+        let expected_range = Range::from(VersionSpecifiers::from_str(">=1.2,<2").unwrap());
+        let expected_source = DependencySource::ExplicitIndex(IndexMetadata::from(
+            IndexUrl::from_str("https://example.invalid/simple").unwrap(),
+        ));
+        assert!(
+            dependencies
+                .iter()
+                .all(|dependency| dependency.version == expected_range)
+        );
+        assert!(
+            dependencies
+                .iter()
+                .all(|dependency| dependency.source == expected_source)
+        );
+        assert!(
+            dependencies
+                .iter()
+                .all(|dependency| dependency.package.marker() == requirement.marker)
+        );
+    }
+
+    #[test]
+    fn indexed_conflicts_distinguish_groups_projects_and_packages() {
+        let package = PackageName::from_str("demo-pkg").unwrap();
+        let other = PackageName::from_str("other-pkg").unwrap();
+        let shared_group = GroupName::from_str("shared-group").unwrap();
+        let conflict_items = build_conflict_items(vec![vec![
+            ConflictItem::from(package.clone()),
+            ConflictItem::from((package.clone(), shared_group)),
+            ConflictItem::from((package.clone(), ExtraName::from_str("group-only").unwrap())),
+            ConflictItem::from((other, ExtraName::from_str("shared-extra").unwrap())),
+        ]]);
+
+        let group_requirement =
+            requirement(&[], &["missing-group", "shared_group", "shared-group"]);
+        let group_dependencies = PubGrubDependency::from_requirements(
+            &conflict_items,
+            [Cow::Borrowed(&group_requirement)],
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            variants(&group_dependencies),
+            vec![
+                (None, None),
+                (None, Some("missing-group".to_string())),
+                (None, Some("shared-group".to_string())),
+                (None, Some("shared-group".to_string())),
+            ]
+        );
+
+        let extra_requirement = requirement(&["shared-extra", "group-only"], &[]);
+        let extra_dependencies = PubGrubDependency::from_requirements(
+            &conflict_items,
+            [Cow::Borrowed(&extra_requirement)],
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            variants(&extra_dependencies),
+            vec![
+                (None, None),
+                (Some("shared-extra".to_string()), None),
+                (Some("group-only".to_string()), None),
+            ]
+        );
+
+        let project_only = build_conflict_items(vec![vec![
+            ConflictItem::from(package),
+            ConflictItem::from((
+                PackageName::from_str("other-pkg").unwrap(),
+                ExtraName::from_str("shared-extra").unwrap(),
+            )),
+        ]]);
+        let project_dependencies = PubGrubDependency::from_requirements(
+            &project_only,
+            [Cow::Borrowed(&extra_requirement)],
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            variants(&project_dependencies),
+            vec![
+                (Some("shared-extra".to_string()), None),
+                (Some("group-only".to_string()), None),
+            ]
+        );
+
+        let cross_kind = build_conflict_items(vec![vec![
+            ConflictItem::from((
+                PackageName::from_str("demo-pkg").unwrap(),
+                GroupName::from_str("shared-group").unwrap(),
+            )),
+            ConflictItem::from((
+                PackageName::from_str("demo-pkg").unwrap(),
+                ExtraName::from_str("group-only").unwrap(),
+            )),
+        ]]);
+        let extra_miss = requirement(&["shared-group"], &[]);
+        let extra_miss_dependencies = PubGrubDependency::from_requirements(
+            &cross_kind,
+            [Cow::Borrowed(&extra_miss)],
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            variants(&extra_miss_dependencies),
+            vec![(Some("shared-group".to_string()), None)]
+        );
+        let group_miss = requirement(&[], &["group-only"]);
+        let group_miss_dependencies = PubGrubDependency::from_requirements(
+            &cross_kind,
+            [Cow::Borrowed(&group_miss)],
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            variants(&group_miss_dependencies),
+            vec![(None, Some("group-only".to_string()))]
+        );
     }
 }
