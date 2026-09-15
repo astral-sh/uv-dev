@@ -568,6 +568,11 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
 
     // Write out any resolved settings.
     macro_rules! show_settings {
+        () => {
+            if globals.show_settings {
+                return Ok(ExitStatus::Success);
+            }
+        };
         ($arg:expr) => {
             if globals.show_settings {
                 writeln!(printer.stdout(), "{:#?}", $arg)?;
@@ -1198,6 +1203,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
             let args = PipTreeSettings::resolve(args, filesystem, environment)?;
+            show_settings!(args);
 
             // Initialize the cache.
             let cache = cache.init().await?;
@@ -1268,10 +1274,14 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
         }
         Commands::Cache(CacheNamespace {
             command: CacheCommand::Dir,
-        }) => commands::cache_dir(&cache, printer),
+        }) => {
+            show_settings!();
+            commands::cache_dir(&cache, printer)
+        }
         Commands::Cache(CacheNamespace {
             command: CacheCommand::Size(args),
         }) => {
+            show_settings!(args);
             let output_format = if args.human {
                 CacheSizeOutputFormat::Human
             } else {
@@ -1923,6 +1933,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
             let args = settings::PythonFindSettings::resolve(args, filesystem, environment)?;
+            show_settings!(args);
 
             // Initialize the cache.
             let cache = cache.init().await?;
@@ -1965,6 +1976,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
             let args = settings::PythonPinSettings::resolve(args, filesystem, environment)?;
+            show_settings!(args);
 
             // Initialize the cache.
             let cache = cache.init().await?;
@@ -2099,6 +2111,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 .await
             }
             WorkspaceCommand::Dir(args) => {
+                show_settings!(args);
                 commands::dir(
                     args.package,
                     &project_dir,
@@ -2109,6 +2122,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 .await
             }
             WorkspaceCommand::List(args) => {
+                show_settings!(args);
                 commands::list(
                     &project_dir,
                     args.paths,
