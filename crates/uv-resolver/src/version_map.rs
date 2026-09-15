@@ -687,7 +687,7 @@ impl VersionMapLazy {
                             filename,
                             file: Box::new(file),
                             index: self.index.clone(),
-                            size_is_authoritative: false,
+                            size_is_authoritative: true,
                         };
                         priority_dist.insert_built(dist, hashes, compatibility);
                     }
@@ -706,7 +706,7 @@ impl VersionMapLazy {
                             file: Box::new(file),
                             index: self.index.clone(),
                             wheels: vec![],
-                            size_is_authoritative: false,
+                            size_is_authoritative: true,
                         };
                         priority_dist.insert_source(dist, hashes, compatibility);
                     }
