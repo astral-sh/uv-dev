@@ -111,6 +111,22 @@ def match_version(entry, pattern):
     return pattern.match(vers) is not None
 
 
+def matches_filters(
+    entry: dict,
+    name: str | None,
+    arch: str | None,
+    os: str | None,
+    version: re.Pattern | None,
+) -> bool:
+    if name and entry["name"] != name:
+        return False
+    if arch and not check_arch(entry["arch"], arch):
+        return False
+    if os and entry["os"] != os:
+        return False
+    return not version or match_version(entry, version)
+
+
 def filter_metadata(
     metadata: list[dict],
     name: str | None,
@@ -120,12 +136,7 @@ def filter_metadata(
 ) -> list[dict]:
     """Filter the metadata based on name, architecture, and OS, ensuring unique URLs."""
     filtered = [
-        entry
-        for entry in metadata
-        if (not name or entry["name"] == name)
-        and (not arch or check_arch(entry["arch"], arch))
-        and (not os or entry["os"] == os)
-        and (not version or match_version(entry, version))
+        entry for entry in metadata if matches_filters(entry, name, arch, os, version)
     ]
     # Use a set to ensure unique URLs
     unique_urls = set()
