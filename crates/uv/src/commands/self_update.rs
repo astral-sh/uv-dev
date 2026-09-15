@@ -25,6 +25,8 @@ use uv_static::{
 };
 
 use crate::commands::ExitStatus;
+use crate::commands::self_install::RECEIPT_NAME;
+use crate::commands::self_update_native;
 use crate::printer::Printer;
 
 const UV_GITHUB_RELEASES_DOWNLOAD_PREFIX: &str =
@@ -78,6 +80,15 @@ pub(crate) async fn self_update(
             )
         )?;
         return Ok(ExitStatus::Failure);
+    }
+
+    if uv_preview::is_enabled(uv_preview::PreviewFeature::SelfManagement)
+        || std::env::current_exe()?
+            .with_file_name(RECEIPT_NAME)
+            .try_exists()?
+    {
+        return self_update_native::self_update(version, token, dry_run, printer, client_builder)
+            .await;
     }
 
     let mut updater = AxoUpdater::new_for("uv");
@@ -300,7 +311,7 @@ fn is_official_public_uv_install_with_overrides(
 /// To preserve existing tag-based behavior, only exact `major.minor.patch` release versions are
 /// accepted. Inputs that normalize to a different version string, such as `0.10` or `v0.10.0`,
 /// are rejected instead of being silently rewritten.
-fn official_target_version_specifiers(
+pub(super) fn official_target_version_specifiers(
     target_version: Option<&str>,
 ) -> Result<Option<VersionSpecifiers>> {
     let Some(target_version) = target_version else {
@@ -323,7 +334,7 @@ fn official_target_version_specifiers(
     )))
 }
 
-fn is_update_needed(
+pub(super) fn is_update_needed(
     current_version: &Pep440Version,
     target_version: &Pep440Version,
     has_target_version: bool,

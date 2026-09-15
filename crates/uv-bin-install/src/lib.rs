@@ -345,6 +345,7 @@ struct BinArtifact {
     platform: String,
     url: String,
     archive_format: String,
+    sha256: Option<String>,
 }
 
 /// A resolved version with its artifact information.
@@ -356,6 +357,7 @@ pub struct ResolvedVersion {
     artifact_urls: Vec<DisplaySafeUrl>,
     /// The archive format.
     archive_format: ArchiveFormat,
+    sha256: Option<String>,
 }
 
 impl ResolvedVersion {
@@ -374,7 +376,23 @@ impl ResolvedVersion {
             version,
             artifact_urls,
             archive_format,
+            sha256: None,
         })
+    }
+
+    /// The mirror-first download locations for the complete distribution archive.
+    pub fn artifact_urls(&self) -> &[DisplaySafeUrl] {
+        &self.artifact_urls
+    }
+
+    /// The archive format recorded in the versions manifest.
+    pub fn archive_format(&self) -> SourceDistExtension {
+        self.archive_format.into()
+    }
+
+    /// The archive's SHA-256 digest, when recorded in the versions manifest.
+    pub fn sha256(&self) -> Option<&str> {
+        self.sha256.as_deref()
     }
 }
 
@@ -551,7 +569,7 @@ pub async fn find_matching_version(
 }
 
 /// Resolve a binary for an explicit release target rather than the detected host platform.
-async fn find_matching_version_for_platform(
+pub async fn find_matching_version_for_platform(
     binary: Binary,
     constraints: Option<&uv_pep440::VersionSpecifiers>,
     exclude_newer: Option<jiff::Timestamp>,
@@ -712,6 +730,7 @@ fn check_version_match(
             version: version_info.version.clone(),
             artifact_urls: binary.mirror_urls(canonical_url)?,
             archive_format,
+            sha256: artifact.sha256.clone(),
         }));
     }
 
@@ -1062,7 +1081,7 @@ mod tests {
     }
 
     #[test]
-    fn uv_manifest_matches_explicit_target() {
+    fn uv_manifest_retains_checksum_and_explicit_target() {
         let manifest: BinVersionInfo = serde_json::from_value(json!({
             "version": "0.12.12",
             "date": "2026-09-09T00:00:00Z",
@@ -1082,8 +1101,9 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(resolved.archive_format, ArchiveFormat::TarGz);
-        assert_eq!(resolved.artifact_urls.len(), 2);
+        assert_eq!(resolved.sha256(), Some("1234"));
+        assert_eq!(resolved.archive_format(), SourceDistExtension::TarGz);
+        assert_eq!(resolved.artifact_urls().len(), 2);
         assert!(
             check_version_match(
                 Binary::Uv,
@@ -1097,7 +1117,7 @@ mod tests {
         );
         let custom = Binary::Uv
             .mirror_urls_with_astral_mirror(
-                resolved.artifact_urls[1].clone(),
+                resolved.artifact_urls()[1].clone(),
                 Some("https://mirror.example.test"),
             )
             .unwrap();
