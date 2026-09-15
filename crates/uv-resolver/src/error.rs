@@ -519,14 +519,15 @@ impl NoSolutionError {
         self.cached.get_or_init(|| self.compute_report_and_hints())
     }
 
-    /// Given a [`DerivationTree`], collapse any [`External::FromDependencyOf`] incompatibilities
-    /// wrap an [`PubGrubPackageInner::Extra`] package.
+    /// Given a [`DerivationTree`], collapse the internal dependencies of proxy packages.
+    /// Dependencies on Python are meaningful incompatibilities, so retain those edges.
     pub(crate) fn collapse_proxies(derivation_tree: ErrorTree) -> ErrorTree {
         fn is_proxy(tree: &ErrorTree) -> bool {
             matches!(
                 tree,
-                DerivationTree::External(External::FromDependencyOf(package, ..))
+                DerivationTree::External(External::FromDependencyOf(package, _, dependency, _))
                     if package.is_proxy()
+                        && !matches!(&**dependency, PubGrubPackageInner::Python(_))
             )
         }
 
@@ -1977,6 +1978,7 @@ mod tests {
     use std::assert_matches;
 
     use super::*;
+    use crate::pubgrub::PubGrubPython;
     use crate::resolver::UnavailableVersion;
 
     fn deep_derivation_tree() -> ErrorTree {
@@ -2011,6 +2013,117 @@ mod tests {
 
     fn version(version: &str) -> Version {
         version.parse().expect("valid version")
+    }
+
+    fn proxy_packages() -> [PubGrubPackage; 3] {
+        [
+            PubGrubPackageInner::Extra {
+                name: package_name("example"),
+                extra: "feature".parse().expect("valid extra name"),
+                marker: uv_pep508::MarkerTree::TRUE,
+            }
+            .into(),
+            PubGrubPackageInner::Group {
+                name: package_name("example"),
+                group: "dev".parse().expect("valid group name"),
+                marker: uv_pep508::MarkerTree::TRUE,
+            }
+            .into(),
+            PubGrubPackageInner::Marker {
+                name: package_name("example"),
+                marker: uv_pep508::MarkerTree::TRUE,
+            }
+            .into(),
+        ]
+    }
+
+    fn tree_with_dependency(dependency: ErrorTree, dependency_first: bool) -> ErrorTree {
+        let root = ErrorTree::External(External::NotRoot(
+            PubGrubPackageInner::Root(None).into(),
+            version("1"),
+        ));
+        let (cause1, cause2) = if dependency_first {
+            (dependency, root)
+        } else {
+            (root, dependency)
+        };
+        ErrorTree::Derived(Derived {
+            terms: pubgrub::Map::default(),
+            shared_id: None,
+            cause1: Arc::new(cause1),
+            cause2: Arc::new(cause2),
+        })
+    }
+
+    #[test]
+    fn collapse_proxies_retains_python_dependencies() {
+        for proxy in proxy_packages() {
+            for python in [PubGrubPython::Installed, PubGrubPython::Target] {
+                for dependency_first in [false, true] {
+                    let dependency = PubGrubPackageInner::Python(python).into();
+                    let tree = tree_with_dependency(
+                        ErrorTree::External(External::FromDependencyOf(
+                            proxy.clone(),
+                            Range::singleton(version("1")),
+                            dependency,
+                            Range::from_range_bounds(version("3.13")..),
+                        )),
+                        dependency_first,
+                    );
+
+                    let collapsed = NoSolutionError::collapse_proxies(tree);
+                    let ErrorTree::Derived(derived) = collapsed else {
+                        panic!("expected the Python dependency to be retained");
+                    };
+                    let cause = if dependency_first {
+                        &*derived.cause1
+                    } else {
+                        &*derived.cause2
+                    };
+                    assert_matches!(
+                        cause,
+                        ErrorTree::External(External::FromDependencyOf(package, package_set, dependency, python_set))
+                            if package == &proxy
+                                && package_set == &Range::singleton(version("1"))
+                                && matches!(&**dependency, PubGrubPackageInner::Python(value) if *value == python)
+                                && python_set == &Range::from_range_bounds(version("3.13")..)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn collapse_proxies_removes_internal_dependencies() {
+        let base = pubgrub_package("example");
+        let extra = PubGrubPackageInner::Package {
+            name: package_name("example"),
+            extra: Some("feature".parse().expect("valid extra name")),
+            group: None,
+            marker: uv_pep508::MarkerTree::TRUE,
+        }
+        .into();
+        for proxy in proxy_packages() {
+            for dependency in [&base, &extra] {
+                for dependency_first in [false, true] {
+                    let tree = tree_with_dependency(
+                        ErrorTree::External(External::FromDependencyOf(
+                            proxy.clone(),
+                            Range::full(),
+                            dependency.clone(),
+                            Range::full(),
+                        )),
+                        dependency_first,
+                    );
+
+                    assert_matches!(
+                        NoSolutionError::collapse_proxies(tree),
+                        ErrorTree::External(External::NotRoot(package, root_version))
+                            if package.is_root() && root_version == version("1")
+                    );
+                }
+            }
+        }
     }
 
     fn known_versions(name: &str, versions: &[&str]) -> FxHashMap<PackageName, Arc<[Version]>> {
