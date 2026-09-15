@@ -19,11 +19,17 @@ and a maintainer confirms that uv does not manage such environments automaticall
 workaround is to give each configuration a distinct `UV_PROJECT_ENVIRONMENT` path, as demonstrated
 by a maintainer in astral-sh/uv#9906.
 
-A maintainer has now asked how the project code is shared between the hardware environments. If
-each hardware environment has a distinct user home (and therefore a distinct uv cache) while the
-project checkout is shared, the `centralized-project-envs` preview feature may already isolate the
-physical project environments. Whether that applies cannot be determined until the reporter
-clarifies the cluster's home, cache, and project-filesystem layout.
+The reporter clarified that the project code is not shared: each run receives a separate copy of
+the Python files. Only read-only data is shared. The `.venv` is linked rather than copied because
+each environment is roughly 10 GB. This rules out the maintainer's example of a shared project
+checkout with a distinct home/cache per hardware environment.
+
+The `centralized-project-envs` preview feature derives an environment from the project path and
+interpreter identity, not from the selected accelerator extra. With a different copied project path
+for every run, it may create a distinct centralized environment for every copy instead of a reusable
+CUDA/ROCm pair. Package files may still be linked from a common cache when the filesystem supports
+it, but the reporter's environment reuse and link topology need clarification before treating this
+as a suitable workaround.
 
 ## Draft response
 
@@ -40,10 +46,10 @@ before submitting jobs avoids changing them during job startup. Concurrent uv op
 protected by an environment lock, as documented by astral-sh/uv#2818, but separate paths are still
 needed because the two sync commands request different final package sets.
 
-Maintainer handoff note: this draft predates the storage-topology follow-up and should not be used
-unchanged. If the reporter confirms that each hardware environment has a separate home/cache, the
-centralized project environment preview may remove the need for explicit `.venv-cuda` and
-`.venv-rocm` paths.
+Maintainer handoff note: this draft predates the reporter's storage-topology clarification and
+should not be used unchanged. The code checkout is copied per run, so centralized project
+environments may be keyed separately for every copied path rather than yielding one reusable
+environment per accelerator.
 
 ## Classification
 
@@ -59,19 +65,27 @@ but serialization cannot make one path retain two different desired package sets
 or dependency-set-specific project environments remain unsupported; a virtual environment also does
 not dynamically redirect installed packages based on GPU hardware.
 
-## Open investigation question
+## Deployment topology and open questions
 
-The effectiveness of centralized project environments depends on the cluster's storage topology:
+Confirmed by the reporter:
 
-- Are the home directory and uv cache shared by CUDA and ROCm nodes, or unique to each hardware
-  environment?
-- Is only the project checkout shared through a separate filesystem?
+- Every run receives its own copy of the Python scripts; project code is not shared between runners.
+- Data files are shared read-only and are not implicated in the environment race.
+- `.venv` is linked because copying an approximately 10 GB environment to every runner is not
+  practical.
 
-If the home/cache roots are unique while the project path is shared, the preview feature suggested
-by the maintainer may produce separate physical environments despite using the same project path.
-If the cache is shared and the interpreter identity is also the same, centralized storage does not
-by itself distinguish CUDA from ROCm or selected extras, so explicit environment paths remain the
-applicable workaround.
+Still needed to evaluate the available workarounds:
+
+- What does each runner's `.venv` link point to, and do CUDA and ROCm runners currently share that
+  same target?
+- Are the uv cache and home directory shared across runners, and are the cache and environment on a
+  filesystem that supports hardlinks or reflinks?
+- Are copied project paths stable and reused across jobs, or unique for every run?
+
+These details determine whether centralized project environments would be reusable. If every copied
+project path is unique, the project-path-derived key implies a separate environment per run. If the
+paths are stable by accelerator, it may be possible to reuse two centralized environments, although
+the feature itself still does not select environments based on CUDA/ROCm extras.
 
 ## Related
 
@@ -106,5 +120,7 @@ astral-sh/uv#18844 and astral-sh/uv#11418 concern ROCm index resolution and inco
 selection, not concurrent selection of two valid environments. The centralized storage work in
 astral-sh/uv#1495 and astral-sh/uv#18214 does not key environments by GPU accelerator or selected
 extras. However, as the maintainer noted, separate home/cache roots for the different hardware
-environments would provide physical separation even when the shared project path and generated
-environment key are otherwise the same.
+environments would provide physical separation when a project path is shared. The reporter has now
+clarified that project paths are copied per run instead, so the path-derived centralized environment
+key may prevent cross-run reuse; the remaining cache, link-target, and path-stability details are
+needed to confirm that behavior in this cluster.
