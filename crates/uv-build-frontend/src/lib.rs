@@ -887,6 +887,18 @@ impl SourceBuild {
         Ok(filename)
     }
 
+    /// Return the statically declared project name, if available.
+    pub fn project_name(&self) -> Option<&PackageName> {
+        self.project.as_ref().map(|project| &project.name)
+    }
+
+    /// Return the statically declared project version, if available.
+    pub fn project_version(&self) -> Option<&Version> {
+        self.project
+            .as_ref()
+            .and_then(|project| project.version.as_ref())
+    }
+
     /// Perform a PEP 517 build for a wheel or source distribution (sdist).
     async fn pep517_build(&self, output_dir: &Path) -> Result<String, Error> {
         // Lock the source tree, if necessary.
