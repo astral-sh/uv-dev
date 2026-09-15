@@ -108,13 +108,18 @@ impl CopyLocks {
     /// Acquires a lock on the parent directory before copying to prevent concurrent writes to the
     /// same directory from corrupting files.
     fn synchronized_copy(&self, from: &Path, to: &Path) -> io::Result<()> {
+        let parent = to.parent().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Copy target must have a parent",
+            )
+        })?;
+
         // Ensure we have a lock for the directory.
-        // TODO(zanieb): This unwrap was copied from `uv-install-wheel`; consider propagating the
-        // error instead of panicking if `to` has no parent.
         let dir_lock = {
             let mut locks_guard = self.dir_locks.lock().unwrap();
             locks_guard
-                .entry(to.parent().unwrap().to_path_buf())
+                .entry(parent.to_path_buf())
                 .or_insert_with(|| Arc::new(Mutex::new(())))
                 .clone()
         };
@@ -960,6 +965,29 @@ mod tests {
 
         assert_eq!(result, LinkMode::Copy);
         verify_test_tree(dst_dir.path());
+    }
+
+    #[test]
+    fn test_copy_parentless_target() {
+        let src_dir = test_tempdir();
+        let src = src_dir.path().join("file.txt");
+        fs_err::write(&src, "content").unwrap();
+
+        let locks = CopyLocks::default();
+        let options = LinkOptions::new(LinkMode::Copy).with_copy_locks(&locks);
+        let error = link_dir(&src, Path::new(""), &options).unwrap_err();
+
+        assert_matches!(
+            error,
+            LinkError::Copy { to, err }
+                if to.as_os_str().is_empty()
+                    && err.kind() == io::ErrorKind::InvalidInput
+                    && err.to_string() == "Copy target must have a parent"
+        );
+
+        let dst = src_dir.path().join("copy.txt");
+        locks.synchronized_copy(&src, &dst).unwrap();
+        assert_eq!(fs_err::read_to_string(dst).unwrap(), "content");
     }
 
     #[test]
