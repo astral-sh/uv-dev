@@ -1686,8 +1686,15 @@ fn parse_json_downloads(
                 }
             };
 
+            let sha256 = match entry.sha256 {
+                Some(sha256) if is_valid_sha256(&sha256) => Some(Cow::Owned(sha256)),
+                Some(sha256) => {
+                    debug!("Skipping entry {key}: Invalid SHA-256 digest '{sha256}'");
+                    return None;
+                }
+                None => None,
+            };
             let url = Cow::Owned(entry.url);
-            let sha256 = entry.sha256.map(Cow::Owned);
             let build = entry
                 .build
                 .map(|s| Box::leak(s.into_boxed_str()) as &'static str);
@@ -1706,6 +1713,10 @@ fn parse_json_downloads(
         })
         .sorted_by(|a, b| Ord::cmp(&b.key, &a.key))
         .collect()
+}
+
+fn is_valid_sha256(digest: &str) -> bool {
+    digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 impl Error {
@@ -1860,7 +1871,7 @@ async fn read_url(
 #[cfg(test)]
 mod tests {
     use std::assert_matches;
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
 
     use crate::PythonVariant;
     use crate::implementation::LenientImplementationName;
@@ -1868,6 +1879,53 @@ mod tests {
     use uv_platform::{Arch, Libc, Os, Platform};
 
     use super::*;
+
+    fn json_python_download(sha256: &str) -> JsonPythonDownload {
+        JsonPythonDownload {
+            name: "cpython".to_string(),
+            arch: JsonArch {
+                family: "x86_64".to_string(),
+                variant: None,
+            },
+            os: "linux".to_string(),
+            libc: "gnu".to_string(),
+            major: 3,
+            minor: 12,
+            patch: 0,
+            prerelease: None,
+            url: "https://example.com/cpython-3.12.0.tar.gz".to_string(),
+            sha256: Some(sha256.to_string()),
+            variant: None,
+            build: None,
+        }
+    }
+
+    #[test]
+    fn parse_json_downloads_validates_sha256() {
+        let invalid = [
+            "abc123".to_string(),
+            format!("{}é{}", "a".repeat(8), "a".repeat(54)),
+            format!("../{}", "a".repeat(61)),
+            format!("g{}", "a".repeat(63)),
+        ];
+        for sha256 in invalid {
+            let downloads = parse_json_downloads(HashMap::from([(
+                "cpython-3.12.0-linux-x86_64-gnu".to_string(),
+                json_python_download(&sha256),
+            )]));
+            assert!(downloads.is_empty(), "accepted invalid SHA-256: {sha256}");
+        }
+
+        let lowercase = "c3223d5924a0ed0ef5958a750377c362d0957587f896c0f6c635ae4b39e0f337";
+        for sha256 in [lowercase.to_string(), lowercase.to_ascii_uppercase()] {
+            let downloads = parse_json_downloads(HashMap::from([(
+                "cpython-3.12.0-linux-x86_64-gnu".to_string(),
+                json_python_download(&sha256),
+            )]));
+            assert_eq!(downloads.len(), 1);
+            assert_eq!(downloads[0].sha256.as_deref(), Some(sha256.as_str()));
+        }
+    }
 
     /// Parse a request with all of its fields.
     #[test]
