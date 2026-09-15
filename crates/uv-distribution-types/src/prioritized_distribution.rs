@@ -122,60 +122,38 @@ pub enum IncompatibleDist {
 
 impl IncompatibleDist {
     pub fn singular_message(&self) -> String {
-        match self {
-            Self::Wheel(incompatibility) => match incompatibility {
-                IncompatibleWheel::NoBinary => format!("has {self}"),
-                IncompatibleWheel::Tag(_) => format!("has {self}"),
-                IncompatibleWheel::Yanked(_) => format!("was {self}"),
-                IncompatibleWheel::ExcludeNewer(ts) => match ts {
-                    Some(_) => format!("was {self}"),
-                    None => format!("has {self}"),
-                },
-                IncompatibleWheel::RequiresPython(..) => format!("requires {self}"),
-                IncompatibleWheel::MissingPlatform(_) => format!("has {self}"),
-            },
-            Self::Source(incompatibility) => match incompatibility {
-                IncompatibleSource::NoBuild => format!("has {self}"),
-                IncompatibleSource::Yanked(_) => format!("was {self}"),
-                IncompatibleSource::ExcludeNewer(ts) => match ts {
-                    Some(_) => format!("was {self}"),
-                    None => format!("has {self}"),
-                },
-                IncompatibleSource::RequiresPython(..) => {
-                    format!("requires {self}")
-                }
-                IncompatibleSource::NotPep625Filename => format!("has {self}"),
-            },
-            Self::Unavailable => format!("has {self}"),
-        }
+        let (singular, _) = self.message_verbs();
+        format!("{singular} {self}")
     }
 
     pub fn plural_message(&self) -> String {
+        let (_, plural) = self.message_verbs();
+        format!("{plural} {self}")
+    }
+
+    /// Return the singular and plural verbs for this incompatibility.
+    fn message_verbs(&self) -> (&'static str, &'static str) {
         match self {
-            Self::Wheel(incompatibility) => match incompatibility {
-                IncompatibleWheel::NoBinary => format!("have {self}"),
-                IncompatibleWheel::Tag(_) => format!("have {self}"),
-                IncompatibleWheel::Yanked(_) => format!("were {self}"),
-                IncompatibleWheel::ExcludeNewer(ts) => match ts {
-                    Some(_) => format!("were {self}"),
-                    None => format!("have {self}"),
-                },
-                IncompatibleWheel::RequiresPython(..) => format!("require {self}"),
-                IncompatibleWheel::MissingPlatform(_) => format!("have {self}"),
-            },
-            Self::Source(incompatibility) => match incompatibility {
-                IncompatibleSource::NoBuild => format!("have {self}"),
-                IncompatibleSource::Yanked(_) => format!("were {self}"),
-                IncompatibleSource::ExcludeNewer(ts) => match ts {
-                    Some(_) => format!("were {self}"),
-                    None => format!("have {self}"),
-                },
-                IncompatibleSource::RequiresPython(..) => {
-                    format!("require {self}")
-                }
-                IncompatibleSource::NotPep625Filename => format!("have {self}"),
-            },
-            Self::Unavailable => format!("have {self}"),
+            Self::Wheel(
+                IncompatibleWheel::NoBinary
+                | IncompatibleWheel::Tag(_)
+                | IncompatibleWheel::ExcludeNewer(None)
+                | IncompatibleWheel::MissingPlatform(_),
+            )
+            | Self::Source(
+                IncompatibleSource::NoBuild
+                | IncompatibleSource::ExcludeNewer(None)
+                | IncompatibleSource::NotPep625Filename,
+            )
+            | Self::Unavailable => ("has", "have"),
+            Self::Wheel(
+                IncompatibleWheel::Yanked(_) | IncompatibleWheel::ExcludeNewer(Some(_)),
+            )
+            | Self::Source(
+                IncompatibleSource::Yanked(_) | IncompatibleSource::ExcludeNewer(Some(_)),
+            ) => ("was", "were"),
+            Self::Wheel(IncompatibleWheel::RequiresPython(..))
+            | Self::Source(IncompatibleSource::RequiresPython(..)) => ("requires", "require"),
         }
     }
 
