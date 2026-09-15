@@ -19,6 +19,12 @@ and a maintainer confirms that uv does not manage such environments automaticall
 workaround is to give each configuration a distinct `UV_PROJECT_ENVIRONMENT` path, as demonstrated
 by a maintainer in astral-sh/uv#9906.
 
+A maintainer has now asked how the project code is shared between the hardware environments. If
+each hardware environment has a distinct user home (and therefore a distinct uv cache) while the
+project checkout is shared, the `centralized-project-envs` preview feature may already isolate the
+physical project environments. Whether that applies cannot be determined until the reporter
+clarifies the cluster's home, cache, and project-filesystem layout.
+
 ## Draft response
 
 This is the same underlying mixed-environment use case discussed in astral-sh/uv#20060 and, more
@@ -34,6 +40,11 @@ before submitting jobs avoids changing them during job startup. Concurrent uv op
 protected by an environment lock, as documented by astral-sh/uv#2818, but separate paths are still
 needed because the two sync commands request different final package sets.
 
+Maintainer handoff note: this draft predates the storage-topology follow-up and should not be used
+unchanged. If the reporter confirms that each hardware environment has a separate home/cache, the
+centralized project environment preview may remove the need for explicit `.venv-cuda` and
+`.venv-rocm` paths.
+
 ## Classification
 
 This is a duplicate because its underlying need is already tracked closely: astral-sh/uv#20060
@@ -47,6 +58,20 @@ changes that environment. uv serializes concurrent installers with a file-based 
 but serialization cannot make one path retain two different desired package sets. Automatic named
 or dependency-set-specific project environments remain unsupported; a virtual environment also does
 not dynamically redirect installed packages based on GPU hardware.
+
+## Open investigation question
+
+The effectiveness of centralized project environments depends on the cluster's storage topology:
+
+- Are the home directory and uv cache shared by CUDA and ROCm nodes, or unique to each hardware
+  environment?
+- Is only the project checkout shared through a separate filesystem?
+
+If the home/cache roots are unique while the project path is shared, the preview feature suggested
+by the maintainer may produce separate physical environments despite using the same project path.
+If the cache is shared and the interpreter identity is also the same, centralized storage does not
+by itself distinguish CUDA from ROCm or selected extras, so explicit environment paths remain the
+applicable workaround.
 
 ## Related
 
@@ -79,5 +104,7 @@ and merged pull requests for concurrent installation and centralized environment
 
 astral-sh/uv#18844 and astral-sh/uv#11418 concern ROCm index resolution and incompatible wheel
 selection, not concurrent selection of two valid environments. The centralized storage work in
-astral-sh/uv#1495 and astral-sh/uv#18214 was also inspected: it still selects one environment per
-project and interpreter and does not key environments by GPU accelerator or selected extras.
+astral-sh/uv#1495 and astral-sh/uv#18214 does not key environments by GPU accelerator or selected
+extras. However, as the maintainer noted, separate home/cache roots for the different hardware
+environments would provide physical separation even when the shared project path and generated
+environment key are otherwise the same.
