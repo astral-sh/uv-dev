@@ -46,6 +46,7 @@ pub fn uninstall_wheel(
 
     // Uninstall the files, keeping track of any directories that are left empty.
     let mut visited = BTreeSet::new();
+    let mut removed_python_sources = HashSet::new();
     for entry in &record {
         let path = site_packages.join(&entry.path);
 
@@ -82,6 +83,9 @@ pub fn uninstall_wheel(
             Ok(()) => {
                 trace!("Removed file: {}", path.display());
                 file_count += 1;
+                if path.extension().is_some_and(|extension| extension == "py") {
+                    removed_python_sources.insert(normalize_path(&path));
+                }
                 if let Some(parent) = path.parent() {
                     visited.insert(normalize_path(parent));
                 }
@@ -116,9 +120,75 @@ pub fn uninstall_wheel(
                 break;
             }
 
-            // If the directory contains a `__pycache__` directory, always remove it. `__pycache__`
-            // may or may not be listed in the RECORD, but installers are expected to be smart
-            // enough to remove it either way.
+            // If the directory still contains files from another distribution, preserve its
+            // `__pycache__` directory too.
+            let read_dir = match fs_err::read_dir(path) {
+                Ok(read_dir) => read_dir,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => break,
+                Err(err) => return Err(err.into()),
+            };
+            let mut contains_other_files = false;
+            for entry in read_dir {
+                if entry?.file_name() != "__pycache__" {
+                    contains_other_files = true;
+                    break;
+                }
+            }
+            if contains_other_files {
+                // Remove any bytecode derived from Python sources that were removed, while
+                // preserving bytecode owned by another distribution in this directory.
+                let pycache = path.join("__pycache__");
+                match fs_err::symlink_metadata(&pycache) {
+                    Ok(metadata) if metadata.file_type().is_symlink() => break,
+                    Ok(_) => {}
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => break,
+                    Err(err) => return Err(err.into()),
+                }
+                let read_dir = match fs_err::read_dir(&pycache) {
+                    Ok(read_dir) => read_dir,
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => break,
+                    Err(err) => return Err(err.into()),
+                };
+                for entry in read_dir {
+                    let bytecode = entry?.path();
+                    if bytecode
+                        .extension()
+                        .is_none_or(|extension| extension != "pyc")
+                    {
+                        continue;
+                    }
+
+                    let Some(file_stem) = bytecode.file_stem() else {
+                        continue;
+                    };
+                    let mut source = PathBuf::from(file_stem);
+                    if source
+                        .extension()
+                        .and_then(|extension| extension.to_str())
+                        .is_some_and(|extension| extension.starts_with("opt-"))
+                    {
+                        source.set_extension("");
+                    }
+                    source.set_extension("py");
+
+                    if !removed_python_sources.contains(&path.join(source)) {
+                        continue;
+                    }
+
+                    match fs_err::remove_file(&bytecode) {
+                        Ok(()) => {
+                            trace!("Removed file: {}", bytecode.display());
+                            file_count += 1;
+                        }
+                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(err) => return Err(err.into()),
+                    }
+                }
+                break;
+            }
+
+            // `__pycache__` may or may not be listed in RECORD. Remove it once the containing
+            // package directory is otherwise empty.
             let pycache = path.join("__pycache__");
             match fs_err::remove_dir_all(&pycache) {
                 Ok(()) => {
@@ -127,19 +197,6 @@ pub fn uninstall_wheel(
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
                 Err(err) => return Err(err.into()),
-            }
-
-            // Try to read from the directory. If it doesn't exist, assume we deleted it in a
-            // previous iteration.
-            let mut read_dir = match fs_err::read_dir(path) {
-                Ok(read_dir) => read_dir,
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => break,
-                Err(err) => return Err(err.into()),
-            };
-
-            // If the directory is not empty, we're done.
-            if read_dir.next().is_some() {
-                break;
             }
 
             fs_err::remove_dir(path)?;
