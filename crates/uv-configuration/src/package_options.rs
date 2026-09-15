@@ -298,7 +298,7 @@ impl Upgrade {
         };
 
         // For `constraints`: always merge the constraints of `self` and `other`.
-        let mut combined_constraints = self.constraints.clone();
+        let mut combined_constraints = self.constraints;
         for (package, requirements) in other.constraints {
             combined_constraints
                 .entry(package)
