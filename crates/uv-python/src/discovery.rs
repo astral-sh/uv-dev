@@ -2464,7 +2464,7 @@ impl PythonRequest {
         }
     }
 
-    /// Check if an interpreter satisfies the request and the catalog's build selection policy.
+    /// Check if an interpreter satisfies the request, build revision, and catalog selection policy.
     pub async fn satisfied_with_catalog(
         &self,
         interpreter: &Interpreter,
@@ -2490,6 +2490,24 @@ impl PythonRequest {
         let Some(key) = managed_key else {
             return Ok(true);
         };
+        // Only explicitly requested provider tags opt into build revision selection.
+        if request
+            .version()
+            .and_then(VersionRequest::variants)
+            .is_some_and(|variants| {
+                variants
+                    .build()
+                    .is_some_and(|variant| variant.provider_tags().next().is_some())
+            })
+            && let Some(build) = python_build_variant_version_from_env().map_err(Error::from)?
+            && ManagedPythonInstallation::try_from_interpreter(interpreter)
+                .is_none_or(|installation| installation.build() != Some(build.as_str()))
+        {
+            debug!(
+                "The managed interpreter does not satisfy the requested build revision `{build}`"
+            );
+            return Ok(false);
+        }
         let download_list = ManagedPythonDownloadList::cached_or_new(
             client_builder,
             cache,
