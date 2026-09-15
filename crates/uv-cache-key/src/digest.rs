@@ -49,7 +49,7 @@ pub fn cache_name(name: &str, max_len: Option<usize>) -> Option<Cow<'_, str>> {
         .bytes()
         .all(|char| matches!(char, b'0'..=b'9' | b'a'..=b'f'))
     {
-        return if name.is_empty() {
+        return if name.is_empty() || limit == 0 {
             None
         } else {
             Some(Cow::Borrowed(name.get(..limit).unwrap_or(name)))
@@ -94,6 +94,25 @@ mod tests {
         assert_eq!(cache_name("foo-bar_baz_", None), Some("foo-bar-baz".into()));
         assert_eq!(cache_name("foo-_bar_baz", None), Some("foo-bar-baz".into()));
         assert_eq!(cache_name("_+-_", None), None);
+    }
+
+    #[test]
+    fn test_cache_name_zero_limit() {
+        for name in [
+            "",
+            "a",
+            "abcdef0123456789",
+            "g",
+            "A",
+            "foo-bar",
+            "é",
+            "🦀",
+            "_",
+        ] {
+            assert_eq!(cache_name(name, Some(0)), None, "{name:?}");
+        }
+        assert_eq!(cache_name("a", Some(1)).as_deref(), Some("a"));
+        assert_eq!(cache_name("g", Some(1)).as_deref(), Some("g"));
     }
 
     #[test]
