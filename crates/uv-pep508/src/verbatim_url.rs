@@ -316,7 +316,7 @@ impl VerbatimUrl {
     }
 
     /// Return the underlying [`DisplaySafeUrl`].
-    pub fn raw(&self) -> &DisplaySafeUrl {
+    pub fn inner(&self) -> &DisplaySafeUrl {
         &self.url
     }
 
