@@ -4386,7 +4386,8 @@ impl Package {
                     ext,
                     index,
                     wheels: vec![],
-                    size_is_authoritative: true,
+                    // `uv.lock` copies registry sizes without downloading every archive.
+                    size_is_authoritative: false,
                 };
                 uv_distribution_types::SourceDist::Registry(reg_dist)
             }
@@ -4462,7 +4463,7 @@ impl Package {
                     ext,
                     index,
                     wheels: vec![],
-                    size_is_authoritative: true,
+                    size_is_authoritative: false,
                 };
                 uv_distribution_types::SourceDist::Registry(reg_dist)
             }
@@ -6233,7 +6234,8 @@ impl Wheel {
                     filename,
                     file,
                     index,
-                    size_is_authoritative: true,
+                    // `uv.lock` copies registry sizes without downloading every archive.
+                    size_is_authoritative: false,
                 })
             }
             RegistrySource::Path(index_path) => {
@@ -6277,7 +6279,7 @@ impl Wheel {
                     filename,
                     file,
                     index,
-                    size_is_authoritative: true,
+                    size_is_authoritative: false,
                 })
             }
         }

@@ -46,6 +46,7 @@ use crate::error::PythonVersion;
 use crate::extracted_wheel::{ExtractedWheel, HashedWheel, WheelExtractor};
 use crate::hash::http_hash_algorithms;
 use crate::metadata::{ArchiveMetadata, Metadata};
+use crate::size::ArchiveSizePolicy;
 use crate::source::SourceDistributionBuilder;
 use crate::{Error, LocalWheel, Reporter, RequiresDist};
 
@@ -720,14 +721,8 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         dist: &BuiltDist,
         hashes: ArchiveHashPolicy<'_>,
     ) -> Result<Archive, Error> {
-        // Sometimes we can promote the size hint to a trusted effective size.
-        let expected_size = match dist {
-            BuiltDist::Registry(dist) if dist.best_wheel().size_is_authoritative => {
-                progress_size_hint
-            }
-            BuiltDist::DirectUrl(_) => progress_size_hint,
-            _ => None,
-        };
+        let size_policy = ArchiveSizePolicy::for_built(dist);
+        let expected_size = size_policy.required();
 
         // Acquire an advisory lock, to guard against concurrent writes.
         let _lock = Self::lock_wheel(wheel_entry, filename).await?;
@@ -779,15 +774,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 // Exhaust the reader to compute the hashes.
                 hasher.finish().await.map_err(Error::HashExhaustion)?;
                 let actual_size = hasher.bytes_read();
-                if let Some(expected) = expected_size
-                    && actual_size != expected
-                {
-                    return Err(Error::MismatchedSize {
-                        distribution: dist.to_string(),
-                        expected,
-                        actual: actual_size,
-                    });
-                }
+                size_policy.check(dist, actual_size)?;
 
                 // Before we make the wheel accessible by persisting it, ensure that the RECORD is
                 // valid.
@@ -851,14 +838,8 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 CachedClientError::Client(err) => Error::Client(err),
             })?;
 
-        if let (Some(expected), Some(actual)) = (expected_size, archive.size)
-            && expected != actual
-        {
-            return Err(Error::MismatchedSize {
-                distribution: dist.to_string(),
-                expected,
-                actual,
-            });
+        if let Some(actual) = archive.size {
+            size_policy.check(dist, actual)?;
         }
 
         // If the archive is missing the required hashes or size, or has since been removed, force a refresh.
@@ -907,14 +888,8 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         dist: &BuiltDist,
         hashes: ArchiveHashPolicy<'_>,
     ) -> Result<Archive, Error> {
-        // Sometimes we can promote the size hint to a trusted effective size.
-        let expected_size = match dist {
-            BuiltDist::Registry(dist) if dist.best_wheel().size_is_authoritative => {
-                progress_size_hint
-            }
-            BuiltDist::DirectUrl(_) => progress_size_hint,
-            _ => None,
-        };
+        let size_policy = ArchiveSizePolicy::for_built(dist);
+        let expected_size = size_policy.required();
 
         // Acquire an advisory lock, to guard against concurrent writes.
         let _lock = Self::lock_wheel(wheel_entry, filename).await?;
@@ -931,7 +906,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 retry_state,
                 filename,
                 progress_size_hint,
-                expected_size,
+                size_policy,
                 wheel_entry,
                 dist,
                 hashes,
@@ -979,14 +954,8 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 CachedClientError::Client(err) => Error::Client(err),
             })?;
 
-        if let (Some(expected), Some(actual)) = (expected_size, archive.size)
-            && expected != actual
-        {
-            return Err(Error::MismatchedSize {
-                distribution: dist.to_string(),
-                expected,
-                actual,
-            });
+        if let Some(actual) = archive.size {
+            size_policy.check(dist, actual)?;
         }
 
         // If the archive is missing the required hashes or size, or has since been removed, force a refresh.
@@ -1034,11 +1003,12 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         retry_state: &mut RetryState,
         filename: &WheelFilename,
         progress_size_hint: Option<u64>,
-        expected_size: Option<u64>,
+        size_policy: ArchiveSizePolicy,
         wheel_entry: &CacheEntry,
         dist: &BuiltDist,
         hashes: ArchiveHashPolicy<'_>,
     ) -> Result<Archive, Error> {
+        let expected_size = size_policy.required();
         let progress_size_hint = progress_size_hint.or_else(|| content_length(&response));
         let mut download_size = content_length(&response).or(expected_size);
 
@@ -1265,15 +1235,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
         // We've left the resumption loop.
         // Sanity check: we should have written as many bytes as we expected.
-        if let Some(expected) = expected_size
-            && bytes_retrieved != expected
-        {
-            return Err(Error::MismatchedSize {
-                distribution: dist.to_string(),
-                expected,
-                actual: bytes_retrieved,
-            });
-        }
+        size_policy.check(dist, bytes_retrieved)?;
 
         // Unzip the wheel to a temporary directory.
         let extractor = WheelExtractor::new(
@@ -1325,27 +1287,10 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         // Acquire an advisory lock, to guard against concurrent writes.
         let _lock = Self::lock_wheel(&wheel_entry, filename).await?;
 
-        let expected_size = match dist {
-            BuiltDist::Registry(dist) => {
-                let wheel = dist.best_wheel();
-                wheel
-                    .size_is_authoritative
-                    .then_some(wheel.file.size)
-                    .flatten()
-            }
-            BuiltDist::DirectUrl(dist) => dist.size,
-            BuiltDist::Path(_) | BuiltDist::GitPath(_) => None,
-        };
+        let size_policy = ArchiveSizePolicy::for_built(dist);
+        let expected_size = size_policy.required();
         let size = fs_err::metadata(path).map_err(Error::CacheRead)?.len();
-        if let Some(expected) = expected_size
-            && size != expected
-        {
-            return Err(Error::MismatchedSize {
-                distribution: dist.to_string(),
-                expected,
-                actual: size,
-            });
-        }
+        size_policy.check(dist, size)?;
 
         // Determine the last-modified time of the wheel.
         let modified = Timestamp::from_path(path).map_err(Error::CacheRead)?;
@@ -1430,15 +1375,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             hasher.finish().await.map_err(Error::HashExhaustion)?;
 
             let size = hasher.bytes_read();
-            if let Some(expected) = expected_size
-                && size != expected
-            {
-                return Err(Error::MismatchedSize {
-                    distribution: dist.to_string(),
-                    expected,
-                    actual: size,
-                });
-            }
+            size_policy.check(dist, size)?;
 
             let hashes = hashers.into_iter().map(HashDigest::from).collect();
 

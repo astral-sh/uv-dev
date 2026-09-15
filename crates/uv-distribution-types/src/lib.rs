@@ -234,7 +234,7 @@ pub struct RegistryBuiltWheel {
     pub filename: WheelFilename,
     pub file: Box<File>,
     pub index: IndexUrl,
-    /// Whether the recorded size must be validated when the wheel is downloaded.
+    /// Whether a size mismatch is an error instead of a warning.
     pub size_is_authoritative: bool,
 }
 
@@ -321,7 +321,7 @@ pub struct RegistrySourceDist {
     /// skip emitting wheels to the lockfile just because the host generating
     /// the lockfile didn't have any compatible wheels available.
     pub wheels: Vec<RegistryBuiltWheel>,
-    /// Whether the recorded size must be validated when the source distribution is downloaded.
+    /// Whether a size mismatch is an error instead of a warning.
     pub size_is_authoritative: bool,
 }
 
