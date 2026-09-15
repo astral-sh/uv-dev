@@ -1,0 +1,21 @@
+name = "pinned-root-incompatible-with-root-version"
+description = "A terminal conflict between two pinned requirements does not treat the root as an incompatible package."
+
+[root]
+requires = ["b==1.0.0", "a==2.0.0"]
+
+[expected]
+satisfiable = false
+
+[packages.a.versions."1.0.0"]
+requires = ["b>=1.0.0"]
+
+[packages.a.versions."2.0.0"]
+requires = ["b>=2.0.0"]
+
+[packages.b.versions."1.0.0"]
+
+[packages.b.versions."2.0.0"]
+
+[testgen]
+kind = "compile"
