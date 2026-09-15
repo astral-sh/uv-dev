@@ -1129,6 +1129,11 @@ impl EnvVars {
     #[attr_added_in("0.4.18")]
     pub const PAGER: &'static str = "PAGER";
 
+    /// Options for `less`. uv preserves this value when set; otherwise, it may provide a prompt
+    /// identifying the requested help page.
+    #[attr_added_in("next release")]
+    pub const LESS: &'static str = "LESS";
+
     /// Used to detect when running inside a Jupyter notebook.
     #[attr_added_in("0.2.6")]
     pub const JPY_SESSION_NAME: &'static str = "JPY_SESSION_NAME";
