@@ -886,6 +886,8 @@ pub struct SelfNamespace {
 
 #[derive(Subcommand)]
 pub enum SelfCommand {
+    /// Install uv and its companion executables.
+    Install(SelfInstallArgs),
     /// Update uv.
     Update(SelfUpdateArgs),
     /// Display uv's version
@@ -896,6 +898,21 @@ pub enum SelfCommand {
         #[arg(long, value_enum, default_value = "text")]
         output_format: VersionFormat,
     },
+}
+
+#[derive(Args, Debug)]
+pub struct SelfInstallArgs {
+    /// The directory in which to install uv. Defaults to the user executable directory.
+    #[arg(long, env = EnvVars::UV_INSTALL_DIR, value_hint = ValueHint::DirPath)]
+    pub install_dir: Option<PathBuf>,
+
+    /// Install without writing a receipt or changing shell configuration.
+    #[arg(long, env = EnvVars::UV_UNMANAGED_INSTALL, value_hint = ValueHint::DirPath)]
+    pub unmanaged: Option<PathBuf>,
+
+    /// Do not add the installation directory to PATH.
+    #[arg(long, env = EnvVars::UV_NO_MODIFY_PATH)]
+    pub no_modify_path: bool,
 }
 
 #[derive(Args, Debug)]
