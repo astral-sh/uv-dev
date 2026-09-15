@@ -2,7 +2,7 @@
 
 Issue: astral-sh/uv#21602
 
-Classification: duplicate of astral-sh/uv#10428; external AV false positive with no repository-side fix identified
+Classification: duplicate of astral-sh/uv#10428; umbrella AV/EDR tracking in astral-sh/uv#20792
 
 ## Summary
 
@@ -46,7 +46,9 @@ Defender's heuristic, but does not explain the transformation.
 The maintainer considers this an antivirus false positive and does not see a repository-side action.
 The recommended escalation is through a Microsoft vendor relationship, if available. uv binaries
 are now code-signed, but that does not help this case because Defender is acting on the PowerShell
-installer command/script rather than an unsigned uv binary.
+installer command/script rather than an unsigned uv binary. The repository's general Windows
+AV/EDR tracker, astral-sh/uv#20792, asks affected organizations to obtain and share a vendor support
+ticket ID so reports against the same product can be cross-referenced.
 
 The final mirror response currently has no `Content-Type` header. That is a useful diagnostic lead,
 not a confirmed cause: PowerShell Core 6.0.0 and 7.6.5 both materialized the same live response as
@@ -170,7 +172,8 @@ as the reported PowerShell parser errors, not whether endpoint security acted on
 maintainer identified the event as an AV false positive, stated that there is little the project can
 do directly, and suggested reporting the product bug to Microsoft through any available vendor
 relationship. They also clarified that recent uv binary code signing does not cover the installer
-script and therefore does not address this detection.
+script and therefore does not address this detection. The maintainer identified astral-sh/uv#20792
+as the tracker for the broader AV/EDR vendor-misbehavior class.
 
 ## Classification
 
@@ -188,7 +191,8 @@ separate tracker unless it persists without a corresponding Defender interventio
 The maintainer's disposition is that this is external antivirus behavior without an identified uv
 change that would resolve it. Code signing the uv executables does not change the trust treatment of
 the PowerShell installer script. Further action belongs in the canonical astral-sh/uv#10428
-discussion or with Microsoft rather than in a separate PowerShell compatibility issue.
+installer discussion, the broader astral-sh/uv#20792 AV/EDR tracker, or with Microsoft rather than
+in a separate PowerShell compatibility issue.
 
 ## Related
 
@@ -197,6 +201,9 @@ discussion or with Microsoft rather than in a separate PowerShell compatibility 
   `Invoke-RestMethod | Invoke-Expression` execution pattern and records a download-to-file
   workaround. astral-sh/uv#21602 adds a Windows Defender `#CleanNotToMoac` detection and unusual
   empty-command/isolated-comment errors.
+- astral-sh/uv#20792 (open issue), “Windows antivirus/EDR issues”: the maintainer-designated umbrella
+  tracker for Windows AV/EDR interference. It asks users to report the problem to their vendor and
+  share a confirmed support ticket ID; it is broader than this installer-specific Defender failure.
 - astral-sh/uv#5460 (open issue), “uv self update: failed to execute installer (status: exit code:
   1) on Windows”: an adjacent Windows PowerShell/cargo-dist installer compatibility tracker. Its
   confirmed failure is execution policy when self-update launches a saved script in Windows
@@ -224,6 +231,8 @@ discussion or with Microsoft rather than in a separate PowerShell compatibility 
   failing command, with status `Removed` and a potentially unwanted behavior description.
 - The maintainer classifies the detection as an AV false positive with no clear repository-side
   remedy and notes that uv binary code signing does not apply to the installer script.
+- The maintainer identifies astral-sh/uv#20792 as tracking the general class of AV/EDR vendor
+  interference; that tracker requests vendor support ticket IDs for cross-reference.
 - The claim that Defender truncates or rewrites the command is unconfirmed; the screenshot records
   the intervention but not how it leads to the parser errors.
 - The reporter's locally saved, comment-removed copy succeeded, but that experiment changed both
