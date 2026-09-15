@@ -479,8 +479,8 @@ fn lock_exclude_newer_package_relative() -> Result<()> {
     Ok(())
 }
 
-/// Local dates in persistent configuration warn because their interpretation depends on the
-/// system timezone. The warning suggests an equivalent timestamp that can be used on other systems.
+/// Local dates are rejected in persistent configuration because their interpretation depends on
+/// the system timezone.
 #[test]
 fn lock_exclude_newer_package_local_date_pyproject() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -504,27 +504,15 @@ fn lock_exclude_newer_package_local_date_pyproject() -> Result<()> {
         .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: `2024-06-15` is a local date without a timezone. `exclude-newer` values in persistent configuration should use a full timestamp with a timezone (use `2024-06-16T04:00:00Z` to retain the current cutoff); local dates will be rejected in a future release
+    warning: Failed to parse `pyproject.toml` during settings discovery:
+      TOML parse error at line 9, column 47
+        |
+      9 |         exclude-newer-package = { iniconfig = "2024-06-15" }
+        |                                               ^^^^^^^^^^^^
+      `2024-06-15` is a local date, but a full timestamp with a timezone is required in persistent configuration (use `2024-06-16T04:00:00Z` for the equivalent cutoff on this system)
+
     Resolved 2 packages in [TIME]
     "#);
-
-    let lock = context.read("uv.lock");
-    pyproject_toml.write_str(
-        &context
-            .read("pyproject.toml")
-            .replace("2024-06-15", "2024-06-16T04:00:00Z"),
-    )?;
-
-    uv_snapshot!(context.filters(), context
-        .lock()
-        .env("TZ", "Asia/Tokyo")
-        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
-        .arg("--locked"), @r#"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    "#);
-    assert_eq!(context.read("uv.lock"), lock);
 
     Ok(())
 }
