@@ -435,7 +435,7 @@ fn narrow_to_known(set: &Range<Version>, versions: &[Version]) -> Range<Version>
     }
 }
 
-/// A wrapper around [`pubgrub::error::NoSolutionError`] that displays a resolution failure report.
+/// A wrapper around [`pubgrub::NoSolutionError`] that displays a resolution failure report.
 pub struct NoSolutionError {
     error: StackSafeErrorTree,
     index: InMemoryIndex,
@@ -1351,7 +1351,7 @@ fn is_workspace_member(
 }
 
 /// Given a [`DerivationTree`], collapse any `NoVersion` incompatibilities for workspace members
-/// to avoid saying things like "only <workspace-member>==0.1.0 is available".
+/// to avoid saying things like `only <workspace-member>==0.1.0 is available`.
 fn collapse_no_versions_of_workspace_members(
     tree: ErrorTree,
     workspace_members: &BTreeSet<PackageName>,

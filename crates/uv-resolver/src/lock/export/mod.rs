@@ -420,9 +420,10 @@ impl Reachable<MarkerTree> for Edge<'_> {
 /// Determine the markers under which a package is reachable in the dependency tree, taking into
 /// account conflicts.
 ///
-/// This method is structurally similar to [`marker_reachability`], but it _also_ attempts to resolve
-/// conflict markers. Specifically, in addition to tracking the reachability marker for each node,
-/// we also track (for each node) the conditions under which each conflict item is `true`. Then,
+/// This method is structurally similar to [`crate::graph_ops::marker_reachability`], but it _also_
+/// attempts to resolve conflict markers. Specifically, in addition to tracking the reachability
+/// marker for each node, we also track (for each node) the conditions under which each conflict item
+/// is `true`. Then,
 /// when evaluating the marker for the node, we inline the conflict marker conditions, thus removing
 /// all conflict items from the marker expression.
 fn conflict_marker_reachability<'lock>(
