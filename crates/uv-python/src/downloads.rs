@@ -584,6 +584,10 @@ impl PythonDownloadRequest {
             }
             if let Some(variant) = version.variant()
                 && variant != key.variant
+                && !matches!(
+                    (variant, key.variant),
+                    (PythonVariant::Gil, PythonVariant::Default)
+                )
             {
                 return false;
             }
@@ -1868,6 +1872,19 @@ mod tests {
     use uv_platform::{Arch, Libc, Os, Platform};
 
     use super::*;
+
+    #[test]
+    fn gil_request_selects_default_python_download() {
+        let request = PythonDownloadRequest::from_str("cpython-3.14+gil-linux-x86_64-gnu")
+            .expect("GIL request should parse");
+        let downloads = ManagedPythonDownloadList::new_only_embedded()
+            .expect("embedded download metadata should load");
+
+        let download = downloads
+            .find(&request)
+            .expect("GIL request should select a download");
+        assert_eq!(download.key().variant, PythonVariant::Default);
+    }
 
     /// Parse a request with all of its fields.
     #[test]
