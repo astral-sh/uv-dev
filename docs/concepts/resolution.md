@@ -267,6 +267,11 @@ direct and indirect (transitive). Alternatively, `--resolution lowest-direct` wi
 compatible versions for all direct dependencies, while using the latest compatible versions for all
 other dependencies. uv will always use the latest versions for build dependencies.
 
+For `lowest-direct`, uv considers [local source trees](./projects/dependencies.md#path), including
+editable requirements, to be first-party and treats their declared dependencies as direct. The same
+rule applies when one local source tree depends on another. Dependencies declared by registry
+packages or wheel files remain transitive unless they are also direct requirements.
+
 For example, given the following `requirements.in` file:
 
 ```requirements title="requirements.in"
