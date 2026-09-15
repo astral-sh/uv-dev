@@ -6,68 +6,68 @@ Classification: bug
 
 ## Summary
 
-uv 0.12.14 fails to install ordinary wheels when `uv pip install` receives `--target=.` or
-`--target=./`. The reported annotated-types reproduction succeeds with 0.12.13, and 0.12.14 also
-succeeds when the same directory is expressed as an absolute path or when a non-dot relative target
-is used. The failure occurs after preparation with `The wheel is invalid: Wheel directory entry
-escapes its destination` on a normal wheel directory such as the `.dist-info` directory.
-
-No existing issue or pull request tracks this exact literal-dot target regression. The closest
-evidence is the merged change that introduced destination validation, astral-sh/uv#21569, and the
-separate 0.12.14 symlink-destination regression in astral-sh/uv#21692.
-
-## Draft response
-
-Thanks for the reproducer. This is an unintended regression in 0.12.14. `--target=.` remains a
-literal relative root, and the destination validation added by astral-sh/uv#21569 consequently
-rejects normal wheel directories beneath it. The equivalent absolute target works, so
-`--target="$PWD"` is a workaround. We should normalize the target path before wheel validation and
-add regression coverage for the dot forms.
+The reported literal-dot target regression is reproducible. On Linux, uv 0.12.14 fails to install
+`annotated-types==0.8.0` with `uv pip install --target=.` and reports that the wheel's normal
+`.dist-info` directory escapes its destination. The same command succeeds with uv 0.12.13, and uv
+0.12.14 succeeds when the target is a non-dot relative path or an absolute path. Python 3.12.3 is
+enough to reproduce the report, so the reported Python 3.14 is not required.
 
 ## Classification
 
-This is a bug rather than an enhancement or question. The command worked in 0.12.13, the target
-directory itself is valid, and equivalent spellings of the same destination still work in 0.12.14.
-Repository source confirms the correctness problem: `uv_python::Target` stores the supplied
-`PathBuf` unchanged and uses it as the wheel scheme root. The validation added by
-astral-sh/uv#21569 calls `normalize_path_under` for each wheel directory. That helper normalizes a
-root of `.` to an empty path and explicitly rejects an empty root, so a normal child such as a
-wheel's `.dist-info` directory is reported as escaping. This mechanism matches both the exact error
-and the literal-dot-only trigger.
+This is a bug: a valid command and wheel that succeeded in uv 0.12.13 fails in uv 0.12.14, while
+equivalent spellings of the destination continue to work in 0.12.14.
 
-This is not a duplicate. No open issue or pull request was found for the same `--target=.` failure,
-and there is no prior closed fix whose regression is being tracked. astral-sh/uv#21692 shares the
-introducing validation but exercises a different branch: it rejects a real pre-existing symlink in
-an installation scheme rather than mishandling the lexical dot root.
+The release boundary is consistent with astral-sh/uv#21569, which merged on 2026-09-10 before uv
+0.12.14 and added the destination validation that emits the observed error. The current source
+passes the target path through `uv_python::Target` without making it absolute; its wheel validation
+then uses `normalize_path_under`, whose tests explicitly reject a root of `.`. This is a
+source-supported explanation consistent with the observed literal-dot-only failure, but the
+reproduction itself establishes the regression independently of that explanation.
+
+## Reproduction
+
+Outcome: reproducible.
+
+Environment:
+
+- Ubuntu Linux x86_64 (kernel 6.17.0-1022-azure)
+- uv 0.12.14 (`x86_64-unknown-linux-gnu`) from `PATH`
+- CPython 3.12.3 at `/usr/bin/python3`
+
+From a fresh temporary directory, with the cache also under `/tmp`:
+
+```console
+$ uv pip install --python python3 --system --no-compile --no-cache --target=. annotated-types==0.8.0
+Using CPython 3.12.3 interpreter at: /usr/bin/python3
+Resolved 1 package in 61ms
+Prepared 1 package in 2ms
+error: Failed to install: annotated_types-0.8.0-py3-none-any.whl (annotated-types==0.8.0)
+  cause: The wheel is invalid: Wheel directory entry escapes its destination: annotated_types-0.8.0.dist-info
+```
+
+The command exited with status 2. Targeted comparison runs produced:
+
+| uv version | target | Result |
+| --- | --- | --- |
+| 0.12.14 | `.` | Exit 2 with the reported invalid-wheel error |
+| 0.12.14 | `packages` | Exit 0; installed `annotated-types==0.8.0` |
+| 0.12.14 | absolute temporary-directory path | Exit 0; installed `annotated-types==0.8.0` |
+| 0.12.13 | `.` | Exit 0; installed `annotated-types==0.8.0` |
+
+Existing integration coverage in `crates/uv/tests/pip_install/pip_install.rs` includes
+`compile_bytecode_for_relative_install_root`, which verifies a non-dot relative target (`target`),
+and the astral-sh/uv#21569 symlink-rejection tests such as
+`reject_symlinked_wheel_package_directory`. None of the target tests inspected passes `.` or `./`
+as the installation target, so they do not cover this regression.
+
+An absolute target such as `--target="$PWD"` is an observed workaround on uv 0.12.14.
 
 ## Related
 
 - astral-sh/uv#21569 — “Reject symlinked wheel installation destinations” (merged pull request).
-  This added `ValidatedWheelDestination` and the exact `Wheel directory entry escapes its
-  destination` error path. It merged before the 0.12.14 release and directly explains why the
-  behavior changed from 0.12.13. It is the introducing change, not a fix created in response to this
-  issue.
-- astral-sh/uv#21692 — “0.12.14: `uv pip install --system` fails in official `python:*` Docker
-  images — \"Cannot install into symlinked directory: /usr/local/man\"” (open issue). This is a
-  sibling regression caused by astral-sh/uv#21569. It has the same release boundary and wheel
-  destination-validation subsystem, but its trigger is a genuine `/usr/local/man` symlink and its
-  error is `Cannot install into symlinked directory`, so it should remain a separate report.
-
-## Supporting evidence
-
-- Literal searches covered the complete error, `escapes its destination`, `--target=.`,
-  `--target=./`, `The wheel is invalid`, `directory entry`, and the reported 0.12.14 release.
-- Conceptual searches covered relative targets, current-working-directory targets, wheel
-  destination traversal, symlinked installation roots, invalid wheel directories, and normalized
-  path handling across open and closed issues plus open, closed, and merged pull requests.
-- Fix-oriented searches covered recent merged pull requests and 0.12.14 destination-validation
-  changes. No existing fix or pull request for astral-sh/uv#21694 was found.
-- astral-sh/uv#21644 was inspected because it also rejects a directory entry, but it concerns ZIP
-  extraction of a DEFLATE-compressed empty directory with a data descriptor in 0.12.13, not wheel
-  installation destination validation.
-- astral-sh/uv#9656 was inspected because it reports an invalid-wheel error for a directory, but it
-  concerns a package placing a directory under `.data/scripts`; maintainers concluded that wheel
-  layout was invalid. It does not depend on `--target=.` or the 0.12.14 validation change.
-- astral-sh/uv#21255 and astral-sh/uv#5631 were also inspected. The former concerns console-script
-  placement through a virtual-environment `lib` symlink, while the latter concerns editable
-  workspace members under `--target`; neither matches this error or trigger.
+  It added `ValidatedWheelDestination` and the exact `Wheel directory entry escapes its
+  destination` error path before the 0.12.14 release. It is the introducing change indicated by
+  the release boundary and source, not a fix created in response to this issue.
+- astral-sh/uv#21692 — a sibling uv 0.12.14 regression in the same destination-validation area.
+  Its trigger is a pre-existing `/usr/local/man` symlink and its error is `Cannot install into
+  symlinked directory`, so it is distinct from the literal-dot target failure.

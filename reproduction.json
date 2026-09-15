@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with uv 0.12.14 from PATH and CPython 3.12.3, running `uv pip install --python python3 --system --no-compile --no-cache --target=. annotated-types==0.8.0` from a fresh temporary directory exited 2 with the reported `Wheel directory entry escapes its destination: annotated_types-0.8.0.dist-info` error. The same literal-dot command succeeded with uv 0.12.13. With uv 0.12.14, both `--target=packages` and an absolute temporary-directory target succeeded. Thus Python 3.14 is not required to reproduce the regression."
+}
