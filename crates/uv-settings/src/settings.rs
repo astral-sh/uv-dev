@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use uv_cache_info::CacheKey;
 use uv_configuration::{
-    BuildIsolation, ExcludeDependency, IndexStrategy, KeyringProviderType, PackageNameSpecifier,
-    ProxyUrl, Reinstall, RequiredVersion, TargetTriple, TrustedHost, TrustedPublishing, Upgrade,
+    BuildIsolation, BuildPolicy, BuildPolicyPackage, ExcludeDependency, IndexStrategy,
+    KeyringProviderType, PackageNameSpecifier, ProxyUrl, Reinstall, RequiredVersion, TargetTriple,
+    TrustedHost, TrustedPublishing, Upgrade,
 };
 use uv_distribution_types::{
     ConfigSettings, ExtraBuildVariables, Index, IndexLocations, IndexUrl, IndexUrlError, Origin,
@@ -657,6 +658,8 @@ pub struct ResolverOptions {
     pub resolution: Option<ResolutionMode>,
     pub prerelease: Option<PrereleaseMode>,
     pub prerelease_package: Option<PrereleasePackage>,
+    pub build_policy: Option<BuildPolicy>,
+    pub build_policy_package: Option<BuildPolicyPackage>,
     pub fork_strategy: Option<ForkStrategy>,
     pub dependency_metadata: Option<Vec<StaticMetadata>>,
     pub config_settings: Option<ConfigSettings>,
@@ -695,6 +698,8 @@ pub struct ResolverInstallerOptions {
     pub resolution: Option<ResolutionMode>,
     pub prerelease: Option<PrereleaseMode>,
     pub prerelease_package: Option<PrereleasePackage>,
+    pub build_policy: Option<BuildPolicy>,
+    pub build_policy_package: Option<BuildPolicyPackage>,
     pub fork_strategy: Option<ForkStrategy>,
     pub dependency_metadata: Option<Vec<StaticMetadata>>,
     pub config_settings: Option<ConfigSettings>,
@@ -738,6 +743,8 @@ impl From<ResolverInstallerSchema> for ResolverInstallerOptions {
             resolution,
             prerelease,
             prerelease_package,
+            build_policy,
+            build_policy_package,
             fork_strategy,
             dependency_metadata,
             config_settings,
@@ -775,6 +782,8 @@ impl From<ResolverInstallerSchema> for ResolverInstallerOptions {
             resolution,
             prerelease,
             prerelease_package,
+            build_policy,
+            build_policy_package,
             fork_strategy,
             dependency_metadata,
             config_settings,
@@ -997,6 +1006,37 @@ pub struct ResolverInstallerSchema {
         "#
     )]
     pub prerelease_package: Option<PrereleasePackage>,
+    /// Control whether packages may be built from source.
+    ///
+    /// The policy also applies to build dependencies. Existing [`no-build`](#no-build) and
+    /// [`no-binary`](#no-binary) restrictions take precedence over build policies.
+    ///
+    /// See the [resolution documentation](../concepts/resolution.md#source-build-policies) for details.
+    ///
+    /// This option is in preview and may change in any future release.
+    #[option(
+        default = "\"allow\"",
+        value_type = "str",
+        example = r#"
+            build-policy = "disallow"
+        "#,
+        possible_values = true
+    )]
+    pub build_policy: Option<BuildPolicy>,
+    /// Source-build policies for individual packages.
+    ///
+    /// Package-specific policies override the global [`build-policy`](#build-policy) setting.
+    /// Accepts a dictionary mapping package names to any supported build policy.
+    ///
+    /// This option is in preview and may change in any future release.
+    #[option(
+        default = "{}",
+        value_type = "dict",
+        example = r#"
+            build-policy-package = { numpy = "disallow" }
+        "#
+    )]
+    pub build_policy_package: Option<BuildPolicyPackage>,
     /// The strategy to use when selecting multiple versions of a given package across Python
     /// versions and platforms.
     ///
@@ -1391,6 +1431,38 @@ impl PythonInstallMirrors {
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PipOptions {
+    /// Control whether packages may be built from source.
+    ///
+    /// The policy also applies to build dependencies. Existing [`no-build`](#no-build),
+    /// [`no-binary`](#no-binary), and [`only-binary`](#only-binary) restrictions take precedence over
+    /// build policies.
+    ///
+    /// See the [resolution documentation](../concepts/resolution.md#source-build-policies) for details.
+    ///
+    /// This option is in preview and may change in any future release.
+    #[option(
+        default = "\"allow\"",
+        value_type = "str",
+        example = r#"
+            build-policy = "disallow"
+        "#,
+        possible_values = true
+    )]
+    pub build_policy: Option<BuildPolicy>,
+    /// Source-build policies for individual packages.
+    ///
+    /// Package-specific policies override the global [`build-policy`](#build-policy) setting.
+    /// Accepts a dictionary mapping package names to any supported build policy.
+    ///
+    /// This option is in preview and may change in any future release.
+    #[option(
+        default = "{}",
+        value_type = "dict",
+        example = r#"
+            build-policy-package = { numpy = "disallow" }
+        "#
+    )]
+    pub build_policy_package: Option<BuildPolicyPackage>,
     /// The Python interpreter into which packages should be installed.
     ///
     /// By default, uv installs into the virtual environment in the current working directory or
@@ -2228,6 +2300,8 @@ impl From<ResolverInstallerSchema> for ResolverOptions {
             resolution: value.resolution,
             prerelease: value.prerelease,
             prerelease_package: value.prerelease_package,
+            build_policy: value.build_policy,
+            build_policy_package: value.build_policy_package,
             fork_strategy: value.fork_strategy,
             dependency_metadata: value.dependency_metadata,
             config_settings: value.config_settings,
@@ -2314,6 +2388,8 @@ pub struct ToolOptions {
     resolution: Option<ResolutionMode>,
     prerelease: Option<PrereleaseMode>,
     prerelease_package: Option<PrereleasePackage>,
+    build_policy: Option<BuildPolicy>,
+    build_policy_package: Option<BuildPolicyPackage>,
     fork_strategy: Option<ForkStrategy>,
     dependency_metadata: Option<Vec<StaticMetadata>>,
     config_settings: Option<ConfigSettings>,
@@ -2348,6 +2424,8 @@ pub struct ToolOptionsWire {
     resolution: Option<ResolutionMode>,
     prerelease: Option<PrereleaseMode>,
     prerelease_package: Option<PrereleasePackage>,
+    build_policy: Option<BuildPolicy>,
+    build_policy_package: Option<BuildPolicyPackage>,
     fork_strategy: Option<ForkStrategy>,
     dependency_metadata: Option<Vec<StaticMetadata>>,
     config_settings: Option<ConfigSettings>,
@@ -2388,6 +2466,8 @@ impl From<ResolverInstallerOptions> for ToolOptions {
             resolution: value.resolution,
             prerelease: value.prerelease,
             prerelease_package: value.prerelease_package,
+            build_policy: value.build_policy,
+            build_policy_package: value.build_policy_package,
             fork_strategy: value.fork_strategy,
             dependency_metadata: value.dependency_metadata,
             config_settings: value.config_settings,
@@ -2439,6 +2519,8 @@ impl From<ToolOptionsWire> for ToolOptions {
             resolution: value.resolution,
             prerelease: value.prerelease,
             prerelease_package: value.prerelease_package,
+            build_policy: value.build_policy,
+            build_policy_package: value.build_policy_package,
             fork_strategy: value.fork_strategy,
             dependency_metadata: value.dependency_metadata,
             config_settings: value.config_settings,
@@ -2488,6 +2570,8 @@ impl From<ToolOptions> for ToolOptionsWire {
             resolution: value.resolution,
             prerelease: value.prerelease,
             prerelease_package: value.prerelease_package,
+            build_policy: value.build_policy,
+            build_policy_package: value.build_policy_package,
             fork_strategy: value.fork_strategy,
             dependency_metadata: value.dependency_metadata,
             config_settings: value.config_settings,
@@ -2526,6 +2610,8 @@ impl From<ToolOptions> for ResolverInstallerOptions {
             resolution: value.resolution,
             prerelease: value.prerelease,
             prerelease_package: value.prerelease_package,
+            build_policy: value.build_policy,
+            build_policy_package: value.build_policy_package,
             fork_strategy: value.fork_strategy,
             dependency_metadata: value.dependency_metadata,
             config_settings: value.config_settings,
@@ -2587,6 +2673,8 @@ struct OptionsWire {
     resolution: Option<ResolutionMode>,
     prerelease: Option<PrereleaseMode>,
     prerelease_package: Option<PrereleasePackage>,
+    build_policy: Option<BuildPolicy>,
+    build_policy_package: Option<BuildPolicyPackage>,
     fork_strategy: Option<ForkStrategy>,
     dependency_metadata: Option<Vec<StaticMetadata>>,
     config_settings: Option<ConfigSettings>,
@@ -2693,6 +2781,8 @@ impl TryFrom<OptionsWire> for Options {
             resolution,
             prerelease,
             prerelease_package,
+            build_policy,
+            build_policy_package,
             fork_strategy,
             dependency_metadata,
             config_settings,
@@ -2772,6 +2862,8 @@ impl TryFrom<OptionsWire> for Options {
                 resolution,
                 prerelease,
                 prerelease_package,
+                build_policy,
+                build_policy_package,
                 fork_strategy,
                 dependency_metadata,
                 config_settings,

@@ -340,6 +340,8 @@ pub enum PreviewFeature {
     MissingExcludeNewerPackageLock,
     /// Allows using `uv export --batch`.
     BatchExport,
+    /// Controls source builds and the artifacts retained in lockfiles and compiled requirements.
+    BuildPolicy,
 }
 
 impl Display for PreviewFeature {
