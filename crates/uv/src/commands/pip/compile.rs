@@ -16,7 +16,7 @@ use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
     BuildIsolation, BuildOptions, Concurrency, Constraints, ExcludeDependency, ExtrasSpecification,
     HashCheckingMode, IndexStrategy, NoBinary, NoBuild, NoSources, Override, PipCompileFormat,
-    Reinstall, Upgrade,
+    Reinstall, RequiredEnvironmentsMode, Upgrade,
 };
 use uv_configuration::{KeyringProviderType, TargetTriple};
 use uv_dispatch::{BuildDispatch, SharedState};
@@ -74,6 +74,7 @@ pub(crate) async fn pip_compile(
     build_constraints_from_workspace: Vec<NameRequirementSpecification>,
     environments: SupportedEnvironments,
     required_environments: SupportedEnvironments,
+    required_environments_mode: Option<RequiredEnvironmentsMode>,
     extras: ExtrasSpecification,
     groups: GroupsSpecification,
     output_file: Option<&Path>,
@@ -546,6 +547,16 @@ pub(crate) async fn pip_compile(
         .torch_backend(torch_backend)
         .build_options(build_options.clone())
         .artifact_environments(artifact_environments)
+        .required_environments(if universal {
+            required_environments.clone()
+        } else {
+            SupportedEnvironments::default()
+        })
+        .required_environments_mode(if universal {
+            required_environments_mode
+        } else {
+            None
+        })
         .build();
 
     // Resolve the requirements.
