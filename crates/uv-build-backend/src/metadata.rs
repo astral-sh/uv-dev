@@ -534,7 +534,7 @@ impl PyProjectToml {
                     .filter_map(|author| match author {
                         Contact::Name { name } => Some(name),
                         Contact::Email { .. } => None,
-                        Contact::NameEmail { name, .. } => Some(name),
+                        Contact::NameEmail { .. } => None,
                     })
                     .join(", ")
             })
@@ -564,7 +564,7 @@ impl PyProjectToml {
                     .filter_map(|maintainer| match maintainer {
                         Contact::Name { name } => Some(name),
                         Contact::Email { .. } => None,
-                        Contact::NameEmail { name, .. } => Some(name),
+                        Contact::NameEmail { .. } => None,
                     })
                     .join(", ")
             })
@@ -1253,7 +1253,7 @@ impl BuildSystem {
 mod tests {
     use super::*;
     use indoc::{formatdoc, indoc};
-    use insta::assert_snapshot;
+    use insta::{assert_json_snapshot, assert_snapshot};
     use std::iter;
     use tempfile::TempDir;
 
@@ -1384,7 +1384,6 @@ mod tests {
         Version: 0.1.0
         Summary: A Python package
         Keywords: demo,example,package
-        Author: Ferris the crab
         Author-email: Ferris the crab <ferris@rustacean.net>
         License: THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
                  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
@@ -1400,7 +1399,6 @@ mod tests {
         Requires-Dist: sqlalchemy[asyncio]>=2.0.35,<3
         Requires-Dist: pymysql>=1.1.1,<2 ; extra == 'mysql'
         Requires-Dist: psycopg>=3.2.2,<4 ; extra == 'postgres'
-        Maintainer: Konsti
         Maintainer-email: Konsti <konstin@mailbox.org>
         Project-URL: Homepage, https://github.com/astral-sh/uv
         Project-URL: Repository, https://astral.sh
@@ -1677,7 +1675,6 @@ mod tests {
         Version: 0.1.0
         Summary: A Python package
         Keywords: demo,example,package
-        Author: Ferris the crab
         Author-email: Ferris the crab <ferris@rustacean.net>
         License: THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
                  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
@@ -1698,7 +1695,6 @@ mod tests {
         Requires-Dist: hello-world[postgres] ; extra == 'databases'
         Requires-Dist: pymysql>=1.1.1,<2 ; extra == 'mysql'
         Requires-Dist: psycopg>=3.2.2,<4 ; sys_platform == 'linux' and extra == 'postgres'
-        Maintainer: Konsti
         Maintainer-email: Konsti <konstin@mailbox.org>
         Project-URL: Homepage, https://github.com/astral-sh/uv
         Project-URL: Repository, https://astral.sh
@@ -1842,6 +1838,80 @@ mod tests {
         Metadata-Version: 2.3
         Name: hello-world
         Version: 0.1.0
+        ");
+    }
+
+    #[test]
+    fn contact_fields_are_mapped_by_shape() {
+        let contents = extend_project(indoc! {r#"
+            authors = [{ name = "Alice", email = "alice@example.com" }]
+            maintainers = [{ name = "Bob", email = "bob@example.com" }]
+        "#});
+        let metadata = toml::from_str::<PyProjectToml>(&contents)
+            .unwrap()
+            .to_metadata(Path::new("/do/not/read"))
+            .unwrap();
+
+        assert_snapshot!(metadata.core_metadata_format(), @"
+        Metadata-Version: 2.3
+        Name: hello-world
+        Version: 0.1.0
+        Author-email: Alice <alice@example.com>
+        Maintainer-email: Bob <bob@example.com>
+        ");
+
+        let metadata_json = serde_json::to_value(metadata).unwrap();
+        assert_json_snapshot!(serde_json::json!({
+            "author": metadata_json.get("author").unwrap(),
+            "author_email": metadata_json.get("author_email").unwrap(),
+            "maintainer": metadata_json.get("maintainer").unwrap(),
+            "maintainer_email": metadata_json.get("maintainer_email").unwrap(),
+        }), @r#"
+        {
+          "author": null,
+          "author_email": "Alice <alice@example.com>",
+          "maintainer": null,
+          "maintainer_email": "Bob <bob@example.com>"
+        }
+        "#);
+    }
+
+    #[test]
+    fn contact_fields_preserve_order() {
+        let contents = extend_project(indoc! {r#"
+            authors = [
+                { name = "Zoe" },
+                { email = "zoe@example.com" },
+                { name = "Bea", email = "bea@example.com" },
+                { name = "Amy" },
+                { email = "amy@example.com" },
+                { name = "Zoe" },
+                { email = "zoe@example.com" },
+                { name = "Bea", email = "bea@example.com" },
+            ]
+            maintainers = [
+                { name = "Mai", email = "mai@example.com" },
+                { name = "Zed" },
+                { email = "zed@example.com" },
+                { name = "Ann" },
+                { name = "Mai", email = "mai@example.com" },
+                { email = "zed@example.com" },
+                { name = "Zed" },
+            ]
+        "#});
+        let metadata = toml::from_str::<PyProjectToml>(&contents)
+            .unwrap()
+            .to_metadata(Path::new("/do/not/read"))
+            .unwrap();
+
+        assert_snapshot!(metadata.core_metadata_format(), @"
+        Metadata-Version: 2.3
+        Name: hello-world
+        Version: 0.1.0
+        Author: Zoe, Amy, Zoe
+        Author-email: zoe@example.com, Bea <bea@example.com>, amy@example.com, zoe@example.com, Bea <bea@example.com>
+        Maintainer: Zed, Ann, Zed
+        Maintainer-email: Mai <mai@example.com>, zed@example.com, Mai <mai@example.com>, zed@example.com
         ");
     }
 
