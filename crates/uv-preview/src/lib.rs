@@ -340,6 +340,8 @@ pub enum PreviewFeature {
     MissingExcludeNewerPackageLock,
     /// Allows using `uv export --batch`.
     BatchExport,
+    /// Allows dependency groups to include dependency groups from the workspace root.
+    IncludeGroupWorkspace,
 }
 
 impl Display for PreviewFeature {
