@@ -419,6 +419,61 @@ fn compile_bytecode_for_relative_install_root() {
     assert_eq!(compiled, 5);
 }
 
+/// Install into the current directory via `--target`.
+#[test]
+fn install_target_current_directory() {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin()
+        .with_filtered_exe_suffix();
+
+    // A target of `.` should install into the current directory, but the normalized empty root
+    // rejects every wheel directory as escaping the destination (astral-sh/uv#21694).
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("iniconfig==2.0.0")
+        .arg("--target")
+        .arg("."), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: iniconfig-2.0.0-py3-none-any.whl (iniconfig==2.0.0)
+      cause: The wheel is invalid: Wheel directory entry escapes its destination: iniconfig-2.0.0.dist-info
+    ");
+}
+
+/// Install into the current directory via `[tool.uv.pip]`.
+#[test]
+fn install_target_current_directory_from_config() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin()
+        .with_filtered_exe_suffix();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.pip]
+        target = "."
+    "#})?;
+
+    // A configured target of `.` has the same undesirable empty-root behavior
+    // (astral-sh/uv#21694).
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("iniconfig==2.0.0"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: iniconfig-2.0.0-py3-none-any.whl (iniconfig==2.0.0)
+      cause: The wheel is invalid: Wheel directory entry escapes its destination: iniconfig-2.0.0.dist-info
+    ");
+
+    Ok(())
+}
+
 #[test]
 fn missing_pyproject_toml() {
     let context = uv_test::test_context!("3.12");
