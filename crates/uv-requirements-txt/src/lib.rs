@@ -104,6 +104,12 @@ enum RequirementsTxtStatement {
     UnsupportedOption(UnsupportedOption),
 }
 
+/// An ordered binary-policy directive from a requirements file.
+enum BinaryPolicy {
+    NoBinary(NoBinary),
+    OnlyBinary(NoBuild),
+}
+
 /// A [Requirement] with additional metadata from the `requirements.txt`, currently only hashes but in
 /// the future also editable and similar information.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -209,6 +215,7 @@ impl RequirementsTxt {
             cache,
         )
         .await
+        .map(|(requirements, _)| requirements)
     }
 
     /// Parse requirements from a string, using the given path for error messages and resolving
@@ -239,6 +246,7 @@ impl RequirementsTxt {
             source_contents,
         )
         .await
+        .map(|(requirements, _)| requirements)
         .map_err(|err| RequirementsTxtFileError {
             file: requirements_txt.into(),
             error: err,
@@ -256,7 +264,7 @@ impl RequirementsTxt {
         client_builder: &BaseClientBuilder<'_>,
         visited: &mut VisitedFiles<'_>,
         cache: &mut SourceCache,
-    ) -> Result<Self, RequirementsTxtFileError> {
+    ) -> Result<(Self, Vec<BinaryPolicy>), RequirementsTxtFileError> {
         let requirements_txt = requirements_txt.as_ref();
         let working_dir = working_dir.as_ref();
 
@@ -359,10 +367,11 @@ impl RequirementsTxt {
         requirements_txt: &Path,
         visited: &mut VisitedFiles<'_>,
         cache: &mut SourceCache,
-    ) -> Result<Self, RequirementsTxtParserError> {
+    ) -> Result<(Self, Vec<BinaryPolicy>), RequirementsTxtParserError> {
         let mut s = Scanner::new(content);
 
         let mut data = Self::default();
+        let mut binary_policies = Vec::new();
         while let Some(statement) = parse_entry(
             &mut s,
             content,
@@ -414,7 +423,7 @@ impl RequirementsTxt {
                             }
                         }
                     }
-                    let sub_requirements = Box::pin(Self::parse_impl(
+                    let (sub_requirements, sub_policies) = Box::pin(Self::parse_impl(
                         &sub_file,
                         working_dir,
                         client_builder,
@@ -445,6 +454,10 @@ impl RequirementsTxt {
 
                     // Add each to the correct category.
                     data.update_from(sub_requirements);
+                    for policy in &sub_policies {
+                        data.apply_binary_policy(policy);
+                    }
+                    binary_policies.extend(sub_policies);
                 }
                 RequirementsTxtStatement::Constraint {
                     filename,
@@ -491,7 +504,7 @@ impl RequirementsTxt {
                         }
                     };
 
-                    let sub_constraints = Box::pin(Self::parse_impl(
+                    let (sub_constraints, _) = Box::pin(Self::parse_impl(
                         &sub_file,
                         working_dir,
                         client_builder,
@@ -555,10 +568,14 @@ impl RequirementsTxt {
                     data.require_hashes = true;
                 }
                 RequirementsTxtStatement::NoBinary(no_binary) => {
-                    data.no_binary.extend(no_binary);
+                    let policy = BinaryPolicy::NoBinary(no_binary);
+                    data.apply_binary_policy(&policy);
+                    binary_policies.push(policy);
                 }
                 RequirementsTxtStatement::OnlyBinary(only_binary) => {
-                    data.only_binary.extend(only_binary);
+                    let policy = BinaryPolicy::OnlyBinary(only_binary);
+                    data.apply_binary_policy(&policy);
+                    binary_policies.push(policy);
                 }
                 RequirementsTxtStatement::UnsupportedOption(flag) => {
                     if requirements_txt == Path::new("-") {
@@ -591,7 +608,7 @@ impl RequirementsTxt {
                 }
             }
         }
-        Ok(data)
+        Ok((data, binary_policies))
     }
 
     /// Merge the data from a nested `requirements` file (`other`) into this one.
@@ -605,8 +622,8 @@ impl RequirementsTxt {
             find_links,
             no_index,
             require_hashes,
-            no_binary,
-            only_binary,
+            no_binary: _,
+            only_binary: _,
         } = other;
         self.requirements.extend(requirements);
         self.constraints.extend(constraints);
@@ -618,8 +635,54 @@ impl RequirementsTxt {
         self.find_links.extend(find_links);
         self.no_index = self.no_index || no_index;
         self.require_hashes = self.require_hashes || require_hashes;
-        self.no_binary.extend(no_binary);
-        self.only_binary.extend(only_binary);
+    }
+
+    /// Apply a binary-policy directive while preserving its position in the requirements file.
+    fn apply_binary_policy(&mut self, policy: &BinaryPolicy) {
+        match policy {
+            BinaryPolicy::NoBinary(no_binary) => self.apply_no_binary(no_binary.clone()),
+            BinaryPolicy::OnlyBinary(only_binary) => self.apply_only_binary(only_binary.clone()),
+        }
+    }
+
+    /// Apply `--no-binary` using pip's ordered, mutually-exclusive policy semantics.
+    fn apply_no_binary(&mut self, no_binary: NoBinary) {
+        match no_binary {
+            NoBinary::None => self.no_binary = NoBinary::None,
+            NoBinary::All => {
+                self.no_binary = NoBinary::All;
+                self.only_binary = NoBuild::None;
+            }
+            NoBinary::Packages(packages) => {
+                if let NoBuild::Packages(only_binary) = &mut self.only_binary {
+                    only_binary.retain(|package| !packages.contains(package));
+                    if only_binary.is_empty() {
+                        self.only_binary = NoBuild::None;
+                    }
+                }
+                self.no_binary.extend(NoBinary::Packages(packages));
+            }
+        }
+    }
+
+    /// Apply `--only-binary` using pip's ordered, mutually-exclusive policy semantics.
+    fn apply_only_binary(&mut self, only_binary: NoBuild) {
+        match only_binary {
+            NoBuild::None => self.only_binary = NoBuild::None,
+            NoBuild::All => {
+                self.only_binary = NoBuild::All;
+                self.no_binary = NoBinary::None;
+            }
+            NoBuild::Packages(packages) => {
+                if let NoBinary::Packages(no_binary) = &mut self.no_binary {
+                    no_binary.retain(|package| !packages.contains(package));
+                    if no_binary.is_empty() {
+                        self.no_binary = NoBinary::None;
+                    }
+                }
+                self.only_binary.extend(NoBuild::Packages(packages));
+            }
+        }
     }
 }
 
@@ -1598,6 +1661,7 @@ mod test {
     use test_case::test_case;
     use unscanny::Scanner;
 
+    use uv_configuration::{NoBinary, NoBuild};
     use uv_fs::Simplified;
 
     use crate::{RequirementsTxt, calculate_row_column};
@@ -2183,6 +2247,76 @@ mod test {
             }
             "#);
         });
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ordered_binary_options() -> Result<()> {
+        let temp_dir = assert_fs::TempDir::new()?;
+
+        let no_then_only = temp_dir.child("no-then-only.txt");
+        no_then_only.write_str("--no-binary iniconfig\n--only-binary iniconfig\n")?;
+        let requirements = RequirementsTxt::parse(no_then_only.path(), temp_dir.path()).await?;
+        assert_eq!(requirements.no_binary, NoBinary::None);
+        assert_eq!(
+            requirements.only_binary,
+            NoBuild::Packages(vec!["iniconfig".parse()?])
+        );
+
+        let only_then_no = temp_dir.child("only-then-no.txt");
+        only_then_no.write_str("--only-binary iniconfig\n--no-binary iniconfig\n")?;
+        let requirements = RequirementsTxt::parse(only_then_no.path(), temp_dir.path()).await?;
+        assert_eq!(
+            requirements.no_binary,
+            NoBinary::Packages(vec!["iniconfig".parse()?])
+        );
+        assert_eq!(requirements.only_binary, NoBuild::None);
+
+        let reset = temp_dir.child("reset.txt");
+        reset.write_str(
+            "--no-binary iniconfig\n--no-binary :none:\n--only-binary packaging\n--only-binary :none:\n",
+        )?;
+        let requirements = RequirementsTxt::parse(reset.path(), temp_dir.path()).await?;
+        assert_eq!(requirements.no_binary, NoBinary::None);
+        assert_eq!(requirements.only_binary, NoBuild::None);
+
+        let all = temp_dir.child("all.txt");
+        all.write_str("--no-binary :all:\n--only-binary :all:\n")?;
+        let requirements = RequirementsTxt::parse(all.path(), temp_dir.path()).await?;
+        assert_eq!(requirements.no_binary, NoBinary::None);
+        assert_eq!(requirements.only_binary, NoBuild::All);
+
+        let nested = temp_dir.child("nested.txt");
+        nested.write_str("--no-binary iniconfig\n-r child.txt\n")?;
+        temp_dir
+            .child("child.txt")
+            .write_str("--only-binary iniconfig\n")?;
+        let requirements = RequirementsTxt::parse(nested.path(), temp_dir.path()).await?;
+        assert_eq!(requirements.no_binary, NoBinary::None);
+        assert_eq!(
+            requirements.only_binary,
+            NoBuild::Packages(vec!["iniconfig".parse()?])
+        );
+
+        let nested_no_reset = temp_dir.child("nested-no-reset.txt");
+        nested_no_reset.write_str("--only-binary iniconfig\n-r child-no-reset.txt\n")?;
+        temp_dir
+            .child("child-no-reset.txt")
+            .write_str("--no-binary iniconfig\n--no-binary :none:\n")?;
+        let requirements = RequirementsTxt::parse(nested_no_reset.path(), temp_dir.path()).await?;
+        assert_eq!(requirements.no_binary, NoBinary::None);
+        assert_eq!(requirements.only_binary, NoBuild::None);
+
+        let nested_only_reset = temp_dir.child("nested-only-reset.txt");
+        nested_only_reset.write_str("--no-binary iniconfig\n-r child-only-reset.txt\n")?;
+        temp_dir
+            .child("child-only-reset.txt")
+            .write_str("--only-binary iniconfig\n--only-binary :none:\n")?;
+        let requirements =
+            RequirementsTxt::parse(nested_only_reset.path(), temp_dir.path()).await?;
+        assert_eq!(requirements.no_binary, NoBinary::None);
+        assert_eq!(requirements.only_binary, NoBuild::None);
 
         Ok(())
     }
