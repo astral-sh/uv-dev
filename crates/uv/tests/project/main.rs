@@ -21,6 +21,9 @@ mod init;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod run;
 
+#[cfg(feature = "test-python")]
+mod run_remote;
+
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod tree;
 
