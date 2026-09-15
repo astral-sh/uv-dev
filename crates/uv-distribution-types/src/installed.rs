@@ -17,6 +17,7 @@ use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_pypi_types::{DirectUrl, MetadataError};
 use uv_redacted::DisplaySafeUrl;
+use uv_warnings::warn_user_once;
 
 use crate::{
     BuildInfo, DistributionMetadata, InstalledMetadata, InstalledVersion, Name, VersionOrUrlRef,
@@ -400,9 +401,16 @@ impl InstalledDist {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(err.into()),
         };
-        let cache_info =
-            serde_json::from_reader::<BufReader<fs_err::File>, CacheInfo>(BufReader::new(file))?;
-        Ok(Some(cache_info))
+        match serde_json::from_reader::<BufReader<fs_err::File>, CacheInfo>(BufReader::new(file)) {
+            Ok(cache_info) => Ok(Some(cache_info)),
+            Err(err) => {
+                warn_user_once!(
+                    "Ignoring invalid installer metadata at `{}`: {err}",
+                    path.user_display()
+                );
+                Ok(None)
+            }
+        }
     }
 
     /// Read the `uv_build.json` file from a `.dist-info` directory.
@@ -413,9 +421,16 @@ impl InstalledDist {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(err.into()),
         };
-        let build_info =
-            serde_json::from_reader::<BufReader<fs_err::File>, BuildInfo>(BufReader::new(file))?;
-        Ok(Some(build_info))
+        match serde_json::from_reader::<BufReader<fs_err::File>, BuildInfo>(BufReader::new(file)) {
+            Ok(build_info) => Ok(Some(build_info)),
+            Err(err) => {
+                warn_user_once!(
+                    "Ignoring invalid installer metadata at `{}`: {err}",
+                    path.user_display()
+                );
+                Ok(None)
+            }
+        }
     }
 
     /// Read the `METADATA` file from a `.dist-info` directory.
