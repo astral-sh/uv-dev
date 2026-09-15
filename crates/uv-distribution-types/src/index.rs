@@ -430,54 +430,21 @@ impl Index {
     /// Initialize an [`Index`] from a pip-style `--index-url`.
     pub fn from_index_url(url: IndexUrl) -> Self {
         Self {
-            url,
-            name: None,
-            explicit: false,
             default: true,
-            origin: None,
-            format: IndexFormat::Simple,
-            publish_url: None,
-            authenticate: AuthPolicy::default(),
-            ignore_error_codes: None,
-            cache_control: None,
-            hash_algorithm: None,
-            exclude_newer: None,
+            ..Self::from(url)
         }
     }
 
     /// Initialize an [`Index`] from a pip-style `--extra-index-url`.
     pub fn from_extra_index_url(url: IndexUrl) -> Self {
-        Self {
-            url,
-            name: None,
-            explicit: false,
-            default: false,
-            origin: None,
-            format: IndexFormat::Simple,
-            publish_url: None,
-            authenticate: AuthPolicy::default(),
-            ignore_error_codes: None,
-            cache_control: None,
-            hash_algorithm: None,
-            exclude_newer: None,
-        }
+        Self::from(url)
     }
 
     /// Initialize an [`Index`] from a pip-style `--find-links`.
     pub fn from_find_links(url: IndexUrl) -> Self {
         Self {
-            url,
-            name: None,
-            explicit: false,
-            default: false,
-            origin: None,
             format: IndexFormat::Flat,
-            publish_url: None,
-            authenticate: AuthPolicy::default(),
-            ignore_error_codes: None,
-            cache_control: None,
-            hash_algorithm: None,
-            exclude_newer: None,
+            ..Self::from(url)
         }
     }
 
@@ -633,36 +600,13 @@ impl FromStr for Index {
             let url = IndexUrl::from_str(url)?;
             return Ok(Self {
                 name: Some(name),
-                url,
-                explicit: false,
-                default: false,
-                origin: None,
-                format: IndexFormat::Simple,
-                publish_url: None,
-                authenticate: AuthPolicy::default(),
-                ignore_error_codes: None,
-                cache_control: None,
-                hash_algorithm: None,
-                exclude_newer: None,
+                ..Self::from(url)
             });
         }
 
         // Otherwise, assume the source is a URL.
         let url = IndexUrl::from_str(s)?;
-        Ok(Self {
-            name: None,
-            url,
-            explicit: false,
-            default: false,
-            origin: None,
-            format: IndexFormat::Simple,
-            publish_url: None,
-            authenticate: AuthPolicy::default(),
-            ignore_error_codes: None,
-            cache_control: None,
-            hash_algorithm: None,
-            exclude_newer: None,
-        })
+        Ok(Self::from(url))
     }
 }
 
@@ -807,6 +751,42 @@ mod tests {
 
     use super::*;
     use http::HeaderValue;
+
+    #[test]
+    fn test_index_constructors() {
+        const URL: &str = "https://example.com/simple?key=value";
+        let url = IndexUrl::from_str(URL).unwrap();
+        let default_index = Index::from_index_url(url.clone());
+        let extra_index = Index::from_extra_index_url(url.clone());
+        let find_links = Index::from_find_links(url.clone());
+        let named = Index::from_str(&format!("named={URL}")).unwrap();
+        let unnamed = Index::from_str(URL).unwrap();
+        let empty_name = Index::from_str(&format!("={URL}")).unwrap();
+        let base = Index::from(url);
+
+        for (index, name, default, format) in [
+            (default_index, None, true, IndexFormat::Simple),
+            (extra_index, None, false, IndexFormat::Simple),
+            (find_links, None, false, IndexFormat::Flat),
+            (named, Some("named"), false, IndexFormat::Simple),
+            (unnamed, None, false, IndexFormat::Simple),
+            (empty_name, Some(""), false, IndexFormat::Simple),
+        ] {
+            let expected = Index {
+                name: name.map(|name| IndexName::from_str(name).unwrap()),
+                default,
+                format,
+                ..base.clone()
+            };
+            assert_eq!(index, expected);
+            assert!(index.origin.is_none());
+        }
+
+        assert_matches!(
+            Index::from_str("bad name=http://["),
+            Err(IndexSourceError::IndexName(_))
+        );
+    }
 
     #[test]
     fn test_index_cache_control_headers() {
