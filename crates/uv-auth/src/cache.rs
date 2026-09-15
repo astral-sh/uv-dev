@@ -1,7 +1,6 @@
 use std::fmt::{self, Display, Formatter};
 use std::hash::BuildHasherDefault;
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::sync::{Arc, PoisonError, RwLock};
 
 use rustc_hash::{FxHashMap, FxHasher};
 use tracing::trace;
@@ -11,33 +10,59 @@ use uv_once_map::OnceMap;
 use uv_redacted::DisplaySafeUrl;
 
 use crate::credentials::{Authentication, CredentialsFromUrlError, Username};
+use crate::matching::{self, AmbiguousCredential};
+use crate::persistent::PersistentCredential;
 use crate::{Credentials, Realm};
 
 type FxOnceMap<K, V> = OnceMap<K, V, BuildHasherDefault<FxHasher>>;
+pub(crate) type StoredCredentials = Arc<[PersistentCredential]>;
+type NativeRealmCredentials = Result<StoredCredentials, Arc<crate::keyring::Error>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum FetchUrl {
-    /// A full index URL
+    /// A configured index URL.
     Index(DisplaySafeUrl),
-    /// A realm URL
+    /// An authentication realm.
     Realm(Realm),
 }
 
 impl Display for FetchUrl {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+    fn fmt(&self, formatter: &mut Formatter) -> std::fmt::Result {
         match self {
-            Self::Index(index) => Display::fmt(index, f),
-            Self::Realm(realm) => Display::fmt(realm, f),
+            Self::Index(url) => Display::fmt(url, formatter),
+            Self::Realm(realm) => Display::fmt(realm, formatter),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum CredentialsCacheScope {
+    /// Cache credentials for the entire realm and the request URL.
+    Realm,
+    /// Cache the complete stored credential snapshot and match by service path.
+    Stored(StoredCredentials),
+    /// Do not add credentials to the eager authentication cache.
+    FetchOnly,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FetchedCredentials {
+    pub(crate) credentials: Arc<Authentication>,
+    pub(crate) cache_scope: CredentialsCacheScope,
 }
 
 #[derive(Debug)] // All internal types are redacted.
 pub struct CredentialsCache {
     /// A cache per realm and username
     realms: RwLock<FxHashMap<(Realm, Username), Arc<Authentication>>>,
-    /// A cache tracking the result of realm or index URL fetches from external services
-    pub(crate) fetches: FxOnceMap<(FetchUrl, Username), Option<Arc<Authentication>>>,
+    /// Cached realm- or index-scoped provider lookups.
+    pub(crate) fetches: FxOnceMap<(FetchUrl, Username), Option<FetchedCredentials>>,
+    /// Cached subprocess keyring lookups.
+    pub(crate) keyring_fetches: FxOnceMap<(FetchUrl, Username), Option<FetchedCredentials>>,
+    /// Native credential snapshots, loaded at most once per realm.
+    pub(crate) native_realms: FxOnceMap<Realm, NativeRealmCredentials>,
+    /// Successfully authenticated credential snapshots, matched by service path.
+    stored: RwLock<FxHashMap<Realm, StoredCredentials>>,
     /// A cache per URL, uses a trie for efficient prefix queries.
     urls: RwLock<UrlTrie<Arc<Authentication>>>,
 }
@@ -53,7 +78,10 @@ impl CredentialsCache {
     pub fn new() -> Self {
         Self {
             fetches: FxOnceMap::default(),
+            keyring_fetches: FxOnceMap::default(),
+            native_realms: FxOnceMap::default(),
             realms: RwLock::new(FxHashMap::default()),
+            stored: RwLock::new(FxHashMap::default()),
             urls: RwLock::new(UrlTrie::new()),
         }
     }
@@ -142,6 +170,52 @@ impl CredentialsCache {
         None
     }
 
+    /// Return the best credential from a successfully authenticated realm snapshot.
+    pub(crate) fn get_stored(
+        &self,
+        url: &DisplaySafeUrl,
+        username: &Username,
+    ) -> Result<Option<Arc<Authentication>>, AmbiguousCredential> {
+        let stored = self.stored.read().unwrap_or_else(PoisonError::into_inner);
+        let Some(credentials) = stored.get(&Realm::from(url)) else {
+            return Ok(None);
+        };
+        Self::select_stored(credentials, url, username)
+    }
+
+    /// Select the most specific service and account in a complete realm snapshot.
+    pub(crate) fn select_stored(
+        credentials: &[PersistentCredential],
+        url: &DisplaySafeUrl,
+        username: &Username,
+    ) -> Result<Option<Arc<Authentication>>, AmbiguousCredential> {
+        matching::select_credential(
+            credentials.iter().map(|credential| {
+                (
+                    &credential.service,
+                    credential.credentials.username(),
+                    &credential.credentials,
+                )
+            }),
+            url,
+            username.as_deref(),
+        )
+        .map(|credentials| credentials.cloned().map(Authentication::from).map(Arc::new))
+    }
+
+    /// Remember a complete realm snapshot after its credentials authenticate successfully.
+    pub(crate) fn insert_stored(&self, url: &DisplaySafeUrl, credentials: StoredCredentials) {
+        if credentials.is_empty() {
+            return;
+        }
+        let realm = Realm::from(url);
+        trace!("Caching path-scoped credentials for realm {realm}");
+        self.stored
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(realm, credentials);
+    }
+
     /// Update the cache with the given credentials.
     pub(crate) fn insert(&self, url: &DisplaySafeUrl, credentials: Arc<Authentication>) {
         // Do not cache empty credentials
@@ -159,7 +233,7 @@ impl CredentialsCache {
         // Insert an entry for requests with no username
         self.insert_realm((Realm::from(url), Username::none()), &credentials);
 
-        // Insert an entry for the URL
+        // Insert an entry for the URL.
         let mut urls = self.urls.write().unwrap();
         urls.insert(url, credentials);
     }
@@ -223,17 +297,21 @@ impl<T> UrlTrie<T> {
 
     fn get(&self, url: &Url) -> Option<&T> {
         let mut state = 0;
+        let mut best = None;
         let realm = Realm::from(url).to_string();
         for component in [realm.as_str()]
             .into_iter()
             .chain(url.path_segments().unwrap().filter(|item| !item.is_empty()))
         {
-            state = self.states[state].get(component)?;
+            let Some(next_state) = self.states[state].get(component) else {
+                break;
+            };
+            state = next_state;
             if let Some(ref value) = self.states[state].value {
-                return Some(value);
+                best = Some(value);
             }
         }
-        self.states[state].value.as_ref()
+        best
     }
 
     fn insert(&mut self, url: &Url, value: T) {
@@ -293,6 +371,8 @@ mod tests {
             Credentials::basic(Some("username3".to_string()), Some("password3".to_string()));
         let credentials4 =
             Credentials::basic(Some("username4".to_string()), Some("password4".to_string()));
+        let credentials5 =
+            Credentials::basic(Some("username5".to_string()), Some("password5".to_string()));
 
         let mut trie = UrlTrie::new();
         trie.insert(
@@ -311,6 +391,10 @@ mod tests {
             &Url::parse("https://example.com/bar").unwrap(),
             credentials4.clone(),
         );
+        trie.insert(
+            &Url::parse("https://example.com/foo/bar").unwrap(),
+            credentials5.clone(),
+        );
 
         let url = Url::parse("https://burntsushi.net/regex-internals").unwrap();
         assert_eq!(trie.get(&url), Some(&credentials1));
@@ -328,6 +412,12 @@ mod tests {
         assert_eq!(trie.get(&url), Some(&credentials3));
 
         let url = Url::parse("https://example.com/foo/bar").unwrap();
+        assert_eq!(trie.get(&url), Some(&credentials5));
+
+        let url = Url::parse("https://example.com/foo/bar/baz").unwrap();
+        assert_eq!(trie.get(&url), Some(&credentials5));
+
+        let url = Url::parse("https://example.com/foo/baz").unwrap();
         assert_eq!(trie.get(&url), Some(&credentials3));
 
         let url = Url::parse("https://example.com/bar").unwrap();
