@@ -957,7 +957,9 @@ pub struct ManagedPythonDownloadList {
     downloads: Vec<ManagedPythonDownload>,
 }
 
-#[derive(Debug, Serialize, Clone)]
+// Cached downloads use positional MessagePack records. Keep fields through `build` in order,
+// and append new fields with defaults so caches without them remain readable.
+#[derive(Debug, Deserialize, Serialize, Clone)]
 struct JsonPythonDownload {
     name: String,
     arch: JsonArch,
@@ -970,94 +972,11 @@ struct JsonPythonDownload {
     url: String,
     sha256: Option<Digest<32>>,
     variant: Option<String>,
-    build_variant: Option<String>,
-    default: Option<bool>,
     build: Option<String>,
-}
-
-impl<'de> Deserialize<'de> for JsonPythonDownload {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct Current {
-            name: String,
-            arch: JsonArch,
-            os: String,
-            libc: String,
-            major: u8,
-            minor: u8,
-            patch: u8,
-            prerelease: Option<String>,
-            url: String,
-            sha256: Option<String>,
-            variant: Option<String>,
-            build_variant: Option<String>,
-            default: Option<bool>,
-            build: Option<String>,
-        }
-
-        // Malformed modern fields must not be discarded by the legacy cache fallback.
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Legacy {
-            name: String,
-            arch: JsonArch,
-            os: String,
-            libc: String,
-            major: u8,
-            minor: u8,
-            patch: u8,
-            prerelease: Option<String>,
-            url: String,
-            sha256: Option<String>,
-            variant: Option<String>,
-            build: Option<String>,
-        }
-
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Compatible {
-            Current(Current),
-            Legacy(Legacy),
-        }
-
-        Ok(match Compatible::deserialize(deserializer)? {
-            Compatible::Current(current) => Self {
-                name: current.name,
-                arch: current.arch,
-                os: current.os,
-                libc: current.libc,
-                major: current.major,
-                minor: current.minor,
-                patch: current.patch,
-                prerelease: current.prerelease,
-                url: current.url,
-                sha256: current.sha256,
-                variant: current.variant,
-                build_variant: current.build_variant,
-                default: current.default,
-                build: current.build,
-            },
-            Compatible::Legacy(legacy) => Self {
-                name: legacy.name,
-                arch: legacy.arch,
-                os: legacy.os,
-                libc: legacy.libc,
-                major: legacy.major,
-                minor: legacy.minor,
-                patch: legacy.patch,
-                prerelease: legacy.prerelease,
-                url: legacy.url,
-                sha256: legacy.sha256,
-                variant: legacy.variant,
-                build_variant: None,
-                default: None,
-                build: legacy.build,
-            },
-        })
-    }
+    #[serde(default)]
+    build_variant: Option<String>,
+    #[serde(default)]
+    default: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1979,6 +1898,8 @@ mod tests {
     use std::assert_matches;
     use std::collections::HashSet;
 
+    use anyhow::Result;
+
     use crate::PythonVariant;
     use crate::implementation::LenientImplementationName;
     use crate::installation::PythonInstallationKey;
@@ -1987,7 +1908,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_versioned_downloads() {
+    fn parse_versioned_downloads() -> Result<()> {
         let json = r#"{
             "version": 1,
             "downloads": {
@@ -2016,15 +1937,24 @@ mod tests {
             ("", None),
         ] {
             let json = json.replace(r#""default": false,"#, default);
-            let downloads = parse_downloads_json(json.as_bytes(), "test".to_string())
-                .expect("Valid catalog should be parsed");
+            let downloads = parse_downloads_json(json.as_bytes(), "test".to_string())?;
             assert_eq!(downloads["custom"].build_variant.as_deref(), Some("custom"));
             assert_eq!(downloads["custom"].default, expected_default);
+            assert_eq!(downloads["custom"].build.as_deref(), Some("20260825"));
+
+            let cached = rmp_serde::to_vec(&downloads)?;
+            let restored: HashMap<String, JsonPythonDownload> = rmp_serde::from_slice(&cached)?;
+            assert_eq!(
+                serde_json::to_value(restored)?,
+                serde_json::to_value(downloads)?
+            );
         }
+
+        Ok(())
     }
 
     #[test]
-    fn cached_downloads_without_build_variants_remain_compatible() {
+    fn cached_downloads_without_build_variants_remain_compatible() -> Result<()> {
         #[derive(Serialize)]
         struct LegacyJsonPythonDownload {
             name: String,
@@ -2061,11 +1991,13 @@ mod tests {
                 build: Some("20260825".to_string()),
             },
         )]);
-        let cached = rmp_serde::to_vec(&legacy).unwrap();
-        let downloads: HashMap<String, JsonPythonDownload> =
-            rmp_serde::from_slice(&cached).unwrap();
+        let cached = rmp_serde::to_vec(&legacy)?;
+        let downloads: HashMap<String, JsonPythonDownload> = rmp_serde::from_slice(&cached)?;
+        assert_eq!(downloads["cpython"].build.as_deref(), Some("20260825"));
         assert_eq!(downloads["cpython"].build_variant, None);
         assert_eq!(downloads["cpython"].default, None);
+
+        Ok(())
     }
 
     #[test]

@@ -724,16 +724,16 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
       cause: Invalid hash digest length (expected 64 hexadecimal characters, found 5) at line 16 column 29
     ");
 
-    // Invalid build metadata must not fall back to legacy records that lose the build identity.
+    // Invalid build metadata must be rejected.
     uv_snapshot!(context.filters(), context
         .python_list()
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
-        .arg("--python-downloads-json-url").arg(format!("{}/invalid-default", server.uri())), @"
+        .arg("--python-downloads-json-url").arg(format!("{}/invalid-default", server.uri())), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Unable to parse the JSON Python download list at http://[LOCALHOST]/invalid-default
-      cause: data did not match any variant of untagged enum Compatible at line 56 column 5
-    ");
+      cause: invalid type: string "false", expected a boolean at line 53 column 30
+    "#);
 
     uv_snapshot!(context.filters(), context
         .python_list()
@@ -742,7 +742,7 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Unable to parse the JSON Python download list at http://[LOCALHOST]/versioned-invalid-default
-      cause: data did not match any variant of untagged enum Compatible at line 1 column 13
+      cause: invalid type: integer `1`, expected struct JsonPythonDownload at line 1 column 13
     ");
 
     uv_snapshot!(context.filters(), context
@@ -752,7 +752,7 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Unable to parse the JSON Python download list at http://[LOCALHOST]/versioned-invalid-build-variant
-      cause: data did not match any variant of untagged enum Compatible at line 1 column 13
+      cause: invalid type: integer `1`, expected struct JsonPythonDownload at line 1 column 13
     ");
 
     Ok(())
