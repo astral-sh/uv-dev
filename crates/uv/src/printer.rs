@@ -34,7 +34,7 @@ pub(crate) struct JsonlResult<T> {
 /// An array-valued command result with the JSONL discriminator.
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-struct JsonlResultData<T> {
+pub(crate) struct JsonlResultData<T> {
     /// Distinguishes the final command result from progress updates.
     #[serde(rename = "type")]
     event_type: ResultType,

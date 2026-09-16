@@ -256,6 +256,16 @@ To exclude downloads and only show installed Python versions:
 $ uv python list --only-installed
 ```
 
+For automation, `--output-format json` emits an array described by the
+[Python-list JSON Schema](../reference/internals/python-list.schema.json). Installed entries include
+their paths, while available downloads include their URLs. Fields that do not apply are `null`.
+
+Use `--output-format jsonl --preview-features jsonl` to receive progress records followed by a
+`"type": "result"` record containing the array in `data`. The
+[JSONL record schema](../reference/internals/python-list-jsonl.schema.json) describes this preview
+format, which may change without warning. Setup failures can occur before any result is emitted;
+consumers should also check the command's exit status.
+
 See the [`uv python list`](../reference/cli.md#uv-python-list) reference for more details.
 
 ## Finding a Python executable
