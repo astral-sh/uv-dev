@@ -25,7 +25,7 @@ use crate::commands::project::lockfile::FrozenWorkspace;
 use crate::commands::project::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectEnvironmentTarget,
     ProjectError, ProjectInterpreter, ProjectPythonRequest, ScriptEnvironment, ScriptInterpreter,
-    UniversalState, project_python_roots,
+    UniversalState,
 };
 use crate::commands::{ExitStatus, UvError};
 use crate::printer::{Printer, Stdout};
@@ -123,14 +123,12 @@ pub(crate) async fn metadata(
                     .await?
                     .into_interpreter(),
                     LockTarget::Workspace(workspace) => {
-                        let python_roots = project_python_roots(workspace, None, true, &[]);
-                        let project_python = ProjectPythonRequest::from_request_for_roots(
+                        let project_python = ProjectPythonRequest::from_request(
                             python.as_deref().map(PythonRequest::parse),
                             Some(workspace),
                             &groups,
                             project_dir,
                             config_discovery,
-                            python_roots.as_deref(),
                         )
                         .await?;
                         ProjectInterpreter::discover(
@@ -212,11 +210,10 @@ pub(crate) async fn metadata(
     let environment = if sync.is_some() {
         Some(match &source {
             MetadataSource::Manifest(LockTarget::Workspace(workspace)) => {
-                let python_roots = project_python_roots(workspace, None, true, &[]);
                 ProjectEnvironment::get_or_init(
                     ProjectEnvironmentTarget::from(*workspace),
                     None,
-                    python_roots.as_deref(),
+                    None,
                     &groups,
                     python.as_deref().map(PythonRequest::parse),
                     &install_mirrors,
