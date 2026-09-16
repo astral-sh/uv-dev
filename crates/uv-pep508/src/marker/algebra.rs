@@ -849,6 +849,18 @@ impl InternerGuard<'_> {
         }
 
         let node = self.shared.node(i);
+        let python_variable = Variable::Version(CanonicalMarkerValueVersion::PythonFullVersion);
+        if node.var > python_variable {
+            // Version variables precede extras and list markers. Inserting the Python bound
+            // below one of those variables would break the decision tree's canonical ordering.
+            let python = self.create_node(
+                python_variable,
+                Edges::Version {
+                    edges: Edges::from_range(&py_range),
+                },
+            );
+            return self.and(i, python);
+        }
         let Node {
             var: Variable::Version(CanonicalMarkerValueVersion::PythonFullVersion),
             children: Edges::Version { edges },
