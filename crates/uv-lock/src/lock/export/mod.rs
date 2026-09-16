@@ -74,7 +74,7 @@ impl<'lock> ExportableRequirements<'lock> {
 
         let mut queue: VecDeque<(PackageIndex, Option<&ExtraName>)> = VecDeque::new();
         let mut seen = FxHashSet::default();
-        let mut activated_items = FxHashSet::default();
+        let mut activated_items = FxHashMap::default();
 
         let root = graph.add_node(Node::Root);
 
@@ -101,10 +101,19 @@ impl<'lock> ExportableRequirements<'lock> {
                 .ok_or_else(|| LockErrorKind::MissingRootPackage {
                     name: root_name.clone(),
                 })?;
+            let root_marker = if dist.fork_markers.is_empty() {
+                MarkerTree::TRUE
+            } else {
+                target.lock().simplify_environment(
+                    dist.fork_markers
+                        .iter()
+                        .fold(MarkerTree::FALSE, |marker, fork| marker.or(fork.pep508())),
+                )
+            };
 
             if root_kind == InstallableRootKind::Production && groups.prod() {
                 // Track the activated package in the list of known conflicts.
-                activated_items.insert(ConflictItem::from(dist.id.name.clone()));
+                activated_items.insert(ConflictItem::from(dist.id.name.clone()), root_marker);
 
                 let package_index = target.lock().by_id[&dist.id];
 
@@ -115,7 +124,7 @@ impl<'lock> ExportableRequirements<'lock> {
                     root,
                     index,
                     Edge::Prod {
-                        marker: MarkerTree::TRUE,
+                        marker: root_marker,
                         dep_extras: Vec::new(),
                     },
                 );
@@ -124,8 +133,10 @@ impl<'lock> ExportableRequirements<'lock> {
                 queue.push_back((package_index, None));
                 for extra in extras.extra_names(dist.optional_dependencies.keys()) {
                     queue.push_back((package_index, Some(extra)));
-                    activated_items
-                        .insert(ConflictItem::from((dist.id.name.clone(), extra.clone())));
+                    activated_items.insert(
+                        ConflictItem::from((dist.id.name.clone(), extra.clone())),
+                        root_marker,
+                    );
                 }
             }
 
@@ -135,8 +146,11 @@ impl<'lock> ExportableRequirements<'lock> {
                 .iter()
                 .filter(|(group, _)| target.includes_group(Some(&dist.id.name), group, groups))
             {
-                // Empty selected groups still participate in conflicts.
-                activated_items.insert(ConflictItem::from((dist.id.name.clone(), group.clone())));
+                // Track the activated group in the list of known conflicts.
+                activated_items.insert(
+                    ConflictItem::from((dist.id.name.clone(), group.clone())),
+                    root_marker,
+                );
 
                 for dep in dependencies {
                     if prune.contains(&dep.package_id.name) {
@@ -149,14 +163,14 @@ impl<'lock> ExportableRequirements<'lock> {
                     let dep_index = *node_by_package[dep.index.0]
                         .get_or_insert_with(|| graph.add_node(Node::Package(dep_dist)));
 
-                    // Add an edge from the root. Development dependencies may be installed without
-                    // installing the workspace package itself (which can never have markers on it
-                    // anyway), so they're directly connected to the root.
+                    // Development dependencies may be installed without the workspace package, so
+                    // connect them directly to the root while retaining the project's Python domain.
                     graph.add_edge(
                         root,
                         dep_index,
                         Edge::Prod {
-                            marker: dep.simplified_marker.as_simplified_marker_tree(),
+                            marker: root_marker
+                                .and(dep.simplified_marker.as_simplified_marker_tree()),
                             dep_extras: dep.extra.iter().collect(),
                         },
                     );
@@ -423,7 +437,7 @@ impl Edge<'_> {
 fn conflict_marker_reachability<'lock>(
     graph: &Graph<Node<'lock>, Edge<'lock>>,
     root: NodeIndex,
-    known_conflicts: &FxHashSet<ConflictItem>,
+    known_conflicts: &FxHashMap<ConflictItem, MarkerTree>,
     conflicts: &Conflicts,
     include_package: impl Fn(&Package) -> bool,
 ) -> Result<FxHashMap<NodeIndex, MarkerTree>, LockError> {
@@ -466,15 +480,14 @@ fn conflict_marker_reachability<'lock>(
         if let Node::Package(package) = graph[package_index] {
             let item = ConflictItem::from((package.name().clone(), extra.clone()));
             solver.nodes[extra_index].extra_fact = variables.by_item.get(&item).copied();
-            if known_conflicts.contains(&item) {
-                // Selected extras belong to unique, unconditionally reached production roots.
-                solver.add_reachability(extra_index, MarkerTree::TRUE);
+            if let Some(&marker) = known_conflicts.get(&item) {
+                solver.add_reachability(extra_index, marker);
             }
         }
     }
-    for item in known_conflicts {
+    for (item, marker) in known_conflicts {
         if let Some(&fact) = variables.by_item.get(item) {
-            solver.activations[fact] = MarkerTree::TRUE;
+            solver.activations[fact] = *marker;
         }
     }
     solver.add_reachability(root.index(), MarkerTree::TRUE);
@@ -526,7 +539,7 @@ struct ConflictVariables {
 impl ConflictVariables {
     fn from_graph(
         graph: &Graph<Node<'_>, Edge<'_>>,
-        known_conflicts: &FxHashSet<ConflictItem>,
+        known_conflicts: &FxHashMap<ConflictItem, MarkerTree>,
         conflicts: &Conflicts,
     ) -> Self {
         let mut referenced_names = FxHashSet::default();
@@ -561,7 +574,7 @@ impl ConflictVariables {
         for item in &conflict_items {
             add_fact((*item).clone());
         }
-        for item in known_conflicts {
+        for item in known_conflicts.keys() {
             add_fact(item.clone());
         }
 
@@ -657,7 +670,7 @@ fn resolve_marker_bindings(
     let mut overrides = FxHashMap::default();
     for (fact, bindings) in aliases {
         // Selected facts are present from the root; requested facts become present at the target.
-        let mut pending = if solver.activations[fact].is_true() {
+        let mut pending = if !solver.activations[fact].is_false() {
             vec![root]
         } else {
             Vec::new()
