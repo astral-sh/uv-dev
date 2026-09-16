@@ -86,13 +86,17 @@ mod tests {
 
     #[test]
     fn keeps_validation_error_kind_and_cause() {
-        let command = clap::Command::new("test");
-        let arg = clap::Arg::new("number").long("number");
+        let mut command = clap::Command::new("test").arg(clap::Arg::new("number").long("number"));
+        command.build();
+        let arg = command
+            .get_arguments()
+            .find(|arg| arg.get_id() == "number")
+            .unwrap();
         let value = OsStr::new("secret");
         let parser = str::parse::<u8>;
-        let original = parser.parse_ref(&command, Some(&arg), value).unwrap_err();
+        let original = parser.parse_ref(&command, Some(arg), value).unwrap_err();
         let redacted = RedactedValueParser(parser)
-            .parse_ref(&command, Some(&arg), value)
+            .parse_ref(&command, Some(arg), value)
             .unwrap_err();
 
         assert_eq!(redacted.kind(), ErrorKind::ValueValidation);
@@ -147,12 +151,31 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn preserves_non_utf8_argument_errors() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let mut command = clap::Command::new("test");
+        command.build();
+        let value = OsStr::from_bytes(b"\xff");
+        let original = parse_index_url
+            .parse_ref(&command, None, value)
+            .unwrap_err();
+        let redacted = RedactedValueParser(parse_index_url)
+            .parse_ref(&command, None, value)
+            .unwrap_err();
+        assert_eq!(redacted.kind(), ErrorKind::InvalidUtf8);
+        assert_eq!(redacted.get(ContextKind::InvalidValue), None);
+        assert_eq!(redacted.to_string(), original.to_string());
+    }
+
+    #[test]
     fn delegates_value_source_and_completion() {
         #[derive(Clone)]
         struct SourceParser;
 
         impl TypedValueParser for SourceParser {
-            type Value = (OsString, Option<ValueSource>);
+            type Value = (OsString, &'static str, Option<ValueSource>);
 
             fn parse_ref(
                 &self,
@@ -160,7 +183,7 @@ mod tests {
                 _arg: Option<&clap::Arg>,
                 value: &OsStr,
             ) -> Result<Self::Value, clap::Error> {
-                Ok((value.to_owned(), None))
+                Ok((value.to_owned(), "borrowed", None))
             }
 
             fn parse_ref_(
@@ -170,7 +193,16 @@ mod tests {
                 value: &OsStr,
                 source: ValueSource,
             ) -> Result<Self::Value, clap::Error> {
-                Ok((value.to_owned(), Some(source)))
+                Ok((value.to_owned(), "borrowed-source", Some(source)))
+            }
+
+            fn parse(
+                &self,
+                _command: &clap::Command,
+                _arg: Option<&clap::Arg>,
+                value: OsString,
+            ) -> Result<Self::Value, clap::Error> {
+                Ok((value, "owned", None))
             }
 
             fn parse_(
@@ -180,7 +212,7 @@ mod tests {
                 value: OsString,
                 source: ValueSource,
             ) -> Result<Self::Value, clap::Error> {
-                Ok((value, Some(source)))
+                Ok((value, "owned-source", Some(source)))
             }
 
             fn possible_values(&self) -> Option<Box<dyn Iterator<Item = PossibleValue> + '_>> {
@@ -190,6 +222,18 @@ mod tests {
 
         let command = clap::Command::new("test");
         let parser = RedactedValueParser(SourceParser);
+        assert_eq!(
+            parser
+                .parse_ref(&command, None, OsStr::new("value"))
+                .unwrap(),
+            (OsString::from("value"), "borrowed", None)
+        );
+        assert_eq!(
+            parser
+                .parse(&command, None, OsString::from("value"))
+                .unwrap(),
+            (OsString::from("value"), "owned", None)
+        );
         for source in [
             ValueSource::DefaultValue,
             ValueSource::EnvVariable,
@@ -199,13 +243,13 @@ mod tests {
                 parser
                     .parse_ref_(&command, None, OsStr::new("value"), source)
                     .unwrap(),
-                (OsString::from("value"), Some(source))
+                (OsString::from("value"), "borrowed-source", Some(source))
             );
             assert_eq!(
                 parser
                     .parse_(&command, None, OsString::from("value"), source)
                     .unwrap(),
-                (OsString::from("value"), Some(source))
+                (OsString::from("value"), "owned-source", Some(source))
             );
         }
         assert_eq!(
