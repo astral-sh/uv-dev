@@ -160,16 +160,15 @@ pub(crate) async fn sync(
     };
     let explicit_workspace_group = workspace_group.is_some();
     let workspace_group = match &target {
-        SyncTarget::Project(project) => {
-            command_workspace_group(
-                project.workspace(),
-                workspace_group.as_ref(),
-                &selection_members,
-                frozen,
-                &settings.resolver.sources,
-            )
-            .await?
-        }
+        SyncTarget::Project(project) => command_workspace_group(
+            project.workspace(),
+            workspace_group.as_ref(),
+            &selection_members,
+            frozen,
+            &settings.resolver.sources,
+        )
+        .await
+        .map_err(UvError::from)?,
         SyncTarget::Script(_) => {
             if workspace_group.is_some() {
                 anyhow::bail!("Workspace groups are not supported for scripts");

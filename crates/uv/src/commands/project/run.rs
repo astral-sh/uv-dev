@@ -641,7 +641,8 @@ pub(crate) async fn run(
                 frozen,
                 &settings.resolver.sources,
             )
-            .await?;
+            .await
+            .map_err(UvError::from)?;
             let select_group_roots = workspace_group
                 .as_ref()
                 .is_some_and(|group| explicit_workspace_group || group.definition.default);
