@@ -329,6 +329,96 @@ kind = "inherent_method"
 level = "expect"
 reason = "retained as a public pyvenv.cfg editing helper"
 
+# Keep the checked endpoint wire API available to source-bound resolver evidence clients.
+
+[[override]]
+lint = "hawk::unnecessary_public"
+crate = "uv_pep440"
+item = "EncodedVersion"
+kind = "reexport"
+level = "expect"
+reason = "entry point for the checked internal version wire format"
+
+[[override]]
+lint = "hawk::unnecessary_public"
+crate = "uv_pep440"
+item = "VersionEncodingError"
+kind = "reexport"
+level = "expect"
+reason = "typed rejection reason for checked endpoint encoding"
+
+[[override]]
+lint = "hawk::unnecessary_public"
+crate = "uv_pep440"
+item = "EncodedVersionRanges"
+kind = "reexport"
+level = "expect"
+reason = "entry point for the checked internal interval wire format"
+
+[[override]]
+lint = "hawk::unnecessary_public"
+crate = "uv_pep440"
+item = "VersionRangesEncodingError"
+kind = "reexport"
+level = "expect"
+reason = "typed rejection reason for checked interval encoding"
+
+[[override]]
+lint = "hawk::dead_public"
+crate = "uv_pep440"
+item = "version_encoding::EncodedVersion::MAX_COMPONENTS"
+kind = "inherent_associated_constant"
+level = "expect"
+reason = "exposes the per-version component bound to aggregate-budget readers"
+
+[[override]]
+lint = "hawk::dead_public"
+crate = "uv_pep440"
+item = "version_encoding::EncodedVersion::MAX_LOCAL_SEGMENT_BYTES"
+kind = "inherent_associated_constant"
+level = "expect"
+reason = "exposes the per-atom byte bound to aggregate-budget readers"
+
+[[override]]
+lint = "hawk::unnecessary_public"
+crate = "uv_pep440"
+item = "version_encoding::EncodedVersion::into_version"
+kind = "inherent_method"
+level = "expect"
+reason = "reconstructs checked endpoints without lossy version-string parsing"
+
+[[override]]
+lint = "hawk::unnecessary_public"
+crate = "uv_pep440"
+item = "version_encoding::EncodedVersion::to_version"
+kind = "inherent_method"
+level = "expect"
+reason = "supports membership checks while retaining the encoded endpoint"
+
+[[override]]
+lint = "hawk::dead_public"
+crate = "uv_pep440"
+item = "version_ranges_encoding::EncodedVersionRanges::MAX_INTERVALS"
+kind = "inherent_associated_constant"
+level = "expect"
+reason = "exposes the per-range interval bound to aggregate-budget readers"
+
+[[override]]
+lint = "hawk::unnecessary_public"
+crate = "uv_pep440"
+item = "version_ranges_encoding::EncodedVersionRanges::into_ranges"
+kind = "inherent_method"
+level = "expect"
+reason = "reconstructs checked candidate-membership intervals"
+
+[[override]]
+lint = "hawk::unnecessary_public"
+crate = "uv_pep440"
+item = "version_ranges_encoding::EncodedVersionRanges::to_ranges"
+kind = "inherent_method"
+level = "expect"
+reason = "supports membership checks while retaining the encoded intervals"
+
 [[exclude]]
 crate = "uv_extract"
 module = "dirhash"

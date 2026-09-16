@@ -28,12 +28,15 @@ pub use version_ranges::{
     LowerBound, UpperBound, canonicalize_version_ranges, release_specifier_to_range,
     release_specifiers_to_ranges, strip_local_version_sentinels,
 };
+#[cfg(feature = "version-ranges")]
+pub use version_ranges_encoding::{EncodedVersionRanges, VersionRangesEncodingError};
 pub use {
     version::{
         BumpCommand, LocalSegment, LocalVersion, LocalVersionSlice, MIN_VERSION, Operator,
         OperatorParseError, Prerelease, PrereleaseKind, Version, VersionParseError, VersionPattern,
         VersionPatternParseError,
     },
+    version_encoding::{EncodedVersion, VersionEncodingError},
     version_specifier::{
         TildeVersionSpecifier, VersionSpecifier, VersionSpecifierBuildError, VersionSpecifiers,
         VersionSpecifiersParseError,
@@ -41,10 +44,13 @@ pub use {
 };
 
 mod version;
+mod version_encoding;
 mod version_specifier;
 
 #[cfg(feature = "version-ranges")]
 mod version_ranges;
+#[cfg(feature = "version-ranges")]
+mod version_ranges_encoding;
 
 #[cfg(test)]
 mod tests {
