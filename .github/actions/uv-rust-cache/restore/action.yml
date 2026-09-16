@@ -1,0 +1,110 @@
+name: Restore the Linux nextest cache
+description: Restore source-aware Cargo downloads and compiled workspace outputs.
+
+inputs:
+  source-directory:
+    description: Clean source checkout inside the Actions workspace.
+    required: true
+  source-repository:
+    description: Expected GitHub repository of the source checkout.
+    required: true
+  source-commit:
+    description: Expected full commit of the source checkout.
+    required: true
+  save-if:
+    description: Whether this caller is permitted to publish a new cache entry.
+    default: "false"
+
+outputs:
+  cache-hit:
+    description: Whether the compiled target cache matched the exact source key.
+    value: ${{ steps.observe.outputs.cache-hit }}
+  cache-matched-key:
+    description: The compiled target key actually restored, or an empty string.
+    value: ${{ steps.observe.outputs.cache-matched-key }}
+  downloads-cache-hit:
+    description: Whether the Cargo downloads cache matched its exact key.
+    value: ${{ steps.observe.outputs.downloads-cache-hit }}
+  manifest:
+    description: Source-bound restore manifest for the save action.
+    value: ${{ steps.observe.outputs.manifest }}
+  manifest-sha256:
+    description: SHA-256 of the restore manifest.
+    value: ${{ steps.observe.outputs.manifest-sha256 }}
+  cargo:
+    description: Observed absolute Cargo invocation path.
+    value: ${{ steps.observe.outputs.cargo }}
+  cargo-target-dir:
+    description: Absolute Cargo target directory for this cache layout.
+    value: ${{ steps.observe.outputs.cargo-target-dir }}
+  target-key:
+    description: Requested exact compiled-target cache key.
+    value: ${{ steps.observe.outputs.target-key }}
+  downloads-key:
+    description: Requested exact Cargo-download cache key.
+    value: ${{ steps.observe.outputs.downloads-key }}
+
+runs:
+  using: composite
+  steps:
+    - id: prepare
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        UV_RUST_CACHE_ACTION_PATH: ${{ github.action_path }}
+        UV_RUST_CACHE_SOURCE: ${{ inputs.source-directory }}
+        UV_RUST_CACHE_REPOSITORY: ${{ inputs.source-repository }}
+        UV_RUST_CACHE_COMMIT: ${{ inputs.source-commit }}
+        UV_RUST_CACHE_SAVE: ${{ inputs.save-if }}
+      run: |
+        set -euo pipefail
+        directory=$(mktemp -d "$RUNNER_TEMP/uv-rust-cache.XXXXXXXX")
+        python3 "$UV_RUST_CACHE_ACTION_PATH/../cache.py" prepare \
+          --workspace "$GITHUB_WORKSPACE" \
+          --source "$UV_RUST_CACHE_SOURCE" \
+          --repository "$UV_RUST_CACHE_REPOSITORY" \
+          --commit "$UV_RUST_CACHE_COMMIT" \
+          --save-if "$UV_RUST_CACHE_SAVE" \
+          --output "$directory/identity.json" \
+          --github-output "$GITHUB_OUTPUT"
+
+    - id: downloads
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.prepare.outputs.downloads-paths }}
+        key: ${{ steps.prepare.outputs.downloads-key }}
+        restore-keys: ${{ steps.prepare.outputs.downloads-restore-key }}
+
+    - id: target
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.prepare.outputs.target-paths }}
+        key: ${{ steps.prepare.outputs.target-key }}
+        restore-keys: ${{ steps.prepare.outputs.target-restore-key }}
+
+    - id: observe
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        UV_RUST_CACHE_ACTION_PATH: ${{ github.action_path }}
+        UV_RUST_CACHE_IDENTITY: ${{ steps.prepare.outputs.identity }}
+        UV_RUST_CACHE_IDENTITY_SHA256: ${{ steps.prepare.outputs.identity-sha256 }}
+        UV_RUST_CACHE_DOWNLOADS_PRIMARY: ${{ steps.downloads.outputs.cache-primary-key }}
+        UV_RUST_CACHE_DOWNLOADS_MATCHED: ${{ steps.downloads.outputs.cache-matched-key }}
+        UV_RUST_CACHE_DOWNLOADS_HIT: ${{ steps.downloads.outputs.cache-hit }}
+        UV_RUST_CACHE_TARGET_PRIMARY: ${{ steps.target.outputs.cache-primary-key }}
+        UV_RUST_CACHE_TARGET_MATCHED: ${{ steps.target.outputs.cache-matched-key }}
+        UV_RUST_CACHE_TARGET_HIT: ${{ steps.target.outputs.cache-hit }}
+      run: |
+        set -euo pipefail
+        python3 "$UV_RUST_CACHE_ACTION_PATH/../cache.py" observe \
+          --identity "$UV_RUST_CACHE_IDENTITY" \
+          --identity-sha256 "$UV_RUST_CACHE_IDENTITY_SHA256" \
+          --downloads-primary "$UV_RUST_CACHE_DOWNLOADS_PRIMARY" \
+          --downloads-matched "$UV_RUST_CACHE_DOWNLOADS_MATCHED" \
+          --downloads-hit "$UV_RUST_CACHE_DOWNLOADS_HIT" \
+          --target-primary "$UV_RUST_CACHE_TARGET_PRIMARY" \
+          --target-matched "$UV_RUST_CACHE_TARGET_MATCHED" \
+          --target-hit "$UV_RUST_CACHE_TARGET_HIT" \
+          --output "${UV_RUST_CACHE_IDENTITY%/*}/manifest.json" \
+          --github-output "$GITHUB_OUTPUT"

@@ -1,0 +1,52 @@
+name: Save the Linux nextest cache
+description: Save an eligible source-aware cache after the workload and pruning succeed.
+
+inputs:
+  manifest:
+    description: Restore manifest returned by the matching restore action.
+    required: true
+  manifest-sha256:
+    description: SHA-256 returned with the restore manifest.
+    required: true
+
+outputs:
+  downloads-save-outcome:
+    description: Outcome of the official downloads save action, not proof of publication.
+    value: ${{ steps.downloads.outcome }}
+  target-save-outcome:
+    description: Outcome of the official target save action, not proof of publication.
+    value: ${{ steps.target.outcome }}
+
+runs:
+  using: composite
+  steps:
+    - id: plan
+      if: ${{ success() }}
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        UV_RUST_CACHE_ACTION_PATH: ${{ github.action_path }}
+        UV_RUST_CACHE_MANIFEST: ${{ inputs.manifest }}
+        UV_RUST_CACHE_MANIFEST_SHA256: ${{ inputs.manifest-sha256 }}
+        UV_RUST_CACHE_JOB_STATUS: ${{ job.status }}
+      run: |
+        set -euo pipefail
+        python3 "$UV_RUST_CACHE_ACTION_PATH/../cache.py" verify \
+          --manifest "$UV_RUST_CACHE_MANIFEST" \
+          --manifest-sha256 "$UV_RUST_CACHE_MANIFEST_SHA256" \
+          --job-status "$UV_RUST_CACHE_JOB_STATUS" \
+          --github-output "$GITHUB_OUTPUT"
+
+    - id: downloads
+      if: ${{ success() && steps.plan.outputs.save-downloads == 'true' }}
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.plan.outputs.downloads-paths }}
+        key: ${{ steps.plan.outputs.downloads-key }}
+
+    - id: target
+      if: ${{ success() && steps.plan.outputs.save-target == 'true' }}
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.plan.outputs.target-paths }}
+        key: ${{ steps.plan.outputs.target-key }}
