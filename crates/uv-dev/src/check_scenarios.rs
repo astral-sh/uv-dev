@@ -11,10 +11,11 @@ use serde_json::json;
 use uv_python::PythonVersion;
 use uv_test::TestContext;
 use uv_test::packse::check::{
-    LockCheckOptions, LockCheckResult, LockfileMode, ScenarioPlatform, ScenarioTarget,
-    check_lock_scenario, check_lock_scenario_with_artifacts, check_project_lock_scenario,
-    check_project_lock_scenario_with_artifacts, check_scenario, check_scenario_with_artifacts,
-    check_witnessed_project_lock_scenario, check_witnessed_project_lock_scenario_with_artifacts,
+    LockCheckOptions, LockCheckResult, LockEvidenceMode, LockfileMode, ScenarioPlatform,
+    ScenarioTarget, check_lock_scenario, check_lock_scenario_with_artifacts,
+    check_project_lock_scenario, check_project_lock_scenario_with_artifacts, check_scenario,
+    check_scenario_with_artifacts, check_witnessed_project_lock_scenario,
+    check_witnessed_project_lock_scenario_with_artifacts,
 };
 use uv_test::packse::generate::{
     SmallGraphOptions, WitnessedProjectGraph, generate_marker_graph, generate_project_graph,
@@ -51,6 +52,10 @@ pub(crate) struct Args {
     /// Write and consume metadata-free preview lockfiles throughout the check.
     #[arg(long, requires = "lock")]
     lock_without_metadata: bool,
+
+    /// Classify witnessed lock failures with printed-v1 (default) or structured-v1 evidence.
+    #[arg(long, requires_all = ["lock", "project_selections"], value_name = "MODE")]
+    lock_evidence: Option<LockEvidenceMode>,
 
     /// Check explicit project-extra and dependency-group exports from the universal lock.
     ///
@@ -124,6 +129,12 @@ pub(crate) fn main(args: &Args) -> Result<()> {
     ensure!(
         args.witness.is_none() || args.scenarios.len() == 1,
         "--witness requires exactly one scenario file"
+    );
+    ensure!(
+        args.lock_evidence.unwrap_or_default() != LockEvidenceMode::StructuredV1
+            || args.satisfiable
+            || args.witness.is_some(),
+        "--lock-evidence structured-v1 requires --satisfiable or --witness"
     );
     let replay_witness = args.witness.as_deref().map(read_witness).transpose()?;
     let uv = fs_err::canonicalize(&args.uv)
@@ -299,6 +310,7 @@ fn check_case(
             } else {
                 LockfileMode::Standard
             },
+            evidence: args.lock_evidence.unwrap_or_default(),
         };
         let context = TestContext::new_with_versions_and_bin(&[interpreter], uv.to_path_buf());
         let failure_dir = args.failure_dir.clone().or_else(|| {
@@ -463,7 +475,88 @@ pub(crate) fn save_scenario_input(path: &Path, contents: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::bail;
+    use clap::Parser;
+
     use super::*;
+
+    #[test]
+    fn lock_evidence_is_explicit_and_requires_a_witnessed_project() -> Result<()> {
+        let crate::Cli::CheckScenarios(default) = crate::Cli::try_parse_from([
+            "uv-dev",
+            "check-scenarios",
+            "--uv",
+            "uv",
+            "--lock",
+            "--project-selections",
+            "graph.toml",
+        ])?
+        else {
+            bail!("expected the scenario checker");
+        };
+        assert_eq!(default.lock_evidence, None);
+        assert_eq!(
+            default.lock_evidence.unwrap_or_default(),
+            LockEvidenceMode::PrintedV1
+        );
+
+        for (mode, expected) in [
+            ("printed-v1", LockEvidenceMode::PrintedV1),
+            ("structured-v1", LockEvidenceMode::StructuredV1),
+        ] {
+            let crate::Cli::CheckScenarios(args) = crate::Cli::try_parse_from([
+                "uv-dev",
+                "check-scenarios",
+                "--uv",
+                "uv",
+                "--lock",
+                "--project-selections",
+                "--lock-evidence",
+                mode,
+                "--witness",
+                "graph.witness.json",
+                "graph.toml",
+            ])?
+            else {
+                bail!("expected the scenario checker");
+            };
+            assert_eq!(args.lock_evidence, Some(expected));
+            assert_eq!(expected.to_string(), mode);
+        }
+
+        for flags in [
+            vec!["--lock-evidence", "structured-v1"],
+            vec!["--lock", "--lock-evidence", "structured-v1"],
+            vec![
+                "--lock",
+                "--project-selections",
+                "--lock-evidence",
+                "unknown",
+            ],
+        ] {
+            let mut arguments = vec!["uv-dev", "check-scenarios", "--uv", "uv"];
+            arguments.extend(flags);
+            arguments.push("graph.toml");
+            assert!(crate::Cli::try_parse_from(arguments).is_err());
+        }
+
+        let crate::Cli::CheckScenarios(unwitnessed) = crate::Cli::try_parse_from([
+            "uv-dev",
+            "check-scenarios",
+            "--uv",
+            "uv",
+            "--lock",
+            "--project-selections",
+            "--lock-evidence",
+            "structured-v1",
+            "graph.toml",
+        ])?
+        else {
+            bail!("expected the scenario checker");
+        };
+        insta::assert_snapshot!(main(&unwitnessed).expect_err("a fresh witness is required"), @"--lock-evidence structured-v1 requires --satisfiable or --witness");
+        Ok(())
+    }
 
     #[test]
     fn saved_witnesses_supply_only_the_assignment() -> Result<()> {

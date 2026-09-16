@@ -13,6 +13,7 @@ use uv_configuration::TargetTriple;
 use uv_pep440::Operator;
 use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder, Requirement, VersionOrUrl};
 use uv_python::PythonVersion;
+use uv_resolver::no_solution_capture::ClosedWorldNoSolution;
 use uv_static::EnvVars;
 
 use crate::TestContext;
@@ -24,6 +25,7 @@ use super::generate::WitnessedProjectGraph;
 use super::oracle::{ScenarioOracle, SearchResult, Selection};
 use super::project::{ProjectSelection, ScenarioProject, project_name};
 use super::scenario::{Scenario, ScenarioDocument};
+use super::structured::{self, StructuredLock};
 use super::witness::{MarkerWitnessCertificate, certify_project_marker_witness};
 
 /// A representative platform for fixed-environment resolver checks.
@@ -239,6 +241,40 @@ impl LockfileMode {
     }
 }
 
+/// The evidence used to classify a witnessed universal lock failure.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LockEvidenceMode {
+    /// Recognize the bounded legacy printed derivation grammar.
+    #[default]
+    PrintedV1,
+    /// Require a source-bound original-DAG capture; never fall back to printed diagnostics.
+    StructuredV1,
+}
+
+impl FromStr for LockEvidenceMode {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "printed-v1" => Ok(Self::PrintedV1),
+            "structured-v1" => Ok(Self::StructuredV1),
+            _ => Err(format!(
+                "unsupported lock evidence mode `{value}`; expected printed-v1 or structured-v1"
+            )),
+        }
+    }
+}
+
+impl fmt::Display for LockEvidenceMode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::PrintedV1 => "printed-v1",
+            Self::StructuredV1 => "structured-v1",
+        })
+    }
+}
+
 /// Policy shared by the oracle, lock construction, round trips, and frozen exports.
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct LockCheckOptions {
@@ -246,6 +282,8 @@ pub struct LockCheckOptions {
     pub max_states: usize,
     /// Representation used by every command in the lockfile trace.
     pub lockfile: LockfileMode,
+    /// Evidence protocol used only for the initial witnessed lock conclusion.
+    pub evidence: LockEvidenceMode,
 }
 
 impl LockCheckOptions {
@@ -254,6 +292,7 @@ impl LockCheckOptions {
         Self {
             max_states,
             lockfile: LockfileMode::Standard,
+            evidence: LockEvidenceMode::PrintedV1,
         }
     }
 }
@@ -507,6 +546,9 @@ fn check_witnessed_project_lock_scenario_inner(
     max_witness_work: usize,
     failure_dir: Option<&Path>,
 ) -> Result<LockCheckResult> {
+    if options.evidence == LockEvidenceMode::StructuredV1 {
+        structured::validate_document(&graph.document)?;
+    }
     let certificate =
         certify_project_marker_witness(&graph.document, &graph.assignment, max_witness_work)?;
     let scenario = graph.document.scenario()?;
@@ -534,6 +576,10 @@ fn check_lock_scenario_inner(
     options: LockCheckOptions,
     artifacts: Option<(&Path, &ScenarioDocument)>,
 ) -> Result<LockCheckResult> {
+    ensure!(
+        options.evidence == LockEvidenceMode::PrintedV1,
+        "structured evidence requires a freshly certified project witness"
+    );
     ensure!(
         !targets.is_empty(),
         "at least one lock projection is required"
@@ -617,6 +663,13 @@ fn check_project_lock_scenario_inner(
     witness: Option<MarkerWitnessCertificate>,
     artifacts: Option<(&Path, &ScenarioDocument)>,
 ) -> Result<LockCheckResult> {
+    if options.evidence == LockEvidenceMode::StructuredV1 {
+        ensure!(
+            witness.is_some(),
+            "structured evidence requires a freshly certified project witness"
+        );
+        structured::validate_scenario_policy(scenario)?;
+    }
     ensure!(
         !targets.is_empty(),
         "at least one lock projection is required"
@@ -731,7 +784,15 @@ struct LockRun<'a> {
 struct WitnessedLock {
     certificate: MarkerWitnessCertificate,
     cache: tempfile::TempDir,
-    derivation: Option<SemanticNoSolution>,
+    derivation: Option<WitnessedDerivation>,
+    structured: Option<StructuredLock>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum WitnessedDerivation {
+    Printed(SemanticNoSolution),
+    Structured(ClosedWorldNoSolution),
 }
 
 impl<'a> LockRun<'a> {
@@ -743,6 +804,10 @@ impl<'a> LockRun<'a> {
         options: LockCheckOptions,
         witness: Option<MarkerWitnessCertificate>,
     ) -> Result<Self> {
+        ensure!(
+            options.evidence == LockEvidenceMode::PrintedV1 || witness.is_some(),
+            "structured evidence requires a freshly certified project witness"
+        );
         fs_err::write(context.temp_dir.join("pyproject.toml"), &pyproject)?;
         let lock_path = context.temp_dir.join("uv.lock");
         if let Err(error) = fs_err::remove_file(&lock_path)
@@ -761,10 +826,22 @@ impl<'a> LockRun<'a> {
                 let cache = tempfile::Builder::new()
                     .prefix("scenario-witness-cache-")
                     .tempdir_in(context.root.path())?;
+                let structured = match options.evidence {
+                    LockEvidenceMode::PrintedV1 => None,
+                    LockEvidenceMode::StructuredV1 => Some(StructuredLock::new(
+                        context,
+                        scenario,
+                        server,
+                        &pyproject,
+                        options.lockfile,
+                        cache.path(),
+                    )?),
+                };
                 Ok::<_, anyhow::Error>(WitnessedLock {
                     certificate,
                     cache,
                     derivation: None,
+                    structured,
                 })
             })
             .transpose()?;
@@ -786,12 +863,25 @@ impl<'a> LockRun<'a> {
     }
 
     fn resolve(&mut self) -> Result<Output> {
-        self.run_command("lock", self.resolve_command())
+        let mut command = self.resolve_command();
+        if let Some(structured) = self
+            .witness
+            .as_mut()
+            .and_then(|witness| witness.structured.as_mut())
+        {
+            structured.prepare_initial(&mut command)?;
+            self.trace
+                .run_bound("lock", command, &self.lock_path, |identity, output| {
+                    structured.record_initial(identity, output)
+                })
+        } else {
+            self.run_command("lock", command)
+        }
     }
 
     fn resolve_command(&self) -> Command {
         let mut command = self.lock_command();
-        if self.witness.is_some() {
+        if self.witness.is_some() && self.options.evidence == LockEvidenceMode::PrintedV1 {
             command
                 .arg("--no-offline")
                 .env(EnvVars::UV_INTERNAL__SHOW_DERIVATION_TREE, "1");
@@ -800,12 +890,26 @@ impl<'a> LockRun<'a> {
     }
 
     fn lock_command(&self) -> Command {
+        if let Some(structured) = self
+            .witness
+            .as_ref()
+            .and_then(|witness| witness.structured.as_ref())
+        {
+            return structured.lock_command(self.context);
+        }
         let mut command = lock_command(self.command("lock"), self.scenario, self.server);
         self.options.lockfile.apply(&mut command);
         command
     }
 
     fn command(&self, subcommand: &str) -> Command {
+        if let Some(structured) = self
+            .witness
+            .as_ref()
+            .and_then(|witness| witness.structured.as_ref())
+        {
+            return structured.command(self.context, subcommand);
+        }
         let mut command = self.context.new_command();
         command.arg(subcommand);
         if let Some(witness) = &self.witness {
@@ -866,6 +970,40 @@ impl<'a> LockRun<'a> {
         let unsatisfiable = searches
             .iter()
             .find(|projection| projection.search.solution.is_none());
+        if self.options.evidence == LockEvidenceMode::StructuredV1 {
+            let witness = self
+                .witness
+                .as_mut()
+                .context("structured evidence has no project witness")?;
+            let structured = witness
+                .structured
+                .as_ref()
+                .context("structured evidence has no invocation")?;
+            if let Some(derivation) = structured.conclusion()? {
+                ensure!(
+                    unsatisfiable.is_none(),
+                    "the sampled oracle contradicts the whole-domain witness"
+                );
+                witness.derivation = Some(WitnessedDerivation::Structured(derivation));
+                return Err(anyhow::anyhow!(
+                    "the whole-domain marker witness satisfies the project:\n{}",
+                    String::from_utf8_lossy(&output.stderr)
+                )
+                .context(LockScenarioFailureKind::FalseUnsatisfiable));
+            }
+            ensure!(
+                output.status.success(),
+                "structured evidence has no terminal conclusion"
+            );
+            if let Some(projection) = unsatisfiable {
+                return Err(anyhow::anyhow!(
+                    "uv lock succeeded, but its {} projection is unsatisfiable",
+                    projection.target
+                )
+                .context(LockScenarioFailureKind::FalseSatisfiable));
+            }
+            return Ok(None);
+        }
         if output.status.success() {
             if let Some(projection) = unsatisfiable {
                 return Err(anyhow::anyhow!(
@@ -881,7 +1019,7 @@ impl<'a> LockRun<'a> {
             return Ok(Some(projection.target.clone()));
         }
         if let Some(witness) = &mut self.witness {
-            witness.derivation = Some(
+            witness.derivation = Some(WitnessedDerivation::Printed(
                 certify_no_solution(
                     self.scenario,
                     output.status.code(),
@@ -889,7 +1027,7 @@ impl<'a> LockRun<'a> {
                     &output.stderr,
                 )
                 .context("the witnessed lock failure has no certified semantic derivation")?,
-            );
+            ));
             return Err(anyhow::anyhow!(
                 "the whole-domain marker witness satisfies the project:\n{}",
                 String::from_utf8_lossy(&output.stderr)
@@ -1004,8 +1142,9 @@ impl<'a> LockRun<'a> {
         if let Some((directory, document)) = artifacts
             && !self.trace.is_empty()
         {
-            if LockScenarioFailureKind::from_error(&error)
-                == Some(LockScenarioFailureKind::NonCanonicalLockfile)
+            if self.options.evidence == LockEvidenceMode::PrintedV1
+                && LockScenarioFailureKind::from_error(&error)
+                    == Some(LockScenarioFailureKind::NonCanonicalLockfile)
                 && let Err(capture_error) = self.capture_canonical_refresh()
             {
                 error = error.context(format!(
@@ -1034,10 +1173,20 @@ impl<'a> LockRun<'a> {
         error: &anyhow::Error,
     ) -> Result<()> {
         evidence::create_directory(directory)?;
-        fs_err::write(directory.join("scenario.toml"), document.to_toml()?)?;
+        let scenario_toml = document.to_toml()?;
+        fs_err::write(directory.join("scenario.toml"), &scenario_toml)?;
         fs_err::write(directory.join("pyproject.toml"), &self.pyproject)?;
         self.trace.write(directory)?;
         self.server.write_distributions(&directory.join("index"))?;
+        if let Some(witness) = &self.witness
+            && let Some(structured) = &witness.structured
+        {
+            structured.write_artifacts(
+                directory,
+                &structured::hash_bytes(scenario_toml.as_bytes()),
+                &structured::hash_json(witness.certificate.assignment())?,
+            )?;
+        }
         fs_err::write(
             directory.join("failure.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
@@ -1060,7 +1209,7 @@ impl<'a> LockRun<'a> {
                         "builds": false,
                         "python_downloads": false,
                         "proxy_routing": false,
-                        "raw_derivation": true,
+                        "raw_derivation": self.options.evidence == LockEvidenceMode::PrintedV1,
                     },
                 })),
             }))?,

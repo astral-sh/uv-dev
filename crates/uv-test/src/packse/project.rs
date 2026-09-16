@@ -109,6 +109,20 @@ impl<'a> ScenarioProject<'a> {
         &self.name
     }
 
+    /// Borrow the validated conflict-free roots without cloning the expanded group requirements.
+    pub(super) fn all_requirements(&self) -> impl Iterator<Item = &Requirement> {
+        self.scenario
+            .root
+            .requires
+            .iter()
+            .chain(self.scenario.root.optional_dependencies.values().flatten())
+            .chain(self.groups.values().flatten())
+    }
+
+    pub(super) fn group_names(&self) -> impl Iterator<Item = &GroupName> {
+        self.groups.keys()
+    }
+
     /// Select every optional dependency and group, as required by a conflict-free universal lock.
     pub fn all_selection(&self) -> ProjectSelection {
         ProjectSelection {

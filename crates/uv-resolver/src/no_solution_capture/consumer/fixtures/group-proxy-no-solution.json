@@ -1,0 +1,1390 @@
+{
+  "schema": 1,
+  "request": "e850e730d1404dd1b4fbd821ebc05c62",
+  "producer_pid": 80645,
+  "command": "lock",
+  "scope": "workspace",
+  "operation": "write",
+  "metadata": "standard",
+  "terminal": "no_solution",
+  "status": "complete",
+  "limits": {
+    "derivation_nodes": 16384,
+    "packages": 4096,
+    "terms": 65536,
+    "intervals": 131072,
+    "marker_nodes": 16384,
+    "marker_edges": 65536,
+    "availability_entries": 65536,
+    "version_components": 256,
+    "atom_bytes": 16384,
+    "text_bytes": 2097152,
+    "work": 1000000,
+    "json_bytes": 8388608
+  },
+  "usage": {
+    "derivation_nodes": 19,
+    "packages": 8,
+    "terms": 9,
+    "intervals": 59,
+    "marker_nodes": 8,
+    "marker_edges": 17,
+    "availability_entries": 12,
+    "max_version_components": 3,
+    "max_atom_bytes": 30,
+    "text_bytes": 595,
+    "work": 889
+  },
+  "graph": {
+    "root": 18,
+    "root_package": 0,
+    "root_version": {
+      "epoch": "0",
+      "release": ["0"],
+      "pre": { "kind": "alpha", "number": "0" },
+      "dev": "0",
+      "local": { "kind": "segments", "segments": [] }
+    },
+    "nodes": [
+      {
+        "no_versions": {
+          "package": 1,
+          "range": {
+            "encoded": [
+              {
+                "lower": { "kind": "unbounded" },
+                "upper": {
+                  "kind": "excluded",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["0", "0", "0"],
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                }
+              },
+              {
+                "lower": {
+                  "kind": "excluded",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["0", "0", "0"],
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                },
+                "upper": { "kind": "unbounded" }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "no_versions": {
+          "package": 2,
+          "range": {
+            "encoded": [
+              {
+                "lower": {
+                  "kind": "included",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["2"],
+                    "local": { "kind": "max" }
+                  }
+                },
+                "upper": { "kind": "unbounded" }
+              }
+            ],
+            "logical": [
+              {
+                "lower": {
+                  "kind": "included",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["2"],
+                    "post": "0",
+                    "dev": "0",
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                },
+                "upper": { "kind": "unbounded" }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "no_versions": {
+          "package": 3,
+          "range": {
+            "encoded": [
+              {
+                "lower": { "kind": "unbounded" },
+                "upper": { "kind": "unbounded" }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "from_dependency_of": {
+          "package": 4,
+          "range": {
+            "encoded": [
+              {
+                "lower": { "kind": "unbounded" },
+                "upper": {
+                  "kind": "excluded",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["2", "0", "0"],
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                }
+              }
+            ]
+          },
+          "dependency": 3,
+          "dependency_range": {
+            "encoded": [
+              {
+                "lower": { "kind": "unbounded" },
+                "upper": { "kind": "unbounded" }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "derived": {
+          "cause1": 2,
+          "cause2": 3,
+          "terms": [
+            {
+              "package": 4,
+              "positive": true,
+              "range": {
+                "encoded": [
+                  {
+                    "lower": { "kind": "unbounded" },
+                    "upper": {
+                      "kind": "excluded",
+                      "version": {
+                        "epoch": "0",
+                        "release": ["2", "0", "0"],
+                        "local": { "kind": "segments", "segments": [] }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "from_dependency_of": {
+          "package": 2,
+          "range": {
+            "encoded": [
+              {
+                "lower": { "kind": "unbounded" },
+                "upper": {
+                  "kind": "excluded",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["2", "0", "0"],
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                }
+              }
+            ]
+          },
+          "dependency": 4,
+          "dependency_range": {
+            "encoded": [
+              {
+                "lower": {
+                  "kind": "included",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["1", "0", "0"],
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                },
+                "upper": {
+                  "kind": "included",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["1", "0", "0"],
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "derived": {
+          "cause1": 4,
+          "cause2": 5,
+          "terms": [
+            {
+              "package": 2,
+              "positive": true,
+              "range": {
+                "encoded": [
+                  {
+                    "lower": { "kind": "unbounded" },
+                    "upper": {
+                      "kind": "excluded",
+                      "version": {
+                        "epoch": "0",
+                        "release": ["2", "0", "0"],
+                        "local": { "kind": "segments", "segments": [] }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "derived": {
+          "cause1": 1,
+          "cause2": 6,
+          "terms": [
+            {
+              "package": 2,
+              "positive": true,
+              "range": {
+                "encoded": [
+                  {
+                    "lower": { "kind": "unbounded" },
+                    "upper": {
+                      "kind": "excluded",
+                      "version": {
+                        "epoch": "0",
+                        "release": ["2", "0", "0"],
+                        "local": { "kind": "segments", "segments": [] }
+                      }
+                    }
+                  },
+                  {
+                    "lower": {
+                      "kind": "included",
+                      "version": {
+                        "epoch": "0",
+                        "release": ["2"],
+                        "local": { "kind": "max" }
+                      }
+                    },
+                    "upper": { "kind": "unbounded" }
+                  }
+                ],
+                "logical": [
+                  {
+                    "lower": { "kind": "unbounded" },
+                    "upper": {
+                      "kind": "excluded",
+                      "version": {
+                        "epoch": "0",
+                        "release": ["2", "0", "0"],
+                        "local": { "kind": "segments", "segments": [] }
+                      }
+                    }
+                  },
+                  {
+                    "lower": {
+                      "kind": "included",
+                      "version": {
+                        "epoch": "0",
+                        "release": ["2"],
+                        "post": "0",
+                        "dev": "0",
+                        "local": { "kind": "segments", "segments": [] }
+                      }
+                    },
+                    "upper": { "kind": "unbounded" }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "from_dependency_of": {
+          "package": 5,
+          "range": {
+            "encoded": [
+              {
+                "lower": { "kind": "unbounded" },
+                "upper": {
+                  "kind": "excluded",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["2", "0", "0"],
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                }
+              }
+            ]
+          },
+          "dependency": 2,
+          "dependency_range": {
+            "encoded": [
+              {
+                "lower": { "kind": "unbounded" },
+                "upper": {
+                  "kind": "excluded",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["2"],
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                }
+              },
+              {
+                "lower": {
+                  "kind": "included",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["2"],
+                    "local": { "kind": "max" }
+                  }
+                },
+                "upper": { "kind": "unbounded" }
+              }
+            ],
+            "logical": [
+              {
+                "lower": { "kind": "unbounded" },
+                "upper": {
+                  "kind": "excluded",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["2"],
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                }
+              },
+              {
+                "lower": {
+                  "kind": "included",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["2"],
+                    "post": "0",
+                    "dev": "0",
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                },
+                "upper": { "kind": "unbounded" }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "derived": {
+          "cause1": 7,
+          "cause2": 8,
+          "terms": [
+            {
+              "package": 5,
+              "positive": true,
+              "range": {
+                "encoded": [
+                  {
+                    "lower": { "kind": "unbounded" },
+                    "upper": {
+                      "kind": "excluded",
+                      "version": {
+                        "epoch": "0",
+                        "release": ["2", "0", "0"],
+                        "local": { "kind": "segments", "segments": [] }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "from_dependency_of": {
+          "package": 6,
+          "range": {
+            "encoded": [
+              {
+                "lower": {
+                  "kind": "included",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["1"],
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                },
+                "upper": {
+                  "kind": "excluded",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["2"],
+                    "local": { "kind": "segments", "segments": [] },
+                    "min": "0"
+                  }
+                }
+              }
+            ],
+            "logical": [
+              {
+                "lower": {
+                  "kind": "included",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["1"],
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                },
+                "upper": {
+                  "kind": "excluded",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["2"],
+                    "dev": "0",
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                }
+              }
+            ]
+          },
+          "dependency": 5,
+          "dependency_range": {
+            "encoded": [
+              {
+                "lower": {
+                  "kind": "included",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["1"],
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                },
+                "upper": {
+                  "kind": "excluded",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["2"],
+                    "local": { "kind": "segments", "segments": [] },
+                    "min": "0"
+                  }
+                }
+              }
+            ],
+            "logical": [
+              {
+                "lower": {
+                  "kind": "included",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["1"],
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                },
+                "upper": {
+                  "kind": "excluded",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["2"],
+                    "dev": "0",
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "derived": {
+          "cause1": 9,
+          "cause2": 10,
+          "terms": [
+            {
+              "package": 6,
+              "positive": true,
+              "range": {
+                "encoded": [
+                  {
+                    "lower": {
+                      "kind": "included",
+                      "version": {
+                        "epoch": "0",
+                        "release": ["1"],
+                        "local": { "kind": "segments", "segments": [] }
+                      }
+                    },
+                    "upper": {
+                      "kind": "excluded",
+                      "version": {
+                        "epoch": "0",
+                        "release": ["2"],
+                        "local": { "kind": "segments", "segments": [] },
+                        "min": "0"
+                      }
+                    }
+                  }
+                ],
+                "logical": [
+                  {
+                    "lower": {
+                      "kind": "included",
+                      "version": {
+                        "epoch": "0",
+                        "release": ["1"],
+                        "local": { "kind": "segments", "segments": [] }
+                      }
+                    },
+                    "upper": {
+                      "kind": "excluded",
+                      "version": {
+                        "epoch": "0",
+                        "release": ["2"],
+                        "dev": "0",
+                        "local": { "kind": "segments", "segments": [] }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "from_dependency_of": {
+          "package": 7,
+          "range": {
+            "encoded": [
+              {
+                "lower": {
+                  "kind": "included",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["0", "0", "0"],
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                },
+                "upper": {
+                  "kind": "included",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["0", "0", "0"],
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                }
+              }
+            ]
+          },
+          "dependency": 6,
+          "dependency_range": {
+            "encoded": [
+              {
+                "lower": {
+                  "kind": "included",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["1"],
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                },
+                "upper": {
+                  "kind": "excluded",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["2"],
+                    "local": { "kind": "segments", "segments": [] },
+                    "min": "0"
+                  }
+                }
+              }
+            ],
+            "logical": [
+              {
+                "lower": {
+                  "kind": "included",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["1"],
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                },
+                "upper": {
+                  "kind": "excluded",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["2"],
+                    "dev": "0",
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "derived": {
+          "cause1": 11,
+          "cause2": 12,
+          "terms": [
+            {
+              "package": 7,
+              "positive": true,
+              "range": {
+                "encoded": [
+                  {
+                    "lower": {
+                      "kind": "included",
+                      "version": {
+                        "epoch": "0",
+                        "release": ["0", "0", "0"],
+                        "local": { "kind": "segments", "segments": [] }
+                      }
+                    },
+                    "upper": {
+                      "kind": "included",
+                      "version": {
+                        "epoch": "0",
+                        "release": ["0", "0", "0"],
+                        "local": { "kind": "segments", "segments": [] }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "from_dependency_of": {
+          "package": 1,
+          "range": {
+            "encoded": [
+              {
+                "lower": {
+                  "kind": "included",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["0", "0", "0"],
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                },
+                "upper": {
+                  "kind": "included",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["0", "0", "0"],
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                }
+              }
+            ]
+          },
+          "dependency": 7,
+          "dependency_range": {
+            "encoded": [
+              {
+                "lower": {
+                  "kind": "included",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["0", "0", "0"],
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                },
+                "upper": {
+                  "kind": "included",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["0", "0", "0"],
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "derived": {
+          "cause1": 13,
+          "cause2": 14,
+          "terms": [
+            {
+              "package": 1,
+              "positive": true,
+              "range": {
+                "encoded": [
+                  {
+                    "lower": {
+                      "kind": "included",
+                      "version": {
+                        "epoch": "0",
+                        "release": ["0", "0", "0"],
+                        "local": { "kind": "segments", "segments": [] }
+                      }
+                    },
+                    "upper": {
+                      "kind": "included",
+                      "version": {
+                        "epoch": "0",
+                        "release": ["0", "0", "0"],
+                        "local": { "kind": "segments", "segments": [] }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "derived": {
+          "cause1": 0,
+          "cause2": 15,
+          "terms": [
+            {
+              "package": 1,
+              "positive": true,
+              "range": {
+                "encoded": [
+                  {
+                    "lower": { "kind": "unbounded" },
+                    "upper": { "kind": "unbounded" }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "from_dependency_of": {
+          "package": 0,
+          "range": {
+            "encoded": [
+              {
+                "lower": {
+                  "kind": "included",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["0"],
+                    "pre": { "kind": "alpha", "number": "0" },
+                    "dev": "0",
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                },
+                "upper": {
+                  "kind": "included",
+                  "version": {
+                    "epoch": "0",
+                    "release": ["0"],
+                    "pre": { "kind": "alpha", "number": "0" },
+                    "dev": "0",
+                    "local": { "kind": "segments", "segments": [] }
+                  }
+                }
+              }
+            ]
+          },
+          "dependency": 1,
+          "dependency_range": {
+            "encoded": [
+              {
+                "lower": { "kind": "unbounded" },
+                "upper": { "kind": "unbounded" }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "derived": {
+          "cause1": 16,
+          "cause2": 17,
+          "terms": [
+            {
+              "package": 0,
+              "positive": true,
+              "range": {
+                "encoded": [
+                  {
+                    "lower": {
+                      "kind": "included",
+                      "version": {
+                        "epoch": "0",
+                        "release": ["0"],
+                        "pre": { "kind": "alpha", "number": "0" },
+                        "dev": "0",
+                        "local": { "kind": "segments", "segments": [] }
+                      }
+                    },
+                    "upper": {
+                      "kind": "included",
+                      "version": {
+                        "epoch": "0",
+                        "release": ["0"],
+                        "pre": { "kind": "alpha", "number": "0" },
+                        "dev": "0",
+                        "local": { "kind": "segments", "segments": [] }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "packages": [
+      { "root": { "name": null } },
+      {
+        "group": { "name": "uv-scenario-root", "group": "shared", "marker": 0 }
+      },
+      { "extra": { "name": "node-2", "extra": "feature", "marker": 0 } },
+      { "marker": { "name": "node-0", "marker": 2 } },
+      {
+        "package": {
+          "name": "node-2",
+          "extra": "feature",
+          "group": null,
+          "marker": 0
+        }
+      },
+      {
+        "package": {
+          "name": "node-1",
+          "extra": null,
+          "group": null,
+          "marker": 0
+        }
+      },
+      { "marker": { "name": "node-1", "marker": 3 } },
+      {
+        "package": {
+          "name": "uv-scenario-root",
+          "extra": null,
+          "group": "shared",
+          "marker": 0
+        }
+      }
+    ],
+    "markers": [
+      "true",
+      "false",
+      {
+        "string": {
+          "key": "sys_platform",
+          "edges": [
+            {
+              "intervals": [
+                {
+                  "lower": { "kind": "unbounded" },
+                  "upper": { "kind": "excluded", "value": "darwin" }
+                }
+              ],
+              "child": 1
+            },
+            {
+              "intervals": [
+                {
+                  "lower": { "kind": "included", "value": "darwin" },
+                  "upper": { "kind": "included", "value": "darwin" }
+                }
+              ],
+              "child": 0
+            },
+            {
+              "intervals": [
+                {
+                  "lower": { "kind": "excluded", "value": "darwin" },
+                  "upper": { "kind": "unbounded" }
+                }
+              ],
+              "child": 1
+            }
+          ]
+        }
+      },
+      {
+        "string": {
+          "key": "sys_platform",
+          "edges": [
+            {
+              "intervals": [
+                {
+                  "lower": { "kind": "unbounded" },
+                  "upper": { "kind": "excluded", "value": "win32" }
+                }
+              ],
+              "child": 1
+            },
+            {
+              "intervals": [
+                {
+                  "lower": { "kind": "included", "value": "win32" },
+                  "upper": { "kind": "included", "value": "win32" }
+                }
+              ],
+              "child": 0
+            },
+            {
+              "intervals": [
+                {
+                  "lower": { "kind": "excluded", "value": "win32" },
+                  "upper": { "kind": "unbounded" }
+                }
+              ],
+              "child": 1
+            }
+          ]
+        }
+      },
+      {
+        "version": {
+          "key": "python_full_version",
+          "edges": [
+            {
+              "intervals": [
+                {
+                  "lower": { "kind": "unbounded" },
+                  "upper": {
+                    "kind": "excluded",
+                    "version": {
+                      "epoch": "0",
+                      "release": ["3", "13"],
+                      "local": { "kind": "segments", "segments": [] }
+                    }
+                  }
+                }
+              ],
+              "child": 1
+            },
+            {
+              "intervals": [
+                {
+                  "lower": {
+                    "kind": "included",
+                    "version": {
+                      "epoch": "0",
+                      "release": ["3", "13"],
+                      "local": { "kind": "segments", "segments": [] }
+                    }
+                  },
+                  "upper": { "kind": "unbounded" }
+                }
+              ],
+              "child": 0
+            }
+          ]
+        }
+      },
+      {
+        "string": {
+          "key": "sys_platform",
+          "edges": [
+            {
+              "intervals": [
+                {
+                  "lower": { "kind": "unbounded" },
+                  "upper": { "kind": "excluded", "value": "darwin" }
+                }
+              ],
+              "child": 1
+            },
+            {
+              "intervals": [
+                {
+                  "lower": { "kind": "included", "value": "darwin" },
+                  "upper": { "kind": "included", "value": "darwin" }
+                }
+              ],
+              "child": 4
+            },
+            {
+              "intervals": [
+                {
+                  "lower": { "kind": "excluded", "value": "darwin" },
+                  "upper": { "kind": "unbounded" }
+                }
+              ],
+              "child": 1
+            }
+          ]
+        }
+      },
+      {
+        "version": {
+          "key": "python_full_version",
+          "edges": [
+            {
+              "intervals": [
+                {
+                  "lower": { "kind": "unbounded" },
+                  "upper": {
+                    "kind": "excluded",
+                    "version": {
+                      "epoch": "0",
+                      "release": ["3", "12"],
+                      "local": { "kind": "segments", "segments": [] }
+                    }
+                  }
+                }
+              ],
+              "child": 1
+            },
+            {
+              "intervals": [
+                {
+                  "lower": {
+                    "kind": "included",
+                    "version": {
+                      "epoch": "0",
+                      "release": ["3", "12"],
+                      "local": { "kind": "segments", "segments": [] }
+                    }
+                  },
+                  "upper": {
+                    "kind": "excluded",
+                    "version": {
+                      "epoch": "0",
+                      "release": ["3", "15"],
+                      "local": { "kind": "segments", "segments": [] }
+                    }
+                  }
+                }
+              ],
+              "child": 0
+            },
+            {
+              "intervals": [
+                {
+                  "lower": {
+                    "kind": "included",
+                    "version": {
+                      "epoch": "0",
+                      "release": ["3", "15"],
+                      "local": { "kind": "segments", "segments": [] }
+                    }
+                  },
+                  "upper": { "kind": "unbounded" }
+                }
+              ],
+              "child": 1
+            }
+          ]
+        }
+      },
+      {
+        "version": {
+          "key": "python_full_version",
+          "edges": [
+            {
+              "intervals": [
+                {
+                  "lower": { "kind": "unbounded" },
+                  "upper": {
+                    "kind": "excluded",
+                    "version": {
+                      "epoch": "0",
+                      "release": ["3", "13"],
+                      "local": { "kind": "segments", "segments": [] }
+                    }
+                  }
+                }
+              ],
+              "child": 1
+            },
+            {
+              "intervals": [
+                {
+                  "lower": {
+                    "kind": "included",
+                    "version": {
+                      "epoch": "0",
+                      "release": ["3", "13"],
+                      "local": { "kind": "segments", "segments": [] }
+                    }
+                  },
+                  "upper": {
+                    "kind": "excluded",
+                    "version": {
+                      "epoch": "0",
+                      "release": ["3", "15"],
+                      "local": { "kind": "segments", "segments": [] }
+                    }
+                  }
+                }
+              ],
+              "child": 0
+            },
+            {
+              "intervals": [
+                {
+                  "lower": {
+                    "kind": "included",
+                    "version": {
+                      "epoch": "0",
+                      "release": ["3", "15"],
+                      "local": { "kind": "segments", "segments": [] }
+                    }
+                  },
+                  "upper": { "kind": "unbounded" }
+                }
+              ],
+              "child": 1
+            }
+          ]
+        }
+      }
+    ],
+    "workspace_members": ["uv-scenario-root"],
+    "environment": {
+      "marker": 5,
+      "initial_forks": [],
+      "include": [],
+      "exclude": []
+    },
+    "original_python": {
+      "source": "requires_python",
+      "exact": {
+        "epoch": "0",
+        "release": ["3", "12", "13"],
+        "local": { "kind": "segments", "segments": [] }
+      },
+      "installed": {
+        "lower": {
+          "kind": "included",
+          "version": {
+            "epoch": "0",
+            "release": ["3", "12", "13"],
+            "local": { "kind": "segments", "segments": [] }
+          }
+        },
+        "upper": { "kind": "unbounded" },
+        "specifiers": [
+          {
+            "operator": "greater_than_equal",
+            "version": {
+              "epoch": "0",
+              "release": ["3", "12", "13"],
+              "local": { "kind": "segments", "segments": [] }
+            }
+          }
+        ]
+      },
+      "target": {
+        "lower": {
+          "kind": "included",
+          "version": {
+            "epoch": "0",
+            "release": ["3", "12"],
+            "local": { "kind": "segments", "segments": [] }
+          }
+        },
+        "upper": {
+          "kind": "excluded",
+          "version": {
+            "epoch": "0",
+            "release": ["3", "15"],
+            "local": { "kind": "segments", "segments": [] }
+          }
+        },
+        "specifiers": [
+          {
+            "operator": "greater_than_equal",
+            "version": {
+              "epoch": "0",
+              "release": ["3", "12"],
+              "local": { "kind": "segments", "segments": [] }
+            }
+          },
+          {
+            "operator": "less_than",
+            "version": {
+              "epoch": "0",
+              "release": ["3", "15"],
+              "local": { "kind": "segments", "segments": [] }
+            }
+          }
+        ]
+      },
+      "target_marker": 6
+    },
+    "effective_python": {
+      "source": "requires_python",
+      "exact": {
+        "epoch": "0",
+        "release": ["3", "12", "13"],
+        "local": { "kind": "segments", "segments": [] }
+      },
+      "installed": {
+        "lower": {
+          "kind": "included",
+          "version": {
+            "epoch": "0",
+            "release": ["3", "12", "13"],
+            "local": { "kind": "segments", "segments": [] }
+          }
+        },
+        "upper": { "kind": "unbounded" },
+        "specifiers": [
+          {
+            "operator": "greater_than_equal",
+            "version": {
+              "epoch": "0",
+              "release": ["3", "12", "13"],
+              "local": { "kind": "segments", "segments": [] }
+            }
+          }
+        ]
+      },
+      "target": {
+        "lower": {
+          "kind": "included",
+          "version": {
+            "epoch": "0",
+            "release": ["3", "13"],
+            "local": { "kind": "segments", "segments": [] }
+          }
+        },
+        "upper": {
+          "kind": "excluded",
+          "version": {
+            "epoch": "0",
+            "release": ["3", "15"],
+            "local": { "kind": "segments", "segments": [] }
+          }
+        },
+        "specifiers": [
+          {
+            "operator": "greater_than_equal",
+            "version": {
+              "epoch": "0",
+              "release": ["3", "13"],
+              "local": { "kind": "segments", "segments": [] }
+            }
+          },
+          {
+            "operator": "less_than",
+            "version": {
+              "epoch": "0",
+              "release": ["3", "15"],
+              "local": { "kind": "segments", "segments": [] }
+            }
+          }
+        ]
+      },
+      "target_marker": 7
+    },
+    "index_authentication": { "unauthorized": false, "forbidden": false },
+    "observations": [
+      {
+        "name": "node-0",
+        "source": "registry",
+        "has_url_policy": false,
+        "has_index_policy": false,
+        "listing": "not_found",
+        "listed_versions": [],
+        "known_versions": [],
+        "unavailable": { "kind": "package_not_found" },
+        "incomplete": []
+      },
+      {
+        "name": "node-1",
+        "source": "registry",
+        "has_url_policy": false,
+        "has_index_policy": false,
+        "listing": "found",
+        "listed_versions": [
+          {
+            "epoch": "0",
+            "release": ["1", "0", "0"],
+            "local": { "kind": "segments", "segments": [] }
+          },
+          {
+            "epoch": "0",
+            "release": ["2", "0", "0"],
+            "local": { "kind": "segments", "segments": [] }
+          }
+        ],
+        "known_versions": [
+          {
+            "epoch": "0",
+            "release": ["1", "0", "0"],
+            "local": { "kind": "segments", "segments": [] }
+          },
+          {
+            "epoch": "0",
+            "release": ["2", "0", "0"],
+            "local": { "kind": "segments", "segments": [] }
+          }
+        ],
+        "unavailable": null,
+        "incomplete": []
+      },
+      {
+        "name": "node-2",
+        "source": "registry",
+        "has_url_policy": false,
+        "has_index_policy": false,
+        "listing": "found",
+        "listed_versions": [
+          {
+            "epoch": "0",
+            "release": ["1", "0", "0"],
+            "local": { "kind": "segments", "segments": [] }
+          },
+          {
+            "epoch": "0",
+            "release": ["2", "0", "0"],
+            "local": { "kind": "segments", "segments": [] }
+          }
+        ],
+        "known_versions": [
+          {
+            "epoch": "0",
+            "release": ["1", "0", "0"],
+            "local": { "kind": "segments", "segments": [] }
+          },
+          {
+            "epoch": "0",
+            "release": ["2", "0", "0"],
+            "local": { "kind": "segments", "segments": [] }
+          }
+        ],
+        "unavailable": null,
+        "incomplete": []
+      },
+      {
+        "name": "uv-scenario-root",
+        "source": "directory",
+        "has_url_policy": true,
+        "has_index_policy": false,
+        "listing": "not_applicable",
+        "listed_versions": [],
+        "known_versions": [],
+        "unavailable": null,
+        "incomplete": []
+      }
+    ]
+  }
+}

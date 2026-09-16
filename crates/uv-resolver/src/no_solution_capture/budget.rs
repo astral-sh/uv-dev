@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use uv_pep440::{EncodedVersion, EncodedVersionRanges};
+use uv_pep440::{EncodedVersion, EncodedVersionRanges, LocalSegment, LocalVersionSlice, Version};
 
 use super::wire::{CaptureReason, CaptureStatus};
 
@@ -231,5 +231,38 @@ impl Budget {
     pub(super) fn decimal(&mut self, value: u64) -> Result<(), Stop> {
         let digits = value.checked_ilog10().map_or(1, |value| value as usize + 1);
         self.atom(digits)
+    }
+
+    /// Charge native version components before the checked codec or a collection clones them.
+    pub(super) fn version(&mut self, version: &Version) -> Result<(), Stop> {
+        self.work(1)?;
+        let release = version.release();
+        self.components(release.len())?;
+        self.decimal(version.epoch())?;
+        for component in &*release {
+            self.decimal(*component)?;
+        }
+        if let Some(pre) = version.pre() {
+            self.decimal(pre.number)?;
+        }
+        for component in [version.post(), version.dev()].into_iter().flatten() {
+            self.decimal(component)?;
+        }
+        // The checked codec admits at most one zero-valued min/max sentinel. Reserve its
+        // decimal byte without exposing the native sentinel accessors.
+        self.decimal(0)?;
+        match version.local() {
+            LocalVersionSlice::Segments(segments) => {
+                self.components(segments.len())?;
+                for segment in segments {
+                    match segment {
+                        LocalSegment::String(value) => self.atom(value.len())?,
+                        LocalSegment::Number(value) => self.decimal(*value)?,
+                    }
+                }
+            }
+            LocalVersionSlice::Max => {}
+        }
+        Ok(())
     }
 }
