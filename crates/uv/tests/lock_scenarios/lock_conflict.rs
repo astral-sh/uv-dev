@@ -2188,6 +2188,140 @@ fn explicit_root_python_range_incompatible_member() -> Result<()> {
     Ok(())
 }
 
+/// Project environments use the Python range of the selected explicit roots.
+#[test]
+fn explicit_root_python_environment_selection() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "root-a"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.13"
+
+        [tool.uv]
+        package = false
+        conflicts = [[{ package = "root-a" }, { package = "root-b" }]]
+
+        [tool.uv.workspace]
+        members = ["root-b"]
+        roots = ["root-a", "root-b"]
+        "#,
+    )?;
+    let root_b = context.temp_dir.child("root-b/pyproject.toml");
+    root_b.write_str(
+        r#"
+        [project]
+        name = "root-b"
+        version = "0.1.0"
+        requires-python = ">=3.13,<3.14"
+
+        [tool.uv]
+        package = false
+        "#,
+    )?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features").arg("package-conflicts")
+        .arg("--no-index").arg("--python").arg("3.12"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 2 packages in [TIME]
+    ");
+    assert_snapshot!(context.read("uv.lock"), @r#"
+    version = 1
+    revision = 3
+    requires-python = ">=3.12, <3.14"
+    resolution-markers = [
+        "python_full_version >= '3.13'",
+        "python_full_version < '3.13'",
+    ]
+    conflicts = [[
+        { package = "root-a" },
+        { package = "root-b" },
+    ]]
+
+    [options]
+    exclude-newer = "2024-03-25T00:00:00Z"
+
+    [manifest]
+    members = [
+        "root-a",
+        "root-b",
+    ]
+
+    [[package]]
+    name = "root-a"
+    version = "0.1.0"
+    source = { virtual = "." }
+    resolution-markers = [
+        "python_full_version < '3.13'",
+    ]
+
+    [[package]]
+    name = "root-b"
+    version = "0.1.0"
+    source = { virtual = "root-b" }
+    resolution-markers = [
+        "python_full_version >= '3.13'",
+    ]
+    "#);
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--frozen").arg("--package").arg("root-b")
+        .arg("--python").arg("3.12"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `==3.13.*` (from workspace member `root-b`'s `project.requires-python`).
+    ");
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--frozen").arg("--package").arg("root-b")
+        .arg("--").arg("python").arg("-c")
+        .arg("import sys; print(sys.version_info[:2])"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (3, 13)
+
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Creating virtual environment at: .venv
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--frozen").arg("--all-packages"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Found conflicting Python requirements:
+    - root-a: >=3.12, <3.13
+    - root-b: >=3.13, <3.14
+    ");
+
+    // Frozen sync must also reject a Python version excluded by the locked root, even if the
+    // project's live metadata was broadened after locking.
+    root_b.write_str(
+        r#"
+        [project]
+        name = "root-b"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+
+        [tool.uv]
+        package = false
+        "#,
+    )?;
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--frozen").arg("--package").arg("root-b")
+        .arg("--python").arg("3.12"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    error: The current Python version (3.12.[X]) is not supported by locked workspace member `root-b`
+    ");
+    Ok(())
+}
+
 /// Conflict discovery can provisionally visit a package that is later excluded after all
 /// transitive extras have been activated. Its dependencies must be evaluated under the package's
 /// reachability marker during that preliminary traversal.
