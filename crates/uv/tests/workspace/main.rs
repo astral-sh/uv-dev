@@ -6,4 +6,5 @@ mod workspace_dir;
 
 mod workspace_list;
 
+mod workspace_groups;
 mod workspace_metadata;

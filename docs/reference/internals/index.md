@@ -4,4 +4,4 @@ The internals section provides details about uv's internal components and implem
 
 - [Resolver](./resolver.md)
 - [Workspace Metadata](./metadata.md)
-- [Workspace groups proposal](./workspace-groups.md)
+- [Workspace groups](./workspace-groups.md)
