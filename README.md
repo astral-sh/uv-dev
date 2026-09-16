@@ -31,6 +31,13 @@ CUDA/ROCm pair. Package files may still be linked from a common cache when the f
 it, but the reporter's environment reuse and link topology need clarification before treating this
 as a suitable workaround.
 
+A maintainer has confirmed two directly applicable manual options because the setup step already
+knows whether it selected `--extra cuda` or `--extra rocm`: point each copied checkout's `.venv`
+symlink at a hardware-specific shared environment, or select that target with
+`UV_PROJECT_ENVIRONMENT`. The maintainer also confirmed that sharing the uv cache and enabling
+centralized project environments could let uv manage the symlink, but warned that the current cache
+key has too few inputs to rule out collisions between these configurations.
+
 ## Draft response
 
 This is the same underlying mixed-environment use case discussed in astral-sh/uv#20060 and, more
@@ -47,9 +54,9 @@ protected by an environment lock, as documented by astral-sh/uv#2818, but separa
 needed because the two sync commands request different final package sets.
 
 Maintainer handoff note: this draft predates the reporter's storage-topology clarification and
-should not be used unchanged. The code checkout is copied per run, so centralized project
-environments may be keyed separately for every copied path rather than yielding one reusable
-environment per accelerator.
+should not be used unchanged. A maintainer has since confirmed the hardware-specific symlink and
+`UV_PROJECT_ENVIRONMENT` approaches, while warning that centralized project environments can still
+clash because their key does not capture all relevant configuration dimensions.
 
 ## Classification
 
@@ -85,7 +92,20 @@ Still needed to evaluate the available workarounds:
 These details determine whether centralized project environments would be reusable. If every copied
 project path is unique, the project-path-derived key implies a separate environment per run. If the
 paths are stable by accelerator, it may be possible to reuse two centralized environments, although
-the feature itself still does not select environments based on CUDA/ROCm extras.
+the feature itself still does not select environments based on CUDA/ROCm extras. The maintainer has
+therefore identified explicit hardware-specific symlink targets or `UV_PROJECT_ENVIRONMENT` values
+as the collision-free options available with the current setup.
+
+## Confirmed workaround options
+
+- During the existing hardware-detection step, link `.venv` to one persistent CUDA environment or
+  one persistent ROCm environment before syncing the corresponding extra.
+- Alternatively, set `UV_PROJECT_ENVIRONMENT` to a persistent CUDA- or ROCm-specific path during
+  that same step. This avoids managing the `.venv` symlink directly.
+- A shared uv cache can avoid duplicating cached package content and can be combined with the
+  `centralized-project-envs` preview feature, but the maintainer cautions that centralized
+  environment keys can clash because they are not keyed by the selected accelerator extra. It is
+  therefore not yet established as a safe replacement for two explicit targets in this topology.
 
 ## Related
 
@@ -123,4 +143,6 @@ extras. However, as the maintainer noted, separate home/cache roots for the diff
 environments would provide physical separation when a project path is shared. The reporter has now
 clarified that project paths are copied per run instead, so the path-derived centralized environment
 key may prevent cross-run reuse; the remaining cache, link-target, and path-stability details are
-needed to confirm that behavior in this cluster.
+needed to confirm that behavior in this cluster. The latest maintainer guidance confirms that a
+shared cache plus centralized environments is plausible but may still clash, whereas selecting two
+explicit symlink targets or `UV_PROJECT_ENVIRONMENT` paths is unambiguous.
