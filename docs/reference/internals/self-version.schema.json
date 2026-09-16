@@ -43,6 +43,7 @@
         "commits_since_last_tag": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0
         },
         "last_tag": {
