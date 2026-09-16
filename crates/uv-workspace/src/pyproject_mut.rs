@@ -536,7 +536,7 @@ impl PyProjectTomlMut {
         {
             PortablePath::from(&path).to_string()
         } else {
-            index.url.without_credentials().to_string()
+            index.url.url().without_sensitive_parts().to_string()
         };
         let existing_url = table.get("url").and_then(|item| item.as_str());
 

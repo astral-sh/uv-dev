@@ -5253,6 +5253,7 @@ async fn tool_install_credentials() {
         .with_exclude_newer("2025-01-18T00:00:00Z")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
+        .with_filter((r"(?m)^WARN Range requests not supported[^\n]*\n", ""))
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
@@ -5261,7 +5262,7 @@ async fn tool_install_credentials() {
     uv_snapshot!(context.filters(), context.tool_install()
         .arg("executable-application")
          .arg("--index")
-        .arg(proxy.authenticated_url("public", "heron", "/basic-auth/simple"))
+        .arg(proxy.authenticated_url("public", "heron", "/basic-auth/simple?sig=signature"))
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----

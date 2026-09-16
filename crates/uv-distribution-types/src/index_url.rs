@@ -105,7 +105,7 @@ impl IndexUrl {
         }
     }
 
-    /// Return the redacted URL for the index, omitting any sensitive credentials.
+    /// Return the index URL without userinfo, retaining query credentials for requests.
     pub fn without_credentials(&self) -> Cow<'_, DisplaySafeUrl> {
         let url = self.url();
         if url.username().is_empty() && url.password().is_none() {
@@ -201,7 +201,7 @@ impl serde::ser::Serialize for IndexUrl {
     where
         S: serde::ser::Serializer,
     {
-        self.inner().without_credentials().serialize(serializer)
+        self.url().serialize(serializer)
     }
 }
 
@@ -631,6 +631,21 @@ mod tests {
             .into_iter()
             .map(|index| index.url().url().as_str())
             .collect()
+    }
+
+    #[test]
+    fn index_url_serde_credentials() -> Result<(), Box<dyn Error>> {
+        let index: Index = toml::from_str(
+            r#"
+            url = "https://user:password@example.com/simple?sig=signature&keep=value"
+            publish-url = "https://publisher:token@example.com/upload?X-Amz-Signature=signature"
+            "#,
+        )?;
+        assert_eq!(index.url().url().password(), Some("password"));
+        let value = serde_json::to_value(index)?;
+        assert_eq!(value["url"], "https://example.com/simple?keep=value");
+        assert_eq!(value["publish-url"], "https://example.com/upload");
+        Ok(())
     }
 
     #[test]
