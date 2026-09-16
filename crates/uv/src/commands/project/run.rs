@@ -74,7 +74,7 @@ use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
     EnvironmentSpecification, LinkErrorReporting, PreferenceLocation, ProjectEnvironment,
     ProjectError, ScriptEnvironment, ScriptInterpreter, UniversalState, WorkspacePython,
-    script_extra_build_requires, script_specification, update_environment,
+    project_python_roots, script_extra_build_requires, script_specification, update_environment,
     validate_project_requires_python,
 };
 use crate::commands::reporters::PythonDownloadReporter;
@@ -639,6 +639,13 @@ pub(crate) async fn run(
             let groups = groups.with_defaults(default_groups);
             let extras = extras.with_defaults(default_extras);
 
+            let python_roots = project_python_roots(
+                project.workspace(),
+                project.project_name(),
+                all_packages,
+                &[],
+            );
+
             let venv = if isolated {
                 debug!("Creating isolated virtual environment");
 
@@ -650,12 +657,13 @@ pub(crate) async fn run(
                     source,
                     python_request,
                     requires_python,
-                } = WorkspacePython::from_request(
+                } = WorkspacePython::from_request_for_roots(
                     python.as_deref().map(PythonRequest::parse),
                     Some(project.workspace()),
                     &groups,
                     project_dir,
                     config_discovery,
+                    python_roots.as_deref(),
                 )
                 .await?;
 
@@ -703,6 +711,7 @@ pub(crate) async fn run(
                 // project.
                 ProjectEnvironment::get_or_init(
                     project.workspace(),
+                    python_roots.as_deref(),
                     &groups,
                     python.as_deref().map(PythonRequest::parse),
                     &install_mirrors,

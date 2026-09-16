@@ -154,6 +154,9 @@ pub(crate) enum ProjectError {
     )]
     LockedPythonIncompatibility(Version, RequiresPython),
 
+    #[error("The current Python version ({0}) is not supported by locked workspace member `{1}`")]
+    LockedRootPythonIncompatibility(Version, PackageName),
+
     #[error(
         "The current Python platform is not compatible with the lockfile's supported environments: {0}"
     )]
@@ -575,7 +578,20 @@ pub(crate) fn find_requires_python(
     workspace: &Workspace,
     groups: &DependencyGroupsWithDefaults,
 ) -> Result<Option<RequiresPython>, ProjectError> {
-    let requires_python = workspace.requires_python(groups)?;
+    find_requires_python_for_roots(workspace, groups, None)
+}
+
+fn find_requires_python_for_roots(
+    workspace: &Workspace,
+    groups: &DependencyGroupsWithDefaults,
+    roots: Option<&[PackageName]>,
+) -> Result<Option<RequiresPython>, ProjectError> {
+    let roots = roots.filter(|_| workspace.resolution_roots().is_some());
+    let requires_python = if let Some(roots) = roots {
+        workspace.requires_python_for(groups, roots)?
+    } else {
+        workspace.requires_python(groups)?
+    };
     // If there are no `Requires-Python` specifiers in the workspace, return `None`.
     if requires_python.is_empty() {
         return Ok(None);
@@ -604,7 +620,9 @@ pub(crate) fn find_requires_python(
             }
         }
     }
-    if let Some(roots) = workspace.resolution_roots() {
+    if roots.is_none()
+        && let Some(roots) = workspace.resolution_roots()
+    {
         let mut ranges = Vec::new();
         for root in roots {
             let root_requires = requires_python
@@ -629,6 +647,23 @@ pub(crate) fn find_requires_python(
     match RequiresPython::intersection(requires_python.iter().map(|(.., specifiers)| specifiers)) {
         Some(requires_python) => Ok(Some(requires_python)),
         None => Err(ProjectError::DisjointRequiresPython(requires_python)),
+    }
+}
+
+/// Select the members whose Python requirements must hold in a project environment.
+pub(crate) fn project_python_roots(
+    workspace: &Workspace,
+    current: Option<&PackageName>,
+    all_packages: bool,
+    packages: &[PackageName],
+) -> Option<Vec<PackageName>> {
+    let roots = workspace.resolution_roots()?;
+    if all_packages || (packages.is_empty() && current.is_none()) {
+        Some(roots.iter().cloned().collect())
+    } else if packages.is_empty() {
+        Some(current.into_iter().cloned().collect())
+    } else {
+        Some(packages.to_vec())
     }
 }
 
@@ -1657,8 +1692,28 @@ impl WorkspacePython {
         project_dir: &Path,
         config_discovery: ConfigDiscovery,
     ) -> Result<Self, ProjectError> {
+        Self::from_request_for_roots(
+            python_request,
+            workspace,
+            groups,
+            project_dir,
+            config_discovery,
+            None,
+        )
+        .await
+    }
+
+    /// Resolve a Python request for the selected members of an explicit-roots workspace.
+    pub(crate) async fn from_request_for_roots(
+        python_request: Option<PythonRequest>,
+        workspace: Option<&Workspace>,
+        groups: &DependencyGroupsWithDefaults,
+        project_dir: &Path,
+        config_discovery: ConfigDiscovery,
+        roots: Option<&[PackageName]>,
+    ) -> Result<Self, ProjectError> {
         let requires_python = workspace
-            .map(|workspace| find_requires_python(workspace, groups))
+            .map(|workspace| find_requires_python_for_roots(workspace, groups, roots))
             .transpose()?
             .flatten();
 
@@ -1856,6 +1911,7 @@ impl ProjectEnvironment {
     /// Initialize a virtual environment for the current project.
     pub(crate) async fn get_or_init(
         workspace: &Workspace,
+        python_roots: Option<&[PackageName]>,
         groups: &DependencyGroupsWithDefaults,
         python: Option<PythonRequest>,
         install_mirrors: &PythonInstallMirrors,
@@ -1881,12 +1937,13 @@ impl ProjectEnvironment {
             })
             .ok();
 
-        let workspace_python = WorkspacePython::from_request(
+        let workspace_python = WorkspacePython::from_request_for_roots(
             python,
             Some(workspace),
             groups,
             workspace.install_path().as_ref(),
             config_discovery,
+            python_roots,
         )
         .await?;
         let upgradeable = workspace_python
