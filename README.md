@@ -26,6 +26,21 @@ merged on 2026-09-15 after AWS-LC v5.9.0 was published. The latest aws-lc-rs rel
 also predates the fix. uv 0.11.8 resolved aws-lc-rs 1.16.2 and aws-lc-sys 0.39.0; the current
 checkout resolves aws-lc-rs 1.18.0 and aws-lc-sys 0.44.0.
 
+## Maintainer decision
+
+A uv maintainer indicated that the intended resolution is to bump the affected dependency. The
+bump is expected to arrive through Renovate, although maintainers may choose to take it earlier.
+The comment treats the existing environment-variable workaround as sufficient in the interim and
+does not favor the proposed uv-specific RNG or TLS-provider changes. It also characterizes this as
+an availability problem without a security impact, consistent with the upstream description in
+aws/aws-lc#3453.
+
+The comment says that a fixed version exists, but it does not identify the package or version.
+Public release metadata checked after the comment still lists AWS-LC v5.9.0 and aws-lc-rs v1.18.1
+as latest; both were published before aws/aws-lc#3475 merged. The exact released dependency for uv
+to bump therefore remains unconfirmed in the available discussion and should be verified before
+changing the lockfile.
+
 ## Reproduction
 
 Outcome: `needs_more_information`.
@@ -60,10 +75,12 @@ failure (for example, an affected GCP Axion physical host), the uv 0.11.8 glibc 
 and enough cold-cache HTTPS handshakes to observe the intermittent event. A paired run with and
 without `OPENSSL_armcap=~0x20000` would test the reported mitigation.
 
-For a reporter-provided repeatable fixture, maintainers still need the exact uv command, a minimal
-requirements file or lockfile (or the package set), whether the index is public PyPI or a custom
-index/proxy, the exact uv artifact and `uv --version` output, CPU feature information, and attempt
-and abort counts for paired cold-cache runs. No credentials or private index URLs are needed.
+If maintainers need an independent uv-level reproduction beyond the upstream fix, the most useful
+additional information would be the exact uv command, a minimal requirements file or lockfile (or
+the package set), whether the index is public PyPI or a custom index/proxy, the exact uv artifact
+and `uv --version` output, CPU feature information, and attempt and abort counts for paired
+cold-cache runs. No credentials or private index URLs are needed. The maintainer comment does not
+make this information a prerequisite for the planned dependency bump.
 
 Exact searches for RNDR, `OPENSSL_armcap`, `RAND_bytes`, SIGABRT, exit 134, and AWS-LC found no
 test covering this failure in `crates/uv/tests/` or `crates/uv-client/tests/it/`.
@@ -72,19 +89,6 @@ PyPI TLS connection, while the TLS retry tests in that file inject protocol or c
 after networking begins. `crates/uv/tests/it/network.rs::connect_timeout_index` and
 `connect_timeout_stream` cover HTTPS connection timeouts. None injects an AWS-LC entropy-source
 failure or runs the affected hardware path.
-
-## Draft response
-
-Thanks for the concrete backtrace and workaround data. The upstream AWS-LC issue and merged retry
-fix strongly support this diagnosis, but we could not reproduce the uv abort on the available
-x86_64 runner because it cannot exercise aarch64 RNDR. Twenty isolated cold-cache installs with
-uv 0.11.8 succeeded on x86_64, which is not evidence against the hardware-specific report.
-
-Could you provide the exact command and a minimal dependency or lockfile fixture, identify the
-exact uv artifact, and include paired attempt/abort counts with and without
-`OPENSSL_armcap=~0x20000` from an affected host? Please omit credentials and private index details.
-aws/aws-lc#3475 merged the bounded RNDR retry, but the current AWS-LC and aws-lc-rs releases predate
-it, so astral-sh/uv#21743 can track propagation into an aws-lc-rs/aws-lc-sys release and then uv.
 
 ## Classification
 
