@@ -21,11 +21,16 @@ jobs:
     name: "walltime build"
     outputs:
       matrix: ${{ steps.shards.outputs.matrix }}
+      artifact-id: ${{ steps.artifacts.outputs.artifact-id }}
+      artifact-digest: ${{ steps.artifacts.outputs.artifact-digest }}
+      archive-sha256: ${{ steps.archive.outputs.sha256 }}
     # codspeed-macro doesn't support Ubuntu 24.04 yet
     runs-on: depot-ubuntu-22.04-arm-4
     # uv-dev benchmarks pull requests but imports its main-branch measurements from uv.
     if: ${{ github.repository == 'astral-sh/uv' || (github.repository == 'astral-sh/uv-dev' && github.ref != 'refs/heads/main') }}
     timeout-minutes: 30
+    env:
+      BENCHMARK_SOURCE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: "Checkout Branch"
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -33,6 +38,9 @@ jobs:
           # Measure the submitted commit independently of changes to the PR base.
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+
+      - name: "Verify walltime source"
+        run: test "$(git rev-parse HEAD)" = "$BENCHMARK_SOURCE_SHA"
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -44,7 +52,19 @@ jobs:
       - name: "Install codspeed"
         uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
         with:
-          tool: cargo-codspeed
+          tool: cargo-codspeed@5.0.1
+
+      - name: "Verify walltime codspeed version"
+        run: |
+          python3 - <<'PY'
+          import runpy
+          from pathlib import Path
+
+          version = runpy.run_path("scripts/benchmark/walltime-shards.py")["cargo_codspeed_version"](Path.cwd())
+          if version != "cargo-codspeed 5.0.1":
+              raise SystemExit(f"Unexpected walltime tool version: {version}")
+          print(version)
+          PY
 
       - name: "Install requirements and prime cache"
         run: |
@@ -66,9 +86,14 @@ jobs:
         run: python3 scripts/benchmark/walltime-shards.py plan
 
       - name: "Create artifact archive"
-        run: tar -cvf benchmarks-walltime.tar target/codspeed target/debug/uv .cache
+        id: archive
+        run: |
+          tar -cvf benchmarks-walltime.tar target/codspeed target/debug/uv .cache
+          walltime_archive_sha=$(sha256sum benchmarks-walltime.tar | cut -d ' ' -f 1)
+          echo "sha256=$walltime_archive_sha" >> "$GITHUB_OUTPUT"
 
       - name: "Upload benchmark artifacts"
+        id: artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: benchmarks-walltime
@@ -86,28 +111,115 @@ jobs:
       matrix: ${{ fromJSON(needs.benchmarks-walltime-build.outputs.matrix) }}
     env:
       BENCHMARK_SHARD: ${{ matrix.index }}
+      BENCHMARK_SHARD_TOTAL: ${{ matrix.total }}
+      BENCHMARK_SOURCE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
     permissions:
       contents: read
       id-token: write # for codspeed authentication
     steps:
+      - name: "Start walltime evidence"
+        id: liveness
+        run: |
+          walltime_started_at=$(date +%s)
+          # Reserve five minutes for child cleanup and artifact uploads.
+          walltime_deadline=$((walltime_started_at + 55 * 60))
+          mkdir "$RUNNER_TEMP/uv-walltime-liveness"
+          python3 - "$RUNNER_TEMP/uv-walltime-liveness/job.json" "$walltime_started_at" "$walltime_deadline" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          record = {
+              "version": 1,
+              "source_commit": os.environ["BENCHMARK_SOURCE_SHA"],
+              "shard": {
+                  "index": int(os.environ["BENCHMARK_SHARD"]),
+                  "total": int(os.environ["BENCHMARK_SHARD_TOTAL"]),
+              },
+              "github": {
+                  name: os.environ[name]
+                  for name in ("GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_JOB")
+              },
+              "started_at_epoch": int(sys.argv[2]),
+              "deadline_epoch": int(sys.argv[3]),
+          }
+          Path(sys.argv[1]).write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+          PY
+          echo "deadline=$walltime_deadline" >> "$GITHUB_OUTPUT"
+
       - name: "Checkout Branch"
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
+      - name: "Record walltime source"
+        run: |
+          walltime_source=$(git rev-parse HEAD)
+          printf '%s\n' "$walltime_source" > "$RUNNER_TEMP/uv-walltime-liveness/checkout-commit.txt"
+          test "$walltime_source" = "$BENCHMARK_SOURCE_SHA"
+
       - name: "Install codspeed"
         uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
         with:
-          tool: cargo-codspeed
+          tool: cargo-codspeed@5.0.1
+
+      - name: "Verify walltime codspeed version"
+        run: |
+          python3 - <<'PY'
+          import runpy
+          from pathlib import Path
+
+          version = runpy.run_path("scripts/benchmark/walltime-shards.py")["cargo_codspeed_version"](Path.cwd())
+          if version != "cargo-codspeed 5.0.1":
+              raise SystemExit(f"Unexpected walltime tool version: {version}")
+          print(version)
+          PY
 
       - name: "Download benchmark artifacts"
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: benchmarks-walltime
+          artifact-ids: ${{ needs.benchmarks-walltime-build.outputs.artifact-id }}
+          merge-multiple: true
+          digest-mismatch: error
+
+      - name: "Verify downloaded walltime archive"
+        env:
+          BENCHMARK_ARTIFACT_ID: ${{ needs.benchmarks-walltime-build.outputs.artifact-id }}
+          BENCHMARK_ARTIFACT_DIGEST: ${{ needs.benchmarks-walltime-build.outputs.artifact-digest }}
+          BENCHMARK_ARCHIVE_SHA256: ${{ needs.benchmarks-walltime-build.outputs.archive-sha256 }}
+        run: |
+          [[ "$BENCHMARK_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          walltime_archive_sha=$(sha256sum benchmarks-walltime.tar | cut -d ' ' -f 1)
+          test "$walltime_archive_sha" = "$BENCHMARK_ARCHIVE_SHA256"
+          python3 - "$RUNNER_TEMP/uv-walltime-liveness/artifact.json" "$walltime_archive_sha" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          record = {
+              "artifact_id": int(os.environ["BENCHMARK_ARTIFACT_ID"]),
+              "artifact_digest": os.environ["BENCHMARK_ARTIFACT_DIGEST"],
+              "archive_name": "benchmarks-walltime.tar",
+              "archive_sha256": sys.argv[2],
+          }
+          Path(sys.argv[1]).write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+          PY
 
       - name: "Extract artifact archive"
-        run: tar -xvf benchmarks-walltime.tar
+        run: |
+          tar -xvf benchmarks-walltime.tar
+          cp .cache/bench-walltime-shards.json "$RUNNER_TEMP/uv-walltime-liveness/plan.json"
+
+      - name: "Upload walltime inputs"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: walltime-inputs-${{ matrix.index }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/uv-walltime-liveness
+          if-no-files-found: error
+          retention-days: 30
 
       - name: "Create venv"
         run: ./target/debug/uv venv --cache-dir .cache
@@ -118,12 +230,79 @@ jobs:
         if: ${{ github.repository == 'astral-sh/uv' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         run: ./target/debug/uv run --script scripts/codspeed-profiles.py start "$RUNNER_TEMP/codspeed-walltime" "walltime-$BENCHMARK_SHARD" >> "$GITHUB_OUTPUT"
 
+      - name: "Compute remaining walltime budget"
+        id: budget
+        env:
+          BENCHMARK_DEADLINE: ${{ steps.liveness.outputs.deadline }}
+        run: |
+          python3 - "$RUNNER_TEMP/uv-walltime-liveness/budget.json" <<'PY'
+          import json
+          import math
+          import os
+          import sys
+          import time
+          from pathlib import Path
+
+          observed_at = time.time()
+          remaining = int(os.environ["BENCHMARK_DEADLINE"]) - observed_at
+          # The command deadline leaves the runner time to reap children and upload.
+          minutes = math.ceil((remaining + 60) / 60) if remaining > 0 else None
+          record = {
+              "observed_at_epoch": observed_at,
+              "remaining_seconds": remaining,
+              "step_timeout_minutes": minutes,
+          }
+          Path(sys.argv[1]).write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+          if minutes is None:
+              raise SystemExit(124)
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              print(f"minutes={minutes}", file=output)
+          PY
+
       - name: "Run benchmarks"
+        id: benchmarks
+        timeout-minutes: ${{ fromJSON(steps.budget.outputs.minutes || '1') }}
         uses: CodSpeedHQ/action@4296e51e7041e24dadb86d1d6e8b9320d223dbe8 # v5.0.3
+        env:
+          BENCHMARK_DEADLINE: ${{ steps.liveness.outputs.deadline }}
         with:
-          run: python3 scripts/benchmark/walltime-shards.py run "$BENCHMARK_SHARD"
+          run: >-
+            python3 scripts/benchmark/walltime-shards.py run "$BENCHMARK_SHARD"
+            --output "$RUNNER_TEMP/uv-walltime-liveness/run"
+            --deadline "$BENCHMARK_DEADLINE"
           mode: walltime
+          runner-version: "5.0.2"
           upload-url: ${{ steps.profiles.outputs.upload-url }}
+
+      - name: "Record walltime step outcome"
+        if: ${{ always() && steps.liveness.outcome == 'success' }}
+        env:
+          BENCHMARK_BUDGET_OUTCOME: ${{ steps.budget.outcome }}
+          BENCHMARK_STEP_OUTCOME: ${{ steps.benchmarks.outcome }}
+        run: |
+          python3 - "$RUNNER_TEMP/uv-walltime-liveness/outcome.json" <<'PY'
+          import json
+          import os
+          import sys
+          import time
+          from pathlib import Path
+
+          record = {
+              "budget_step": os.environ["BENCHMARK_BUDGET_OUTCOME"],
+              "benchmark_step": os.environ["BENCHMARK_STEP_OUTCOME"],
+              "recorded_at_epoch": time.time(),
+          }
+          Path(sys.argv[1]).write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: "Upload walltime run state"
+        if: ${{ always() && steps.liveness.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: walltime-liveness-${{ matrix.index }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/uv-walltime-liveness
+          if-no-files-found: error
+          retention-days: 30
 
       - name: "Finish profile capture"
         if: ${{ always() && steps.profiles.outcome == 'success' }}
