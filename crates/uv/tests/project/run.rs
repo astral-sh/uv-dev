@@ -1986,7 +1986,6 @@ fn run_with_overlay_interpreter() -> Result<()> {
     fs_err::remove_file(context.temp_dir.child("main_gui"))?;
 
     // The project's entrypoint should be rewritten to use the overlay interpreter.
-    #[cfg(not(windows))]
     uv_snapshot!(context.filters(), context.run().arg("--with").arg("iniconfig").arg("main").arg(context.temp_dir.child("main").as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -1996,22 +1995,6 @@ fn run_with_overlay_interpreter() -> Result<()> {
     Resolved 6 packages in [TIME]
     Checked 4 packages in [TIME]
     Resolved 1 package in [TIME]
-    ");
-
-    // On Windows, recreating the relocatable environment changes its base interpreter path,
-    // so the cached requirements environment must be recreated too.
-    #[cfg(windows)]
-    uv_snapshot!(context.filters(), context.run().arg("--with").arg("iniconfig").arg("main").arg(context.temp_dir.child("main").as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [CACHE_DIR]/builds-v0/[TMP]/[BIN]/python
-
-    ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Checked 4 packages in [TIME]
-    Resolved 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
     ");
 
     // The project's gui entrypoint should be rewritten to use the overlay interpreter.
@@ -2060,7 +2043,6 @@ fn run_with_overlay_interpreter() -> Result<()> {
     );
 
     // When layering the project on top (via `--with`), the overlay interpreter also should be used.
-    #[cfg(not(windows))]
     uv_snapshot!(context.filters(), context.run().arg("--no-project").arg("--with").arg(".").arg("main"), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -2068,21 +2050,6 @@ fn run_with_overlay_interpreter() -> Result<()> {
 
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    ");
-
-    #[cfg(windows)]
-    uv_snapshot!(context.filters(), context.run().arg("--no-project").arg("--with").arg(".").arg("main"), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [CACHE_DIR]/builds-v0/[TMP]/[BIN]/python
-
-    ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + anyio==4.3.0
-     + foo==1.0.0 (from file://[TEMP_DIR]/)
-     + idna==3.6
-     + sniffio==1.3.1
     ");
 
     // When layering the project on top (via `--with`), the overlay gui interpreter also should be used.
