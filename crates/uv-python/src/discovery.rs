@@ -1779,27 +1779,33 @@ pub(crate) async fn find_best_python_installation(
 ) -> Result<PythonInstallation, crate::Error> {
     debug!("Starting Python discovery for {request}");
     let original_request = request;
-    match find_python_installation(request, environments, preference, cache) {
-        Ok(Ok(installation))
-            if !installation.is_managed()
-                || PythonDownloadRequest::from_request(request).is_none() =>
-        {
-            warn_on_unsupported_python(installation.interpreter());
-            return Ok(installation);
+    // Catalog selection only applies to managed installations. System-only searches can proceed
+    // directly through the fallback requests without loading download metadata.
+    let (mut first_result, download_list) = if preference.allows_managed() {
+        match find_python_installation(request, environments, preference, cache) {
+            Ok(Ok(installation))
+                if !installation.is_managed()
+                    || PythonDownloadRequest::from_request(request).is_none() =>
+            {
+                warn_on_unsupported_python(installation.interpreter());
+                return Ok(installation);
+            }
+            Err(error) if error.is_critical() => return Err(error.into()),
+            Ok(_) | Err(_) => {}
         }
-        Err(error) if error.is_critical() => return Err(error.into()),
-        Ok(_) | Err(_) => {}
-    }
-    let (result, download_list) = find_python_installation_with_cached_catalog(
-        request,
-        environments,
-        preference,
-        client_builder,
-        cache,
-        python_downloads_json_url,
-    )
-    .await?;
-    let mut first_result = Some(result);
+        let (result, download_list) = find_python_installation_with_cached_catalog(
+            request,
+            environments,
+            preference,
+            client_builder,
+            cache,
+            python_downloads_json_url,
+        )
+        .await?;
+        (Some(result), Some(download_list))
+    } else {
+        (None, None)
+    };
 
     let mut previous_fetch_failed = false;
     let mut download_state = None;
@@ -1837,7 +1843,7 @@ pub(crate) async fn find_best_python_installation(
                 environments,
                 preference,
                 cache,
-                Some(&download_list),
+                download_list.as_ref(),
             )??)
         });
         let error = match result {
@@ -1854,6 +1860,7 @@ pub(crate) async fn find_best_python_installation(
         // Attempt to download the version if downloads are enabled
         if downloads_enabled
             && !previous_fetch_failed
+            && let Some(download_list) = &download_list
             && let Some(download_request) = PythonDownloadRequest::from_request(request)
         {
             let (client, retry_policy, download_list) =
@@ -1865,7 +1872,7 @@ pub(crate) async fn find_best_python_installation(
                     // Python downloads are performing their own retries to catch stream errors, disable
                     // the default retries to avoid the middleware performing uncontrolled retries.
                     let client = client_builder.clone().retries(0).build()?;
-                    download_state.insert((client, retry_policy, &download_list))
+                    download_state.insert((client, retry_policy, download_list))
                 };
 
             let download = download_request
