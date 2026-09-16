@@ -30,6 +30,13 @@ use crate::settings::{InstallerSettingsRef, ResolverSettings};
 pub(crate) struct CollectedEnvironment {
     pub(crate) packages: SitePackages,
     pub(crate) module_owners: BTreeMap<ModuleName, Vec<String>>,
+    pub(crate) installed_module_owners: BTreeMap<ModuleName, Vec<String>>,
+}
+
+#[derive(Default)]
+struct CollectedModuleOwners {
+    selected: BTreeMap<ModuleName, BTreeSet<String>>,
+    installed: BTreeMap<ModuleName, BTreeSet<String>>,
 }
 
 /// Inspect installed distributions, optionally syncing all locked extras and groups first.
@@ -101,14 +108,19 @@ pub(crate) async fn collect_environment(
     }
 
     let packages = SitePackages::from_environment(venv)?;
-    let module_owners = if let Some(package_ids) = package_ids {
-        find_module_owners_in_environment(venv, &packages, &package_ids)?
-    } else {
-        BTreeMap::new()
-    };
+    let owners = find_module_owners_in_environment(venv, &packages, package_ids.as_ref())?;
     Ok(CollectedEnvironment {
         packages,
-        module_owners,
+        module_owners: owners
+            .selected
+            .into_iter()
+            .map(|(module, owners)| (module, owners.into_iter().collect()))
+            .collect(),
+        installed_module_owners: owners
+            .installed
+            .into_iter()
+            .map(|(module, owners)| (module, owners.into_iter().collect()))
+            .collect(),
     })
 }
 
@@ -146,28 +158,35 @@ fn selected_package_ids(
     Ok(Some(package_ids))
 }
 
-/// Map modules in an existing environment to their selected package IDs.
+/// Map modules to their installed distribution IDs and, when available, selected package IDs.
 fn find_module_owners_in_environment(
     venv: &PythonEnvironment,
     packages: &SitePackages,
-    package_ids: &BTreeMap<PackageName, String>,
-) -> Result<BTreeMap<ModuleName, Vec<String>>> {
-    let mut owners = BTreeMap::<ModuleName, BTreeSet<String>>::new();
+    package_ids: Option<&BTreeMap<PackageName, String>>,
+) -> Result<CollectedModuleOwners> {
+    let mut owners = CollectedModuleOwners::default();
     for dist in packages.iter() {
-        let Some(package_id) = package_ids.get(dist.name()) else {
-            continue;
-        };
+        let package_id = package_ids.and_then(|package_ids| package_ids.get(dist.name()));
+        let installed_id = Metadata::installed_package_id(dist);
         // TODO: Editable installs often only record a `.pth` file; we'll
         // need to handle them specially.
         for module in dist.read_modules(venv.interpreter().extension_suffixes())? {
-            owners.entry(module).or_default().insert(package_id.clone());
+            if let Some(package_id) = package_id {
+                owners
+                    .selected
+                    .entry(module.clone())
+                    .or_default()
+                    .insert(package_id.clone());
+            }
+            owners
+                .installed
+                .entry(module)
+                .or_default()
+                .insert(installed_id.clone());
         }
     }
 
-    Ok(owners
-        .into_iter()
-        .map(|(module, owners)| (module, owners.into_iter().collect()))
-        .collect())
+    Ok(owners)
 }
 
 fn target_selection(

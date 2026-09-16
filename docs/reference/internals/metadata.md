@@ -15,6 +15,12 @@ environment, not an additional node in the locked `resolution` graph. In particu
 versions may differ from the locked versions, and more than one installed distribution can have the
 same name.
 
+`environment.module_owners` maps module names to those installed-package identifiers, including
+distributions outside the locked graph. The top-level `module_owners` field continues to reference
+package nodes in `resolution`. Both maps describe modules found in installed file records; they do
+not prove which file Python would import. For example, editable packages can expose modules through
+`.pth` files, and multiple distributions can record files under the same namespace.
+
 The primary structure is the "resolution" field which contains the dependency graph with exact
 package versions that a `uv.lock` encodes.
 
@@ -199,6 +205,14 @@ Here is a human-readable annotated example:
         "path": "/workspace/.venv/lib/python3.12/site-packages/idna-3.10.dist-info",
         "editable": false
       }
+    },
+    // Modules recorded by the installed distributions
+    "module_owners": {
+      "idna": [
+        {
+          "installed_id": "installed+/workspace/.venv/lib/python3.12/site-packages/idna-3.10.dist-info"
+        }
+      ]
     }
   },
   // Information about the script target, only present with `--script`.

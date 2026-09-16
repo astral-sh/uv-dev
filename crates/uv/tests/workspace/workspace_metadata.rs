@@ -280,6 +280,28 @@ import iniconfig
             "path": "[CACHE_DIR]/environments-v2/script-[HASH]/[PYTHON-LIB]/site-packages/iniconfig-2.0.0.dist-info",
             "editable": false
           }
+        },
+        "module_owners": {
+          "iniconfig": [
+            {
+              "installed_id": "installed+[CACHE_DIR]/environments-v2/script-[HASH]/[PYTHON-LIB]/site-packages/iniconfig-2.0.0.dist-info"
+            }
+          ],
+          "iniconfig._parse": [
+            {
+              "installed_id": "installed+[CACHE_DIR]/environments-v2/script-[HASH]/[PYTHON-LIB]/site-packages/iniconfig-2.0.0.dist-info"
+            }
+          ],
+          "iniconfig._version": [
+            {
+              "installed_id": "installed+[CACHE_DIR]/environments-v2/script-[HASH]/[PYTHON-LIB]/site-packages/iniconfig-2.0.0.dist-info"
+            }
+          ],
+          "iniconfig.exceptions": [
+            {
+              "installed_id": "installed+[CACHE_DIR]/environments-v2/script-[HASH]/[PYTHON-LIB]/site-packages/iniconfig-2.0.0.dist-info"
+            }
+          ]
         }
       },
       "script": {
@@ -455,6 +477,7 @@ fn workspace_metadata_script_includes_existing_environment() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         insta::assert_json_snapshot!(metadata["environment"], @r#"
         {
+          "module_owners": {},
           "packages": {},
           "python": {
             "implementation": "cpython",
@@ -916,11 +939,24 @@ fn workspace_metadata_exact_sync_removes_extraneous_packages() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         insta::assert_json_snapshot!(serde_json::json!({
             "extraneous_installed": extraneous_installed,
+            "installed_module_owners": metadata["environment"]["module_owners"],
             "module_owners": metadata["module_owners"],
             "required_installed": required_installed,
         }), @r#"
         {
           "extraneous_installed": true,
+          "installed_module_owners": {
+            "extra_module": [
+              {
+                "installed_id": "installed+[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info"
+              }
+            ],
+            "required_module": [
+              {
+                "installed_id": "installed+[SITE_PACKAGES]/metadata_required-0.1.0.dist-info"
+              }
+            ]
+          },
           "module_owners": {
             "required_module": [
               {
@@ -956,11 +992,19 @@ fn workspace_metadata_exact_sync_removes_extraneous_packages() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         insta::assert_json_snapshot!(serde_json::json!({
             "extraneous_installed": extraneous_installed,
+            "installed_module_owners": metadata["environment"]["module_owners"],
             "module_owners": metadata["module_owners"],
             "required_installed": required_installed,
         }), @r#"
         {
           "extraneous_installed": false,
+          "installed_module_owners": {
+            "required_module": [
+              {
+                "installed_id": "installed+[SITE_PACKAGES]/metadata_required-0.1.0.dist-info"
+              }
+            ]
+          },
           "module_owners": {
             "required_module": [
               {
@@ -1077,11 +1121,24 @@ fn workspace_metadata_installed_packages_are_independent_of_lock() -> Result<()>
     insta::with_settings!({ filters => context.filters() }, {
         insta::assert_json_snapshot!(serde_json::json!({
             "installed_packages": packages,
+            "installed_module_owners": metadata["environment"]["module_owners"],
             "inspection_changed_environment": before != after,
             "locked_versions": locked_versions,
         }), @r#"
         {
           "inspection_changed_environment": false,
+          "installed_module_owners": {
+            "extra_module": [
+              {
+                "installed_id": "installed+[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info"
+              }
+            ],
+            "required_module": [
+              {
+                "installed_id": "installed+[SITE_PACKAGES]/metadata_required-0.2.0.dist-info"
+              }
+            ]
+          },
           "installed_packages": {
             "installed+[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info": {
               "editable": false,
@@ -1176,6 +1233,13 @@ dependencies = [
         }), @r#"
         {
           "environment": {
+            "module_owners": {
+              "installed_module": [
+                {
+                  "installed_id": "installed+[SITE_PACKAGES]/installed_owner-0.1.0.dist-info"
+                }
+              ]
+            },
             "packages": {
               "installed+[SITE_PACKAGES]/installed_owner-0.1.0.dist-info": {
                 "editable": false,
@@ -1294,6 +1358,36 @@ dependencies = [
             "path": "[SITE_PACKAGES]/typing_extensions-0.1.0.dist-info",
             "editable": false
           }
+        },
+        "module_owners": {
+          "café": [
+            {
+              "installed_id": "installed+[SITE_PACKAGES]/typing_extensions-0.1.0.dist-info"
+            }
+          ],
+          "gpu": [
+            {
+              "installed_id": "installed+[SITE_PACKAGES]/gpu_a-0.1.0.dist-info"
+            },
+            {
+              "installed_id": "installed+[SITE_PACKAGES]/gpu_b-0.1.0.dist-info"
+            }
+          ],
+          "gpu.a": [
+            {
+              "installed_id": "installed+[SITE_PACKAGES]/gpu_a-0.1.0.dist-info"
+            }
+          ],
+          "gpu.b": [
+            {
+              "installed_id": "installed+[SITE_PACKAGES]/gpu_b-0.1.0.dist-info"
+            }
+          ],
+          "typing_extensions": [
+            {
+              "installed_id": "installed+[SITE_PACKAGES]/typing_extensions-0.1.0.dist-info"
+            }
+          ]
         }
       },
       "workspace": {
@@ -1539,6 +1633,18 @@ package = false
     };
 
     insta::assert_snapshot!(module_owners, @"<missing>");
+
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(metadata["environment"]["module_owners"], @r#"
+        {
+          "stale": [
+            {
+              "installed_id": "installed+[SITE_PACKAGES]/module_owner_root-0.1.0.dist-info"
+            }
+          ]
+        }
+        "#);
+    });
 
     Ok(())
 }
