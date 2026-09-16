@@ -20,18 +20,16 @@ in astral-sh/uv#19625. The broader request for a portable lockfile that can be i
 different proxy or index is tracked in astral-sh/uv#6349, with an open implementation in
 astral-sh/uv#20790.
 
-## Draft response
+A maintainer has now confirmed this interpretation directly on astral-sh/uv#21747. The supported
+current approach is to apply the index environment variables when producing `uv.lock`; when the
+lockfile must remain fixed, the maintainer pointed to astral-sh/uv#20790 as the prospective solution.
 
-Thanks for the report. With `--frozen`, uv installs from `uv.lock` without performing resolution,
-and the lockfile contains the selected registry and artifact URLs. As a result,
-`UV_INDEX_STRATEGY` is not consulted, and changing `UV_DEFAULT_INDEX` does not replace URLs already
-recorded in the lockfile. This is the same behavior confirmed in astral-sh/uv#19625.
+## Maintainer response status
 
-The request to install one lockfile through a different index or proxy is already tracked in
-astral-sh/uv#6349, and astral-sh/uv#20790 is the current open implementation for proxy-index routing,
-including frozen installs. I would close this as a duplicate of astral-sh/uv#6349. Until that work is
-available, the lockfile needs to be generated with the index used for the frozen install, or the
-sync must be allowed to update the lockfile when changing indexes.
+A maintainer has replied that `--frozen` downloads archives from the locations captured in
+`uv.lock`. They advised applying the index environment variables while producing the lockfile, or
+waiting for astral-sh/uv#20790 if the lockfile must remain fixed. This confirms the handoff's prior
+analysis and workaround; no additional public response is needed based on this comment alone.
 
 ## Classification
 
@@ -62,6 +60,10 @@ environments.
 
 ## Supporting evidence
 
+- In the new comment on astral-sh/uv#21747, maintainer zsol directly confirmed that frozen installs
+  download archives from locations captured in `uv.lock`. The comment identifies generating the
+  lockfile with the index environment variables as the current workaround and points to
+  astral-sh/uv#20790 for fixed-lockfile proxy routing.
 - The project documentation defines `--frozen` as using the lockfile without checking or updating
   it, while the sync command documentation states that a project is not re-locked when `--frozen`
   is provided.
