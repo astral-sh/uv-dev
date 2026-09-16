@@ -136,7 +136,7 @@ impl uv_errors::Hinted for ExternallyInstalledError {
 
 #[doc(hidden)]
 pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Result<ExitStatus> {
-    run_with_capture(cli, global_initialization, None).await
+    Box::pin(run_with_capture(cli, global_initialization, None)).await
 }
 
 #[instrument(name = "run", skip_all)]
