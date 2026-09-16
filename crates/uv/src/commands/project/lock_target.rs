@@ -198,6 +198,9 @@ impl<'lock> LockTarget<'lock> {
     pub(crate) fn members(self) -> Vec<PackageName> {
         match self {
             Self::Workspace(workspace) => {
+                if let Some(roots) = workspace.resolution_roots() {
+                    return roots.iter().cloned().collect();
+                }
                 let mut members = workspace.packages().keys().cloned().collect::<Vec<_>>();
                 members.sort();
 
@@ -364,7 +367,11 @@ impl<'lock> LockTarget<'lock> {
 
         // Check if the discovered workspace members match the locked workspace members.
         if let Self::Workspace(workspace) = self {
-            for package_name in workspace.packages().keys() {
+            for package_name in workspace.packages().keys().filter(|name| {
+                workspace
+                    .resolution_roots()
+                    .is_none_or(|roots| roots.contains(*name))
+            }) {
                 existing
                     .find_by_name(package_name)
                     .map_err(|_| ProjectError::LockWorkspaceMismatch(package_name.clone(), source))?

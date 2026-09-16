@@ -4030,6 +4030,14 @@ impl Lock {
         // virtual to non-virtual or vice versa).
         for (name, member) in packages {
             let source = self.find_by_name(name).ok().flatten();
+            // A discovered member that is neither a root nor in the locked graph has no source
+            // to validate. Its source will be checked if a dependency makes it reachable.
+            if source.is_none()
+                && !self.manifest.members.is_empty()
+                && !self.manifest.members.contains(name)
+            {
+                continue;
+            }
 
             // Determine whether the member was required by any other member.
             let value = required_members.get(name);
@@ -4314,8 +4322,11 @@ impl Lock {
                 .collect::<BTreeSet<_>>()
         });
 
-        // Add the workspace packages to the queue.
-        for root_name in packages.keys() {
+        // Traverse the configured roots and their dependencies. An omitted manifest member list
+        // represents the implicit single-project root.
+        for root_name in packages.keys().filter(|name| {
+            self.manifest.members.is_empty() || self.manifest.members.contains(*name)
+        }) {
             let root = self
                 .find_by_name(root_name)
                 .expect("found too many packages matching root");
