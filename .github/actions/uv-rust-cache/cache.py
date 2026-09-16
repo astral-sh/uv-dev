@@ -37,6 +37,7 @@ MAX_JSON_BYTES = 2 * 1024 * 1024
 MAX_CONFIG_BYTES = 1024 * 1024
 OID = re.compile(r"[0-9a-f]{40}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
+KEY_NAMESPACE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 REPOSITORY = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+")
 DOWNLOAD_PATHS = (
     "~/.cargo/registry/index",
@@ -843,7 +844,18 @@ def paths_identity(
     }
 
 
-def cache_keys(identity: dict[str, Any]) -> dict[str, str]:
+def validate_key_namespace(value: str) -> str:
+    require(
+        type(value) is str
+        and len(value) <= 64
+        and (not value or KEY_NAMESPACE.fullmatch(value) is not None),
+        "Invalid cache key namespace",
+    )
+    return value
+
+
+def cache_keys(identity: dict[str, Any], key_namespace: str = "") -> dict[str, str]:
+    key_namespace = validate_key_namespace(key_namespace)
     dependencies = [
         {key: item[key] for key in ("path", "sha256")}
         for item in identity["source"]["inputs"]
@@ -879,8 +891,15 @@ def cache_keys(identity: dict[str, Any]) -> dict[str, str]:
             "tools": semantic_tools(identity["tools"]),
         }
     )
-    downloads_prefix = f"uv-rust-downloads-v1-{download_compatibility}-"
-    target_prefix = f"uv-rust-target-v1-{compatibility}-"
+    namespace_component = (
+        f"ns-{hashlib.sha256(key_namespace.encode('ascii')).hexdigest()}-"
+        if key_namespace
+        else ""
+    )
+    downloads_prefix = (
+        f"uv-rust-downloads-v1-{namespace_component}{download_compatibility}-"
+    )
+    target_prefix = f"uv-rust-target-v1-{namespace_component}{compatibility}-"
     return {
         "downloads": downloads_prefix + digest(dependencies),
         "downloads_restore": downloads_prefix,
@@ -912,7 +931,10 @@ def make_identity(
     commit: str,
     save_allowed: bool,
     environment: Mapping[str, str],
+    *,
+    key_namespace: str = "",
 ) -> dict[str, Any]:
+    key_namespace = validate_key_namespace(key_namespace)
     environment = dict(environment)
     workspace = safe_path(workspace).resolve(strict=True)
     source = safe_path(source).resolve(strict=True)
@@ -950,13 +972,16 @@ def make_identity(
         "The source changed during preparation",
     )
     verify_executable("git", git, environment)
+    policy: dict[str, bool | str] = {"save_allowed": save_allowed}
+    if key_namespace:
+        policy["key_namespace"] = key_namespace
     return {
         "format": FORMAT,
         "version": VERSION,
         "workload": WORKLOAD,
         "identity": identity,
-        "policy": {"save_allowed": save_allowed},
-        "keys": cache_keys(identity),
+        "policy": policy,
+        "keys": cache_keys(identity, key_namespace),
     }
 
 
@@ -1015,10 +1040,19 @@ def verify_identity(manifest: dict[str, Any], environment: Mapping[str, str]) ->
         and manifest["version"] == VERSION
         and manifest["workload"] == WORKLOAD
         and isinstance(manifest["policy"], dict)
-        and set(manifest["policy"]) == {"save_allowed"}
-        and type(manifest["policy"].get("save_allowed")) is bool,
+        and set(manifest["policy"])
+        in ({"save_allowed"}, {"save_allowed", "key_namespace"})
+        and type(manifest["policy"].get("save_allowed")) is bool
+        and (
+            "key_namespace" not in manifest["policy"]
+            or (
+                type(manifest["policy"]["key_namespace"]) is str
+                and bool(manifest["policy"]["key_namespace"])
+            )
+        ),
         "Unsupported cache manifest",
     )
+    key_namespace = validate_key_namespace(manifest["policy"].get("key_namespace", ""))
     identity = manifest["identity"]
     current = make_identity(
         Path(identity["paths"]["workspace"]),
@@ -1027,6 +1061,7 @@ def verify_identity(manifest: dict[str, Any], environment: Mapping[str, str]) ->
         identity["source"]["commit"],
         manifest["policy"]["save_allowed"],
         environment,
+        key_namespace=key_namespace,
     )
     require(
         canonical_json(current) == canonical_json(manifest),
@@ -1169,6 +1204,7 @@ def main() -> None:
     prepare.add_argument("--repository", required=True)
     prepare.add_argument("--commit", required=True)
     prepare.add_argument("--save-if", type=boolean, required=True)
+    prepare.add_argument("--key-namespace", default="")
     prepare.add_argument("--output", type=Path, required=True)
     prepare.add_argument("--github-output", type=Path, required=True)
     observe = subparsers.add_parser("observe")
@@ -1196,6 +1232,7 @@ def main() -> None:
             arguments.commit,
             arguments.save_if,
             environment,
+            key_namespace=arguments.key_namespace,
         )
         output = manifest_output(arguments.output, manifest)
         checksum = write_json(output, manifest)

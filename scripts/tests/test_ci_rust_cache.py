@@ -218,6 +218,7 @@ class CacheContract(unittest.TestCase):
         commit: str | None = None,
         repository: str = "astral-sh/uv",
         save: bool = True,
+        namespace: str = "",
         environment: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         source = source or self.source
@@ -246,6 +247,7 @@ class CacheContract(unittest.TestCase):
                 commit or self.git("rev-parse", "HEAD", source=source),
                 save,
                 environment or self.environment,
+                key_namespace=namespace,
             )
 
     def observation(
@@ -273,6 +275,88 @@ class CacheContract(unittest.TestCase):
             before["keys"]["target_restore"], after["keys"]["target_restore"]
         )
         self.assertNotEqual(before["keys"]["target"], after["keys"]["target"])
+
+    def test_empty_namespace_uses_the_ordinary_v1_keys(self) -> None:
+        manifest = self.snapshot()
+        self.assertEqual(manifest["policy"], {"save_allowed": True})
+        downloads = (
+            "uv-rust-downloads-v1-"
+            "c4060c1e58b6655b18665ab7a3b79300a4c8f5a08c4cd7c370cdb5773db17840-"
+        )
+        target = (
+            "uv-rust-target-v1-"
+            "26f3463364e96297e0b4f8831ff1513d88b9de34577a17a30536c2abba566dfd-"
+        )
+        self.assertEqual(
+            manifest["keys"],
+            {
+                "downloads_restore": downloads,
+                "downloads": downloads
+                + "f7cd02bdf328c7f465ae105c96217fcbadadda5e4edda580b5104a3b6cff63e2",
+                "target_restore": target,
+                "target": target + manifest["identity"]["source"]["commit"],
+            },
+        )
+
+    def test_namespaces_keep_source_fallback_inside_one_fixed_width_prefix(
+        self,
+    ) -> None:
+        namespace = "acceptance-123-1"
+        unnamespaced = self.snapshot()
+        before = self.snapshot(namespace=namespace)
+        self.assertEqual(
+            before["policy"], {"save_allowed": True, "key_namespace": namespace}
+        )
+        component = "ns-" + hashlib.sha256(namespace.encode("ascii")).hexdigest() + "-"
+        for name, key in unnamespaced["keys"].items():
+            self.assertEqual(
+                before["keys"][name], key.replace("v1-", "v1-" + component, 1)
+            )
+        self.write(
+            "crates/example/src/lib.rs", "pub fn example() { let _changed = 1; }\n"
+        )
+        self.commit()
+        after = self.snapshot(namespace=namespace)
+        self.assertEqual(before["keys"]["downloads"], after["keys"]["downloads"])
+        self.assertEqual(
+            before["keys"]["target_restore"], after["keys"]["target_restore"]
+        )
+        self.assertNotEqual(before["keys"]["target"], after["keys"]["target"])
+        scopes = [
+            self.snapshot(namespace=value)["keys"]
+            for value in ("", namespace, namespace + "-fault", "a" * 64)
+        ]
+        for left, right in itertools.permutations(scopes, 2):
+            for kind in ("downloads", "target"):
+                with self.subTest(left=left[kind], right=right[kind]):
+                    self.assertFalse(left[kind].startswith(right[kind + "_restore"]))
+                    self.assertNotEqual(
+                        left[kind + "_restore"], right[kind + "_restore"]
+                    )
+
+    def test_namespace_validation_does_not_normalize_or_coerce_values(self) -> None:
+        for value in ("", "a", "acceptance-123-1", "a" * 64):
+            with self.subTest(value=value):
+                self.assertEqual(cache.validate_key_namespace(value), value)
+        for value in (
+            None,
+            True,
+            0,
+            [],
+            {},
+            "A",
+            "-a",
+            "a-",
+            "a--b",
+            "a_b",
+            "a/b",
+            "a\nb",
+            "a b",
+            "é",
+            "a" * 65,
+        ):
+            with self.subTest(value=value), self.assertRaises(cache.CacheError):
+                cache.validate_key_namespace(value)
 
     def test_relocation_is_observed_without_changing_compatible_keys(self) -> None:
         before = self.snapshot()
@@ -529,15 +613,68 @@ class CacheContract(unittest.TestCase):
                 ):
                     cache.restore_observation(keys, kind, primary, matched, hit)
 
+    def test_restore_rejects_a_matched_key_from_another_namespace(self) -> None:
+        scopes = [
+            self.snapshot(namespace=value)["keys"]
+            for value in ("", "acceptance-123-1", "acceptance-123-1-fault")
+        ]
+        for requested, other in itertools.permutations(scopes, 2):
+            for kind in ("downloads", "target"):
+                with (
+                    self.subTest(requested=requested[kind], matched=other[kind]),
+                    self.assertRaisesRegex(cache.CacheError, "incompatible key"),
+                ):
+                    cache.restore_observation(
+                        requested, kind, requested[kind], other[kind], "false"
+                    )
+
+    def test_namespace_is_reconstructed_from_the_original_manifest(self) -> None:
+        namespace = "acceptance-123-1"
+        manifest = self.snapshot(namespace=namespace)
+        other = self.snapshot(namespace=namespace + "-fault")
+        changed = copy.deepcopy(manifest)
+        changed["policy"]["key_namespace"] = namespace + "-fault"
+        state = cache.restored_manifest(
+            changed,
+            {
+                kind: self.observation(changed, kind, "miss")
+                for kind in ("downloads", "target")
+            },
+        )
+        with (
+            mock.patch.object(cache, "make_identity", return_value=other) as make,
+            self.assertRaisesRegex(cache.CacheError, "changed"),
+        ):
+            cache.save_plan(state, self.environment, "success")
+        self.assertEqual(make.call_args.kwargs, {"key_namespace": namespace + "-fault"})
+        for value in ("", None, True, 0, "UPPER", "a" * 65):
+            changed = copy.deepcopy(manifest)
+            changed["policy"]["key_namespace"] = value
+            with self.subTest(value=value), self.assertRaises(cache.CacheError):
+                cache.verify_identity(changed, self.environment)
+        for value in (None, 0, 1, "true"):
+            changed = copy.deepcopy(manifest)
+            changed["policy"]["save_allowed"] = value
+            with (
+                self.subTest(save_allowed=value),
+                self.assertRaisesRegex(cache.CacheError, "Unsupported cache manifest"),
+            ):
+                cache.verify_identity(changed, self.environment)
+
     def test_save_policy_matrix_never_promotes_a_read_only_caller(self) -> None:
-        manifests = {save: self.snapshot(save=save) for save in (False, True)}
-        for save, downloads, target, status in itertools.product(
+        namespaces = ("", "acceptance-123-1", "acceptance-123-1-fault")
+        manifests = {
+            (namespace, save): self.snapshot(namespace=namespace, save=save)
+            for namespace, save in itertools.product(namespaces, (False, True))
+        }
+        for namespace, save, downloads, target, status in itertools.product(
+            namespaces,
             (False, True),
             ("miss", "fallback", "exact"),
             ("miss", "fallback", "exact"),
             ("success", "failure", "cancelled"),
         ):
-            manifest = manifests[save]
+            manifest = manifests[namespace, save]
             observations = {
                 kind: self.observation(manifest, kind, state)
                 for kind, state in (("downloads", downloads), ("target", target))
@@ -789,6 +926,15 @@ class CacheContract(unittest.TestCase):
                 },
             )
         self.assertEqual(action_field(save["plan"], "if"), "${{ success() }}")
+        self.assertEqual(
+            action_mapping(restore["prepare"], "env")["UV_RUST_CACHE_NAMESPACE"],
+            "${{ inputs.key-namespace }}",
+        )
+        self.assertIn(
+            '          --key-namespace "$UV_RUST_CACHE_NAMESPACE" \\',
+            restore["prepare"],
+        )
+        self.assertNotIn("key-namespace:", (ACTION / "save/action.yml").read_text())
 
     def test_action_extractor_rejects_changed_shape(self) -> None:
         path = self.root / "action.yml"

@@ -14,6 +14,9 @@ inputs:
   save-if:
     description: Whether this caller is permitted to publish a new cache entry.
     default: "false"
+  key-namespace:
+    description: Optional public identifier for an isolated set of cache entries.
+    default: ""
 
 outputs:
   cache-hit:
@@ -56,6 +59,7 @@ runs:
         UV_RUST_CACHE_REPOSITORY: ${{ inputs.source-repository }}
         UV_RUST_CACHE_COMMIT: ${{ inputs.source-commit }}
         UV_RUST_CACHE_SAVE: ${{ inputs.save-if }}
+        UV_RUST_CACHE_NAMESPACE: ${{ inputs.key-namespace }}
       run: |
         set -euo pipefail
         directory=$(mktemp -d "$RUNNER_TEMP/uv-rust-cache.XXXXXXXX")
@@ -65,6 +69,7 @@ runs:
           --repository "$UV_RUST_CACHE_REPOSITORY" \
           --commit "$UV_RUST_CACHE_COMMIT" \
           --save-if "$UV_RUST_CACHE_SAVE" \
+          --key-namespace "$UV_RUST_CACHE_NAMESPACE" \
           --output "$directory/identity.json" \
           --github-output "$GITHUB_OUTPUT"
 

@@ -53,6 +53,12 @@ output and key. A save step's successful outcome is not confirmation that the ca
 committed a new entry; a fresh consumer must restore the requested exact key before publication is
 reported as confirmed.
 
+An opt-in acceptance caller can set `key-namespace` to isolate its downloads and compiled entries.
+The default empty namespace uses the ordinary version-1 keys. A nonempty namespace is a public,
+lowercase ASCII identifier of at most 64 characters; its hash occupies a fixed-width key segment,
+and neither restore family falls back to unnamespaced entries. The recorded namespace cannot be
+overridden by `save` and does not grant permission to publish a cache.
+
 Cargo's own freshness checks remain authoritative. Recording a different checkout path does not make
 compiled artifacts hermetic or promise that Cargo can reuse them after relocation. The helper
 detects ordinary source/tool changes at its observation boundaries; it cannot close races with an
