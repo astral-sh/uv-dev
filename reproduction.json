@@ -1,0 +1,4 @@
+{
+  "reproduction": "needs_more_information",
+  "reason": "The available runner is x86_64 Linux, so it cannot exercise the reported aarch64 FEAT_RNG/RNDR path. Using isolated temporary caches, uv 0.11.8 completed 20/20 cold-cache `pip install` downloads of `iniconfig==2.0.0`; installed uv 0.12.13 completed 5/5. All exited 0 without signals, but this is not evidence against the CPU-specific report. No uv integration test injects an AWS-LC entropy failure. Direct reproduction requires an affected Axion/Graviton host, the exact uv artifact and command/dependency fixture, and paired cold-cache attempt counts with and without `OPENSSL_armcap=~0x20000`. Upstream aws/aws-lc#3475 supports the hypothesis but does not constitute runtime reproduction. The issue-context README was updated consistently."
+}
