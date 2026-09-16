@@ -79,11 +79,15 @@ source change. The controller and test source are separate clean checkouts, and 
 source's toolchain, Linux test filesystems, Python versions, and nextest configuration remain part
 of the recorded contract.
 
-The `source` stage runs six sequential fresh jobs: downloads seeding, a cold baseline target, a
-baseline exact hit, a candidate fallback from the baseline, a candidate exact hit, and that same
-candidate at a different checkout path. Only the seed and the two complete source-cache producers
-may save. Their following fresh consumers must observe the requested exact keys. The namespace is
-derived from the workflow run and attempt, so this sequence cannot restore an ordinary CI entry.
+The `source` stage runs six sequential fresh jobs: downloads seeding, a baseline target-cache miss,
+a baseline exact hit, a candidate fallback from the baseline, a candidate exact hit, and that same
+candidate at a different checkout path. The `baseline-cold` case requires a miss from the namespaced
+cache service. It records the target payload and fingerprints before the workload, but does not
+require the local target directory to be empty. A physically cold build or a performance comparison
+needs those records to establish its starting state. Only the seed and the two complete source-cache
+producers may save. Their following fresh consumers must observe the requested exact keys. The
+namespace is derived from the workflow run and attempt, so this sequence cannot restore an ordinary
+CI entry.
 
 The optional `source-and-malformed-cache` stage adds a fixture producer and fresh consumer in a
 separate namespace. The producer restores the valid candidate entry read-only, records its payload
