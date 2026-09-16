@@ -23,7 +23,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = ROOT / ".github/workflows/plan.yml"
+CI_WORKFLOW_PATH = ROOT / ".github/workflows/ci.yml"
 RETAIN_DIRECTORY: Path | None = None
+DOWNSTREAM_MATRICES = (
+    "test_smoke",
+    "test_ecosystem",
+    "test_integration",
+    "test_system",
+)
 LABEL_EXPRESSION = re.compile(
     r"\$\{\{ contains\(github\.event\.pull_request\.labels\.\*\.name, '([^']+)'\) \}\}"
 )
@@ -394,7 +401,7 @@ class WorkflowShape(unittest.TestCase):
 
 
 @unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "requires POSIX Bash")
-class CIPlan(unittest.TestCase):
+class GitWorkflowTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.workflow = Workflow.load(WORKFLOW_PATH)
@@ -420,6 +427,8 @@ class CIPlan(unittest.TestCase):
         )
         self.assertEqual(values, {}, (result.stdout, result.stderr))
 
+
+class CIPlan(GitWorkflowTest):
     def test_checkout_and_dispatch_contract(self) -> None:
         checkouts = [
             step
@@ -631,11 +640,165 @@ class CIPlan(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, (result.stdout, result.stderr))
 
 
+class MirrorCIPlan(GitWorkflowTest):
+    def test_only_automatic_mirror_main_skips_downstream_matrices(self) -> None:
+        history = self.history
+        checkout = history.fetched_checkout("refs/heads/main")
+        result, upstream = history.plan(
+            self.workflow, checkout, "refs/heads/main", event="push"
+        )
+        self.assert_success(result)
+        for name in (
+            "test_code",
+            "run_checks",
+            "test_windows_trampoline",
+            "save_rust_cache",
+            "run_bench",
+            "test_macos",
+            *DOWNSTREAM_MATRICES,
+        ):
+            self.assertTrue(upstream[name], name)
+
+        for repository, event, skips_downstream in (
+            ("astral-sh/uv-dev", "push", True),
+            ("astral-sh/uv-dev", "workflow_dispatch", False),
+            ("example/uv", "push", False),
+        ):
+            with self.subTest(repository=repository, event=event):
+                result, values = history.plan(
+                    self.workflow,
+                    checkout,
+                    "refs/heads/main",
+                    repository=repository,
+                    event=event,
+                )
+                self.assert_success(result)
+                expected = upstream.copy()
+                if skips_downstream:
+                    expected.update(dict.fromkeys(DOWNSTREAM_MATRICES, False))
+                self.assertEqual(values, expected)
+
+    def test_pull_requests_keep_label_and_cache_policy(self) -> None:
+        history = self.history
+        history.branch("feature", history.initial)
+        feature = history.commit(
+            "cache-relevant feature",
+            {
+                "Cargo.lock": "version = 3\n",
+                "crates/fixture/src/lib.rs": "pub fn feature() {}\n",
+            },
+        )
+        history.push("feature")
+        history.merge(history.initial, feature, "refs/pull/44/merge")
+        checkout = history.fetched_checkout("refs/pull/44/merge")
+        for labels in (
+            (),
+            ("test:integration", "test:system"),
+            ("test:skip",),
+            ("build:skip",),
+            ("build:release", "build:push-docker", "test:extended"),
+        ):
+            with self.subTest(labels=labels):
+                result, upstream = history.plan(
+                    self.workflow, checkout, "refs/pull/44/merge", labels=labels
+                )
+                self.assert_success(result)
+                result, mirror = history.plan(
+                    self.workflow,
+                    checkout,
+                    "refs/pull/44/merge",
+                    repository="astral-sh/uv-dev",
+                    labels=labels,
+                )
+                self.assert_success(result)
+                self.assertEqual(mirror, upstream)
+                self.assertTrue(mirror["save_rust_cache"])
+                if "test:integration" in labels or "test:extended" in labels:
+                    for name in DOWNSTREAM_MATRICES:
+                        self.assertTrue(mirror[name], name)
+                if "build:push-docker" in labels:
+                    self.assertTrue(mirror["build_docker"])
+                    self.assertTrue(mirror["push_docker"])
+
+    def test_branch_dispatch_keeps_its_matrices(self) -> None:
+        history = self.history
+        history.branch("feature", history.initial)
+        history.commit(
+            "feature", {"crates/fixture/src/lib.rs": "pub fn feature() {}\n"}
+        )
+        history.push("feature")
+        checkout = history.fetched_checkout("refs/heads/feature")
+        self.assert_success(history.fetch_main(self.workflow, checkout))
+        result, upstream = history.plan(
+            self.workflow, checkout, "refs/heads/feature", event="workflow_dispatch"
+        )
+        self.assert_success(result)
+        result, mirror = history.plan(
+            self.workflow,
+            checkout,
+            "refs/heads/feature",
+            repository="astral-sh/uv-dev",
+            event="workflow_dispatch",
+        )
+        self.assert_success(result)
+        self.assertEqual(mirror, upstream)
+        for name in ("test_code", "run_bench", "test_smoke", "test_ecosystem"):
+            self.assertTrue(mirror[name], name)
+        for name in (
+            "test_integration",
+            "test_system",
+            "build_release_binaries",
+            "build_docker",
+        ):
+            self.assertFalse(mirror[name], name)
+
+    def test_ci_keeps_cache_producing_jobs_and_save_inputs(self) -> None:
+        jobs = block(
+            CI_WORKFLOW_PATH.read_text(encoding="utf-8").splitlines(), "jobs:", 0
+        )
+        formatting = block(jobs, "check-fmt:", 2)
+        self.assertEqual(
+            flat_mapping(
+                [line for line in formatting if not line.lstrip().startswith("#")], 4
+            ),
+            {
+                "if": "${{ github.repository != 'astral-sh/uv-dev' || github.event_name != 'push' || github.ref != 'refs/heads/main' }}",
+                "uses": "$/.github/workflows/check-fmt.yml",
+            },
+        )
+        for name, condition in (
+            ("check-lint", None),
+            ("check-generated-files", "${{ needs.plan.outputs.test-code == 'true' }}"),
+            ("test", "${{ needs.plan.outputs.test-code == 'true' }}"),
+            ("build-dev-binaries", "${{ needs.plan.outputs.test-code == 'true' }}"),
+            ("bench", "${{ needs.plan.outputs.run-bench == 'true' }}"),
+        ):
+            with self.subTest(job=name):
+                job = block(jobs, f"{name}:", 2)
+                fields = flat_mapping(
+                    [
+                        line
+                        for line in job
+                        if re.fullmatch(r"    [A-Za-z0-9_-]+: .+", line)
+                    ],
+                    4,
+                )
+                self.assertEqual(fields["needs"], "plan")
+                self.assertEqual(fields.get("if"), condition)
+                self.assertEqual(fields["uses"], f"$/.github/workflows/{name}.yml")
+                self.assertEqual(
+                    flat_mapping(block(job, "with:", 4), 6)["save-rust-cache"],
+                    "${{ needs.plan.outputs.save-rust-cache }}",
+                )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--workflow", type=Path, default=WORKFLOW_PATH)
+    parser.add_argument("--ci-workflow", type=Path, default=CI_WORKFLOW_PATH)
     parser.add_argument("--retain-fixtures", type=Path)
     arguments, remaining = parser.parse_known_args()
     WORKFLOW_PATH = arguments.workflow.resolve()
+    CI_WORKFLOW_PATH = arguments.ci_workflow.resolve()
     RETAIN_DIRECTORY = arguments.retain_fixtures
     unittest.main(argv=[sys.argv[0], *remaining])
