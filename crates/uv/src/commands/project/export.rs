@@ -245,16 +245,15 @@ pub(crate) async fn export(
     };
     let explicit_workspace_group = workspace_group.is_some();
     let workspace_group = match &target {
-        ExportTarget::Project(project) => {
-            command_workspace_group(
-                project.workspace(),
-                workspace_group.as_ref(),
-                &selection_members,
-                frozen,
-                &settings.sources,
-            )
-            .await?
-        }
+        ExportTarget::Project(project) => command_workspace_group(
+            project.workspace(),
+            workspace_group.as_ref(),
+            &selection_members,
+            frozen,
+            &settings.sources,
+        )
+        .await
+        .map_err(UvError::from)?,
         ExportTarget::Script(_) => {
             if workspace_group.is_some() {
                 bail!("Workspace groups are not supported for scripts");
