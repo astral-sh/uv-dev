@@ -568,7 +568,6 @@ impl ObjectKind {
         use ArrayKind as A;
         use EnumKind as E;
         use Kind::{Array, Atom, Bool, Decimal, Enum, LocalAtom, Object, Request, U16, U32, Usize};
-        use ObjectKind as O;
         match self {
             Self::Envelope => fields![
                 Field::required("schema", U32),
@@ -581,9 +580,9 @@ impl ObjectKind {
                 Field::required("terminal", Enum(E::Terminal)),
                 Field::required("status", Enum(E::Status)),
                 Field::optional_nullable("reason", Enum(E::CaptureReason)),
-                Field::required("limits", Object(O::Limits)),
-                Field::required("usage", Object(O::Usage)),
-                Field::optional_nullable("graph", Object(O::Graph)),
+                Field::required("limits", Object(Self::Limits)),
+                Field::required("usage", Object(Self::Usage)),
+                Field::optional_nullable("graph", Object(Self::Graph)),
             ],
             Self::Limits => fields![
                 Field::required("derivation_nodes", Usize),
@@ -615,15 +614,15 @@ impl ObjectKind {
             Self::Graph => fields![
                 Field::required("root", U32),
                 Field::required("root_package", U32),
-                Field::required("root_version", Object(O::Version)),
+                Field::required("root_version", Object(Self::Version)),
                 Field::required("nodes", Array(A::Nodes)),
                 Field::required("packages", Array(A::Packages)),
                 Field::required("markers", Array(A::Markers)),
                 Field::required("workspace_members", Array(A::WorkspaceMembers)),
-                Field::required("environment", Object(O::Environment)),
-                Field::required("original_python", Object(O::Python)),
-                Field::required("effective_python", Object(O::Python)),
-                Field::required("index_authentication", Object(O::IndexAuthentication)),
+                Field::required("environment", Object(Self::Environment)),
+                Field::required("original_python", Object(Self::Python)),
+                Field::required("effective_python", Object(Self::Python)),
+                Field::required("index_authentication", Object(Self::IndexAuthentication)),
                 Field::required("observations", Array(A::Observations)),
             ],
             Self::IndexAuthentication => fields![
@@ -632,22 +631,22 @@ impl ObjectKind {
             ],
             Self::NotRoot => fields![
                 Field::required("package", U32),
-                Field::required("version", Object(O::Version)),
+                Field::required("version", Object(Self::Version)),
             ],
             Self::NoVersions => fields![
                 Field::required("package", U32),
-                Field::required("range", Object(O::Range)),
+                Field::required("range", Object(Self::Range)),
             ],
             Self::FromDependencyOf => fields![
                 Field::required("package", U32),
-                Field::required("range", Object(O::Range)),
+                Field::required("range", Object(Self::Range)),
                 Field::required("dependency", U32),
-                Field::required("dependency_range", Object(O::Range)),
+                Field::required("dependency_range", Object(Self::Range)),
             ],
             Self::Custom => fields![
                 Field::required("package", U32),
-                Field::required("range", Object(O::Range)),
-                Field::required("reason", Object(O::Reason)),
+                Field::required("range", Object(Self::Range)),
+                Field::required("reason", Object(Self::Reason)),
             ],
             Self::Derived => fields![
                 Field::required("cause1", U32),
@@ -657,7 +656,7 @@ impl ObjectKind {
             Self::Term => fields![
                 Field::required("package", U32),
                 Field::required("positive", Bool),
-                Field::required("range", Object(O::Range)),
+                Field::required("range", Object(Self::Range)),
             ],
             Self::Range => fields![
                 Field::required("encoded", Array(A::EncodedIntervals)),
@@ -666,10 +665,10 @@ impl ObjectKind {
             Self::Version => fields![
                 Field::required("epoch", Decimal),
                 Field::required("release", Array(A::Release)),
-                Field::optional_nullable("pre", Object(O::Prerelease)),
+                Field::optional_nullable("pre", Object(Self::Prerelease)),
                 Field::optional_nullable("post", Decimal),
                 Field::optional_nullable("dev", Decimal),
-                Field::required("local", Object(O::LocalVersion)),
+                Field::required("local", Object(Self::LocalVersion)),
                 Field::optional_nullable("min", Decimal),
                 Field::optional_nullable("max", Decimal),
             ],
@@ -686,12 +685,12 @@ impl ObjectKind {
                 Field::required("value", LocalAtom),
             ],
             Self::EncodedInterval => fields![
-                Field::required("lower", Object(O::VersionBound)),
-                Field::required("upper", Object(O::VersionBound)),
+                Field::required("lower", Object(Self::VersionBound)),
+                Field::required("upper", Object(Self::VersionBound)),
             ],
             Self::VersionBound => fields![
                 Field::required("kind", Enum(E::Bound)),
-                Field::optional("version", Object(O::Version)),
+                Field::optional("version", Object(Self::Version)),
             ],
             Self::RootPackage => fields![Field::nullable("name", Atom)],
             Self::PythonPackage => fields![Field::required("kind", Enum(E::PythonKind))],
@@ -733,8 +732,8 @@ impl ObjectKind {
                 Field::required("child", U32),
             ],
             Self::StringInterval => fields![
-                Field::required("lower", Object(O::StringBound)),
-                Field::required("upper", Object(O::StringBound)),
+                Field::required("lower", Object(Self::StringBound)),
+                Field::required("upper", Object(Self::StringBound)),
             ],
             Self::StringBound => fields![
                 Field::required("kind", Enum(E::Bound)),
@@ -757,19 +756,19 @@ impl ObjectKind {
             ],
             Self::Python => fields![
                 Field::required("source", Enum(E::PythonSource)),
-                Field::required("exact", Object(O::Version)),
-                Field::required("installed", Object(O::PythonDomain)),
-                Field::required("target", Object(O::PythonDomain)),
+                Field::required("exact", Object(Self::Version)),
+                Field::required("installed", Object(Self::PythonDomain)),
+                Field::required("target", Object(Self::PythonDomain)),
                 Field::required("target_marker", U32),
             ],
             Self::PythonDomain => fields![
-                Field::required("lower", Object(O::VersionBound)),
-                Field::required("upper", Object(O::VersionBound)),
+                Field::required("lower", Object(Self::VersionBound)),
+                Field::required("upper", Object(Self::VersionBound)),
                 Field::required("specifiers", Array(A::Specifiers)),
             ],
             Self::Specifier => fields![
                 Field::required("operator", Enum(E::Operator)),
-                Field::required("version", Object(O::Version)),
+                Field::required("version", Object(Self::Version)),
             ],
             Self::Observation => fields![
                 Field::required("name", Atom),
@@ -779,12 +778,12 @@ impl ObjectKind {
                 Field::required("listing", Enum(E::Listing)),
                 Field::required("listed_versions", Array(A::AvailableVersions)),
                 Field::required("known_versions", Array(A::AvailableVersions)),
-                Field::nullable("unavailable", Object(O::Reason)),
+                Field::nullable("unavailable", Object(Self::Reason)),
                 Field::required("incomplete", Array(A::Incomplete)),
             ],
             Self::MetadataFact => fields![
-                Field::required("version", Object(O::Version)),
-                Field::required("reason", Object(O::Reason)),
+                Field::required("version", Object(Self::Version)),
+                Field::required("reason", Object(Self::Reason)),
             ],
             Self::Reason => fields![
                 Field::required("kind", Enum(E::Reason)),

@@ -9,7 +9,7 @@ fn complete_bytes() -> Vec<u8> {
     let fixture = Fixture::new();
     let tree = basic_tree();
     options()
-        .capture(fixture.context(&tree))
+        .capture(&fixture.context(&tree))
         .to_json()
         .expect("serializable complete fixture")
 }

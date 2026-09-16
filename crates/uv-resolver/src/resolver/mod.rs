@@ -67,6 +67,7 @@ pub(crate) use crate::resolver::availability::{
 use crate::resolver::batch_prefetch::BatchPrefetcher;
 use crate::resolver::derivation::DerivationChainBuilder;
 pub use crate::resolver::environment::ResolverEnvironment;
+pub(crate) use crate::resolver::environment::UniversalEnvironmentRef;
 use crate::resolver::environment::{
     ForkingPossibility, fork_on_no_solution, fork_version_by_marker,
     fork_version_by_python_requirement, restart_on_no_solution,
@@ -402,7 +403,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                     state.fork_indexes,
                                     &state.known_versions.0,
                                     state.env,
-                                    state.python_requirement,
+                                    &state.python_requirement,
                                     self.current_environment.clone(),
                                     &visited,
                                 ));
@@ -2868,18 +2869,18 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         fork_indexes: ForkIndexes,
         known_versions: &FxHashMap<PackageName, Arc<[Version]>>,
         env: ResolverEnvironment,
-        effective_python: PythonRequirement,
+        effective_python: &PythonRequirement,
         current_environment: MarkerEnvironment,
         visited: &FxHashSet<PackageName>,
     ) -> ResolveError {
         let capture = self.no_solution_capture.as_ref().map(|capture| {
-            capture.capture(CaptureContext {
+            capture.capture(&CaptureContext {
                 error: &err,
                 project: self.project.as_ref(),
                 workspace_members: &self.workspace_members,
                 environment: &env,
                 original_python: &self.python_requirement,
-                effective_python: &effective_python,
+                effective_python,
                 index: &self.index,
                 index_locations: &self.locations,
                 index_capabilities: &self.capabilities,

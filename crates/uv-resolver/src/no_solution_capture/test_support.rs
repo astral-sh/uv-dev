@@ -76,7 +76,7 @@ pub(super) fn package(name: &str) -> PubGrubPackage {
     .into()
 }
 
-pub(super) fn root() -> PubGrubPackage {
+fn root() -> PubGrubPackage {
     PubGrubPackageInner::Root(Some(package_name("capture-project"))).into()
 }
 
@@ -105,21 +105,21 @@ pub(super) fn basic_tree() -> ErrorTree {
 }
 
 pub(super) struct Fixture {
-    pub project: PackageName,
-    pub workspace_members: BTreeSet<PackageName>,
-    pub environment: ResolverEnvironment,
-    pub original_python: PythonRequirement,
-    pub effective_python: PythonRequirement,
-    pub index: InMemoryIndex,
-    pub index_locations: IndexLocations,
-    pub index_capabilities: IndexCapabilities,
-    pub urls: Urls,
-    pub indexes: Indexes,
-    pub fork_urls: ForkUrls,
-    pub fork_indexes: ForkIndexes,
-    pub known_versions: FxHashMap<PackageName, Arc<[Version]>>,
-    pub unavailable_packages: HashMap<PackageName, UnavailablePackage>,
-    pub incomplete_packages: HashMap<PackageName, HashMap<Version, MetadataUnavailable>>,
+    pub(super) project: PackageName,
+    pub(super) workspace_members: BTreeSet<PackageName>,
+    pub(super) environment: ResolverEnvironment,
+    pub(super) original_python: PythonRequirement,
+    pub(super) effective_python: PythonRequirement,
+    pub(super) index: InMemoryIndex,
+    pub(super) index_locations: IndexLocations,
+    pub(super) index_capabilities: IndexCapabilities,
+    pub(super) urls: Urls,
+    pub(super) indexes: Indexes,
+    pub(super) fork_urls: ForkUrls,
+    pub(super) fork_indexes: ForkIndexes,
+    pub(super) known_versions: FxHashMap<PackageName, Arc<[Version]>>,
+    pub(super) unavailable_packages: HashMap<PackageName, UnavailablePackage>,
+    pub(super) incomplete_packages: HashMap<PackageName, HashMap<Version, MetadataUnavailable>>,
 }
 
 impl Fixture {

@@ -25,7 +25,7 @@ fn original_graph_round_trips_through_the_checked_reader() -> Result<(), Box<dyn
         .expect("Python domain can be split")
         .1;
     let tree = basic_tree();
-    let evidence = options().capture(fixture.context(&tree));
+    let evidence = options().capture(&fixture.context(&tree));
     assert_eq!(evidence.status(), CaptureStatus::Complete);
     let graph = evidence.0.graph.as_ref().expect("complete graph");
     assert_eq!(graph.nodes.len(), 3);
@@ -255,12 +255,12 @@ fn json_escaping_is_bounded_before_publication() -> Result<(), Box<dyn Error>> {
             value: ArcStr::from("\0\"\\".repeat(256)),
         })]);
     let tree = basic_tree();
-    let complete = options().capture(fixture.context(&tree));
+    let complete = options().capture(&fixture.context(&tree));
     assert_eq!(complete.status(), CaptureStatus::Complete);
     let complete_bytes = complete.to_json()?;
     NoSolutionEvidence::from_json(&complete_bytes, &token())?;
     let evidence = options().capture_with_limits(
-        fixture.context(&tree),
+        &fixture.context(&tree),
         CaptureLimits {
             json_bytes: complete_bytes.len() / 2,
             ..CaptureLimits::V1
@@ -290,7 +290,7 @@ fn unsupported_marker_kinds_do_not_emit_partial_graphs() {
         let mut fixture = Fixture::new();
         fixture.environment = ResolverEnvironment::universal(vec![marker(expression)]);
         let tree = basic_tree();
-        let evidence = options().capture(fixture.context(&tree));
+        let evidence = options().capture(&fixture.context(&tree));
         assert_eq!(
             evidence.status(),
             CaptureStatus::Unsupported,
@@ -304,7 +304,7 @@ fn unsupported_marker_kinds_do_not_emit_partial_graphs() {
     fixture.environment =
         ResolverEnvironment::specific(ResolverMarkerEnvironment::from(marker_environment()));
     let tree = basic_tree();
-    let evidence = options().capture(fixture.context(&tree));
+    let evidence = options().capture(&fixture.context(&tree));
     assert_eq!(evidence.0.reason, Some(CaptureReason::SpecificEnvironment));
     assert!(evidence.0.graph.is_none());
 }
@@ -316,7 +316,7 @@ fn observations_distinguish_unobserved_listing_and_metadata_failure() -> Result<
     let tree = basic_tree();
     let name = package_name("a");
     assert!(fixture.index.implicit().register(name.clone()));
-    let unobserved = options().capture(fixture.context(&tree));
+    let unobserved = options().capture(&fixture.context(&tree));
     let observation = unobserved
         .0
         .graph
@@ -346,7 +346,7 @@ fn observations_distinguish_unobserved_listing_and_metadata_failure() -> Result<
         .pin()
         .insert(version("1.0"), MetadataUnavailable::Offline);
     fixture.incomplete_packages.pin().insert(name, incomplete);
-    let evidence = options().capture(fixture.context(&tree));
+    let evidence = options().capture(&fixture.context(&tree));
     let observation = evidence
         .0
         .graph
@@ -389,7 +389,7 @@ fn index_authentication_uses_existing_global_capability_state() -> Result<(), Bo
     );
     let authentication = |fixture: &Fixture| {
         options()
-            .capture(fixture.context(&basic_tree()))
+            .capture(&fixture.context(&basic_tree()))
             .0
             .graph
             .expect("complete graph")
@@ -479,7 +479,7 @@ fn index_authentication_uses_existing_global_capability_state() -> Result<(), Bo
         CapturedIndexAuthentication::default()
     );
     let tree = basic_tree();
-    let evidence = options().capture(fixture.context(&tree));
+    let evidence = options().capture(&fixture.context(&tree));
     NoSolutionEvidence::from_json(&evidence.to_json()?, &token())?;
     Ok(())
 }
@@ -517,7 +517,7 @@ fn index_authentication_scan_cannot_return_partial_false_flags() -> Result<(), B
         Vec::new(),
         false,
     );
-    let evidence = options().capture(fixture.context(&tree));
+    let evidence = options().capture(&fixture.context(&tree));
     assert_eq!(evidence.status(), CaptureStatus::Truncated);
     assert_eq!(evidence.0.reason, Some(CaptureReason::AtomBytes));
     assert!(evidence.0.graph.is_none());
@@ -529,7 +529,7 @@ fn index_authentication_scan_cannot_return_partial_false_flags() -> Result<(), B
 fn each_capture_budget_discards_the_partial_graph() -> Result<(), Box<dyn Error>> {
     let fixture = Fixture::new();
     let tree = basic_tree();
-    let complete = options().capture(fixture.context(&tree));
+    let complete = options().capture(&fixture.context(&tree));
     assert_eq!(complete.status(), CaptureStatus::Complete);
     let usage = complete.0.usage;
     let cases = [
@@ -612,7 +612,7 @@ fn each_capture_budget_discards_the_partial_graph() -> Result<(), Box<dyn Error>
         ),
     ];
     for (limits, reason) in cases {
-        let evidence = options().capture_with_limits(fixture.context(&tree), limits);
+        let evidence = options().capture_with_limits(&fixture.context(&tree), limits);
         assert_eq!(evidence.status(), CaptureStatus::Truncated, "{reason:?}");
         assert_eq!(evidence.0.reason, Some(reason));
         assert!(evidence.0.graph.is_none());
@@ -624,7 +624,7 @@ fn each_capture_budget_discards_the_partial_graph() -> Result<(), Box<dyn Error>
 
     let complete_bytes = complete.to_json()?;
     let evidence = options().capture_with_limits(
-        fixture.context(&tree),
+        &fixture.context(&tree),
         CaptureLimits {
             json_bytes: complete_bytes.len() / 2,
             ..CaptureLimits::V1

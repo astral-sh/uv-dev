@@ -9,7 +9,11 @@ use uv_pep440::{EncodedVersion, MIN_VERSION, Version};
 
 use super::NoSolutionEvidence;
 use super::budget::{Budget, CaptureLimits, CaptureUsage, Stop};
-use super::wire::*;
+use super::wire::{
+    CaptureReason, CaptureStatus, CaptureToken, CapturedConflict, CapturedGraph, CapturedListing,
+    CapturedMarker, CapturedNode, CapturedPackage, CapturedReason, CapturedReasonKind,
+    CapturedSource, EvidenceWire, StringBound,
+};
 
 mod preflight;
 
@@ -18,7 +22,7 @@ mod tests;
 
 /// An internal capture was not a supported, bounded envelope for this invocation.
 #[derive(Debug)]
-pub(crate) struct CaptureReadError(ReadErrorKind);
+pub(super) struct CaptureReadError(ReadErrorKind);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ReadErrorKind {

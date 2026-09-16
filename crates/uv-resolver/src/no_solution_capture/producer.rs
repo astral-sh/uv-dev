@@ -26,12 +26,20 @@ use crate::pubgrub::{PubGrubPackage, PubGrubPackageInner, PubGrubPython, Range};
 use crate::python_requirement::PythonRequirementSource;
 use crate::resolver::{
     InMemoryIndex, Indexes, MetadataUnavailable, ResolverEnvironment, UnavailablePackage,
-    UnavailableReason, UnavailableVersion, Urls, VersionsResponse,
+    UnavailableReason, UnavailableVersion, UniversalEnvironmentRef, Urls, VersionsResponse,
 };
 
 use super::NoSolutionEvidence;
 use super::budget::{Budget, CaptureLimits, Resource, Stop};
-use super::wire::*;
+use super::wire::{
+    CaptureCommand, CaptureOptions, CaptureReason, CaptureStatus, CaptureTerminal,
+    CapturedConflict, CapturedEnvironment, CapturedGraph, CapturedIndexAuthentication,
+    CapturedListing, CapturedMarker, CapturedMetadataFact, CapturedNode, CapturedObservation,
+    CapturedOperator, CapturedPackage, CapturedPython, CapturedPythonDomain, CapturedPythonKind,
+    CapturedPythonSource, CapturedRange, CapturedReason, CapturedReasonKind, CapturedSource,
+    CapturedSpecifier, CapturedTerm, EvidenceWire, StringBound, StringInterval, StringMarkerEdge,
+    StringMarkerKey, VersionBound, VersionMarkerEdge, VersionMarkerKey,
+};
 
 #[cfg(test)]
 mod tests;
@@ -57,13 +65,13 @@ pub(crate) struct CaptureContext<'a> {
 }
 
 impl CaptureOptions {
-    pub(crate) fn capture(&self, context: CaptureContext<'_>) -> NoSolutionEvidence {
+    pub(crate) fn capture(&self, context: &CaptureContext<'_>) -> NoSolutionEvidence {
         self.capture_with_limits(context, CaptureLimits::V1)
     }
 
     fn capture_with_limits(
         &self,
-        context: CaptureContext<'_>,
+        context: &CaptureContext<'_>,
         limits: CaptureLimits,
     ) -> NoSolutionEvidence {
         let mut collector = Collector::new(limits);
@@ -111,7 +119,7 @@ impl Collector {
         }
     }
 
-    fn graph(&mut self, context: CaptureContext<'_>) -> Result<CapturedGraph, Stop> {
+    fn graph(&mut self, context: &CaptureContext<'_>) -> Result<CapturedGraph, Stop> {
         if let Some(project) = context.project {
             self.budget.check_atom(project.as_ref().len())?;
         }
@@ -126,8 +134,8 @@ impl Collector {
         for name in context.workspace_members {
             workspace_members.push(self.budget.string(name.as_ref())?);
         }
-        let index_authentication = self.index_authentication(&context)?;
-        let observations = self.observations(&context)?;
+        let index_authentication = self.index_authentication(context)?;
+        let observations = self.observations(context)?;
         Ok(CapturedGraph {
             root,
             root_package,
@@ -548,7 +556,13 @@ impl Collector {
     }
 
     fn environment(&mut self, env: &ResolverEnvironment) -> Result<CapturedEnvironment, Stop> {
-        let Some((marker, initial_forks, include, exclude)) = env.capture_parts() else {
+        let Some(UniversalEnvironmentRef {
+            marker,
+            initial_forks,
+            include,
+            exclude,
+        }) = env.capture_parts()
+        else {
             return Err(Stop::unsupported(CaptureReason::SpecificEnvironment));
         };
         let marker = self.marker(marker)?;

@@ -6,7 +6,7 @@ use crate::no_solution_capture::test_support::{Fixture, basic_tree, options, tok
 fn complete_value() -> serde_json::Value {
     let fixture = Fixture::new();
     let tree = basic_tree();
-    let evidence = options().capture(fixture.context(&tree));
+    let evidence = options().capture(&fixture.context(&tree));
     assert_eq!(evidence.status(), CaptureStatus::Complete);
     let mut value = serde_json::to_value(&evidence.0).expect("serializable fixture");
     // Reference mutations may change atom lengths without changing structural counts.

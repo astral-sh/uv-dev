@@ -14,9 +14,9 @@ mod test_support;
 
 use std::fmt;
 
-pub(crate) use reader::CaptureReadError;
+use reader::CaptureReadError;
 pub use reader::CaptureWriteError;
-pub(crate) use wire::CaptureStatus;
+use wire::CaptureStatus;
 pub use wire::{CaptureMetadata, CaptureOperation, CaptureOptions, CaptureScope, CaptureToken};
 
 pub(crate) use producer::CaptureContext;
@@ -34,7 +34,7 @@ impl NoSolutionEvidence {
             reason = "capture reconstruction is restricted to internal validation"
         )
     )]
-    pub(crate) fn from_json(bytes: &[u8], token: &CaptureToken) -> Result<Self, CaptureReadError> {
+    fn from_json(bytes: &[u8], token: &CaptureToken) -> Result<Self, CaptureReadError> {
         reader::read(bytes, token, budget::CaptureLimits::V1)
     }
 
@@ -54,7 +54,7 @@ impl NoSolutionEvidence {
             reason = "capture status is inspected by internal validation"
         )
     )]
-    pub(crate) const fn status(&self) -> CaptureStatus {
+    const fn status(&self) -> CaptureStatus {
         self.0.status
     }
 }

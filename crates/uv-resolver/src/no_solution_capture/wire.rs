@@ -93,7 +93,7 @@ pub(super) enum CaptureTerminal {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum CaptureStatus {
+pub(super) enum CaptureStatus {
     Complete,
     Truncated,
     Unsupported,
