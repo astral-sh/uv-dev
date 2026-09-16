@@ -63,11 +63,10 @@ pub(crate) fn from_state(
     // Add the root node.
     let root_index = graph.add_node(ResolutionGraphNode::Root);
 
-    let mut seen = FxHashSet::default();
     for resolution in resolutions {
         // Add every package to the graph.
         for (package, version) in &resolution.nodes {
-            if !seen.insert((package, version)) {
+            if inverse.contains_key(&PackageRef { package, version }) {
                 // Insert each node only once.
                 continue;
             }
