@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 1233,
+        "title": "Process aborts on aarch64 when a transient RNDR read fails (no retry) — rustls handshakes on GCP Axion / Graviton",
+        "url": "https://github.com/aws/aws-lc-rs/issues/1233",
+        "state": "open",
+        "reason": "aws/aws-lc-rs#1233 reports the same backtrace, platforms, intermittent failure rate, workaround, and need to consume the AWS-LC fix."
+      },
+      {
+        "kind": "issue",
+        "number": 3453,
+        "title": "transient RNDR failure on aarch64 aborts the process (no retry, unlike rdrand)",
+        "url": "https://github.com/aws/aws-lc/issues/3453",
+        "state": "closed",
+        "reason": "aws/aws-lc#3453 is the canonical upstream defect. Maintainer discussion confirms the RNDR failure path and acknowledges OPENSSL_armcap=~0x20000 as a viable workaround."
+      },
+      {
+        "kind": "pull_request",
+        "number": 3475,
+        "title": "Retry failed rndr register read a bounded number of times",
+        "url": "https://github.com/aws/aws-lc/pull/3475",
+        "state": "merged",
+        "reason": "aws/aws-lc#3475 adds the bounded RNDR retry that directly fixes the abort. It merged after the currently published AWS-LC and aws-lc-rs releases."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21537,
+        "title": "Add optional native-tls (OpenSSL) backend",
+        "url": "https://github.com/astral-sh/uv/pull/21537",
+        "state": "open",
+        "reason": "astral-sh/uv#21537 addresses the adjacent request for an alternative TLS provider in downstream builds, but does not add a runtime RNG switch or alter official rustls-based binaries."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21158,
+        "title": "Fix riscv64 musl TLS segfaults by updating aws-lc-rs",
+        "url": "https://github.com/astral-sh/uv/pull/21158",
+        "state": "merged",
+        "reason": "astral-sh/uv#21158 is the closest earlier uv AWS-LC HTTPS crash fix, but its deterministic RISC-V musl SIGSEGV from a toolchain miscompilation differs from this intermittent aarch64 RNDR SIGABRT affecting both libc variants."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for SIGABRT, exit 134, RAND_bytes, RNDR, OPENSSL_armcap, aws-lc-rs, SessionId, Axion, Graviton, aarch64/arm64 download crashes, cold-cache and HTTPS-handshake failures, core dumps, RNG/provider controls, native TLS, getrandom, and dependency fixes. No earlier uv tracker matched. Inspected and ruled out astral-sh/uv#21337 (macOS subprocess-stdio abort), astral-sh/uv#18890 (deterministic certificate-extension panic), and astral-sh/uv#20632 (debug symbols for a separate Windows AWS-LC crash)."
+  },
+  "type": "bug",
+  "type_reason": "A normal HTTPS download can terminate uv, and AWS-LC has confirmed and fixed the responsible behavior. No uv-local issue or pull request already tracks this aarch64 failure; the upstream trackers do not cover propagation into uv releases or uv-specific workaround documentation.",
+  "summary": "The exact defect is tracked in aws-lc-rs and fixed in AWS-LC, but no released dependency yet contains the fix. Related uv work covers an optional TLS backend and a mechanically different AWS-LC crash, not this issue.",
+  "draft_response": "Thanks for the concrete backtrace and workaround data. This matches aws/aws-lc#3453 and the aws-lc-rs propagation report aws/aws-lc-rs#1233. AWS-LC merged bounded RNDR retries in aws/aws-lc#3475 on 2026-09-15, but its latest release predates that merge; upstream says the fix should be included in the next release. Upstream also confirmed that OPENSSL_armcap=~0x20000 should work as a temporary workaround.\n\nLet's keep astral-sh/uv#21743 open to track an aws-lc-rs/aws-lc-sys release containing the fix and the corresponding uv dependency update, and consider adding a temporary workaround note while that propagates. astral-sh/uv#21537 is related alternative-backend work, but it is a compile-time option for downstream builds and does not change the official rustls-based binaries."
+}
