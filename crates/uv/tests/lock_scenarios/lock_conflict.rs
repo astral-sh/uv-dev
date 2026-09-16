@@ -125,6 +125,31 @@ fn project_conflicts_with_explicit_workspace_roots() -> Result<()> {
     shared-leaf==2.0.0
     ");
 
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + common-leaf==1.0.0
+     + shared-leaf==1.0.0
+    ");
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--frozen").arg("--package").arg("root-b"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - shared-leaf==1.0.0
+     + shared-leaf==2.0.0
+    ");
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--frozen").arg("--all-packages"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `root-a` and package `root-b` are incompatible with the declared conflicts: {root-a, root-b}
+    ");
+
     let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
     let packages = lock["package"]
         .as_array()
