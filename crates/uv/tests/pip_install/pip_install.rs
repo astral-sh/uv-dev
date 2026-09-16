@@ -8387,6 +8387,7 @@ async fn registry_wheel_size_is_advisory() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
+    warning: Size mismatch for `tqdm==1000.0.0`: expected 1 bytes, but downloaded 1017 bytes. This will become an error in a future release.
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + tqdm==1000.0.0
