@@ -6,7 +6,7 @@ use std::sync::{LazyLock, Mutex, OnceLock};
 
 use tracing::trace;
 
-use uv_fs::{is_same_file_allow_missing, normalize_path_under, write_atomic_sync};
+use uv_fs::{normalize_path_under, write_atomic_sync};
 use uv_pypi_types::Identifier;
 use uv_warnings::warn_user;
 
@@ -14,6 +14,10 @@ use crate::installed_files::InstalledFiles;
 use crate::script::{EntryPointNames, Script};
 use crate::wheel::{ValidatedScript, read_record};
 use crate::{Error, Layout};
+
+mod egg;
+
+use egg::{EggUninstallAuthority, PathDecision, PathScope};
 
 /// Uninstall the wheel represented by the given `.dist-info` directory.
 pub fn uninstall_wheel(
@@ -251,9 +255,11 @@ pub fn uninstall_egg(
     let mut file_count = 0usize;
     let mut dir_count = 0usize;
 
-    let dist_location = egg_info
-        .parent()
-        .expect("egg-info directory is not in a site-packages directory");
+    if egg_info.parent().is_none() {
+        return Err(Error::BrokenVenv(
+            "egg-info directory is not in a site-packages directory".to_string(),
+        ));
+    }
 
     let installed_files = InstalledFiles::read(egg_info.join("installed-files.txt"))?;
 
@@ -320,7 +326,7 @@ pub fn uninstall_egg(
             function: String::new(),
         };
         let validated = ValidatedScript::try_from_script(&script, layout)?;
-        script_paths.push(validated.as_path().to_path_buf());
+        script_paths.push((script.name.clone(), validated.as_path().to_path_buf()));
 
         if layout.os_name == "nt" {
             let Some(path) = normalize_path_under(
@@ -332,71 +338,78 @@ pub fn uninstall_egg(
                     script.name
                 )));
             };
-            script_paths.push(path.clone());
+            script_paths.push((script.name.clone(), path.clone()));
 
             let mut manifest = path.as_os_str().to_owned();
             manifest.push(".exe.manifest");
-            script_paths.push(PathBuf::from(manifest));
+            script_paths.push((script.name.clone(), PathBuf::from(manifest)));
 
             let mut script_path = path.into_os_string();
             script_path.push(if is_gui { "-script.pyw" } else { "-script.py" });
-            script_paths.push(PathBuf::from(script_path));
+            script_paths.push((script.name.clone(), PathBuf::from(script_path)));
+        }
+    }
+
+    let authority = EggUninstallAuthority::new(layout)?;
+    let egg_info = match authority.check(egg_info, PathScope::Library)? {
+        PathDecision::Allowed(path) => path,
+        PathDecision::Missing => return Ok(Uninstall::default()),
+        PathDecision::Escapes | PathDecision::Protected => {
+            return Err(Error::BrokenVenv(
+                "egg-info directory is not within the selected site-packages directories"
+                    .to_string(),
+            ));
+        }
+    };
+    let dist_location = egg_info
+        .parent()
+        .expect("validated egg-info directory has a parent");
+
+    // Check the actual raw and generated launcher paths, including Windows copies, before any
+    // recorded payload is removed. A child directory alias cannot introduce a new scripts root.
+    let mut validated_script_paths = Vec::with_capacity(script_paths.len());
+    for (declared, path) in script_paths {
+        match authority.check(&path, PathScope::Scripts)? {
+            PathDecision::Allowed(path) => validated_script_paths.push(path),
+            PathDecision::Missing => {}
+            PathDecision::Escapes => {
+                return Err(Error::InvalidWheel(format!(
+                    "Script path must resolve to a file within the scripts directory: `{declared}`"
+                )));
+            }
+            PathDecision::Protected => {
+                return Err(Error::InvalidWheel(format!(
+                    "Script path targets a core Python environment file: `{declared}`"
+                )));
+            }
         }
     }
 
     // Remove files recorded by legacy installers. Entries are relative to the `.egg-info`
     // directory and may point into any of the installation scheme directories.
     if let Some(installed_files) = installed_files.as_ref() {
-        let schemes = [
-            layout.scheme.data.as_path(),
-            layout.scheme.purelib.as_path(),
-            layout.scheme.platlib.as_path(),
-            layout.scheme.scripts.as_path(),
-            layout.scheme.include.as_path(),
-        ];
-        let resolved_schemes = schemes
-            .map(|scheme| fs_err::canonicalize(scheme).unwrap_or_else(|_| scheme.to_path_buf()));
-
-        let pyvenv_cfg = layout
-            .sys_executable
-            .parent()
-            .and_then(Path::parent)
-            .map(|root| root.join("pyvenv.cfg"));
         let mut recorded_paths = Vec::new();
 
         for entry in &installed_files.paths {
             let path = egg_info.join(entry);
-            let normalized = normalize_path(&path);
-            let resolved_parent = path.parent().map_or_else(
-                || normalized.clone(),
-                |parent| fs_err::canonicalize(parent).unwrap_or_else(|_| normalize_path(parent)),
-            );
-            if !schemes.iter().any(|scheme| normalized.starts_with(scheme))
-                || !resolved_schemes
-                    .iter()
-                    .any(|scheme| resolved_parent.starts_with(scheme))
-            {
-                warn_user!(
-                    "Invalid `installed-files.txt` entry in {} that escapes the Python environment, skipping: {}",
-                    distribution,
-                    entry
-                );
-                continue;
+            match authority.check(&path, PathScope::Installation)? {
+                PathDecision::Allowed(path) => recorded_paths.push(path),
+                PathDecision::Missing => {}
+                PathDecision::Escapes => {
+                    warn_user!(
+                        "Invalid `installed-files.txt` entry in {} that escapes the Python environment, skipping: {}",
+                        distribution,
+                        entry
+                    );
+                }
+                PathDecision::Protected => {
+                    warn_user!(
+                        "Invalid `installed-files.txt` entry in {} that targets a core environment file, skipping: {}",
+                        distribution,
+                        entry
+                    );
+                }
             }
-
-            if pyvenv_cfg.as_ref().is_some_and(|pyvenv_cfg| {
-                is_same_file_allow_missing(&path, pyvenv_cfg) == Some(true)
-            }) || is_same_file_allow_missing(&path, &layout.sys_executable) == Some(true)
-            {
-                warn_user!(
-                    "Invalid `installed-files.txt` entry in {} that targets a core environment file, skipping: {}",
-                    distribution,
-                    entry
-                );
-                continue;
-            }
-
-            recorded_paths.push(path);
         }
 
         let mut visited = BTreeSet::new();
@@ -406,7 +419,7 @@ pub fn uninstall_egg(
                     trace!("Removed file: {}", path.display());
                     file_count += 1;
                     if let Some(parent) = path.parent() {
-                        visited.insert(normalize_path(parent));
+                        visited.insert(parent.to_path_buf());
                     }
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -429,6 +442,11 @@ pub fn uninstall_egg(
                 if metadata.file_type().is_symlink() {
                     continue;
                 }
+                let PathDecision::Allowed(pycache) =
+                    authority.check(&pycache, PathScope::Installation)?
+                else {
+                    continue;
+                };
                 let entries = match fs_err::read_dir(&pycache) {
                     Ok(entries) => entries,
                     Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
@@ -444,8 +462,16 @@ pub fn uninstall_egg(
                                 .extension()
                                 .is_some_and(|extension| extension.eq_ignore_ascii_case("pyc"))
                     }) {
-                        fs_err::remove_file(entry.path())?;
-                        file_count += 1;
+                        let PathDecision::Allowed(path) =
+                            authority.check(&entry.path(), PathScope::Installation)?
+                        else {
+                            continue;
+                        };
+                        match fs_err::remove_file(path) {
+                            Ok(()) => file_count += 1,
+                            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                            Err(err) => return Err(err.into()),
+                        }
                     }
                 }
                 visited.insert(pycache);
@@ -456,21 +482,24 @@ pub fn uninstall_egg(
         for path in visited.iter().rev() {
             let mut path = path.as_path();
             loop {
-                if schemes.contains(&path) || !schemes.iter().any(|scheme| path.starts_with(scheme))
-                {
+                let Some(approved) = authority.prunable_directory(path)? else {
                     break;
-                }
+                };
 
-                let mut entries = match fs_err::read_dir(path) {
+                let mut entries = match fs_err::read_dir(&approved) {
                     Ok(entries) => entries,
                     Err(err) if err.kind() == std::io::ErrorKind::NotFound => break,
                     Err(err) => return Err(err.into()),
                 };
-                if entries.next().is_some() {
+                if entries.next().transpose()?.is_some() {
                     break;
                 }
 
-                fs_err::remove_dir(path)?;
+                match fs_err::remove_dir(&approved) {
+                    Ok(()) => {}
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => break,
+                    Err(err) => return Err(err.into()),
+                }
                 dir_count += 1;
                 let Some(parent) = path.parent() else {
                     break;
@@ -514,7 +543,7 @@ pub fn uninstall_egg(
     }
 
     // Remove generated console and GUI launchers declared by `entry_points.txt`.
-    for path in script_paths {
+    for path in validated_script_paths {
         match fs_err::remove_file(&path) {
             Ok(()) => {
                 trace!("Removed file: {}", path.display());
@@ -526,7 +555,7 @@ pub fn uninstall_egg(
     }
 
     // Remove the `.egg-info` directory.
-    match fs_err::remove_dir_all(egg_info) {
+    match fs_err::remove_dir_all(&egg_info) {
         Ok(()) => {
             trace!("Removed directory: {}", egg_info.display());
             dir_count += 1;
@@ -667,6 +696,10 @@ mod tests {
     fn layout(venv: &Path, site_packages: &Path) -> Layout {
         Layout {
             sys_executable: venv.join("bin/python"),
+            sys_prefix: venv.to_path_buf(),
+            sys_base_executable: None,
+            real_executable: venv.join("bin/python"),
+            interpreter_scripts: venv.join("bin"),
             python_version: (3, 13),
             os_name: "posix".to_string(),
             scheme: Scheme {
@@ -869,6 +902,10 @@ mod tests {
         // Something that looks sufficiently like a Unix environment.
         let layout = Layout {
             sys_executable: venv.path().join("bin/python"),
+            sys_prefix: venv.path().to_path_buf(),
+            sys_base_executable: None,
+            real_executable: venv.path().join("bin/python"),
+            interpreter_scripts: venv.path().join("bin"),
             python_version: (3, 13),
             os_name: "posix".to_string(),
             scheme: Scheme {
