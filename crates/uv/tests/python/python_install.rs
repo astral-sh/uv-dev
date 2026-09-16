@@ -5341,6 +5341,7 @@ fn python_build_variant_revision_context(
 ) -> anyhow::Result<(TestContext, ChildPath)> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
+        .with_filtered_python_names()
         .with_filtered_exe_suffix()
         .with_managed_python_dirs();
     let platform = platform_key_from_env()?;
@@ -5484,7 +5485,6 @@ fn python_find_build_variant_revision_in_active_environment() -> anyhow::Result<
     let (context, installation) = python_build_variant_revision_context("custom")?;
     let context = context
         .with_filtered_virtualenv_bin()
-        .with_filtered_python_names()
         .with_filtered_python_sources();
     context
         .venv()
@@ -5724,7 +5724,6 @@ fn python_project_build_variant_revision() -> anyhow::Result<()> {
     let (context, installation) = python_build_variant_revision_context("custom")?;
     let search_path = context.bin_dir.to_path_buf();
     let context = context
-        .with_filtered_python_names()
         .with_filtered_python_sources()
         .with_filtered_python_install_bin()
         .with_env(EnvVars::UV_PYTHON_SEARCH_PATH, search_path);
