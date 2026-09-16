@@ -832,6 +832,7 @@ impl ProjectEnvironment {
     pub async fn get_or_init(
         target: ProjectEnvironmentTarget<'_>,
         frozen_target: Option<InstallTarget<'_>>,
+        python_roots: Option<&[PackageName]>,
         groups: &DependencyGroupsWithDefaults,
         python: Option<PythonRequest>,
         install_mirrors: &PythonInstallMirrors,
@@ -880,12 +881,13 @@ impl ProjectEnvironment {
             )
             .await?
         } else {
-            ProjectPythonRequest::from_request(
+            ProjectPythonRequest::from_request_for_roots(
                 python,
                 target.workspace(),
                 groups,
                 target.install_path(),
                 config_discovery,
+                python_roots,
             )
             .await?
         };

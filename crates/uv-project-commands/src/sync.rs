@@ -37,6 +37,7 @@ use uv_lock_operations::{
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
+use uv_python_discovery::project_python_roots;
 use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_requirements::{script_extra_build_requires, script_specification};
@@ -208,6 +209,16 @@ pub async fn sync(
         detect_conflicts(&install_target, &extras, &groups)?;
     }
 
+    let python_roots = match &target {
+        SyncTarget::Manifest(SyncManifest::Project(project)) => project_python_roots(
+            project.workspace(),
+            project.project_name(),
+            all_packages,
+            &package,
+        ),
+        SyncTarget::Manifest(SyncManifest::Script(_)) | SyncTarget::Lockfile { .. } => None,
+    };
+
     // Discover or create the virtual environment.
     let environment = match &target {
         SyncTarget::Manifest(SyncManifest::Project(project)) => SyncEnvironment::Project(
@@ -219,6 +230,7 @@ pub async fn sync(
                     .map(|lock| {
                         identify_installation_target(&target, lock, all_packages, &package)
                     }),
+                python_roots.as_deref(),
                 &groups,
                 python.as_deref().map(PythonRequest::parse),
                 &install_mirrors,
@@ -248,6 +260,7 @@ pub async fn sync(
                     all_packages,
                     &package,
                 )),
+                None,
                 &groups,
                 python.as_deref().map(PythonRequest::parse),
                 &install_mirrors,

@@ -28,6 +28,7 @@ use uv_project_edit::{DependencyTarget, PyProjectTomlMut};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::ScriptInterpreter;
+use uv_python_discovery::project_python_roots;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_scripts::Pep723Script;
@@ -241,14 +242,17 @@ pub async fn remove(
     // Discover the interpreter or environment used to lock and sync the target.
     let python_target = match &target {
         EditTarget::Project(project) => {
+            let python_roots =
+                project_python_roots(project.workspace(), project.project_name(), false, &[]);
             if no_sync {
                 // Discover the interpreter.
-                let project_python = ProjectPythonRequest::from_request(
+                let project_python = ProjectPythonRequest::from_request_for_roots(
                     python.as_deref().map(PythonRequest::parse),
                     Some(project.workspace()),
                     &groups,
                     project_dir,
                     config_discovery,
+                    python_roots.as_deref(),
                 )
                 .await?;
                 let interpreter = ProjectInterpreter::discover(
@@ -274,6 +278,7 @@ pub async fn remove(
                 let environment = ProjectEnvironment::get_or_init(
                     ProjectEnvironmentTarget::from(project.workspace()),
                     None,
+                    python_roots.as_deref(),
                     &groups,
                     python.as_deref().map(PythonRequest::parse),
                     &install_mirrors,

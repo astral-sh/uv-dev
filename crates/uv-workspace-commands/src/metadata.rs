@@ -23,6 +23,7 @@ use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::ScriptInterpreter;
+use uv_python_discovery::project_python_roots;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_scripts::Pep723Script;
@@ -124,12 +125,14 @@ pub async fn metadata(
                     .await?
                     .into_interpreter(),
                     LockTarget::Workspace(workspace) => {
-                        let project_python = ProjectPythonRequest::from_request(
+                        let python_roots = project_python_roots(workspace, None, true, &[]);
+                        let project_python = ProjectPythonRequest::from_request_for_roots(
                             python.as_deref().map(PythonRequest::parse),
                             Some(workspace),
                             &groups,
                             project_dir,
                             config_discovery,
+                            python_roots.as_deref(),
                         )
                         .await?;
                         ProjectInterpreter::discover(
@@ -211,9 +214,11 @@ pub async fn metadata(
     let environment = if sync.is_some() {
         Some(match &source {
             MetadataSource::Manifest(LockTarget::Workspace(workspace)) => {
+                let python_roots = project_python_roots(workspace, None, true, &[]);
                 ProjectEnvironment::get_or_init(
                     ProjectEnvironmentTarget::from(*workspace),
                     None,
+                    python_roots.as_deref(),
                     &groups,
                     python.as_deref().map(PythonRequest::parse),
                     &install_mirrors,
@@ -255,6 +260,7 @@ pub async fn metadata(
                     lock,
                 },
                 Some(install_target),
+                None,
                 &groups,
                 python.as_deref().map(PythonRequest::parse),
                 &install_mirrors,
