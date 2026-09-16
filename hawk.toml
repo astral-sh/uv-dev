@@ -329,6 +329,46 @@ kind = "inherent_method"
 level = "expect"
 reason = "retained as a public pyvenv.cfg editing helper"
 
+[[override]]
+lint = "hawk::dead_public"
+crate = "uv_resolver_types"
+item = "output::ResolverOutput::scope_to_root"
+kind = "inherent_method"
+level = "expect"
+reason = "public interface for independent root-resolution composition"
+
+[[override]]
+lint = "hawk::dead_public"
+crate = "uv_resolver_types"
+item = "output::ResolverOutput::merge"
+kind = "inherent_method"
+level = "expect"
+reason = "public interface for independent root-resolution composition"
+
+[[override]]
+lint = "hawk::unnecessary_public"
+crate = "uv_resolver_types"
+item = "universal_marker::UniversalMarker::has_root_marker"
+kind = "inherent_method"
+level = "expect"
+reason = "public query for root-aware lockfile consumers"
+
+[[override]]
+lint = "hawk::dead_public"
+crate = "uv_resolver"
+item = "preferences::Preference::from_resolution"
+kind = "inherent_method"
+level = "expect"
+reason = "public interface for sharing preferences between independent root resolutions"
+
+[[override]]
+lint = "hawk::dead_public"
+crate = "uv_resolver"
+item = "preferences::Preference::select_root"
+kind = "inherent_method"
+level = "expect"
+reason = "public interface for selecting saved root-resolution preferences"
+
 [[exclude]]
 crate = "uv_extract"
 module = "dirhash"

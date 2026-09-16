@@ -125,7 +125,7 @@ impl ActivatedConflictItems {
 
 impl UniversalMarker {
     /// Restrict a marker to one independently resolved workspace root.
-    pub fn for_root(package: &PackageName) -> Self {
+    pub(crate) fn for_root(package: &PackageName) -> Self {
         let name = uv_pep508::MarkerValueExtra::Extra(encode_root(package));
         Self::from_combined(MarkerTree::expression(MarkerExpression::Extra {
             operator: ExtraOperator::Equal,
