@@ -55,6 +55,14 @@ pub use project::sync_json_schema;
 pub use project::sync_jsonl_schema;
 pub(crate) use project::tree::tree;
 pub(crate) use project::upgrade::upgrade;
+#[cfg(feature = "schemars")]
+pub use project::version::project_json_schema as version_json_schema;
+#[cfg(feature = "schemars")]
+pub use project::version::project_jsonl_schema as version_jsonl_schema;
+#[cfg(feature = "schemars")]
+pub use project::version::self_json_schema as self_version_json_schema;
+#[cfg(feature = "schemars")]
+pub use project::version::self_jsonl_schema as self_version_jsonl_schema;
 pub(crate) use project::version::{project_version, self_version};
 pub(crate) use publish::publish;
 pub(crate) use python::dir::dir as python_dir;

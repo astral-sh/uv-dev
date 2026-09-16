@@ -9,6 +9,8 @@ use thiserror::Error;
 use tracing::debug;
 use uv_cache::Cache;
 use uv_cli::version::ProjectVersionInfo;
+#[cfg(feature = "schemars")]
+use uv_cli::version::SelfVersionInfo;
 use uv_cli::{VersionBump, VersionBumpSpec, VersionFormat};
 use uv_client::BaseClientBuilder;
 use uv_configuration::{
@@ -42,6 +44,38 @@ use crate::commands::project::{
 use crate::commands::{ExitStatus, UvError, project};
 use crate::printer::{Printer, jsonl_result};
 use crate::settings::{FrozenSource, LockCheck, ResolverInstallerSettings};
+
+/// Generate the `uv version` JSON schema for repository development tools.
+#[cfg(feature = "schemars")]
+pub fn project_json_schema() -> schemars::Schema {
+    schemars::generate::SchemaSettings::draft07()
+        .for_serialize()
+        .into_generator()
+        .into_root_schema_for::<ProjectVersionInfo>()
+}
+
+/// Generate the preview `uv version` JSONL record schema for repository development tools.
+#[cfg(feature = "schemars")]
+pub fn project_jsonl_schema() -> schemars::Schema {
+    crate::commands::report::jsonl_object_schema::<ProjectVersionInfo>("uv version JSONL (preview)")
+}
+
+/// Generate the `uv self version` JSON schema for repository development tools.
+#[cfg(feature = "schemars")]
+pub fn self_json_schema() -> schemars::Schema {
+    schemars::generate::SchemaSettings::draft07()
+        .for_serialize()
+        .into_generator()
+        .into_root_schema_for::<SelfVersionInfo>()
+}
+
+/// Generate the preview `uv self version` JSONL record schema for repository development tools.
+#[cfg(feature = "schemars")]
+pub fn self_jsonl_schema() -> schemars::Schema {
+    crate::commands::report::jsonl_object_schema::<SelfVersionInfo>(
+        "uv self version JSONL (preview)",
+    )
+}
 
 /// Display version information for uv itself (`uv self version`)
 pub(crate) fn self_version(

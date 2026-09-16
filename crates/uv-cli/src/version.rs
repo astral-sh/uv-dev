@@ -9,6 +9,7 @@ use uv_pep508::uv_pep440::Version;
 
 /// Information about the git repository where uv was built from.
 #[derive(Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub(crate) struct CommitInfo {
     short_commit_hash: String,
     commit_hash: String,
@@ -19,6 +20,8 @@ pub(crate) struct CommitInfo {
 
 /// Version information for uv itself (e.g., in `uv self version`).
 #[derive(Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schemars", schemars(title = "uv self version"))]
 pub struct SelfVersionInfo {
     /// Name of the package (always "uv").
     package_name: String,
@@ -34,16 +37,17 @@ pub struct SelfVersionInfo {
 
 /// Version information for a project (`uv version`).
 #[derive(Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schemars", schemars(title = "uv version"))]
 pub struct ProjectVersionInfo {
     /// Name of the package.
     pub package_name: Option<String>,
     /// Version, such as "0.5.1".
     version: String,
-    /// Information about the git commit uv was built from.
-    ///
-    /// Always `null` for project versions, kept for backwards compatibility.
+    /// Always `null`; project versions do not include uv's build information.
+    /// This field remains in the output for backwards compatibility.
     // TODO(zanieb): Remove this field in a breaking release.
-    commit_info: Option<CommitInfo>,
+    commit_info: (),
 }
 
 impl ProjectVersionInfo {
@@ -51,7 +55,7 @@ impl ProjectVersionInfo {
         Self {
             package_name: package_name.map(ToString::to_string),
             version: version.to_string(),
-            commit_info: None,
+            commit_info: (),
         }
     }
 }

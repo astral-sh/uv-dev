@@ -208,6 +208,17 @@ $ uv version --output-format json
 }
 ```
 
+The [JSON Schema](../reference/internals/version.schema.json) is generated from the output type. The
+`commit_info` field is always `null` for project versions. When updating a version, including with
+`--dry-run`, the JSON report contains the proposed new version.
+
+Use `--output-format jsonl --preview-features jsonl` for a single-line `"type": "result"` record. An
+update that locks or syncs the project can emit `"type": "progress"` records first. Pass
+`--no-progress` or `--quiet` to emit only the result. A failed command can omit the result, so
+consumers must also check the exit status. JSONL is a separate preview format and may change without
+warning. The [JSONL record schema](../reference/internals/version-jsonl.schema.json) describes both
+kinds of record.
+
 See the [publishing guide](./package.md#updating-your-version) for details on updating your package
 version.
 
