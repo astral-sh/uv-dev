@@ -5296,7 +5296,7 @@ pub struct AuditCommonArgs {
     ///
     /// The service needs to use the OSV protocol, unless a different
     /// format was requested by `--service-format`.
-    #[arg(long, value_hint = ValueHint::Url)]
+    #[arg(long, value_hint = ValueHint::Url, value_parser = RedactedValueParser(str::parse::<DisplaySafeUrl>))]
     pub service_url: Option<DisplaySafeUrl>,
 }
 
@@ -6666,6 +6666,7 @@ pub struct PythonPinArgs {
 #[derive(Args)]
 pub struct AuthLogoutArgs {
     /// The domain or URL of the service to logout from.
+    #[arg(value_parser = RedactedValueParser(str::parse::<Service>))]
     pub service: Service,
 
     /// The username to logout.
@@ -6687,7 +6688,7 @@ pub struct AuthLogoutArgs {
 #[derive(Args)]
 pub struct AuthLoginArgs {
     /// The domain or URL of the service to log into.
-    #[arg(value_hint = ValueHint::Url)]
+    #[arg(value_hint = ValueHint::Url, value_parser = RedactedValueParser(str::parse::<Service>))]
     pub service: Service,
 
     /// The username to use for the service.
@@ -6723,7 +6724,7 @@ pub struct AuthLoginArgs {
 #[derive(Args)]
 pub struct AuthTokenArgs {
     /// The domain or URL of the service to lookup.
-    #[arg(value_hint = ValueHint::Url)]
+    #[arg(value_hint = ValueHint::Url, value_parser = RedactedValueParser(str::parse::<Service>))]
     pub service: Service,
 
     /// The username to lookup.
@@ -7782,7 +7783,7 @@ pub struct PublishArgs {
     /// and index upload.
     ///
     /// Defaults to PyPI's publish URL (<https://upload.pypi.org/legacy/>).
-    #[arg(long, env = EnvVars::UV_PUBLISH_URL, hide_env_values = true)]
+    #[arg(long, env = EnvVars::UV_PUBLISH_URL, hide_env_values = true, value_parser = RedactedValueParser(str::parse::<DisplaySafeUrl>))]
     pub publish_url: Option<DisplaySafeUrl>,
 
     /// Check an index URL for existing files to skip duplicate uploads.
@@ -7798,7 +7799,7 @@ pub struct PublishArgs {
     /// file succeeds even without `--check-url`, while most other indexes error.
     ///
     /// The index must provide one of the supported hashes (SHA-256, SHA-384, or SHA-512).
-    #[arg(long, env = EnvVars::UV_PUBLISH_CHECK_URL, hide_env_values = true)]
+    #[arg(long, env = EnvVars::UV_PUBLISH_CHECK_URL, hide_env_values = true, value_parser = RedactedValueParser(str::parse::<IndexUrl>))]
     pub check_url: Option<IndexUrl>,
 
     #[arg(long, hide = true)]
