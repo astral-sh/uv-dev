@@ -2,7 +2,7 @@ use std::path::Path;
 use std::process::Command;
 
 use anyhow::Result;
-use assert_fs::fixture::{ChildPath, FileWriteStr, PathChild, PathCreateDir};
+use assert_fs::fixture::{ChildPath, FileWriteBin, FileWriteStr, PathChild, PathCreateDir};
 use indoc::indoc;
 
 use uv_static::EnvVars;
@@ -293,6 +293,290 @@ fn show_legacy_metadata_with_files() -> Result<()> {
     Required-by:
     Files:
     Cannot locate RECORD or installed-files.txt
+    ");
+    Ok(())
+}
+
+#[test]
+fn show_legacy_installed_file_paths() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let target = context.temp_dir.child("target");
+    let metadata = target.child("legacy_paths-1.0.0.egg-info");
+    metadata.create_dir_all()?;
+    metadata
+        .child("PKG-INFO")
+        .write_str("Metadata-Version: 1.0\nName: legacy-paths\nVersion: 1.0.0\n")?;
+
+    let package = target.child("package");
+    package.create_dir_all()?;
+    package.child("__init__.py").write_str("unchanged\n")?;
+    let elsewhere = context.temp_dir.child("elsewhere");
+    elsewhere.create_dir_all()?;
+    elsewhere.child("marker").write_str("untouched\n")?;
+    #[cfg(unix)]
+    fs_err::os::unix::fs::symlink(elsewhere.path(), package.child("link").path())?;
+    #[cfg(windows)]
+    package.child("link").create_dir_all()?;
+
+    let absolute = context.temp_dir.child("absolute-missing");
+    let contents = format!(
+        "\nPKG-INFO\r\n../package/__init__.py\r\n../../bin/legacy-script\n../package/link/../missing.py\n../package/file with space.py \n./../package/dot.py\n..\n../..\n{}\n\n",
+        absolute.path().display()
+    );
+    metadata.child("installed-files.txt").write_str(&contents)?;
+    let mut filters = context.filters();
+    filters.push((r"(?m)(file with space\.py) $", "$1[TRAILING-SPACE]"));
+    uv_snapshot!(filters, show(&context, target.path()).arg("legacy-paths").arg("--files"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Name: legacy-paths
+    Version: 1.0.0
+    Location: [TEMP_DIR]/target
+    Requires:
+    Required-by:
+    Files:
+      legacy_paths-1.0.0.egg-info/PKG-INFO
+      package/__init__.py
+      ../bin/legacy-script
+      package/link/../missing.py
+      package/file with space.py[TRAILING-SPACE]
+      package/dot.py
+      .
+      ..
+      [TEMP_DIR]/absolute-missing
+    ");
+    assert_eq!(
+        fs_err::read_to_string(metadata.child("installed-files.txt"))?,
+        contents
+    );
+    assert_eq!(
+        fs_err::read_to_string(package.child("__init__.py"))?,
+        "unchanged\n"
+    );
+    assert_eq!(
+        fs_err::read_to_string(elsewhere.child("marker"))?,
+        "untouched\n"
+    );
+    assert!(!absolute.path().exists());
+    assert!(!package.child("missing.py").path().exists());
+    Ok(())
+}
+
+#[test]
+fn show_legacy_installed_files_for_directory_layouts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let target = context.temp_dir.child("target");
+    write_dist_info(
+        &target,
+        "recordless",
+        "Metadata-Version: 2.1\nName: recordless\nVersion: 1.0.0\n",
+    )?;
+    target
+        .child("recordless-1.0.0.dist-info/installed-files.txt")
+        .write_str("METADATA\n../recordless.py\n")?;
+
+    let source = context.temp_dir.child("legacy-source");
+    let editable = source.child("legacy_editable.egg-info");
+    editable.create_dir_all()?;
+    editable
+        .child("PKG-INFO")
+        .write_str("Metadata-Version: 1.0\nName: legacy-editable\nVersion: 1.0.0\n")?;
+    editable
+        .child("installed-files.txt")
+        .write_str("PKG-INFO\n../editable.py\n")?;
+    target
+        .child("legacy-editable.egg-link")
+        .write_str(&format!("{}\n", source.path().display()))?;
+
+    uv_snapshot!(context.filters(), show(&context, target.path())
+        .arg("recordless")
+        .arg("legacy-editable")
+        .arg("--files"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Name: legacy-editable
+    Version: 1.0.0
+    Location: [TEMP_DIR]/legacy-source
+    Editable project location: [TEMP_DIR]/legacy-source
+    Requires:
+    Required-by:
+    Files:
+      legacy_editable.egg-info/PKG-INFO
+      editable.py
+    ---
+    Name: recordless
+    Version: 1.0.0
+    Location: [TEMP_DIR]/target
+    Requires:
+    Required-by:
+    Files:
+      recordless-1.0.0.dist-info/METADATA
+      recordless.py
+    ");
+    Ok(())
+}
+
+#[test]
+fn show_record_precedes_legacy_installed_files() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let target = context.temp_dir.child("target");
+    for name in ["recorded", "empty-record", "broken-record"] {
+        write_dist_info(
+            &target,
+            name,
+            format!("Metadata-Version: 2.1\nName: {name}\nVersion: 1.0.0\n"),
+        )?;
+        target
+            .child(format!("{name}-1.0.0.dist-info/installed-files.txt"))
+            .write_str("../legacy-only.py\n")?;
+    }
+    target
+        .child("recorded-1.0.0.dist-info/RECORD")
+        .write_str("recorded.py,,\n")?;
+    target
+        .child("empty-record-1.0.0.dist-info/RECORD")
+        .write_str("")?;
+    target
+        .child("broken-record-1.0.0.dist-info/RECORD")
+        .write_str("recorded.py,,not-a-size\n")?;
+
+    uv_snapshot!(context.filters(), show(&context, target.path())
+        .arg("recorded")
+        .arg("empty-record")
+        .arg("--files"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Name: empty-record
+    Version: 1.0.0
+    Location: [TEMP_DIR]/target
+    Requires:
+    Required-by:
+    Files:
+    ---
+    Name: recorded
+    Version: 1.0.0
+    Location: [TEMP_DIR]/target
+    Requires:
+    Required-by:
+    Files:
+      recorded.py
+    ");
+    uv_snapshot!(context.filters(), show(&context, target.path())
+        .arg("broken-record")
+        .arg("--files"), @"
+    exit_code: 2 (error)
+    ----- stdout -----
+    Name: broken-record
+    Version: 1.0.0
+    Location: [TEMP_DIR]/target
+    Requires:
+    Required-by:
+    Files:
+    ----- stderr -----
+    error: RECORD file is invalid
+      Caused by: CSV deserialize error: record 0 (line: 1, byte: 0): field 2: invalid digit found in string
+    ");
+    Ok(())
+}
+
+#[test]
+fn show_empty_legacy_installed_files() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let target = context.temp_dir.child("target");
+    write_dist_info(
+        &target,
+        "empty",
+        "Metadata-Version: 2.1\nName: empty\nVersion: 1.0.0\n",
+    )?;
+    target
+        .child("empty-1.0.0.dist-info/installed-files.txt")
+        .write_str("\n\r\n")?;
+    uv_snapshot!(context.filters(), show(&context, target.path()).arg("empty").arg("--files"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Name: empty
+    Version: 1.0.0
+    Location: [TEMP_DIR]/target
+    Requires:
+    Required-by:
+    Files:
+    ");
+    Ok(())
+}
+
+#[test]
+fn show_invalid_legacy_installed_files() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let target = context.temp_dir.child("target");
+    for name in ["invalid", "unreadable"] {
+        write_dist_info(
+            &target,
+            name,
+            format!("Metadata-Version: 2.1\nName: {name}\nVersion: 1.0.0\n"),
+        )?;
+    }
+    target
+        .child("invalid-1.0.0.dist-info/installed-files.txt")
+        .write_binary(&[0xff])?;
+    target
+        .child("unreadable-1.0.0.dist-info/installed-files.txt")
+        .create_dir_all()?;
+    uv_snapshot!(context.filters(), show(&context, target.path()).arg("invalid").arg("--files"), @"
+    exit_code: 2 (error)
+    ----- stdout -----
+    Name: invalid
+    Version: 1.0.0
+    Location: [TEMP_DIR]/target
+    Requires:
+    Required-by:
+    Files:
+    ----- stderr -----
+    error: failed to read from file `[TEMP_DIR]/target/invalid-1.0.0.dist-info/installed-files.txt`: stream did not contain valid UTF-8
+    ");
+    let mut filters = context.filters();
+    filters.push((
+        r"Is a directory \(os error 21\)|Access is denied\. \(os error 5\)",
+        "[DIRECTORY_READ_ERROR]",
+    ));
+    uv_snapshot!(filters, show(&context, target.path()).arg("unreadable").arg("--files"), @"
+    exit_code: 2 (error)
+    ----- stdout -----
+    Name: unreadable
+    Version: 1.0.0
+    Location: [TEMP_DIR]/target
+    Requires:
+    Required-by:
+    Files:
+    ----- stderr -----
+    error: failed to read from file `[TEMP_DIR]/target/unreadable-1.0.0.dist-info/installed-files.txt`: [DIRECTORY_READ_ERROR]
+    ");
+    Ok(())
+}
+
+#[test]
+#[cfg(windows)]
+fn show_legacy_installed_files_windows_paths() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let target = context.temp_dir.child("target");
+    write_dist_info(
+        &target,
+        "windows-paths",
+        "Metadata-Version: 2.1\nName: windows-paths\nVersion: 1.0.0\n",
+    )?;
+    target
+        .child("windows-paths-1.0.0.dist-info/installed-files.txt")
+        .write_str("Z:\\not-installed\\absolute.py\nZ:drive-relative.py\n")?;
+    uv_snapshot!(context.filters(), show(&context, target.path()).arg("windows-paths").arg("--files"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Name: windows-paths
+    Version: 1.0.0
+    Location: [TEMP_DIR]/target
+    Requires:
+    Required-by:
+    Files:
+      Z:/not-installed/absolute.py
+      Z:drive-relative.py
     ");
     Ok(())
 }

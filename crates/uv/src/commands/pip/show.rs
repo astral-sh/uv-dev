@@ -1,4 +1,5 @@
 use std::fmt::{self, Write};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::Result;
 use fs_err::File;
@@ -9,8 +10,8 @@ use tracing::debug;
 
 use uv_cache::Cache;
 use uv_distribution_types::{DependencyMetadata, Diagnostic, InstalledDistKind, Name};
-use uv_fs::Simplified;
-use uv_install_wheel::read_record;
+use uv_fs::{PortablePath, Simplified};
+use uv_install_wheel::{InstalledFiles, read_record};
 use uv_installer::SitePackages;
 use uv_normalize::PackageName;
 use uv_python::{
@@ -20,6 +21,11 @@ use uv_python::{
 use crate::commands::ExitStatus;
 use crate::commands::pip::operations::report_target_environment;
 use crate::printer::Printer;
+
+enum InstalledFileList {
+    Record(File),
+    Legacy(InstalledFiles),
+}
 
 /// Show information about one or more installed packages.
 pub(crate) fn pip_show(
@@ -276,16 +282,27 @@ pub(crate) fn pip_show(
                 | InstalledDistKind::LegacyEditable(_) => {
                     let path = distribution.install_path().join("RECORD");
                     match File::open(path) {
-                        Ok(record) => Some(record),
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                        Ok(record) => Some(InstalledFileList::Record(record)),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                            InstalledFiles::read(
+                                distribution.install_path().join("installed-files.txt"),
+                            )?
+                            .map(InstalledFileList::Legacy)
+                        }
                         Err(error) => return Err(error.into()),
                     }
                 }
             };
             match record {
-                Some(mut record) => {
+                Some(InstalledFileList::Record(mut record)) => {
                     for entry in read_record(&mut record)? {
                         writeln!(printer.stdout(), "  {}", entry.path)?;
+                    }
+                }
+                Some(InstalledFileList::Legacy(record)) => {
+                    for entry in record.paths {
+                        let path = legacy_record_path(distribution.install_path(), &entry);
+                        writeln!(printer.stdout(), "  {}", PortablePath::from(&path))?;
                     }
                 }
                 None => {
@@ -312,6 +329,26 @@ pub(crate) fn pip_show(
     }
 
     Ok(ExitStatus::Success)
+}
+
+/// Express a legacy metadata-relative path relative to the displayed package location.
+/// Only leading parent components cancel the metadata directory; later parents may cross symlinks.
+fn legacy_record_path(metadata_directory: &Path, entry: &str) -> PathBuf {
+    let Some(metadata_name) = metadata_directory.file_name() else {
+        return PathBuf::from(entry);
+    };
+    let mut components = Path::new(entry).components();
+    if components.clone().next() == Some(Component::CurDir) {
+        components.next();
+    }
+    let mut path = if components.clone().next() == Some(Component::ParentDir) {
+        components.next();
+        PathBuf::new()
+    } else {
+        PathBuf::from(metadata_name)
+    };
+    path.extend(components);
+    path
 }
 
 /// Write a nonempty metadata field, stripping terminal control sequences from its value.
