@@ -241,7 +241,7 @@ pub(super) enum CapturedPackage {
 }
 
 impl CapturedPackage {
-    pub fn name(&self) -> Option<&str> {
+    pub(super) fn name(&self) -> Option<&str> {
         match self {
             Self::Root { name } => name.as_deref(),
             Self::Python { .. } => None,
@@ -253,7 +253,7 @@ impl CapturedPackage {
         }
     }
 
-    pub fn marker(&self) -> Option<u32> {
+    pub(super) fn marker(&self) -> Option<u32> {
         match self {
             Self::Root { .. } | Self::Python { .. } | Self::System { .. } => None,
             Self::Package { marker, .. }

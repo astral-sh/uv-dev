@@ -13,6 +13,9 @@ use super::wire::*;
 
 mod preflight;
 
+#[cfg(test)]
+mod tests;
+
 /// An internal capture was not a supported, bounded envelope for this invocation.
 #[derive(Debug)]
 pub struct CaptureReadError(ReadErrorKind);

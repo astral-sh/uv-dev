@@ -33,6 +33,9 @@ use super::NoSolutionEvidence;
 use super::budget::{Budget, CaptureLimits, Resource, Stop};
 use super::wire::*;
 
+#[cfg(test)]
+mod tests;
+
 /// Read-only state at the final failed fork, before any diagnostic tree transformations.
 pub(crate) struct CaptureContext<'a> {
     pub error: &'a ErrorTree,

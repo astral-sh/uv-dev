@@ -13,6 +13,9 @@ use super::{CaptureReadError, ReadErrorKind, usage_within};
 use crate::no_solution_capture::budget::{Budget, CaptureLimits, CaptureUsage, Resource, Stop};
 use crate::no_solution_capture::wire::{CaptureReason, CaptureToken, valid_request};
 
+#[cfg(test)]
+mod tests;
+
 const MAX_DEPTH: usize = 32;
 const MAX_FIELDS: usize = 16;
 const JSON_BYTES_PER_WORK: usize = 16;
@@ -34,6 +37,7 @@ pub(super) fn check(
     let mut state = State {
         budget: Budget::new(limits),
         token,
+        json_bytes: bytes.len(),
         rejection: None,
     };
     state
@@ -154,6 +158,7 @@ fn hex_quad(bytes: &[u8], cursor: &mut usize) -> Result<u16, CaptureReadError> {
 struct State<'token> {
     budget: Budget,
     token: &'token CaptureToken,
+    json_bytes: usize,
     rejection: Option<ReadErrorKind>,
 }
 
@@ -921,6 +926,10 @@ impl<'de> Visitor<'de> for ShapeVisitor<'_, '_> {
         Err(self.0.state.reject(ReadErrorKind::InvalidSchema))
     }
 
+    fn visit_f64<E: de::Error>(self, _value: f64) -> Result<Value, E> {
+        Err(self.0.state.reject(ReadErrorKind::InvalidSchema))
+    }
+
     fn visit_str<E: de::Error>(self, value: &str) -> Result<Value, E> {
         let state = self.0.state;
         match self.0.shape.kind {
@@ -989,6 +998,9 @@ impl<'de> Visitor<'de> for ShapeVisitor<'_, '_> {
             Kind::Object(kind) => {
                 kind.charge(self.0.state)?;
                 let fields = kind.fields();
+                if fields.len() > MAX_FIELDS {
+                    return Err(self.0.state.reject(ReadErrorKind::InvalidSchema));
+                }
                 let mut values = [Value::Missing; MAX_FIELDS];
                 let mut seen = 0_u32;
                 while let Some(index) = map.next_key_seed(KeySeed {
@@ -1195,9 +1207,10 @@ fn finish_object<E: de::Error>(
             }))
         }
         ObjectKind::Envelope => {
-            if field("schema").number() != Some(1)
-                || field("producer_pid").number() != Some(u64::from(state.token.producer_pid()))
-            {
+            if field("schema").number() != Some(1) {
+                return Err(state.reject(ReadErrorKind::InvalidSchema));
+            }
+            if field("producer_pid").number() != Some(u64::from(state.token.producer_pid())) {
                 return Err(state.reject(ReadErrorKind::MismatchedRequest));
             }
             let (Value::Limits(limits), Value::Usage(usage), Value::Tag(status)) =
@@ -1207,6 +1220,9 @@ fn finish_object<E: de::Error>(
             };
             if !limits.is_supported() {
                 return Err(state.reject(ReadErrorKind::InvalidLimits));
+            }
+            if state.json_bytes > limits.json_bytes {
+                return Err(state.reject(ReadErrorKind::Limit(CaptureReason::JsonBytes)));
             }
             let reason = field("reason");
             let graph = field("graph").present();

@@ -23,7 +23,7 @@ pub(super) struct CaptureLimits {
 
 impl CaptureLimits {
     /// The largest limits accepted by version 1 of the internal protocol.
-    pub const V1: Self = Self {
+    pub(super) const V1: Self = Self {
         derivation_nodes: 16_384,
         packages: 4_096,
         terms: 65_536,
@@ -92,14 +92,14 @@ pub(super) struct Stop {
 }
 
 impl Stop {
-    pub const fn unsupported(reason: CaptureReason) -> Self {
+    pub(super) const fn unsupported(reason: CaptureReason) -> Self {
         Self {
             status: CaptureStatus::Unsupported,
             reason,
         }
     }
 
-    pub const fn truncated(reason: CaptureReason) -> Self {
+    pub(super) const fn truncated(reason: CaptureReason) -> Self {
         Self {
             status: CaptureStatus::Truncated,
             reason,
@@ -113,7 +113,7 @@ pub(super) struct Budget {
 }
 
 impl Budget {
-    pub const fn new(limits: CaptureLimits) -> Self {
+    pub(super) const fn new(limits: CaptureLimits) -> Self {
         Self {
             limits,
             usage: CaptureUsage {
@@ -132,7 +132,7 @@ impl Budget {
         }
     }
 
-    pub fn charge(&mut self, resource: Resource, amount: usize) -> Result<(), Stop> {
+    pub(super) fn charge(&mut self, resource: Resource, amount: usize) -> Result<(), Stop> {
         let (counter, limit, reason) = match resource {
             Resource::DerivationNodes => (
                 &mut self.usage.derivation_nodes,
@@ -185,16 +185,16 @@ impl Budget {
         }
     }
 
-    pub fn work(&mut self, amount: usize) -> Result<(), Stop> {
+    pub(super) fn work(&mut self, amount: usize) -> Result<(), Stop> {
         self.charge(Resource::Work, amount)
     }
 
-    pub fn components(&mut self, count: usize) -> Result<(), Stop> {
+    pub(super) fn components(&mut self, count: usize) -> Result<(), Stop> {
         self.check_components(count)?;
         self.work(count)
     }
 
-    pub fn check_components(&mut self, count: usize) -> Result<(), Stop> {
+    pub(super) fn check_components(&mut self, count: usize) -> Result<(), Stop> {
         self.usage.max_version_components = self
             .usage
             .max_version_components
@@ -205,7 +205,7 @@ impl Budget {
         Ok(())
     }
 
-    pub fn check_atom(&mut self, bytes: usize) -> Result<(), Stop> {
+    pub(super) fn check_atom(&mut self, bytes: usize) -> Result<(), Stop> {
         self.usage.max_atom_bytes = self
             .usage
             .max_atom_bytes
@@ -217,18 +217,18 @@ impl Budget {
         }
     }
 
-    pub fn atom(&mut self, bytes: usize) -> Result<(), Stop> {
+    pub(super) fn atom(&mut self, bytes: usize) -> Result<(), Stop> {
         self.check_atom(bytes)?;
         self.charge(Resource::TextBytes, bytes)?;
         self.work(1)
     }
 
-    pub fn string(&mut self, value: &str) -> Result<String, Stop> {
+    pub(super) fn string(&mut self, value: &str) -> Result<String, Stop> {
         self.atom(value.len())?;
         Ok(value.to_owned())
     }
 
-    pub fn decimal(&mut self, value: u64) -> Result<(), Stop> {
+    pub(super) fn decimal(&mut self, value: u64) -> Result<(), Stop> {
         let digits = value.checked_ilog10().map_or(1, |value| value as usize + 1);
         self.atom(digits)
     }

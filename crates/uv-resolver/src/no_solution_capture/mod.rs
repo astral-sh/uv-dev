@@ -9,6 +9,9 @@ mod producer;
 mod reader;
 mod wire;
 
+#[cfg(test)]
+mod test_support;
+
 use std::fmt;
 
 pub use reader::{CaptureReadError, CaptureWriteError};
