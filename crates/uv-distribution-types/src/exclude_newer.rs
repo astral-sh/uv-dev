@@ -4,6 +4,7 @@ use std::str::FromStr;
 use jiff::{Span, Timestamp, ToSpan, Unit, tz::TimeZone};
 use serde::Deserialize;
 use serde::de::value::{MapAccessDeserializer, StrDeserializer};
+use uv_preview::PreviewFeature;
 use uv_warnings::warn_user_once;
 
 #[derive(Debug, Copy, Clone)]
@@ -154,8 +155,14 @@ impl<'de> serde::Deserialize<'de> for ExcludeNewerValue {
                 // with the same effective cutoff.
                 match &value {
                     Self::Absolute(timestamp) if input.parse::<Timestamp>().is_err() => {
+                        if uv_preview::is_enabled(PreviewFeature::LocalDateExcludeNewer) {
+                            return Err(serde::de::Error::custom(format!(
+                                "`{input}` is a local date, but a full timestamp with a timezone is required in persistent configuration (use `{timestamp}` for the equivalent cutoff on this system)"
+                            )));
+                        }
                         warn_user_once!(
-                            "`{input}` is a local date without a timezone. `exclude-newer` values in persistent configuration should use a full timestamp with a timezone (use `{timestamp}` to retain the current cutoff); local dates will be rejected in a future release"
+                            "`{input}` is a local date without a timezone. `exclude-newer` values in persistent configuration should use a full timestamp with a timezone (use `{timestamp}` to retain the current cutoff); local dates will be rejected in a future release. Pass `--preview-features {}` to reject them now",
+                            PreviewFeature::LocalDateExcludeNewer
                         );
                     }
                     Self::Absolute(_) | Self::Relative(_) => {}
@@ -309,7 +316,7 @@ impl schemars::JsonSchema for ExcludeNewerValue {
     fn json_schema(_generator: &mut schemars::generate::SchemaGenerator) -> schemars::Schema {
         schemars::json_schema!({
             "type": "string",
-            "description": "Exclude distributions uploaded after the given timestamp.\n\nAccepts both RFC 3339 timestamps (e.g., `2006-12-02T02:07:43Z`) and local dates in the same format (e.g., `2006-12-02`), as well as relative durations (e.g., `1 week`, `30 days`, `6 months`). Local dates depend on the system timezone and are accepted for compatibility, but will be rejected in a future release. Relative durations are resolved to a timestamp at lock time.",
+            "description": "Exclude distributions uploaded after the given timestamp.\n\nAccepts both RFC 3339 timestamps (e.g., `2006-12-02T02:07:43Z`) and local dates in the same format (e.g., `2006-12-02`), as well as relative durations (e.g., `1 week`, `30 days`, `6 months`). Local dates depend on the system timezone and are accepted for compatibility, but will be rejected in a future release. Enable `--preview-features local-date-exclude-newer` to reject local dates now. Relative durations are resolved to a timestamp at lock time.",
         })
     }
 }
@@ -440,6 +447,7 @@ mod tests {
     use super::{ExcludeNewerOverride, ExcludeNewerValue};
     use std::collections::BTreeMap;
     use std::str::FromStr;
+    use uv_preview::PreviewFeature;
 
     #[derive(Debug, serde::Deserialize)]
     struct Options {
@@ -455,21 +463,61 @@ mod tests {
     }
 
     #[test]
-    fn local_date_is_accepted_from_command_line_and_persistent_configuration() {
+    fn local_date_is_accepted_without_preview() -> Result<(), toml::de::Error> {
+        let _guard = uv_preview::test::with_features(&[]);
+        toml::from_str::<Options>(r#"exclude-newer = "2024-01-01""#)?;
+        toml::from_str::<Options>(r#"exclude-newer-package = { anyio = "2024-01-01" }"#)?;
+        toml::from_str::<Value>(r#"_value = "2024-01-01""#)?;
+        Ok(())
+    }
+
+    #[test]
+    fn local_date_is_rejected_from_persistent_configuration_with_preview() {
+        let _guard = uv_preview::test::with_features(&[PreviewFeature::LocalDateExcludeNewer]);
         ExcludeNewerValue::from_str("2024-01-01").unwrap();
-        toml::from_str::<Options>(r#"exclude-newer = "2024-01-01""#).unwrap();
-        toml::from_str::<Options>(r#"exclude-newer-package = { anyio = "2024-01-01" }"#).unwrap();
-        toml::from_str::<Value>(r#"_value = "2024-01-01""#).unwrap();
+
+        let error = toml::from_str::<Options>(r#"exclude-newer = "2024-01-01""#)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(
+                "`2024-01-01` is a local date, but a full timestamp with a timezone is required in persistent configuration"
+            ),
+            "unexpected error: {error}"
+        );
+
+        let error =
+            toml::from_str::<Options>(r#"exclude-newer-package = { anyio = "2024-01-01" }"#)
+                .unwrap_err()
+                .to_string();
+        assert!(
+            error.contains(
+                "`2024-01-01` is a local date, but a full timestamp with a timezone is required in persistent configuration"
+            ),
+            "unexpected error: {error}"
+        );
+
+        let error = toml::from_str::<Value>(r#"_value = "2024-01-01""#)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(
+                "`2024-01-01` is a local date, but a full timestamp with a timezone is required in persistent configuration"
+            ),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
     fn timestamp_and_duration_are_accepted_from_persistent_configuration() {
+        let _guard = uv_preview::test::with_features(&[PreviewFeature::LocalDateExcludeNewer]);
         toml::from_str::<Options>(r#"exclude-newer = "2024-01-01T00:00:00Z""#).unwrap();
         toml::from_str::<Options>(r#"exclude-newer = "30 days""#).unwrap();
     }
 
     #[test]
     fn persistent_timestamp_span_tables_are_accepted() -> Result<(), toml::de::Error> {
+        let _guard = uv_preview::test::with_features(&[PreviewFeature::LocalDateExcludeNewer]);
         let absolute =
             toml::from_str::<Value>(r#"_value = { timestamp = "2024-01-01T00:00:00Z" }"#)?;
         assert_eq!(
