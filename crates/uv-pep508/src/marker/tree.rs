@@ -3374,6 +3374,22 @@ mod test {
             m("python_full_version < '3.10'"),
         );
         assert_eq!(
+            complexify(Some([3, 12]), Some([3, 15]), "extra == 'feature'"),
+            m(
+                "python_full_version >= '3.12' and python_full_version < '3.15' and extra == 'feature'"
+            ),
+        );
+        assert_eq!(
+            complexify(
+                Some([3, 12]),
+                Some([3, 15]),
+                "sys_platform == 'win32' or extra == 'feature'"
+            ),
+            m(
+                "python_full_version >= '3.12' and python_full_version < '3.15' and (sys_platform == 'win32' or extra == 'feature')"
+            ),
+        );
+        assert_eq!(
             complexify(Some([3, 8]), None, "python_full_version < '3.10'"),
             m("python_full_version >= '3.8' and python_full_version < '3.10'"),
         );
