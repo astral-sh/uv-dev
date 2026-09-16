@@ -76,7 +76,7 @@ from argparse import ArgumentParser
 from dataclasses import dataclass
 from pathlib import Path
 from shutil import rmtree
-from subprocess import PIPE, CalledProcessError, check_call, run
+from subprocess import PIPE, CalledProcessError, TimeoutExpired, check_call, run
 from tempfile import TemporaryDirectory, gettempdir
 from time import sleep
 
@@ -94,6 +94,7 @@ from sigstore.sign import SigningContext
 
 TEST_PYPI_PUBLISH_URL = "https://test.pypi.org/legacy/"
 PYTHON_VERSION = os.environ.get("UV_TEST_PUBLISH_PYTHON_VERSION", "3.12")
+INDEX_WAIT_TIMEOUT_SECONDS = 5 * 60
 # `pyproject.toml` contents using all supported metadata fields, except for the
 # generated header with `[project]`, name and version.
 PYPROJECT_TAIL = """
@@ -381,7 +382,7 @@ def wait_for_index(
     plan: Plan,
     version: Version,
 ):
-    """Check that the index URL was updated, wait up to 100s if necessary.
+    """Check that the index URL was updated, waiting up to five minutes.
 
     Often enough the index takes a few seconds until the index is updated after an
     upload. We need to specifically run this through uv since to query the same cache
@@ -391,39 +392,44 @@ def wait_for_index(
     Require consecutive successful checks since index responses can briefly disagree
     after an upload.
     """
+    deadline = time.monotonic() + INDEX_WAIT_TIMEOUT_SECONDS
     consecutive_successes = 0
-    for _ in range(50):
-        result = run(
-            [
-                plan.uv,
-                "pip",
-                "compile",
-                "-p",
-                PYTHON_VERSION,
-                "--index",
-                plan.configuration.index_url,
-                "--quiet",
-                "--generate-hashes",
-                "--no-header",
-                "--refresh-package",
-                plan.configuration.project_name,
-                "-",
-            ],
-            text=True,
-            input=f"{plan.configuration.project_name}=={version}",
-            stdout=PIPE,
-            env=plan.full_env(),
-            # The version was just published, so run outside the repository to avoid
-            # applying its exclude-newer setting.
-            cwd=gettempdir(),
-            check=False,
-        )
+    while (remaining := deadline - time.monotonic()) > 0:
+        try:
+            result = run(
+                [
+                    plan.uv,
+                    "pip",
+                    "compile",
+                    "-p",
+                    PYTHON_VERSION,
+                    "--index",
+                    plan.configuration.index_url,
+                    "--quiet",
+                    "--generate-hashes",
+                    "--no-header",
+                    "--refresh-package",
+                    plan.configuration.project_name,
+                    "-",
+                ],
+                text=True,
+                input=f"{plan.configuration.project_name}=={version}",
+                stdout=PIPE,
+                env=plan.full_env(),
+                # The version was just published, so run outside the repository to avoid
+                # applying its exclude-newer setting.
+                cwd=gettempdir(),
+                check=False,
+                timeout=remaining,
+            )
+        except TimeoutExpired:
+            break
         # codeberg sometimes times out
         if result.returncode != 0:
             consecutive_successes = 0
             print(
                 f"uv pip compile not updated, missing 2 files for {version}, "
-                + f"sleeping for 2s: `{plan.configuration.index_url}`:\n",
+                + f"retrying: `{plan.configuration.index_url}`:\n",
                 file=sys.stderr,
             )
         elif (
@@ -437,18 +443,60 @@ def wait_for_index(
             consecutive_successes = 0
             print(
                 f"uv pip compile not updated, missing 2 files for {version}, "
-                + f"sleeping for 2s: `{plan.configuration.index_url}`:\n"
+                + f"retrying: `{plan.configuration.index_url}`:\n"
                 + "```\n"
                 + result.stdout.replace("\\\n    ", "")
                 + "```",
                 file=sys.stderr,
             )
-        sleep(2)
+        if (remaining := deadline - time.monotonic()) <= 0:
+            break
+        sleep(min(2, remaining))
 
     raise RuntimeError(
         f"Index did not consistently expose both files for "
         f"{plan.configuration.project_name}=={version}"
     )
+
+
+def is_transient_publish_error(output: str) -> bool:
+    """Recognize transient HTTP failures in uv's final error, not its debug logs."""
+    if error := re.search(r"(?ms)^error: .*", output):
+        return (
+            re.search(
+                r"(?:Server returned status code |HTTP status (?:client|server) error \()"
+                r"(?:408|429|500|502|503|504)\b",
+                error.group(),
+            )
+            is not None
+        )
+    return False
+
+
+def publish_with_retries(plan: Plan, args: list[str | Path], project_dir: Path) -> str:
+    """Retry idempotent re-uploads after transient registry HTTP failures."""
+    attempt = 1
+    while True:
+        try:
+            return run(
+                args,
+                cwd=project_dir,
+                env=plan.full_env(),
+                text=True,
+                check=True,
+                stderr=PIPE,
+            ).stderr
+        except CalledProcessError as error:
+            if attempt == 5 or not is_transient_publish_error(error.stderr or ""):
+                raise
+            print(
+                f"Transient publish failure for {plan.target} "
+                f"(exit code {error.returncode}); retrying ({attempt}/4):\n"
+                f"{error.stderr}",
+                file=sys.stderr,
+            )
+            sleep(2**attempt)
+            attempt += 1
 
 
 def get_fresh_version(plan: Plan) -> Version:
@@ -546,14 +594,7 @@ def test_reupload_same_files(
         plan.configuration.publish_url,
         *plan.extra_args,
     ]
-    output = run(
-        args,
-        cwd=project_dir,
-        env=plan.full_env(),
-        text=True,
-        check=True,
-        stderr=PIPE,
-    ).stderr
+    output = publish_with_retries(plan, args, project_dir)
     if (
         output.count("Uploading") != len(expected_filenames)
         or output.count("already exists") != 0
@@ -609,14 +650,7 @@ def test_reupload_with_check_url(
         ]
     for attempt in range(5):
         wait_for_index(plan, version)
-        output = run(
-            args,
-            cwd=project_dir,
-            env=plan.full_env(),
-            text=True,
-            check=True,
-            stderr=PIPE,
-        ).stderr
+        output = publish_with_retries(plan, args, project_dir)
 
         if output.count("Uploading") == 0 and output.count("already exists") == len(
             expected_filenames
