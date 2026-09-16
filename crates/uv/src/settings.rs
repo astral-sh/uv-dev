@@ -37,9 +37,8 @@ use uv_configuration::{
     ActiveEnvironment, BuildIsolation, BuildOptions, Concurrency, DependencyGroups, DevMode,
     DryRun, EditableMode, EnvFile, ExcludeDependency, ExportFormat, ExtrasSpecification,
     GitLfsSetting, HashCheckingMode, IndexStrategy, InstallOptions, KeyringProviderType, NoBinary,
-    NoBuild, NoSources, Override, PackageOverride, PipCompileFormat, ProjectBuildBackend, ProxyUrl,
-    Reinstall, RequiredVersion, TargetTriple, TrustedHost, TrustedPublishing, Upgrade,
-    VersionControlSystem,
+    NoBuild, NoSources, Override, PipCompileFormat, ProjectBuildBackend, ProxyUrl, Reinstall,
+    RequiredVersion, TargetTriple, TrustedHost, TrustedPublishing, Upgrade, VersionControlSystem,
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations, IndexUrl,
@@ -65,7 +64,7 @@ use uv_settings::{
 use uv_static::EnvVars;
 use uv_torch::{AmdGpuArchitecture, TorchMode};
 use uv_warnings::warn_user_once;
-use uv_workspace::pyproject::{DependencyType, ExtraBuildDependencies, OverrideDependency};
+use uv_workspace::pyproject::{DependencyType, ExtraBuildDependencies};
 use uv_workspace::pyproject_mut::AddBoundsKind;
 
 use crate::commands::pip::operations::Modifications;
@@ -3440,28 +3439,9 @@ fn workspace_overrides(filesystem: Option<&FilesystemOptions>) -> Vec<Override<R
         .into_iter()
         .flatten()
     {
-        match dependency {
-            OverrideDependency::Requirement(requirement) => {
-                overrides.push(Override::Requirement(Requirement::from(
-                    requirement
-                        .clone()
-                        .with_origin(RequirementOrigin::Workspace),
-                )));
-            }
-            OverrideDependency::Package(package) => {
-                overrides.push(Override::Package(PackageOverride {
-                    package: package.package.clone(),
-                    dependencies: package
-                        .dependencies
-                        .iter()
-                        .cloned()
-                        .map(|requirement| {
-                            Requirement::from(requirement.with_origin(RequirementOrigin::Workspace))
-                        })
-                        .collect(),
-                }));
-            }
-        }
+        overrides.push(dependency.clone().map(|requirement| {
+            Requirement::from(requirement.with_origin(RequirementOrigin::Workspace))
+        }));
     }
     overrides
 }

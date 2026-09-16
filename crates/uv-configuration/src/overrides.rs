@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use either::Either;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use serde::de::IntoDeserializer;
+use version_ranges::Ranges;
 
 use uv_distribution_types::{Requirement, RequirementSource};
 use uv_normalize::PackageName;
@@ -25,6 +26,15 @@ pub struct PackageOverride<T> {
     pub dependencies: Box<[T]>,
 }
 
+/// Replace requirements in a version range with a differently named dependency.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct RequirementReplacement<T> {
+    pub requirement: T,
+    pub replacement: T,
+}
+
 /// The package and optional version selected by a [`PackageOverride`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -41,13 +51,56 @@ pub struct PackageOverrideTarget {
     version: Option<Version>,
 }
 
-/// An override, either global or scoped to a specific package version.
+/// A same-name override, a package-scoped override, or a requirement replacement.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema), schemars(untagged))]
 #[serde(untagged, bound(serialize = "T: serde::Serialize"))]
 pub enum Override<T> {
     Package(PackageOverride<T>),
+    Replacement(RequirementReplacement<T>),
     Requirement(T),
+}
+
+impl<T> Override<T> {
+    /// Transform every requirement in an override.
+    pub fn map<U>(self, mut map: impl FnMut(T) -> U) -> Override<U> {
+        match self {
+            Self::Package(package) => Override::Package(PackageOverride {
+                package: package.package,
+                dependencies: package
+                    .dependencies
+                    .into_vec()
+                    .into_iter()
+                    .map(map)
+                    .collect(),
+            }),
+            Self::Replacement(replacement) => Override::Replacement(RequirementReplacement {
+                requirement: map(replacement.requirement),
+                replacement: map(replacement.replacement),
+            }),
+            Self::Requirement(requirement) => Override::Requirement(map(requirement)),
+        }
+    }
+
+    /// Fallibly transform every requirement in an override.
+    pub fn try_map<U, E>(self, mut map: impl FnMut(T) -> Result<U, E>) -> Result<Override<U>, E> {
+        Ok(match self {
+            Self::Package(package) => Override::Package(PackageOverride {
+                package: package.package,
+                dependencies: package
+                    .dependencies
+                    .into_vec()
+                    .into_iter()
+                    .map(map)
+                    .collect::<Result<_, _>>()?,
+            }),
+            Self::Replacement(replacement) => Override::Replacement(RequirementReplacement {
+                requirement: map(replacement.requirement)?,
+                replacement: map(replacement.replacement)?,
+            }),
+            Self::Requirement(requirement) => Override::Requirement(map(requirement)?),
+        })
+    }
 }
 
 // A derived `#[serde(untagged)]` implementation collapses detailed requirement parse errors into
@@ -64,6 +117,7 @@ where
         #[serde(untagged)]
         enum MapOverride<T> {
             Package(PackageOverride<T>),
+            Replacement(RequirementReplacement<T>),
             Requirement(T),
         }
 
@@ -73,6 +127,7 @@ where
                 map.deserialize::<MapOverride<T>>()
                     .map(|entry| match entry {
                         MapOverride::Package(package) => Self::Package(package),
+                        MapOverride::Replacement(replacement) => Self::Replacement(replacement),
                         MapOverride::Requirement(requirement) => Self::Requirement(requirement),
                     })
             })
@@ -85,6 +140,7 @@ where
 pub struct Overrides {
     global: FxHashMap<PackageName, Vec<Requirement>>,
     scoped: FxHashMap<PackageName, Vec<ScopedOverrides>>,
+    replacements: FxHashMap<PackageName, Vec<RequirementReplacement<Requirement>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -93,9 +149,17 @@ struct ScopedOverrides {
     overrides: FxHashMap<PackageName, Vec<Requirement>>,
 }
 
-/// An unsupported source in a scoped dependency override.
+/// An invalid dependency override.
 #[derive(Debug, thiserror::Error)]
-pub enum ScopedOverrideSourceError {
+pub enum OverrideError {
+    #[error(
+        "Replacement selector for `{dependency}` must be a plain registry requirement without extras, groups, markers, or an explicit index"
+    )]
+    ReplacementSelector { dependency: PackageName },
+    #[error("Replacement for `{dependency}` must name a different package")]
+    ReplacementName { dependency: PackageName },
+    #[error("Replacement selectors for `{dependency}` overlap")]
+    OverlappingReplacements { dependency: PackageName },
     #[error(
         "Scoped override for `{package}` cannot use a URL or path source for `{dependency}`; scoped overrides currently support version specifiers only"
     )]
@@ -126,19 +190,66 @@ impl Overrides {
         Self {
             global,
             scoped: FxHashMap::default(),
+            replacements: FxHashMap::default(),
         }
     }
 
     /// Create an indexed set of overrides.
-    pub fn from_entries(
-        entries: Vec<Override<Requirement>>,
-    ) -> Result<Self, ScopedOverrideSourceError> {
+    pub fn from_entries(entries: Vec<Override<Requirement>>) -> Result<Self, OverrideError> {
         let mut global: FxHashMap<PackageName, Vec<Requirement>> =
             FxHashMap::with_capacity_and_hasher(entries.len(), FxBuildHasher);
         let mut scoped: FxHashMap<PackageName, Vec<ScopedOverrides>> = FxHashMap::default();
+        let mut replacements: FxHashMap<PackageName, Vec<RequirementReplacement<Requirement>>> =
+            FxHashMap::default();
 
         for entry in entries {
             match entry {
+                Override::Replacement(replacement) => {
+                    let selector = &replacement.requirement;
+                    let RequirementSource::Registry {
+                        specifier,
+                        index: None,
+                        conflict: None,
+                        ..
+                    } = &selector.source
+                    else {
+                        return Err(OverrideError::ReplacementSelector {
+                            dependency: selector.name.clone(),
+                        });
+                    };
+                    if !selector.extras.is_empty()
+                        || !selector.groups.is_empty()
+                        || !selector.marker.is_true()
+                    {
+                        return Err(OverrideError::ReplacementSelector {
+                            dependency: selector.name.clone(),
+                        });
+                    }
+                    if selector.name == replacement.replacement.name {
+                        return Err(OverrideError::ReplacementName {
+                            dependency: selector.name.clone(),
+                        });
+                    }
+                    let range = Ranges::from(specifier.clone());
+                    let entries = replacements.entry(selector.name.clone()).or_default();
+                    for existing in entries.iter() {
+                        if let RequirementSource::Registry { specifier, .. } =
+                            &existing.requirement.source
+                            && !range
+                                .intersection(&Ranges::from(specifier.clone()))
+                                .is_empty()
+                            && !replacement
+                                .replacement
+                                .marker
+                                .is_disjoint(existing.replacement.marker)
+                        {
+                            return Err(OverrideError::OverlappingReplacements {
+                                dependency: selector.name.clone(),
+                            });
+                        }
+                    }
+                    entries.push(replacement);
+                }
                 Override::Requirement(requirement) => {
                     global
                         .entry(requirement.name.clone())
@@ -149,7 +260,7 @@ impl Overrides {
                     for requirement in &package.dependencies {
                         match &requirement.source {
                             RequirementSource::Registry { index: Some(_), .. } => {
-                                return Err(ScopedOverrideSourceError::Index {
+                                return Err(OverrideError::Index {
                                     package: package.package.name.clone(),
                                     dependency: requirement.name.clone(),
                                 });
@@ -160,7 +271,7 @@ impl Overrides {
                             | RequirementSource::GitPath { .. }
                             | RequirementSource::Path { .. }
                             | RequirementSource::Directory { .. } => {
-                                return Err(ScopedOverrideSourceError::Url {
+                                return Err(OverrideError::Url {
                                     package: package.package.name.clone(),
                                     dependency: requirement.name.clone(),
                                 });
@@ -190,7 +301,11 @@ impl Overrides {
             }
         }
 
-        Ok(Self { global, scoped })
+        Ok(Self {
+            global,
+            scoped,
+            replacements,
+        })
     }
 
     /// Return an iterator over all global [`Requirement`]s in the override set.
@@ -198,6 +313,12 @@ impl Overrides {
         self.global
             .values()
             .flat_map(|requirements| requirements.iter())
+            .chain(
+                self.replacements
+                    .values()
+                    .flatten()
+                    .map(|entry| &entry.replacement),
+            )
     }
 
     /// Return all scoped [`Requirement`]s with the package and version they apply to.
@@ -301,6 +422,73 @@ impl Overrides {
     where
         I: IntoIterator<Item = &'a Requirement>,
     {
+        let package_name = package.map(|(name, _)| name.clone());
+        let requirements = self.apply_same_name(requirements, package);
+        if self.replacements.is_empty() {
+            return Either::Left(requirements);
+        }
+        Either::Right(requirements.flat_map(move |requirement| {
+            self.apply_replacement(requirement, package_name.as_ref())
+        }))
+    }
+
+    fn apply_replacement<'a>(
+        &'a self,
+        requirement: Cow<'a, Requirement>,
+        package: Option<&PackageName>,
+    ) -> Vec<Cow<'a, Requirement>> {
+        let Some(replacements) = self.replacements.get(&requirement.name) else {
+            return vec![requirement];
+        };
+        let RequirementSource::Registry {
+            specifier,
+            index: None,
+            conflict: None,
+            ..
+        } = &requirement.source
+        else {
+            return vec![requirement];
+        };
+        if !requirement.extras.is_empty() || !requirement.groups.is_empty() {
+            return vec![requirement];
+        }
+        let requested = Ranges::from(specifier.clone());
+        let mut result = Vec::new();
+        for entry in replacements {
+            let RequirementSource::Registry { specifier, .. } = &entry.requirement.source else {
+                continue;
+            };
+            if requested.is_empty()
+                || requested.intersection(&Ranges::from(specifier.clone())) != requested
+            {
+                continue;
+            }
+            // A replacement may depend on the original library. Rewriting that edge would
+            // replace the library with a self-dependency and remove it from the environment.
+            if package == Some(&entry.replacement.name) {
+                return vec![requirement];
+            }
+            let marker = requirement.marker.and(entry.replacement.marker);
+            result.push(Cow::Owned(Requirement {
+                marker,
+                ..entry.replacement.clone()
+            }));
+        }
+        if result.is_empty() {
+            vec![requirement]
+        } else {
+            result
+        }
+    }
+
+    fn apply_same_name<'a, I>(
+        &'a self,
+        requirements: I,
+        package: Option<(&PackageName, &Version)>,
+    ) -> impl Iterator<Item = Cow<'a, Requirement>> + use<'a, I>
+    where
+        I: IntoIterator<Item = &'a Requirement>,
+    {
         let scoped = package.and_then(|(package, version)| self.scoped_for(package, version));
         if let Some(scoped) = scoped {
             let requirements = requirements.into_iter().collect::<Vec<_>>();
@@ -369,5 +557,80 @@ impl Overrides {
                 })
             },
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    use serde_json::json;
+
+    use uv_pypi_types::VerbatimParsedUrl;
+
+    use super::*;
+
+    fn requirement(value: &str) -> Result<Requirement> {
+        let requirement: uv_pep508::Requirement<VerbatimParsedUrl> = value.parse()?;
+        Ok(Requirement::from(requirement))
+    }
+
+    fn replacements(entries: serde_json::Value) -> Result<Overrides> {
+        let entries: Vec<Override<uv_pep508::Requirement<VerbatimParsedUrl>>> =
+            serde_json::from_value(entries)?;
+        Ok(Overrides::from_entries(
+            entries
+                .into_iter()
+                .map(|entry| entry.map(Requirement::from))
+                .collect(),
+        )?)
+    }
+
+    #[test]
+    fn replacement_range_and_recursion() -> Result<()> {
+        let overrides = replacements(json!([
+            { "requirement": "lib<2", "replacement": "virtual-lib1" },
+            { "requirement": "lib>=2", "replacement": "virtual-lib2" }
+        ]))?;
+        let dependencies = [
+            requirement("lib>=1,<2 ; sys_platform == 'win32'")?,
+            requirement("lib>=2")?,
+            requirement("lib")?,
+            requirement("lib[feature]<2")?,
+            requirement("lib @ https://example.com/lib-1.0.0.tar.gz")?,
+        ];
+        let actual = overrides
+            .apply(&dependencies)
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            [
+                requirement("virtual-lib1 ; sys_platform == 'win32'")?,
+                requirement("virtual-lib2")?,
+                requirement("lib")?,
+                requirement("lib[feature]<2")?,
+                requirement("lib @ https://example.com/lib-1.0.0.tar.gz")?,
+            ]
+        );
+
+        let package: PackageName = "virtual-lib1".parse()?;
+        let version: Version = "0.1.0".parse()?;
+        let dependencies = [requirement("lib<2")?];
+        let actual = overrides
+            .apply_for(&package, &version, &dependencies)
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>();
+        assert_eq!(actual, dependencies);
+        Ok(())
+    }
+
+    #[test]
+    fn replacement_selectors_cannot_overlap() {
+        let error = replacements(json!([
+            { "requirement": "lib<3", "replacement": "virtual-lib1" },
+            { "requirement": "lib>=2", "replacement": "virtual-lib2" }
+        ]))
+        .expect_err("overlapping replacement selectors must fail");
+        insta::assert_snapshot!(error, @"Replacement selectors for `lib` overlap");
     }
 }

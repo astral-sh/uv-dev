@@ -16,7 +16,7 @@ use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
     ActiveEnvironment, Concurrency, Constraints, DependencyGroupsWithDefaults, DryRun,
     ExtrasSpecification, GitLfsSetting, HashCheckingMode, Override, PackageOverride, Reinstall,
-    TargetTriple, Upgrade,
+    RequirementReplacement, TargetTriple, Upgrade,
 };
 use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies, LoweredRequirement};
@@ -3331,6 +3331,30 @@ pub(crate) async fn script_specification(
         let mut overrides = Vec::new();
         for entry in override_entries {
             match entry {
+                Override::Replacement(replacement) => {
+                    let requirement = Requirement::from(replacement.requirement);
+                    overrides.extend(
+                        LoweredRequirement::from_non_workspace_requirement(
+                            replacement.replacement,
+                            script_dir.as_ref(),
+                            script_sources.as_ref(),
+                            &script_indexes,
+                            &settings.index_locations,
+                            cache,
+                            workspace_cache,
+                            credentials_cache,
+                        )
+                        .await
+                        .map_ok(LoweredRequirement::into_inner)
+                        .map_ok(|replacement| {
+                            Override::Replacement(RequirementReplacement {
+                                requirement: requirement.clone(),
+                                replacement,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                    );
+                }
                 Override::Requirement(requirement) => {
                     overrides.extend(
                         LoweredRequirement::from_non_workspace_requirement(

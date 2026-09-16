@@ -3832,10 +3832,10 @@ impl Fork {
                 return true;
             }
             match conflicting_item.kind() {
-                // We should not filter entire projects unless they're a top-level dependency
-                // Otherwise, we'll fail to solve for children of the project, like extras
+                // Enforce a selected package's self-constraints, but do not let another
+                // package pull an excluded project back into the fork.
                 ConflictKindRef::Project => {
-                    if dep.parent.is_some() {
+                    if dep.parent.as_ref() == Some(conflicting_item.package()) {
                         return true;
                     }
                 }

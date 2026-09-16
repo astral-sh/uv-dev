@@ -6306,6 +6306,7 @@ name = "uv-configuration"
 version = "0.0.82"
 dependencies = [
  "anyhow",
+ "astral-version-ranges",
  "clap",
  "either",
  "fs-err",

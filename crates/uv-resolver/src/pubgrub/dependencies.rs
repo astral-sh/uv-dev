@@ -85,16 +85,9 @@ pub(crate) struct PubGrubDependency {
     /// When the parent that created this dependency is a "normal" package
     /// (non-extra non-group), this corresponds to its name.
     ///
-    /// This is used to create project-level `ConflictItemRef` for a specific
-    /// package. In effect, this lets us "delay" filtering of project
-    /// dependencies when a conflict is declared between the project and a
-    /// group.
-    ///
-    /// The main problem with dealing with project level conflicts is that if you
-    /// declare a conflict between a package and a group, we represent that
-    /// group as a dependency of that package. So if you filter out the package
-    /// in a fork due to a conflict, you also filter out the group. Therefore,
-    /// we introduce this parent field to enable "delayed" filtering.
+    /// Project-conflict filtering uses this to distinguish self-constraints from
+    /// incoming requirements declared by other packages. A selected package's
+    /// self-constraint must still be enforced when its project is excluded.
     pub(crate) parent: Option<PackageName>,
 
     /// The direct source constraint attached to this dependency edge.

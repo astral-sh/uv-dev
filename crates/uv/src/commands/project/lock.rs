@@ -13,7 +13,8 @@ use uv_cache::{Cache, Refresh};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
     ActiveEnvironment, Concurrency, Constraints, DependencyGroupsWithDefaults, DryRun,
-    ExcludeDependency, ExtrasSpecification, Override, PackageOverride, Reinstall, Upgrade,
+    ExcludeDependency, ExtrasSpecification, Override, PackageOverride, Reinstall,
+    RequirementReplacement, Upgrade,
 };
 use uv_dispatch::BuildDispatch;
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
@@ -552,6 +553,28 @@ async fn do_lock(
         let mut lowered_overrides = Vec::new();
         for entry in overrides {
             match entry {
+                Override::Replacement(replacement) => {
+                    let requirement = Requirement::from(replacement.requirement);
+                    lowered_overrides.extend(
+                        target
+                            .lower(
+                                vec![replacement.replacement],
+                                index_locations,
+                                sources,
+                                cache,
+                                workspace_cache,
+                                client_builder.credentials_cache(),
+                            )
+                            .await?
+                            .into_iter()
+                            .map(|replacement| {
+                                Override::Replacement(RequirementReplacement {
+                                    requirement: requirement.clone(),
+                                    replacement,
+                                })
+                            }),
+                    );
+                }
                 Override::Requirement(requirement) => {
                     lowered_overrides.extend(
                         target

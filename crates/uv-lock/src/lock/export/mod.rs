@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::collections::hash_map::Entry;
 
 use either::Either;
+use itertools::Itertools;
 use petgraph::graph::NodeIndex;
 use petgraph::prelude::EdgeRef;
 use petgraph::visit::IntoNodeReferences;
@@ -13,7 +14,7 @@ use uv_configuration::{
 };
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep508::MarkerTree;
-use uv_pypi_types::ConflictItem;
+use uv_pypi_types::{ConflictItem, ConflictKindRef, Conflicts};
 
 use uv_resolver_types::graph_ops::Reachable;
 use uv_resolver_types::universal_marker::resolve_activated_extras;
@@ -315,7 +316,36 @@ impl<'lock> ExportableRequirements<'lock> {
         }
 
         // Determine the reachability of each node in the graph.
-        let mut reachability = conflict_marker_reachability(&graph, &[], &activated_items);
+        let mut reachability =
+            conflict_marker_reachability(&graph, &[], &activated_items, target.lock().conflicts());
+
+        for set in target.lock().conflicts().iter() {
+            let projects = set
+                .iter()
+                .filter(|item| item.kind().as_ref() == ConflictKindRef::Project)
+                .map(|item| {
+                    let marker =
+                        graph
+                            .node_references()
+                            .fold(MarkerTree::FALSE, |marker, (index, node)| match node {
+                                Node::Package(package) if package.name() == item.package() => {
+                                    marker
+                                        .or(*reachability.get(&index).unwrap_or(&MarkerTree::FALSE))
+                                }
+                                Node::Package(_) | Node::Root => marker,
+                            });
+                    (item.package(), marker)
+                });
+            for ((first, first_marker), (second, second_marker)) in projects.tuple_combinations() {
+                if !first_marker.is_disjoint(second_marker) {
+                    return Err(LockErrorKind::ConflictingProject {
+                        package1: first.clone(),
+                        package2: second.clone(),
+                    }
+                    .into());
+                }
+            }
+        }
 
         // Collect all packages.
         let nodes = graph
@@ -429,6 +459,7 @@ fn conflict_marker_reachability<'lock>(
     graph: &Graph<Node<'lock>, Edge<'lock>>,
     fork_markers: &[Edge<'lock>],
     known_conflicts: &FxHashMap<ConflictItem, MarkerTree>,
+    conflicts: &Conflicts,
 ) -> FxHashMap<NodeIndex, MarkerTree> {
     // For each node, track the conditions under which each conflict item is enabled.
     let mut conflict_maps =
@@ -497,6 +528,13 @@ fn conflict_marker_reachability<'lock>(
                 .unwrap_or_else(|| known_conflicts.clone());
 
             if let Node::Package(child) = graph[child_edge.target()] {
+                if conflicts.contains(child.name(), ConflictKindRef::Project) {
+                    let item = ConflictItem::from(child.name().clone());
+                    parent_map
+                        .entry(item)
+                        .and_modify(|marker| *marker = marker.or(parent_marker))
+                        .or_insert(parent_marker);
+                }
                 for extra in child_edge.weight().dep_extras() {
                     let item = ConflictItem::from((child.name().clone(), (*extra).clone()));
                     parent_map.insert(item, parent_marker);
