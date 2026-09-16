@@ -10,8 +10,9 @@ use sha2::{Digest, Sha256};
 use std::env::current_dir;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use uv_static::EnvVars;
-use uv_test::{uv_snapshot, venv_bin_path};
+use uv_test::{TestContext, uv_snapshot, venv_bin_path};
 use wiremock::matchers::{basic_auth, body_json, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
@@ -80,6 +81,18 @@ fn username_password_error() -> ResponseTemplate {
     }))
 }
 
+/// Isolate local rejected uploads from ambient proxy and GitHub authentication settings.
+fn local_publish(context: &TestContext) -> Command {
+    let mut command = context.publish();
+    command
+        .env(EnvVars::NO_PROXY, "*")
+        .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("GH_ENTERPRISE_TOKEN")
+        .env_remove("GITHUB_ENTERPRISE_TOKEN");
+    command
+}
+
 #[tokio::test]
 async fn username_password_no_longer_supported() {
     let context = uv_test::test_context!("3.12").with_filtered_sizes();
@@ -93,7 +106,7 @@ async fn username_password_no_longer_supported() {
         .mount(&server)
         .await;
 
-    uv_snapshot!(context.filters(), context.publish()
+    uv_snapshot!(context.filters(), local_publish(&context)
         .arg("-u")
         .arg("dummy")
         .arg("-p")
@@ -153,19 +166,14 @@ async fn invalid_token() -> Result<()> {
         .mount(&server)
         .await;
 
-    uv_snapshot!(context.filters(), context.publish()
+    uv_snapshot!(context.filters(), local_publish(&context)
         .arg("-u")
         .arg("__token__")
         .arg("-p")
         .arg("dummy")
         .arg("--publish-url")
         .arg(format!("{}/legacy/", server.uri()))
-        .arg(wheel.path())
-        .env(EnvVars::NO_PROXY, "*")
-        .env_remove("GH_TOKEN")
-        .env_remove("GITHUB_TOKEN")
-        .env_remove("GH_ENTERPRISE_TOKEN")
-        .env_remove("GITHUB_ENTERPRISE_TOKEN"), @"
+        .arg(wheel.path()), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Publishing 1 file to http://[LOCALHOST]/legacy/
@@ -398,7 +406,7 @@ async fn check_keyring_behaviours() {
         .success();
 
     // Ok: The keyring may be used for the index page.
-    uv_snapshot!(context.filters(), context.publish()
+    uv_snapshot!(context.filters(), local_publish(&context)
         .arg("-u")
         .arg("dummy")
         .arg("-p")
@@ -422,7 +430,7 @@ async fn check_keyring_behaviours() {
     );
 
     // Warn: The keyring is unused.
-    uv_snapshot!(context.filters(), context.publish()
+    uv_snapshot!(context.filters(), local_publish(&context)
         .arg("-u")
         .arg("dummy")
         .arg("-p")
@@ -446,7 +454,7 @@ async fn check_keyring_behaviours() {
 
     // Warn: There is no keyring entry for the user dummy.
     // https://github.com/astral-sh/uv/issues/7963#issuecomment-2453558043
-    uv_snapshot!(context.filters(), context.publish()
+    uv_snapshot!(context.filters(), local_publish(&context)
         .arg("-u")
         .arg("dummy")
         .arg("--keyring-provider")
@@ -476,7 +484,7 @@ async fn check_keyring_behaviours() {
 
     // Ok: There is a keyring entry for the user dummy.
     // https://github.com/astral-sh/uv/issues/7963#issuecomment-2453558043
-    uv_snapshot!(context.filters(), context.publish()
+    uv_snapshot!(context.filters(), local_publish(&context)
         .arg("-u")
         .arg("dummy")
         .arg("--keyring-provider")
