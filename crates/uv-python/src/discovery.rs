@@ -298,22 +298,8 @@ impl FromStr for VariantRequest {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let variants = s.to_ascii_lowercase();
-        if let Ok(python) = PythonVariant::from_str(&variants) {
-            return Ok(Self::new(python, None));
-        }
-
-        for (index, _) in variants.rmatch_indices('+') {
-            if let Ok(python) = PythonVariant::from_str(&variants[..index]) {
-                let build = LenientPythonBuildVariant::from_str(&variants[index + 1..])?;
-                return Ok(Self::new(python, Some(build)));
-            }
-        }
-
-        Ok(Self::new(
-            PythonVariant::Default,
-            Some(LenientPythonBuildVariant::from_str(&variants)?),
-        ))
+        let (python, build) = parse_python_variants(s)?;
+        Ok(Self::new(python, build))
     }
 }
 
