@@ -385,11 +385,18 @@ $ uv python install 3.13+custom
 $ uv python find 3.13+custom
 ```
 
-Use `UV_PYTHON_BUILD` to select a particular revision without changing the variant identity:
+Use [`UV_PYTHON_BUILD`](../reference/environment.md#uv_python_build) to select a particular revision
+without changing the variant identity:
 
 ```console
 $ UV_PYTHON_BUILD=20260825 uv python install 3.13+custom
 ```
+
+`UV_PYTHON_BUILD` applies to requests with an explicit build variant, including optimization
+variants such as `3.13+pgo+lto`. For CPython requests without a build variant, such as `3.13` or
+`3.13+freethreaded`, use
+[`UV_PYTHON_CPYTHON_BUILD`](../reference/environment.md#uv_python_cpython_build) to select a build
+revision.
 
 Build variants use ordinary executable names. Pass `--default` when the selected build should own
 the `python`, `python3`, and versioned aliases in uv's executable directory.
