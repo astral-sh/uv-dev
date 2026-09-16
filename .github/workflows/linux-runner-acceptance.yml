@@ -1,0 +1,210 @@
+name: Linux Rust-cache acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Source reuse only, or include the isolated malformed-cache fixture.
+        type: choice
+        default: source
+        options:
+          - source
+          - source-and-malformed-cache
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-rust-cache-acceptance-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  downloads-seed:
+    if: ${{ github.repository == 'astral-sh/uv-dev' && github.event_name == 'workflow_dispatch' }}
+    uses: ./.github/workflows/ci-rust-cache-acceptance-job.yml
+    with:
+      case: downloads-seed
+      stage: ${{ inputs.stage }}
+
+  baseline-cold:
+    needs: downloads-seed
+    uses: ./.github/workflows/ci-rust-cache-acceptance-job.yml
+    with:
+      case: baseline-cold
+      stage: ${{ inputs.stage }}
+
+  baseline-exact:
+    needs: baseline-cold
+    uses: ./.github/workflows/ci-rust-cache-acceptance-job.yml
+    with:
+      case: baseline-exact
+      stage: ${{ inputs.stage }}
+
+  candidate-fallback:
+    needs: baseline-exact
+    uses: ./.github/workflows/ci-rust-cache-acceptance-job.yml
+    with:
+      case: candidate-fallback
+      stage: ${{ inputs.stage }}
+
+  candidate-exact:
+    needs: candidate-fallback
+    uses: ./.github/workflows/ci-rust-cache-acceptance-job.yml
+    with:
+      case: candidate-exact
+      stage: ${{ inputs.stage }}
+
+  candidate-relocated:
+    needs: candidate-exact
+    uses: ./.github/workflows/ci-rust-cache-acceptance-job.yml
+    with:
+      case: candidate-relocated
+      stage: ${{ inputs.stage }}
+
+  malformed-cache-fixture:
+    needs: candidate-relocated
+    if: ${{ inputs.stage == 'source-and-malformed-cache' }}
+    uses: ./.github/workflows/ci-rust-cache-acceptance-job.yml
+    with:
+      case: malformed-cache-fixture
+      stage: ${{ inputs.stage }}
+
+  malformed-cache-consumer:
+    needs: malformed-cache-fixture
+    if: ${{ inputs.stage == 'source-and-malformed-cache' }}
+    uses: ./.github/workflows/ci-rust-cache-acceptance-job.yml
+    with:
+      case: malformed-cache-consumer
+      stage: ${{ inputs.stage }}
+
+  aggregate:
+    name: Verify cache-acceptance evidence
+    if: ${{ always() && github.repository == 'astral-sh/uv-dev' && github.event_name == 'workflow_dispatch' }}
+    needs:
+      - downloads-seed
+      - baseline-cold
+      - baseline-exact
+      - candidate-fallback
+      - candidate-exact
+      - candidate-relocated
+      - malformed-cache-fixture
+      - malformed-cache-consumer
+    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    env:
+      UV_RUST_CACHE_ACCEPTANCE_STAGE: ${{ inputs.stage }}
+    steps:
+      - name: Checkout acceptance controller
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: controller
+          persist-credentials: false
+
+      - name: Download downloads-seed evidence
+        id: download-downloads-seed
+        if: ${{ always() && needs.downloads-seed.outputs.artifact-id != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.downloads-seed.outputs.artifact-id }}
+          path: case-artifacts/ci-rust-cache-acceptance-${{ github.run_id }}-${{ github.run_attempt }}-downloads-seed
+          digest-mismatch: error
+
+      - name: Download baseline-cold evidence
+        id: download-baseline-cold
+        if: ${{ always() && needs.baseline-cold.outputs.artifact-id != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.baseline-cold.outputs.artifact-id }}
+          path: case-artifacts/ci-rust-cache-acceptance-${{ github.run_id }}-${{ github.run_attempt }}-baseline-cold
+          digest-mismatch: error
+
+      - name: Download baseline-exact evidence
+        id: download-baseline-exact
+        if: ${{ always() && needs.baseline-exact.outputs.artifact-id != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.baseline-exact.outputs.artifact-id }}
+          path: case-artifacts/ci-rust-cache-acceptance-${{ github.run_id }}-${{ github.run_attempt }}-baseline-exact
+          digest-mismatch: error
+
+      - name: Download candidate-fallback evidence
+        id: download-candidate-fallback
+        if: ${{ always() && needs.candidate-fallback.outputs.artifact-id != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.candidate-fallback.outputs.artifact-id }}
+          path: case-artifacts/ci-rust-cache-acceptance-${{ github.run_id }}-${{ github.run_attempt }}-candidate-fallback
+          digest-mismatch: error
+
+      - name: Download candidate-exact evidence
+        id: download-candidate-exact
+        if: ${{ always() && needs.candidate-exact.outputs.artifact-id != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.candidate-exact.outputs.artifact-id }}
+          path: case-artifacts/ci-rust-cache-acceptance-${{ github.run_id }}-${{ github.run_attempt }}-candidate-exact
+          digest-mismatch: error
+
+      - name: Download candidate-relocated evidence
+        id: download-candidate-relocated
+        if: ${{ always() && needs.candidate-relocated.outputs.artifact-id != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.candidate-relocated.outputs.artifact-id }}
+          path: case-artifacts/ci-rust-cache-acceptance-${{ github.run_id }}-${{ github.run_attempt }}-candidate-relocated
+          digest-mismatch: error
+
+      - name: Download malformed-cache-fixture evidence
+        id: download-malformed-cache-fixture
+        if: ${{ always() && needs.malformed-cache-fixture.outputs.artifact-id != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.malformed-cache-fixture.outputs.artifact-id }}
+          path: case-artifacts/ci-rust-cache-acceptance-${{ github.run_id }}-${{ github.run_attempt }}-malformed-cache-fixture
+          digest-mismatch: error
+
+      - name: Download malformed-cache-consumer evidence
+        id: download-malformed-cache-consumer
+        if: ${{ always() && needs.malformed-cache-consumer.outputs.artifact-id != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.malformed-cache-consumer.outputs.artifact-id }}
+          path: case-artifacts/ci-rust-cache-acceptance-${{ github.run_id }}-${{ github.run_attempt }}-malformed-cache-consumer
+          digest-mismatch: error
+
+      - name: Verify the selected acceptance stage
+        id: aggregate
+        if: ${{ always() && steps.checkout.outcome == 'success' }}
+        env:
+          DOWNLOADS_SEED: ${{ needs.downloads-seed.outputs.artifact-id }}:${{ needs.downloads-seed.outputs.artifact-digest }}:${{ needs.downloads-seed.outputs.result-sha256 }}:${{ steps.download-downloads-seed.outcome }}
+          BASELINE_COLD: ${{ needs.baseline-cold.outputs.artifact-id }}:${{ needs.baseline-cold.outputs.artifact-digest }}:${{ needs.baseline-cold.outputs.result-sha256 }}:${{ steps.download-baseline-cold.outcome }}
+          BASELINE_EXACT: ${{ needs.baseline-exact.outputs.artifact-id }}:${{ needs.baseline-exact.outputs.artifact-digest }}:${{ needs.baseline-exact.outputs.result-sha256 }}:${{ steps.download-baseline-exact.outcome }}
+          CANDIDATE_FALLBACK: ${{ needs.candidate-fallback.outputs.artifact-id }}:${{ needs.candidate-fallback.outputs.artifact-digest }}:${{ needs.candidate-fallback.outputs.result-sha256 }}:${{ steps.download-candidate-fallback.outcome }}
+          CANDIDATE_EXACT: ${{ needs.candidate-exact.outputs.artifact-id }}:${{ needs.candidate-exact.outputs.artifact-digest }}:${{ needs.candidate-exact.outputs.result-sha256 }}:${{ steps.download-candidate-exact.outcome }}
+          CANDIDATE_RELOCATED: ${{ needs.candidate-relocated.outputs.artifact-id }}:${{ needs.candidate-relocated.outputs.artifact-digest }}:${{ needs.candidate-relocated.outputs.result-sha256 }}:${{ steps.download-candidate-relocated.outcome }}
+          MALFORMED_FIXTURE: ${{ needs.malformed-cache-fixture.outputs.artifact-id }}:${{ needs.malformed-cache-fixture.outputs.artifact-digest }}:${{ needs.malformed-cache-fixture.outputs.result-sha256 }}:${{ steps.download-malformed-cache-fixture.outcome }}
+          MALFORMED_CONSUMER: ${{ needs.malformed-cache-consumer.outputs.artifact-id }}:${{ needs.malformed-cache-consumer.outputs.artifact-digest }}:${{ needs.malformed-cache-consumer.outputs.result-sha256 }}:${{ steps.download-malformed-cache-consumer.outcome }}
+        run: |
+          set -euo pipefail
+          python3 controller/.github/actions/uv-rust-cache/acceptance.py aggregate \
+            --directory "$GITHUB_WORKSPACE/case-artifacts" \
+            --output "$GITHUB_WORKSPACE/aggregate.json" \
+            --artifact "downloads-seed=$DOWNLOADS_SEED" \
+            --artifact "baseline-cold=$BASELINE_COLD" \
+            --artifact "baseline-exact=$BASELINE_EXACT" \
+            --artifact "candidate-fallback=$CANDIDATE_FALLBACK" \
+            --artifact "candidate-exact=$CANDIDATE_EXACT" \
+            --artifact "candidate-relocated=$CANDIDATE_RELOCATED" \
+            --artifact "malformed-cache-fixture=$MALFORMED_FIXTURE" \
+            --artifact "malformed-cache-consumer=$MALFORMED_CONSUMER"
+
+      - name: Retain aggregate evidence
+        if: ${{ always() && steps.aggregate.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-rust-cache-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: aggregate.json
+          if-no-files-found: error
+          retention-days: 14

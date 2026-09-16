@@ -69,3 +69,59 @@ Run the source-only contract tests with:
 ```console
 uv --no-config run --locked --python 3.12 --script scripts/tests/test_ci_rust_cache.py
 ```
+
+## Opt-in full-operation acceptance
+
+`linux-runner-acceptance.yml` is a manual-only caller in `astral-sh/uv-dev`. It uses the fixed
+`f36ab068f6d834c7e13d5b7b10c7aca80d04cd65` and `65d6ba4fe450b7df59d8a1cda83083a02865ccd0` source
+pair. Both contain the same native-auth test isolation; their only difference is an integration-test
+source change. The controller and test source are separate clean checkouts, and the selected
+source's toolchain, Linux test filesystems, Python versions, and nextest configuration remain part
+of the recorded contract.
+
+The `source` stage runs six sequential fresh jobs: downloads seeding, a baseline target-cache miss,
+a baseline exact hit, a candidate fallback from the baseline, a candidate exact hit, and that same
+candidate at a different checkout path. The `baseline-cold` case requires a miss from the namespaced
+cache service. It records the target payload and fingerprints before the workload, but does not
+require the local target directory to be empty. A physically cold build or a performance comparison
+needs those records to establish its starting state. Only the seed and the two complete source-cache
+producers may save. Their following fresh consumers must observe the requested exact keys. The
+namespace is derived from the workflow run and attempt, so this sequence cannot restore an ordinary
+CI entry.
+
+The optional `source-and-malformed-cache` stage adds a fixture producer and fresh consumer in a
+separate namespace. The producer restores the valid candidate entry read-only, records its payload
+and original `.rustc_info.json`, and replaces only that generated metadata file. The consumer must
+observe the isolated exact hit and finish the normal nextest workload with valid Cargo metadata. The
+fixture is never represented as a successfully built production cache. An unsuccessful composite
+restore remains an adverse result; an identity or setup failure is not a cache miss.
+
+Each case has a 40-minute command deadline inside a 45-minute job on the normal 16-core Linux test
+runner. Commands use the source-pinned process-group cleanup implementation from
+`f1c904fb0930efeaf82232ea1884c41a18b93dd8`, with the Git blob and file digest checked before loading
+it. The original failure, timeout, or signal remains authoritative while bounded cleanup confirms
+that the owned group is absent. A successful leader that leaves descendants does not complete the
+case.
+
+The nextest command adds only `--cargo-message-format=json` to the manifest's workload arguments.
+Evidence separates enclosing command time, Cargo's reported build interval, nextest's reported test
+interval, actual `compiler-artifact` freshness records, raw configuration fingerprints, and a newly
+written JUnit report. An artifact record is not a package count or a measure of equal compiler or
+native-build work. Nextest's listed-binary count is retained as reported; listed binaries with no
+reported tests need not have a JUnit suite. The aggregate downloads the exact returned artifact IDs,
+requires successful digest-checked downloads, rehashes the case files, and rederives completion from
+their source, command, cache, and test evidence. Partial or adverse runs remain visible.
+
+This caller does not change production cache policy, grant cross-repository access, or establish a
+speedup. A dependency-changing source pair, other targets, and production adoption require their own
+qualification.
+
+Run the source-only acceptance tests with:
+
+```console
+uv --no-config run --locked --python 3.12 --script scripts/tests/test_ci_rust_cache_acceptance.py
+```
+
+To include short real POSIX process controls, pass `--process-owner-repository` pointing to a local
+Git repository containing the pinned cleanup commit. `--retain-directory` retains their command
+records and output in a new directory. Neither option runs Cargo or accesses the cache service.
