@@ -589,6 +589,7 @@ pub(crate) async fn pip_compile(
         options,
         Box::new(DefaultResolveLogger),
         printer,
+        None,
     )
     .await
     {

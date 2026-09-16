@@ -73,6 +73,14 @@ pub struct ResolverEnvironment {
     kind: Kind,
 }
 
+/// Already-materialized universal state borrowed for bounded no-solution capture.
+pub(crate) struct UniversalEnvironmentRef<'a> {
+    pub(crate) marker: MarkerTree,
+    pub(crate) initial_forks: &'a [MarkerTree],
+    pub(crate) include: &'a crate::FxHashbrownSet<ConflictItem>,
+    pub(crate) exclude: &'a crate::FxHashbrownSet<ConflictItem>,
+}
+
 /// The specific kind of resolver environment.
 ///
 /// Note that it is explicitly intended that this type remain unexported from
@@ -243,6 +251,24 @@ impl ResolverEnvironment {
         match self.kind {
             Kind::Specific { .. } => None,
             Kind::Universal { markers, .. } => Some(markers),
+        }
+    }
+
+    /// Borrow the already-materialized universal state without combining conflict markers.
+    pub(crate) fn capture_parts(&self) -> Option<UniversalEnvironmentRef<'_>> {
+        match &self.kind {
+            Kind::Specific { .. } => None,
+            Kind::Universal {
+                initial_forks,
+                markers,
+                include,
+                exclude,
+            } => Some(UniversalEnvironmentRef {
+                marker: *markers,
+                initial_forks,
+                include,
+                exclude,
+            }),
         }
     }
 

@@ -32,6 +32,9 @@ use uv_python::{
     PythonRequest,
 };
 use uv_requirements::{ExtrasResolver, LockedRequirements, read_lock_requirements};
+use uv_resolver::no_solution_capture::{
+    CaptureMetadata, CaptureOperation, CaptureOptions, CaptureScope, CaptureToken,
+};
 use uv_resolver::{
     FlatIndex, InMemoryIndex, Lock, Options, OptionsBuilder, Package, PythonRequirement,
     ResolverEnvironment, ResolverManifest, SatisfiesResult, UniversalMarker,
@@ -104,6 +107,7 @@ pub(crate) async fn lock(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
     preview: Preview,
+    no_solution_capture: Option<CaptureToken>,
 ) -> anyhow::Result<ExitStatus> {
     // If necessary, initialize the PEP 723 script.
     let script = match script {
@@ -202,6 +206,26 @@ pub(crate) async fn lock(
         }
     };
 
+    let no_solution_capture = no_solution_capture.map(|token| {
+        token.for_lock(
+            match target {
+                LockTarget::Workspace(_) => CaptureScope::Workspace,
+                LockTarget::Script(_) => CaptureScope::Script,
+            },
+            match mode {
+                LockMode::Write(_) => CaptureOperation::Write,
+                LockMode::DryRun(_) => CaptureOperation::DryRun,
+                LockMode::Locked(..) => CaptureOperation::Locked,
+                LockMode::Frozen(_) => CaptureOperation::Frozen,
+            },
+            if preview.is_enabled(PreviewFeature::LockWithoutMetadata) {
+                CaptureMetadata::WithoutMetadata
+            } else {
+                CaptureMetadata::Standard
+            },
+        )
+    });
+
     // Initialize any shared state.
     let state = UniversalState::default();
 
@@ -219,6 +243,7 @@ pub(crate) async fn lock(
             printer,
             preview,
         )
+        .with_internal_no_solution_capture(no_solution_capture)
         .with_refresh(&refresh)
         .with_lockfile_contents_check(
             matches!(&refresh, Refresh::All(..))
@@ -301,6 +326,7 @@ pub(crate) struct LockOperation<'env> {
     workspace_cache: &'env WorkspaceCache,
     printer: Printer,
     preview: Preview,
+    no_solution_capture: Option<CaptureOptions>,
 }
 
 impl<'env> LockOperation<'env> {
@@ -331,6 +357,7 @@ impl<'env> LockOperation<'env> {
             workspace_cache,
             printer,
             preview,
+            no_solution_capture: None,
         }
     }
 
@@ -355,6 +382,12 @@ impl<'env> LockOperation<'env> {
     #[must_use]
     fn with_lockfile_contents_check(mut self, enabled: bool) -> Self {
         self.check_lockfile_contents = enabled;
+        self
+    }
+
+    /// Opt only this direct lock operation into the invocation's resolver capture.
+    fn with_internal_no_solution_capture(mut self, capture: Option<CaptureOptions>) -> Self {
+        self.no_solution_capture = capture;
         self
     }
 
@@ -428,6 +461,7 @@ impl<'env> LockOperation<'env> {
                     self.workspace_cache,
                     self.printer,
                     self.preview,
+                    self.no_solution_capture,
                 ))
                 .await?;
 
@@ -482,6 +516,7 @@ impl<'env> LockOperation<'env> {
                     self.workspace_cache,
                     self.printer,
                     self.preview,
+                    self.no_solution_capture,
                 ))
                 .await?;
 
@@ -516,6 +551,7 @@ async fn do_lock(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
     preview: Preview,
+    no_solution_capture: Option<CaptureOptions>,
 ) -> Result<LockResult, ProjectError> {
     let start = std::time::Instant::now();
 
@@ -1101,6 +1137,7 @@ async fn do_lock(
                 options,
                 Box::new(SummaryResolveLogger),
                 printer,
+                no_solution_capture,
             )
             .await?;
 

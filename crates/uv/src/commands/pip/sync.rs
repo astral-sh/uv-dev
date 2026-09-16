@@ -476,6 +476,7 @@ pub(crate) async fn pip_sync(
             options,
             Box::new(DefaultResolveLogger),
             printer,
+            None,
         )
         .await
         {

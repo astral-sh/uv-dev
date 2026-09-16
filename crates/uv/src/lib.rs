@@ -44,6 +44,7 @@ use uv_pypi_types::{ParsedDirectoryUrl, ParsedUrl};
 use uv_python::{ConfigDiscovery, PythonRequest};
 use uv_requirements::{GroupsSpecification, RequirementsSource};
 use uv_requirements_txt::RequirementsTxtRequirement;
+use uv_resolver::no_solution_capture::CaptureToken;
 use uv_scripts::{Pep723Error, Pep723Item, Pep723Script};
 use uv_settings::{Combine, EnvironmentOptions, FilesystemOptions, Options};
 use uv_static::EnvVars;
@@ -54,6 +55,7 @@ use crate::commands::{
     ExitStatus, ParsedRunCommand, ProjectError, RunCommand, ScriptPath, ToolRunCommand, UvError,
 };
 use crate::printer::Printer;
+use crate::resolver_capture::InvocationCapture;
 use crate::settings::{
     CacheSettings, GlobalSettings, PipCheckSettings, PipCompileSettings, PipFreezeSettings,
     PipInstallSettings, PipListSettings, PipShowSettings, PipSyncSettings, PipUninstallSettings,
@@ -66,6 +68,7 @@ pub mod commands;
 mod install_source;
 mod logging;
 pub(crate) mod printer;
+mod resolver_capture;
 pub(crate) mod settings;
 
 /// Construct the shared HTTP client builder from the resolved global settings.
@@ -131,9 +134,17 @@ impl uv_errors::Hinted for ExternallyInstalledError {
     }
 }
 
-#[instrument(skip_all)]
 #[doc(hidden)]
 pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Result<ExitStatus> {
+    Box::pin(run_with_capture(cli, global_initialization, None)).await
+}
+
+#[instrument(name = "run", skip_all)]
+async fn run_with_capture(
+    cli: Cli,
+    global_initialization: GlobalInitialization,
+    no_solution_capture: Option<CaptureToken>,
+) -> Result<ExitStatus> {
     let config_discovery = ConfigDiscovery::from_args(cli.top_level.no_config);
 
     // Configure color before resolving settings so argument errors retain their styling.
@@ -1434,6 +1445,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 cache,
                 &workspace_cache,
                 printer,
+                no_solution_capture,
             ))
             .await
         }
@@ -2221,6 +2233,7 @@ async fn run_project(
     cache: Cache,
     workspace_cache: &WorkspaceCache,
     printer: Printer,
+    no_solution_capture: Option<CaptureToken>,
 ) -> Result<ExitStatus> {
     // Write out any resolved settings.
     macro_rules! show_settings {
@@ -2460,6 +2473,7 @@ async fn run_project(
                 workspace_cache,
                 printer,
                 globals.preview,
+                no_solution_capture,
             ))
             .await
         }
@@ -3024,6 +3038,16 @@ where
     #[cfg(windows)]
     uv_windows::install_unhandled_exception_handler();
 
+    let capture_destination = std::env::var_os(EnvVars::UV_INTERNAL__RESOLVER_CAPTURE);
+    let capture_request = std::env::var_os(EnvVars::UV_INTERNAL__RESOLVER_CAPTURE_REQUEST);
+    // SAFETY: The caller guarantees single-threaded process initialization. Removing both inputs
+    // here prevents nested uv invocations and build hooks from inheriting the capability.
+    unsafe {
+        std::env::remove_var(EnvVars::UV_INTERNAL__RESOLVER_CAPTURE);
+        std::env::remove_var(EnvVars::UV_INTERNAL__RESOLVER_CAPTURE_REQUEST);
+    }
+    let capture = InvocationCapture::new(capture_destination, capture_request, std::process::id());
+
     // Set the `UV` variable to the current executable so it is implicitly propagated to all child
     // processes, e.g., in `uv run`.
     if let Ok(current_exe) = std::env::current_exe() {
@@ -3055,6 +3079,7 @@ where
 
     // See `min_stack_size` doc comment about `main2`
     let min_stack_size = min_stack_size();
+    let capture_token = capture.as_ref().map(InvocationCapture::token);
     let main2 = move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -3062,7 +3087,11 @@ where
             .build()
             .expect("Failed building the Runtime");
         // Box the large main future to avoid stack overflows.
-        let result = runtime.block_on(Box::pin(run(cli, GlobalInitialization::Initialize)));
+        let result = runtime.block_on(Box::pin(run_with_capture(
+            cli,
+            GlobalInitialization::Initialize,
+            capture_token,
+        )));
         // Avoid waiting for pending tasks to complete.
         //
         // The resolver may have kicked off HTTP requests during resolution that
@@ -3095,6 +3124,9 @@ where
                 }
                 Err(err) => UvError::unexpected(err),
             };
+            if let Some(capture) = &capture {
+                capture.publish(&error);
+            }
             match error {
                 UvError::User(err) => {
                     commands::diagnostics::write_error_chain(&err, printer)

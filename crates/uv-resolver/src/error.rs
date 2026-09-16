@@ -25,6 +25,7 @@ use crate::candidate_selector::CandidateSelector;
 use crate::dependency_provider::UvDependencyProvider;
 use crate::fork_indexes::ForkIndexes;
 use crate::fork_urls::ForkUrls;
+use crate::no_solution_capture::NoSolutionEvidence;
 use crate::prerelease::PrereleaseSelection;
 use crate::pubgrub::{
     PubGrubHint, PubGrubPackage, PubGrubPackageInner, PubGrubReportFormatter, Range,
@@ -582,6 +583,8 @@ pub struct NoSolutionError {
     options: Options,
     /// Cached report and hints, computed once on first access.
     cached: OnceLock<(String, IndexSet<PubGrubHint>)>,
+    /// An opt-in snapshot of the original tree, excluded from ordinary error formatting.
+    internal_capture: Option<Box<NoSolutionEvidence>>,
 }
 
 impl NoSolutionError {
@@ -605,6 +608,7 @@ impl NoSolutionError {
         tags: Option<Tags>,
         workspace_members: BTreeSet<PackageName>,
         options: Options,
+        internal_capture: Option<NoSolutionEvidence>,
     ) -> Self {
         Self {
             error: StackSafeErrorTree::new(error),
@@ -626,7 +630,14 @@ impl NoSolutionError {
             workspace_members,
             options,
             cached: OnceLock::new(),
+            internal_capture: internal_capture.map(Box::new),
         }
+    }
+
+    /// Return the invocation-local original-tree capture, when the caller requested one.
+    #[doc(hidden)]
+    pub fn internal_no_solution_capture(&self) -> Option<&NoSolutionEvidence> {
+        self.internal_capture.as_deref()
     }
 
     /// Get the cached report and hints, computing them on first access.
@@ -961,7 +972,7 @@ impl NoSolutionError {
 
 impl std::fmt::Debug for NoSolutionError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        // Include every field except `index` (no Debug) and `cached` (derived).
+        // Include diagnostic state, but not the shared index, derived report, or separate capture.
         let Self {
             error,
             index: _,
@@ -982,6 +993,7 @@ impl std::fmt::Debug for NoSolutionError {
             workspace_members,
             options,
             cached: _,
+            internal_capture: _,
         } = self;
         f.debug_struct("NoSolutionError")
             .field("error", error)
