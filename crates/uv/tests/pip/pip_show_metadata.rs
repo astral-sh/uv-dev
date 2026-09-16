@@ -320,12 +320,13 @@ fn show_legacy_installed_file_paths() -> Result<()> {
 
     let absolute = context.temp_dir.child("absolute-missing");
     let contents = format!(
-        "\nPKG-INFO\r\n../package/__init__.py\r\n../../bin/legacy-script\n../package/link/../missing.py\n../package/file with space.py \n./../package/dot.py\n..\n../..\n{}\n\n",
+        "\nPKG-INFO\r\n../package/__init__.py\r\n../../bin/legacy-script\n../package/link/../missing.py\n../package/file with space.py \n./../package/dot.py\n.\n./\n..\n../..\n{}\n\n",
         absolute.path().display()
     );
     metadata.child("installed-files.txt").write_str(&contents)?;
     let mut filters = context.filters();
-    filters.push((r"(?m)(file with space\.py) $", "$1[TRAILING-SPACE]"));
+    // Record the significant space before the standard snapshot filters trim line endings.
+    filters.insert(0, (r"(?m)(file with space\.py) $", "$1[TRAILING-SPACE]"));
     uv_snapshot!(filters, show(&context, target.path()).arg("legacy-paths").arg("--files"), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -341,6 +342,8 @@ fn show_legacy_installed_file_paths() -> Result<()> {
       package/link/../missing.py
       package/file with space.py[TRAILING-SPACE]
       package/dot.py
+      legacy_paths-1.0.0.egg-info
+      legacy_paths-1.0.0.egg-info
       .
       ..
       [TEMP_DIR]/absolute-missing
@@ -464,7 +467,7 @@ fn show_record_precedes_legacy_installed_files() -> Result<()> {
     uv_snapshot!(context.filters(), show(&context, target.path())
         .arg("broken-record")
         .arg("--files"), @"
-    exit_code: 2 (error)
+    exit_code: 2 (failure)
     ----- stdout -----
     Name: broken-record
     Version: 1.0.0
@@ -472,9 +475,10 @@ fn show_record_precedes_legacy_installed_files() -> Result<()> {
     Requires:
     Required-by:
     Files:
+
     ----- stderr -----
     error: RECORD file is invalid
-      Caused by: CSV deserialize error: record 0 (line: 1, byte: 0): field 2: invalid digit found in string
+      cause: CSV deserialize error: record 0 (line: 1, byte: 0): field 2: invalid digit found in string
     ");
     Ok(())
 }
@@ -522,7 +526,7 @@ fn show_invalid_legacy_installed_files() -> Result<()> {
         .child("unreadable-1.0.0.dist-info/installed-files.txt")
         .create_dir_all()?;
     uv_snapshot!(context.filters(), show(&context, target.path()).arg("invalid").arg("--files"), @"
-    exit_code: 2 (error)
+    exit_code: 2 (failure)
     ----- stdout -----
     Name: invalid
     Version: 1.0.0
@@ -530,6 +534,7 @@ fn show_invalid_legacy_installed_files() -> Result<()> {
     Requires:
     Required-by:
     Files:
+
     ----- stderr -----
     error: failed to read from file `[TEMP_DIR]/target/invalid-1.0.0.dist-info/installed-files.txt`: stream did not contain valid UTF-8
     ");
@@ -539,7 +544,7 @@ fn show_invalid_legacy_installed_files() -> Result<()> {
         "[DIRECTORY_READ_ERROR]",
     ));
     uv_snapshot!(filters, show(&context, target.path()).arg("unreadable").arg("--files"), @"
-    exit_code: 2 (error)
+    exit_code: 2 (failure)
     ----- stdout -----
     Name: unreadable
     Version: 1.0.0
@@ -547,6 +552,7 @@ fn show_invalid_legacy_installed_files() -> Result<()> {
     Requires:
     Required-by:
     Files:
+
     ----- stderr -----
     error: failed to read from file `[TEMP_DIR]/target/unreadable-1.0.0.dist-info/installed-files.txt`: [DIRECTORY_READ_ERROR]
     ");
@@ -565,8 +571,20 @@ fn show_legacy_installed_files_windows_paths() -> Result<()> {
     )?;
     target
         .child("windows-paths-1.0.0.dist-info/installed-files.txt")
-        .write_str("Z:\\not-installed\\absolute.py\nZ:drive-relative.py\n")?;
-    uv_snapshot!(context.filters(), show(&context, target.path()).arg("windows-paths").arg("--files"), @"
+        .write_str(concat!(
+            "Z:\\not-installed\\absolute.py\n",
+            "Z:drive-relative.py\n",
+            r"\rooted\link\..\missing.py",
+            "\n",
+            r"\\server\share\pkg\link\..\missing.py",
+            "\n",
+            r"\\?\C:\pkg\link\..\missing.py",
+            "\n",
+            r"\\?\UNC\server\share\pkg\link\..\missing.py",
+            "\n",
+        ))?;
+    // Assert the native prefixes before the standard separator filter can rewrite them.
+    uv_snapshot!(context.filters_without_standard_filters(), windows_filters=false, show(&context, target.path()).arg("windows-paths").arg("--files"), @r"
     exit_code: 0 (success)
     ----- stdout -----
     Name: windows-paths
@@ -577,6 +595,10 @@ fn show_legacy_installed_files_windows_paths() -> Result<()> {
     Files:
       Z:/not-installed/absolute.py
       Z:drive-relative.py
+      /rooted/link/../missing.py
+      \\server\share/pkg/link/../missing.py
+      \\?\C:/pkg/link/../missing.py
+      \\?\UNC\server\share/pkg/link/../missing.py
     ");
     Ok(())
 }

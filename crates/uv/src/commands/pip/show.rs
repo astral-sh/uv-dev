@@ -334,21 +334,27 @@ pub(crate) fn pip_show(
 /// Express a legacy metadata-relative path relative to the displayed package location.
 /// Only leading parent components cancel the metadata directory; later parents may cross symlinks.
 fn legacy_record_path(metadata_directory: &Path, entry: &str) -> PathBuf {
+    let entry = Path::new(entry);
     let Some(metadata_name) = metadata_directory.file_name() else {
-        return PathBuf::from(entry);
+        return entry.to_path_buf();
     };
-    let mut components = Path::new(entry).components();
-    if components.clone().next() == Some(Component::CurDir) {
-        components.next();
+    let mut components = entry.components();
+    match components.clone().next() {
+        // Extending a verbatim Windows path can normalize its internal `..` components.
+        Some(Component::Prefix(_) | Component::RootDir) => return entry.to_path_buf(),
+        Some(Component::CurDir) => {
+            components.next();
+        }
+        Some(Component::ParentDir | Component::Normal(_)) | None => {}
     }
-    let mut path = if components.clone().next() == Some(Component::ParentDir) {
+    if components.clone().next() == Some(Component::ParentDir) {
         components.next();
-        PathBuf::new()
-    } else {
+        components.as_path().to_path_buf()
+    } else if components.as_path().as_os_str().is_empty() {
         PathBuf::from(metadata_name)
-    };
-    path.extend(components);
-    path
+    } else {
+        Path::new(metadata_name).join(components.as_path())
+    }
 }
 
 /// Write a nonempty metadata field, stripping terminal control sequences from its value.
