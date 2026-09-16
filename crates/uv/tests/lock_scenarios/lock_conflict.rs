@@ -201,6 +201,86 @@ fn project_conflicts_with_explicit_workspace_roots() -> Result<()> {
     Ok(())
 }
 
+/// Explicit workspace roots can cover different Python ranges in one lockfile.
+#[test]
+fn project_conflicts_with_root_python_ranges() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(
+        r#"
+        name = "workspace-root-python-ranges"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.shared-leaf.versions."1.0.0"]
+        sdist = false
+        [packages.shared-leaf.versions."2.0.0"]
+        sdist = false
+        "#,
+    )?;
+    let server = PackseServer::from_scenario(&scenario);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "root-a"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.13"
+        dependencies = ["shared-leaf<2"]
+
+        [tool.uv]
+        package = false
+        conflicts = [[{ package = "root-a" }, { package = "root-b" }]]
+
+        [tool.uv.workspace]
+        members = ["root-b"]
+        roots = ["root-a", "root-b"]
+        "#,
+    )?;
+    context.temp_dir.child("root-b/pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "root-b"
+        version = "0.1.0"
+        requires-python = ">=3.13,<3.15"
+        dependencies = ["shared-leaf>=2"]
+
+        [tool.uv]
+        package = false
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features").arg("package-conflicts")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features").arg("package-conflicts")
+        .arg("--index-url").arg(server.index_url())
+        .arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert_snapshot!(lock["requires-python"].as_str().unwrap_or_default(), @">=3.12, <3.15");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shared-leaf==1.0.0 ; python_full_version < '3.13'
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--package").arg("root-b")
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shared-leaf==2.0.0 ; python_full_version >= '3.13'
+    ");
+    Ok(())
+}
+
 /// Conflict discovery can provisionally visit a package that is later excluded after all
 /// transitive extras have been activated. Its dependencies must be evaluated under the package's
 /// reachability marker during that preliminary traversal.
