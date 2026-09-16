@@ -375,7 +375,7 @@ impl ManagedPythonInstallation {
 
     /// Return the managed installation path and [`PythonInstallationKey`] for an interpreter,
     /// without reading its build revision.
-    pub(crate) fn path_and_key_from_interpreter(
+    fn path_and_key_from_interpreter(
         interpreter: &Interpreter,
     ) -> Option<(PathBuf, PythonInstallationKey)> {
         let managed_root = ManagedPythonInstallations::from_settings(None).ok()?;
