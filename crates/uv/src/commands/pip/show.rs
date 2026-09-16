@@ -8,7 +8,7 @@ use rustc_hash::FxHashMap;
 use tracing::debug;
 
 use uv_cache::Cache;
-use uv_distribution_types::{DependencyMetadata, Diagnostic, Name};
+use uv_distribution_types::{DependencyMetadata, Diagnostic, InstalledDistKind, Name};
 use uv_fs::Simplified;
 use uv_install_wheel::read_record;
 use uv_installer::SitePackages;
@@ -214,21 +214,35 @@ pub(crate) fn pip_show(
 
         // If requests, show the list of installed files.
         if files {
-            let path = distribution.install_path().join("RECORD");
             writeln!(printer.stdout(), "Files:")?;
-            match File::open(path) {
-                Ok(mut record) => {
+            let record = match &distribution.kind {
+                // Distutils stores the metadata in a single file, not a directory that can
+                // contain an installed-file record.
+                InstalledDistKind::EggInfoFile(_) => None,
+                InstalledDistKind::Registry(_)
+                | InstalledDistKind::Url(_)
+                | InstalledDistKind::EggInfoDirectory(_)
+                | InstalledDistKind::LegacyEditable(_) => {
+                    let path = distribution.install_path().join("RECORD");
+                    match File::open(path) {
+                        Ok(record) => Some(record),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+            };
+            match record {
+                Some(mut record) => {
                     for entry in read_record(&mut record)? {
                         writeln!(printer.stdout(), "  {}", entry.path)?;
                     }
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                None => {
                     writeln!(
                         printer.stdout(),
                         "Cannot locate RECORD or installed-files.txt"
                     )?;
                 }
-                Err(error) => return Err(error.into()),
             }
         }
     }
