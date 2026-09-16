@@ -753,8 +753,7 @@ fn show_required_by_index() -> Result<()> {
         .arg("broken-pkg")
         .arg("--target")
         .arg(target.path()), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     Name: broken-pkg
     Version: 1.0
@@ -771,10 +770,21 @@ fn show_required_by_index() -> Result<()> {
     Location: [TEMP_DIR]/target
     Requires: foo-bar
     Required-by:
-
-    ----- stderr -----
     "
     );
+
+    uv_snapshot!(context.filters(), context.pip_show()
+        .arg("Foo_Bar")
+        .arg("--target")
+        .arg(target.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Name: foo-bar
+    Version: 1.0
+    Location: [TEMP_DIR]/target
+    Requires: foo-bar
+    Required-by: alpha-pkg, zeta-pkg
+    ");
 
     Ok(())
 }
