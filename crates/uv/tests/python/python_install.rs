@@ -409,38 +409,6 @@ async fn python_install_build_variant() -> anyhow::Result<()> {
     [TEMP_DIR]/managed/cpython-3.13+custom-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
 
-    fs_err::write(custom_path.join("BUILD"), "custom-build")?;
-    let find_dir = context.home_dir.child("find");
-    find_dir.create_dir_all()?;
-    context
-        .python_find()
-        .current_dir(find_dir.path())
-        .arg("3.13+custom")
-        .env(EnvVars::UV_PYTHON_BUILD, "custom-build")
-        .assert()
-        .success();
-    context
-        .python_find()
-        .current_dir(find_dir.path())
-        .arg("3.13+custom")
-        .env(EnvVars::UV_PYTHON_BUILD, "missing-build")
-        .assert()
-        .failure();
-    context
-        .python_find()
-        .current_dir(find_dir.path())
-        .arg("3.13")
-        .env(EnvVars::UV_PYTHON_BUILD, "missing-build")
-        .assert()
-        .success();
-    context
-        .python_find()
-        .current_dir(find_dir.path())
-        .arg("3.13+custom")
-        .env(EnvVars::UV_PYTHON_CPYTHON_BUILD, "missing-build")
-        .assert()
-        .success();
-
     Ok(())
 }
 
@@ -5408,6 +5376,44 @@ fn track_python_build_compilation(installation: &ChildPath) -> anyhow::Result<()
         if Path(sys.argv[0]).name == "pip_compileall.py":
             (Path(sys.prefix).parent.parent / "compiled-old-build").touch()
     "#})?;
+    Ok(())
+}
+
+#[test]
+fn python_find_build_variant_revision_variables() -> anyhow::Result<()> {
+    let (context, _stock, custom_path) = python_custom_build_variant_context()?;
+    fs_err::write(custom_path.join("BUILD"), "custom-build")?;
+    let find_dir = context.home_dir.child("find");
+    find_dir.create_dir_all()?;
+    context
+        .python_find()
+        .current_dir(find_dir.path())
+        .arg("3.13+custom")
+        .env(EnvVars::UV_PYTHON_BUILD, "custom-build")
+        .assert()
+        .success();
+    context
+        .python_find()
+        .current_dir(find_dir.path())
+        .arg("3.13+custom")
+        .env(EnvVars::UV_PYTHON_BUILD, "missing-build")
+        .assert()
+        .failure();
+    context
+        .python_find()
+        .current_dir(find_dir.path())
+        .arg("3.13")
+        .env(EnvVars::UV_PYTHON_BUILD, "missing-build")
+        .assert()
+        .success();
+    context
+        .python_find()
+        .current_dir(find_dir.path())
+        .arg("3.13+custom")
+        .env(EnvVars::UV_PYTHON_CPYTHON_BUILD, "missing-build")
+        .assert()
+        .success();
+
     Ok(())
 }
 
