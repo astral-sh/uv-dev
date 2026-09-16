@@ -551,6 +551,12 @@ impl Field {
     }
 }
 
+macro_rules! fields {
+    ($($field:expr),* $(,)?) => {
+        const { &[$($field),*] }
+    };
+}
+
 impl ObjectKind {
     const fn fields(self) -> &'static [Field] {
         use ArrayKind as A;
@@ -558,7 +564,7 @@ impl ObjectKind {
         use Kind::{Array, Atom, Bool, Decimal, Enum, LocalAtom, Object, Request, U16, U32, Usize};
         use ObjectKind as O;
         match self {
-            Self::Envelope => &[
+            Self::Envelope => fields![
                 Field::required("schema", U32),
                 Field::required("request", Request),
                 Field::required("producer_pid", U32),
@@ -573,7 +579,7 @@ impl ObjectKind {
                 Field::required("usage", Object(O::Usage)),
                 Field::optional_nullable("graph", Object(O::Graph)),
             ],
-            Self::Limits => &[
+            Self::Limits => fields![
                 Field::required("derivation_nodes", Usize),
                 Field::required("packages", Usize),
                 Field::required("terms", Usize),
@@ -587,7 +593,7 @@ impl ObjectKind {
                 Field::required("work", Usize),
                 Field::required("json_bytes", Usize),
             ],
-            Self::Usage => &[
+            Self::Usage => fields![
                 Field::required("derivation_nodes", Usize),
                 Field::required("packages", Usize),
                 Field::required("terms", Usize),
@@ -600,7 +606,7 @@ impl ObjectKind {
                 Field::required("text_bytes", Usize),
                 Field::required("work", Usize),
             ],
-            Self::Graph => &[
+            Self::Graph => fields![
                 Field::required("root", U32),
                 Field::required("root_package", U32),
                 Field::required("root_version", Object(O::Version)),
@@ -613,40 +619,40 @@ impl ObjectKind {
                 Field::required("effective_python", Object(O::Python)),
                 Field::required("observations", Array(A::Observations)),
             ],
-            Self::NotRoot => &[
+            Self::NotRoot => fields![
                 Field::required("package", U32),
                 Field::required("version", Object(O::Version)),
             ],
-            Self::NoVersions => &[
+            Self::NoVersions => fields![
                 Field::required("package", U32),
                 Field::required("range", Object(O::Range)),
             ],
-            Self::FromDependencyOf => &[
+            Self::FromDependencyOf => fields![
                 Field::required("package", U32),
                 Field::required("range", Object(O::Range)),
                 Field::required("dependency", U32),
                 Field::required("dependency_range", Object(O::Range)),
             ],
-            Self::Custom => &[
+            Self::Custom => fields![
                 Field::required("package", U32),
                 Field::required("range", Object(O::Range)),
                 Field::required("reason", Object(O::Reason)),
             ],
-            Self::Derived => &[
+            Self::Derived => fields![
                 Field::required("cause1", U32),
                 Field::required("cause2", U32),
                 Field::required("terms", Array(A::Terms)),
             ],
-            Self::Term => &[
+            Self::Term => fields![
                 Field::required("package", U32),
                 Field::required("positive", Bool),
                 Field::required("range", Object(O::Range)),
             ],
-            Self::Range => &[
+            Self::Range => fields![
                 Field::required("encoded", Array(A::EncodedIntervals)),
                 Field::optional_nullable("logical", Array(A::EncodedIntervals)),
             ],
-            Self::Version => &[
+            Self::Version => fields![
                 Field::required("epoch", Decimal),
                 Field::required("release", Array(A::Release)),
                 Field::optional_nullable("pre", Object(O::Prerelease)),
@@ -656,105 +662,105 @@ impl ObjectKind {
                 Field::optional_nullable("min", Decimal),
                 Field::optional_nullable("max", Decimal),
             ],
-            Self::Prerelease => &[
+            Self::Prerelease => fields![
                 Field::required("kind", Enum(E::Pre)),
                 Field::required("number", Decimal),
             ],
-            Self::LocalVersion => &[
+            Self::LocalVersion => fields![
                 Field::required("kind", Enum(E::LocalVersion)),
                 Field::optional("segments", Array(A::LocalSegments)),
             ],
-            Self::LocalSegment => &[
+            Self::LocalSegment => fields![
                 Field::required("kind", Enum(E::LocalSegment)),
                 Field::required("value", LocalAtom),
             ],
-            Self::EncodedInterval => &[
+            Self::EncodedInterval => fields![
                 Field::required("lower", Object(O::VersionBound)),
                 Field::required("upper", Object(O::VersionBound)),
             ],
-            Self::VersionBound => &[
+            Self::VersionBound => fields![
                 Field::required("kind", Enum(E::Bound)),
                 Field::optional("version", Object(O::Version)),
             ],
-            Self::RootPackage => &[Field::nullable("name", Atom)],
-            Self::PythonPackage => &[Field::required("kind", Enum(E::PythonKind))],
-            Self::SystemPackage => &[Field::required("name", Atom)],
-            Self::Package => &[
+            Self::RootPackage => fields![Field::nullable("name", Atom)],
+            Self::PythonPackage => fields![Field::required("kind", Enum(E::PythonKind))],
+            Self::SystemPackage => fields![Field::required("name", Atom)],
+            Self::Package => fields![
                 Field::required("name", Atom),
                 Field::nullable("extra", Atom),
                 Field::nullable("group", Atom),
                 Field::required("marker", U32),
             ],
-            Self::ExtraPackage => &[
+            Self::ExtraPackage => fields![
                 Field::required("name", Atom),
                 Field::required("extra", Atom),
                 Field::required("marker", U32),
             ],
-            Self::GroupPackage => &[
+            Self::GroupPackage => fields![
                 Field::required("name", Atom),
                 Field::required("group", Atom),
                 Field::required("marker", U32),
             ],
-            Self::MarkerPackage => &[
+            Self::MarkerPackage => fields![
                 Field::required("name", Atom),
                 Field::required("marker", U32),
             ],
-            Self::VersionMarker => &[
+            Self::VersionMarker => fields![
                 Field::required("key", Enum(E::VersionMarkerKey)),
                 Field::required("edges", Array(A::VersionEdges)),
             ],
-            Self::StringMarker => &[
+            Self::StringMarker => fields![
                 Field::required("key", Enum(E::StringMarkerKey)),
                 Field::required("edges", Array(A::StringEdges)),
             ],
-            Self::VersionEdge => &[
+            Self::VersionEdge => fields![
                 Field::required("intervals", Array(A::EncodedIntervals)),
                 Field::required("child", U32),
             ],
-            Self::StringEdge => &[
+            Self::StringEdge => fields![
                 Field::required("intervals", Array(A::StringIntervals)),
                 Field::required("child", U32),
             ],
-            Self::StringInterval => &[
+            Self::StringInterval => fields![
                 Field::required("lower", Object(O::StringBound)),
                 Field::required("upper", Object(O::StringBound)),
             ],
-            Self::StringBound => &[
+            Self::StringBound => fields![
                 Field::required("kind", Enum(E::Bound)),
                 Field::optional("value", Atom),
             ],
-            Self::Environment => &[
+            Self::Environment => fields![
                 Field::required("marker", U32),
                 Field::required("initial_forks", Array(A::InitialForks)),
                 Field::required("include", Array(A::Conflicts)),
                 Field::required("exclude", Array(A::Conflicts)),
             ],
-            Self::ProjectConflict => &[Field::required("package", Atom)],
-            Self::ExtraConflict => &[
+            Self::ProjectConflict => fields![Field::required("package", Atom)],
+            Self::ExtraConflict => fields![
                 Field::required("package", Atom),
                 Field::required("extra", Atom),
             ],
-            Self::GroupConflict => &[
+            Self::GroupConflict => fields![
                 Field::required("package", Atom),
                 Field::required("group", Atom),
             ],
-            Self::Python => &[
+            Self::Python => fields![
                 Field::required("source", Enum(E::PythonSource)),
                 Field::required("exact", Object(O::Version)),
                 Field::required("installed", Object(O::PythonDomain)),
                 Field::required("target", Object(O::PythonDomain)),
                 Field::required("target_marker", U32),
             ],
-            Self::PythonDomain => &[
+            Self::PythonDomain => fields![
                 Field::required("lower", Object(O::VersionBound)),
                 Field::required("upper", Object(O::VersionBound)),
                 Field::required("specifiers", Array(A::Specifiers)),
             ],
-            Self::Specifier => &[
+            Self::Specifier => fields![
                 Field::required("operator", Enum(E::Operator)),
                 Field::required("version", Object(O::Version)),
             ],
-            Self::Observation => &[
+            Self::Observation => fields![
                 Field::required("name", Atom),
                 Field::required("source", Enum(E::Source)),
                 Field::required("has_url_policy", Bool),
@@ -765,11 +771,11 @@ impl ObjectKind {
                 Field::nullable("unavailable", Object(O::Reason)),
                 Field::required("incomplete", Array(A::Incomplete)),
             ],
-            Self::MetadataFact => &[
+            Self::MetadataFact => fields![
                 Field::required("version", Object(O::Version)),
                 Field::required("reason", Object(O::Reason)),
             ],
-            Self::Reason => &[
+            Self::Reason => fields![
                 Field::required("kind", Enum(E::Reason)),
                 Field::optional_nullable("http_status", U16),
             ],
@@ -1224,7 +1230,8 @@ fn finish_object<E: de::Error>(
                     || usage.availability_entries != observed.availability_entries
                     || usage.max_version_components != observed.max_version_components
                     || usage.max_atom_bytes < observed.max_atom_bytes
-                    || usage.text_bytes != observed.text_bytes
+                    // Producers may reserve the optional zero-sentinel byte for every version.
+                    || usage.text_bytes < observed.text_bytes
                 {
                     return Err(state.reject(ReadErrorKind::InvalidSchema));
                 }

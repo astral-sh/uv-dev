@@ -4,7 +4,6 @@ use std::ops::Bound;
 use std::str::FromStr;
 
 use rustc_hash::FxHashSet;
-use serde::Serialize;
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::{EncodedVersion, MIN_VERSION, Version};
 

@@ -438,17 +438,12 @@ impl Collector {
         if let Some(pre) = version.pre() {
             self.budget.decimal(pre.number)?;
         }
-        for component in [
-            version.post(),
-            version.dev(),
-            Version::min(version),
-            Version::max(version),
-        ]
-        .into_iter()
-        .flatten()
-        {
+        for component in [version.post(), version.dev()].into_iter().flatten() {
             self.budget.decimal(component)?;
         }
+        // The checked codec admits at most one zero-valued min/max sentinel. Reserve its
+        // decimal byte before encoding without exposing the native sentinel accessors.
+        self.budget.decimal(0)?;
         match version.local() {
             LocalVersionSlice::Segments(segments) => {
                 self.budget.components(segments.len())?;
