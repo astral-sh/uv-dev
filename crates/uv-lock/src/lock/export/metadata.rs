@@ -1130,7 +1130,7 @@ impl MetadataWheelWireSource {
                 path: normalize_workspace_relative_path(workspace_root, path),
             }),
             // We guarantee this as a separate field so it's redundant
-            WheelWireSource::Filename { .. } => None,
+            WheelWireSource::Filename => None,
         }
     }
 }

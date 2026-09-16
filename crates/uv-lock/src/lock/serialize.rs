@@ -539,8 +539,8 @@ fn write_wheel_inline(writer: &mut LockWriter, wheel: &Wheel) -> Result<(), Writ
         WheelWireSource::Path { path } => {
             writer.inline_value(&mut first, "path", PortablePath::from(path).to_string())?;
         }
-        WheelWireSource::Filename { filename } => {
-            writer.inline_value(&mut first, "filename", filename.to_string())?;
+        WheelWireSource::Filename => {
+            writer.inline_value(&mut first, "filename", wheel.filename.to_string())?;
         }
     }
     if let Some(hash) = &wheel.hash {
