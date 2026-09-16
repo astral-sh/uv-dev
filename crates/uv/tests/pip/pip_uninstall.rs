@@ -352,6 +352,74 @@ fn uninstall_egg_info() -> Result<()> {
     Ok(())
 }
 
+/// Remove every adjacent module file while keeping namespaces and directory precedence intact.
+#[test]
+fn uninstall_egg_info_adjacent_module_files() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let site_packages = ChildPath::new(context.site_packages());
+    let egg_info = site_packages.child("adjacent_bytecode-0.1.0.egg-info");
+    egg_info.create_dir_all()?;
+    egg_info
+        .child("PKG-INFO")
+        .write_str("Metadata-Version: 2.1\nName: adjacent-bytecode\nVersion: 0.1.0\n")?;
+    egg_info
+        .child("top_level.txt")
+        .write_str("legacy_module\nshared_module\nlegacy_package\n")?;
+    egg_info
+        .child("namespace_packages.txt")
+        .write_str("shared_module\n")?;
+
+    let package = site_packages.child("legacy_package");
+    package
+        .child("__init__.py")
+        .write_str("VALUE = 'package'\n")?;
+    for extension in ["py", "pyc", "pyo"] {
+        site_packages
+            .child(format!("legacy_module.{extension}"))
+            .write_str("owned module")?;
+        site_packages
+            .child(format!("shared_module.{extension}"))
+            .write_str("namespace sentinel")?;
+        site_packages
+            .child(format!("legacy_package.{extension}"))
+            .write_str("adjacent sentinel")?;
+    }
+
+    uv_snapshot!(context.pip_uninstall()
+        .arg("--python")
+        .arg(context.interpreter())
+        .arg("adjacent-bytecode"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+     - adjacent-bytecode==0.1.0
+    ");
+
+    assert!(!egg_info.exists());
+    assert!(!package.exists());
+    for extension in ["py", "pyc", "pyo"] {
+        assert!(
+            !site_packages
+                .child(format!("legacy_module.{extension}"))
+                .exists()
+        );
+        assert_eq!(
+            fs_err::read_to_string(site_packages.child(format!("shared_module.{extension}")))?,
+            "namespace sentinel"
+        );
+        assert_eq!(
+            fs_err::read_to_string(site_packages.child(format!("legacy_package.{extension}")))?,
+            "adjacent sentinel"
+        );
+    }
+
+    context
+        .assert_command("import sys; assert sys.prefix != sys.base_prefix")
+        .success();
+
+    Ok(())
+}
+
 /// Refuse to uninstall a versionless `.egg-info` file without the metadata required to do so safely.
 #[test]
 fn uninstall_versionless_egg_info_file() -> Result<()> {
