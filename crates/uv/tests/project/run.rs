@@ -153,6 +153,75 @@ fn run_with_python_version() -> Result<()> {
 }
 
 #[test]
+#[cfg(windows)]
+fn run_with_python_directory_reuses_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let requested = context.temp_dir.child("requested");
+
+    context
+        .venv()
+        .arg("--offline")
+        .arg("--python")
+        .arg(&context.python_versions[0].1)
+        .arg(requested.path())
+        .assert()
+        .success();
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [tool.uv]
+        package = false
+        "#
+        })?;
+
+    context
+        .run()
+        .env_remove(EnvVars::VIRTUAL_ENV)
+        .arg("--offline")
+        .arg("--python")
+        .arg(requested.path())
+        .arg("python")
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(contains("Python 3.12."));
+
+    let marker = context.venv.child("directory-request-marker");
+    marker.write_str("preserved")?;
+    let requested_executable = requested.child("Scripts").child("python.exe");
+
+    // Windows creates distinct launchers for environments with the same base interpreter.
+    for request in [requested_executable.path(), requested.path()] {
+        context
+            .run()
+            .env_remove(EnvVars::VIRTUAL_ENV)
+            .arg("--offline")
+            .arg("--python")
+            .arg(request)
+            .arg("python")
+            .arg("--version")
+            .assert()
+            .success()
+            .stdout(contains("Python 3.12."));
+        assert!(
+            marker.path().is_file(),
+            "environment was recreated for {}",
+            request.display()
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
 #[cfg(unix)]
 fn run_with_python_executable_name() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
@@ -2132,6 +2201,78 @@ fn run_with_copied_virtualenv_uses_matching_base_interpreter() {
     ----- stderr -----
     Resolved 1 package in [TIME]
     ");
+}
+
+#[test]
+#[cfg(unix)]
+fn run_with_copied_virtualenv_reuses_creator_directory() -> Result<()> {
+    const QUERY: &str =
+        "import json,sys; print(json.dumps([sys.implementation.name,list(sys.version_info[:3])]))";
+
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
+    create_copied_virtualenv_with_mismatched_base(&context);
+    let newer_python = &context.python_versions[0].1;
+    let creator_directory = newer_python
+        .parent()
+        .and_then(Path::parent)
+        .expect("the managed interpreter has a bin directory");
+    let creator_executable = creator_directory.join("bin").join("python");
+    assert!(creator_executable.is_file());
+    assert_eq!(
+        uv_fs::is_same_file_allow_missing(&creator_executable, newer_python),
+        Some(true)
+    );
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "foo"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = []
+
+            [tool.uv]
+            package = false
+        "#})?;
+
+    let expected = Command::new(newer_python)
+        .args(["-I", "-c", QUERY])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let expected: serde_json::Value = serde_json::from_slice(&expected)?;
+    let marker = context.venv.child("creator-directory-marker");
+    marker.write_str("preserved")?;
+
+    // The creator can be requested by its executable or by its installation directory.
+    for request in [newer_python.as_path(), creator_directory] {
+        let actual = context
+            .run()
+            .env_remove(EnvVars::VIRTUAL_ENV)
+            .arg("--offline")
+            .arg("--python")
+            .arg(request)
+            .args(["python", "-I", "-c", QUERY])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&actual)?,
+            expected
+        );
+        assert!(
+            marker.path().is_file(),
+            "environment was recreated for {}",
+            request.display()
+        );
+    }
+    Ok(())
 }
 
 #[test]
