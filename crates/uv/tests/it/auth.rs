@@ -826,7 +826,7 @@ fn login_native_auth_url() {
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: invalid value 'http://example.com' for '<SERVICE>': HTTPS is required for non-local hosts
+    error: invalid value '****' for '<SERVICE>': HTTPS is required for non-local hosts
 
     For more information, try '--help'.
     ");
@@ -879,7 +879,7 @@ fn login_native_auth_url() {
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: invalid value 'not a valid url' for '<SERVICE>': invalid international domain name
+    error: invalid value '****' for '<SERVICE>': invalid international domain name
 
     For more information, try '--help'.
     ");
@@ -1004,7 +1004,7 @@ async fn login_text_store() {
         .arg("testpass"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: invalid value 'http://example.com/simple' for '<SERVICE>': HTTPS is required for non-local hosts
+    error: invalid value '****' for '<SERVICE>': HTTPS is required for non-local hosts
 
     For more information, try '--help'.
     ");
@@ -1018,7 +1018,7 @@ async fn login_text_store() {
         .arg("testpass"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: invalid value 'ftp://example.com/simple' for '<SERVICE>': Unsupported scheme: ftp
+    error: invalid value '****' for '<SERVICE>': Unsupported scheme: ftp
 
     For more information, try '--help'.
     ");

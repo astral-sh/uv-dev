@@ -74,6 +74,112 @@ fn index_argument_errors_keep_the_parse_cause() {
 }
 
 #[test]
+fn service_argument_errors_do_not_repeat_credentials() {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let value = "https://user/name:password@example.invalid/simple?sig=secret@value#fragment";
+
+    insta::allow_duplicates! {
+        for (arguments, argument) in [
+            (
+                &["publish", "--dry-run", "--publish-url"][..],
+                "--publish-url <PUBLISH_URL>",
+            ),
+            (
+                &["publish", "--dry-run", "--check-url"][..],
+                "--check-url <CHECK_URL>",
+            ),
+            (&["auth", "login"][..], "<SERVICE>"),
+            (&["auth", "logout"][..], "<SERVICE>"),
+            (&["auth", "token"][..], "<SERVICE>"),
+            (
+                &["audit", "--service-url"][..],
+                "--service-url <SERVICE_URL>",
+            ),
+        ] {
+            let mut filters = context.filters();
+            filters.push((argument, "--service-url <SERVICE_URL>"));
+
+            uv_snapshot!(filters, context.command()
+                .args(["--no-config", "--offline", "--no-python-downloads"])
+                .args(arguments)
+                .arg(value), @"
+            exit_code: 2 (failure)
+            ----- stderr -----
+            error: invalid value '****' for '--service-url <SERVICE_URL>': ambiguous user/pass authority in URL (not percent-encoded?): https:***@example.invalid/simple
+
+            For more information, try '--help'.
+            ");
+        }
+    }
+}
+
+#[test]
+fn publish_url_environment_errors_do_not_repeat_credentials() {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let value = "https://user/name:password@example.invalid/simple?sig=secret@value#fragment";
+
+    insta::allow_duplicates! {
+        for (argument, variable) in [
+            ("--publish-url <PUBLISH_URL>", EnvVars::UV_PUBLISH_URL),
+            ("--check-url <CHECK_URL>", EnvVars::UV_PUBLISH_CHECK_URL),
+        ] {
+            let mut filters = context.filters();
+            filters.push((argument, "--publish-url <PUBLISH_URL>"));
+
+            uv_snapshot!(filters, context.command()
+                .args(["--no-config", "--offline", "--no-python-downloads", "publish", "--dry-run"])
+                .env(variable, value), @"
+            exit_code: 2 (failure)
+            ----- stderr -----
+            error: invalid value '****' for '--publish-url <PUBLISH_URL>': ambiguous user/pass authority in URL (not percent-encoded?): https:***@example.invalid/simple
+
+            For more information, try '--help'.
+            ");
+        }
+    }
+}
+
+#[test]
+fn service_argument_errors_keep_the_parse_cause() {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let value = "https://user:password@example.invalid:bad/simple?sig=signature#fragment";
+
+    insta::allow_duplicates! {
+        for (arguments, argument) in [
+            (
+                &["publish", "--dry-run", "--publish-url"][..],
+                "--publish-url <PUBLISH_URL>",
+            ),
+            (
+                &["publish", "--dry-run", "--check-url"][..],
+                "--check-url <CHECK_URL>",
+            ),
+            (&["auth", "login"][..], "<SERVICE>"),
+            (&["auth", "logout"][..], "<SERVICE>"),
+            (&["auth", "token"][..], "<SERVICE>"),
+            (
+                &["audit", "--service-url"][..],
+                "--service-url <SERVICE_URL>",
+            ),
+        ] {
+            let mut filters = context.filters();
+            filters.push((argument, "--service-url <SERVICE_URL>"));
+
+            uv_snapshot!(filters, context.command()
+                .args(["--no-config", "--offline", "--no-python-downloads"])
+                .args(arguments)
+                .arg(value), @"
+            exit_code: 2 (failure)
+            ----- stderr -----
+            error: invalid value '****' for '--service-url <SERVICE_URL>': invalid port number
+
+            For more information, try '--help'.
+            ");
+        }
+    }
+}
+
+#[test]
 fn cert_is_limited_to_pip() {
     let context = uv_test::test_context_with_versions!(&[]);
 

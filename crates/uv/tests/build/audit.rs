@@ -21,7 +21,7 @@ fn audit_invalid_service_url() {
         .arg("not-a-url"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: invalid value 'not-a-url' for '--service-url <SERVICE_URL>': relative URL without a base
+    error: invalid value '****' for '--service-url <SERVICE_URL>': relative URL without a base
 
     For more information, try '--help'.
     ");

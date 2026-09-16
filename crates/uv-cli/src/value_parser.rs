@@ -73,14 +73,18 @@ mod tests {
     use std::error::Error;
     use std::ffi::{OsStr, OsString};
 
+    use anyhow::{Context, Result};
+    use clap::CommandFactory;
     use clap::builder::{PossibleValue, TypedValueParser};
     use clap::error::{ContextKind, ContextValue, ErrorKind};
     use clap::parser::ValueSource;
-    use uv_distribution_types::{Index, Origin};
+    use uv_auth::Service;
+    use uv_distribution_types::{Index, IndexUrl, Origin};
+    use uv_redacted::DisplaySafeUrl;
 
     use super::RedactedValueParser;
     use crate::{
-        IndexArg, Maybe, parse_default_index, parse_extra_index_url, parse_find_links,
+        Cli, IndexArg, Maybe, parse_default_index, parse_extra_index_url, parse_find_links,
         parse_index_url, parse_indices,
     };
 
@@ -332,5 +336,189 @@ mod tests {
         assert_eq!(index.origin, Some(Origin::Cli));
         assert!(index.default);
         assert_eq!(index.raw_url().as_str(), URL);
+    }
+
+    fn assert_value_unchanged<P>(parser: P, value: &str) -> Result<P::Value>
+    where
+        P: TypedValueParser,
+        P::Value: std::fmt::Debug + PartialEq,
+    {
+        let command = clap::Command::new("test");
+        let value = OsStr::new(value);
+        let expected = parser.parse_ref(&command, None, value)?;
+        let actual = RedactedValueParser(parser).parse_ref(&command, None, value)?;
+        assert_eq!(actual, expected);
+        Ok(actual)
+    }
+
+    fn assert_argument_value<T>(
+        arguments: &[&str],
+        subcommands: &[&str],
+        argument: &str,
+        expected: &T,
+    ) -> Result<()>
+    where
+        T: Clone + Send + Sync + std::fmt::Debug + PartialEq + 'static,
+    {
+        let matches = Cli::command().try_get_matches_from(arguments)?;
+        let mut current = &matches;
+        for subcommand in subcommands {
+            current = current
+                .subcommand_matches(subcommand)
+                .with_context(|| format!("missing {subcommand} subcommand"))?;
+        }
+        assert_eq!(current.try_get_one::<T>(argument)?, Some(expected));
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_service_url_values() -> Result<()> {
+        const URL: &str = "https://user:password@example.invalid/simple?sig=secret@value#fragment";
+
+        for value in [
+            URL,
+            "http://localhost:8000/api",
+            "ftp://example.invalid/packages",
+            "file:///local-index",
+        ] {
+            let expected = assert_value_unchanged(str::parse::<DisplaySafeUrl>, value)?;
+            assert_argument_value(
+                &["uv", "publish", "--publish-url", value],
+                &["publish"],
+                "publish_url",
+                &expected,
+            )?;
+            assert_argument_value(
+                &["uv", "audit", "--service-url", value],
+                &["audit"],
+                "service_url",
+                &expected,
+            )?;
+        }
+
+        for value in [URL, "https://pypi.org/simple", "./local-index"] {
+            let expected = assert_value_unchanged(str::parse::<IndexUrl>, value)?;
+            assert_argument_value(
+                &["uv", "publish", "--check-url", value],
+                &["publish"],
+                "check_url",
+                &expected,
+            )?;
+        }
+
+        for value in [
+            URL,
+            "example.invalid",
+            "http://localhost:8000/simple",
+            "http://127.0.0.1:8000/simple",
+        ] {
+            let expected = assert_value_unchanged(str::parse::<Service>, value)?;
+            for command in ["login", "logout", "token"] {
+                assert_argument_value(
+                    &["uv", "auth", command, value],
+                    &["auth", command],
+                    "service",
+                    &expected,
+                )?;
+            }
+        }
+
+        assert_eq!(
+            assert_value_unchanged(str::parse::<DisplaySafeUrl>, URL)?.as_str(),
+            URL
+        );
+        assert_eq!(
+            assert_value_unchanged(str::parse::<IndexUrl>, URL)?
+                .url()
+                .as_str(),
+            URL
+        );
+        assert_eq!(
+            assert_value_unchanged(str::parse::<Service>, URL)?
+                .url()
+                .as_str(),
+            URL
+        );
+        Ok(())
+    }
+
+    fn assert_validation_unchanged<P>(parser: P, value: &str) -> Result<()>
+    where
+        P: TypedValueParser,
+    {
+        let command = clap::Command::new("test");
+        let value = OsStr::new(value);
+        let original = parser
+            .parse_ref(&command, None, value)
+            .err()
+            .context("the original parser accepted the invalid value")?;
+        let redacted = RedactedValueParser(parser)
+            .parse_ref(&command, None, value)
+            .err()
+            .context("the redacted parser accepted the invalid value")?;
+        assert_eq!(redacted.kind(), original.kind());
+        assert_eq!(
+            redacted.get(ContextKind::InvalidValue),
+            Some(&ContextValue::String("****".to_owned()))
+        );
+        assert_eq!(
+            redacted.source().map(ToString::to_string),
+            original.source().map(ToString::to_string)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_service_url_validation() -> Result<()> {
+        for value in [
+            "https://user/name:password@example.invalid/simple?sig=secret@value#fragment",
+            "https://user:password@example.invalid:bad/simple?sig=signature#fragment",
+        ] {
+            assert_validation_unchanged(str::parse::<DisplaySafeUrl>, value)?;
+            assert_validation_unchanged(str::parse::<IndexUrl>, value)?;
+            assert_validation_unchanged(str::parse::<Service>, value)?;
+        }
+        for value in [
+            "http://example.invalid/simple",
+            "ftp://example.invalid/simple",
+            "not a valid url",
+        ] {
+            assert_validation_unchanged(str::parse::<Service>, value)?;
+        }
+        assert_validation_unchanged(str::parse::<DisplaySafeUrl>, "not-a-url")?;
+        Ok(())
+    }
+
+    #[test]
+    fn service_arguments_use_redacted_values() -> Result<()> {
+        for value in [
+            "https://user/name:password@example.invalid/simple?sig=secret@value#fragment",
+            "https://user:password@example.invalid:bad/simple?sig=signature#fragment",
+        ] {
+            for arguments in [
+                &["publish", "--dry-run", "--publish-url"][..],
+                &["publish", "--dry-run", "--check-url"][..],
+                &["auth", "login"][..],
+                &["auth", "logout"][..],
+                &["auth", "token"][..],
+                &["audit", "--service-url"][..],
+            ] {
+                let error = Cli::command()
+                    .try_get_matches_from(
+                        ["uv", "--no-config", "--offline", "--no-python-downloads"]
+                            .into_iter()
+                            .chain(arguments.iter().copied())
+                            .chain([value]),
+                    )
+                    .err()
+                    .context("the CLI accepted the invalid service URL")?;
+                assert_eq!(error.kind(), ErrorKind::ValueValidation);
+                assert_eq!(
+                    error.get(ContextKind::InvalidValue),
+                    Some(&ContextValue::String("****".to_owned()))
+                );
+            }
+        }
+        Ok(())
     }
 }
