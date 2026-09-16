@@ -715,6 +715,29 @@ fn show_files_without_record() -> Result<()> {
 }
 
 #[test]
+fn show_files_with_egg_info_file() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    ChildPath::new(context.site_packages())
+        .child("legacy_file-1.0.0.egg-info")
+        .write_str("Metadata-Version: 1.1\nName: legacy-file\nVersion: 1.0.0\n")?;
+
+    uv_snapshot!(context.filters(), context.pip_show().arg("legacy-file").arg("--files"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Name: legacy-file
+    Version: 1.0.0
+    Location: [SITE_PACKAGES]/
+    Requires:
+    Required-by:
+    Files:
+    Cannot locate RECORD or installed-files.txt
+    ");
+
+    Ok(())
+}
+
+#[test]
 #[cfg(feature = "test-pypi")]
 fn show_target() -> Result<()> {
     let context = uv_test::test_context!("3.12");
