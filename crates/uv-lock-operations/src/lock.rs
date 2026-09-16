@@ -329,6 +329,7 @@ async fn do_lock(
 
     // Collect the requirements, etc.
     let members = target.members();
+    let root_markers = target.resolution_root_markers();
     let packages = target.packages();
     let required_members = target.required_members();
     let workspace_default_groups = match target {
@@ -780,6 +781,7 @@ async fn do_lock(
             target.install_path(),
             packages,
             &members,
+            root_markers.as_ref(),
             required_members,
             &requirements,
             &dependency_groups,
