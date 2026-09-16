@@ -1490,7 +1490,7 @@ fn find_python_installations_with_strategy<'a>(
                     download_list,
                 )
                 .filter_ok(move |installation| {
-                    request.satisfied_by_interpreter(&installation.interpreter)
+                    request.satisfied_by_discovered_installation(installation)
                 })
                 .map_ok(Ok)
             })
@@ -2459,7 +2459,16 @@ impl PythonRequest {
         let Some(request) = PythonDownloadRequest::from_request(self) else {
             return Ok(true);
         };
-        let Some(key) = ManagedPythonInstallation::key_from_interpreter(interpreter) else {
+        let managed_key = ManagedPythonInstallation::key_from_interpreter(interpreter);
+        if let Some(version) = request.version() {
+            let key = managed_key
+                .as_ref()
+                .map_or_else(|| Cow::Owned(interpreter.key()), Cow::Borrowed);
+            if !version.matches_installation_key(&key) {
+                return Ok(false);
+            }
+        }
+        let Some(key) = managed_key else {
             return Ok(true);
         };
         let download_list = ManagedPythonDownloadList::cached_or_new(
@@ -2471,7 +2480,10 @@ impl PythonRequest {
         Ok(download_list.allows_installed_build(&request, &key))
     }
 
-    /// Check if a given interpreter satisfies the interpreter request.
+    /// Check the interpreter's reported properties or executable path against this request.
+    ///
+    /// Managed installation identity and catalog selection are checked by
+    /// [`Self::satisfied_with_catalog`].
     fn satisfied(&self, interpreter: &Interpreter, cache: &Cache) -> bool {
         /// Returns `true` if the two paths refer to the same interpreter executable.
         fn is_same_executable(path1: &Path, path2: &Path) -> bool {
@@ -2480,9 +2492,7 @@ impl PythonRequest {
 
         match self {
             Self::Default | Self::Any => true,
-            Self::Version(version_request) => {
-                version_request.matches_interpreter_with_key(interpreter)
-            }
+            Self::Version(version_request) => version_request.matches_interpreter(interpreter),
             Self::Directory(directory) => {
                 // `sys.prefix` points to the environment root or `sys.executable` is the same
                 is_same_executable(directory, interpreter.sys_prefix())
@@ -2556,7 +2566,7 @@ impl PythonRequest {
                 .implementation_name()
                 .eq_ignore_ascii_case(implementation.long_name()),
             Self::ImplementationVersion(implementation, version) => {
-                version.matches_interpreter_with_key(interpreter)
+                version.matches_interpreter(interpreter)
                     && interpreter
                         .implementation_name()
                         .eq_ignore_ascii_case(implementation.long_name())
@@ -3426,20 +3436,15 @@ impl VersionRequest {
             && request.matches_interpreter(&installation.interpreter)
     }
 
-    /// Check if an interpreter and its managed installation identity match the request.
-    pub(crate) fn matches_interpreter_with_key(&self, interpreter: &Interpreter) -> bool {
-        let key = ManagedPythonInstallation::key_from_interpreter(interpreter)
-            .unwrap_or_else(|| interpreter.key());
-        self.matches_installation_key(&key) && self.matches_interpreter(interpreter)
-    }
-
     fn matches_build_variant(&self, key: &PythonInstallationKey) -> bool {
         self.variants()
             .is_none_or(|variants| variants.matches_build_variant(key))
     }
 
-    /// Check if a interpreter matches the request.
-    fn matches_interpreter(&self, interpreter: &Interpreter) -> bool {
+    /// Check the interpreter's reported version and runtime variant.
+    ///
+    /// Use [`Self::matches_installation_key`] to validate the installation identity as well.
+    pub(crate) fn matches_interpreter(&self, interpreter: &Interpreter) -> bool {
         match self {
             Self::Any => true,
             // Do not use free-threaded interpreters by default

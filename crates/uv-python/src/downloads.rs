@@ -46,7 +46,7 @@ use crate::PythonBuildVariant;
 use crate::implementation::{
     Error as ImplementationError, ImplementationName, LenientImplementationName,
 };
-use crate::installation::PythonInstallationKey;
+use crate::installation::{PythonInstallation, PythonInstallationKey};
 use crate::managed::ManagedPythonInstallation;
 use crate::python_version::{BuildVersionError, python_build_version_from_env};
 use crate::{Interpreter, PythonRequest, PythonVersion, VariantRequest, VersionRequest};
@@ -651,10 +651,26 @@ impl PythonDownloadRequest {
             || self.os.is_some_and(|os| os.is_emscripten())
     }
 
+    /// Check both the installation identity and the interpreter's reported properties.
+    pub(crate) fn satisfied_by_discovered_installation(
+        &self,
+        installation: &PythonInstallation,
+    ) -> bool {
+        if let Some(version) = self.version()
+            && !version.matches_installation_key(installation.key())
+        {
+            return false;
+        }
+        self.satisfied_by_interpreter(installation.interpreter())
+    }
+
+    /// Check the interpreter's reported properties, without resolving its managed identity.
+    ///
+    /// Use [`Self::satisfied_by_discovered_installation`] when the installation key is available.
     pub(crate) fn satisfied_by_interpreter(&self, interpreter: &Interpreter) -> bool {
         let executable = interpreter.sys_executable().display();
         if let Some(version) = self.version()
-            && !version.matches_interpreter_with_key(interpreter)
+            && !version.matches_interpreter(interpreter)
         {
             let interpreter_version = interpreter.python_version();
             debug!(
