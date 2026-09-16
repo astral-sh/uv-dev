@@ -424,23 +424,26 @@ fn show_record_precedes_legacy_installed_files() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let target = context.temp_dir.child("target");
     for name in ["recorded", "empty-record", "broken-record"] {
+        let directory_name = name.replace('-', "_");
         write_dist_info(
             &target,
-            name,
+            &directory_name,
             format!("Metadata-Version: 2.1\nName: {name}\nVersion: 1.0.0\n"),
         )?;
         target
-            .child(format!("{name}-1.0.0.dist-info/installed-files.txt"))
+            .child(format!(
+                "{directory_name}-1.0.0.dist-info/installed-files.txt"
+            ))
             .write_str("../legacy-only.py\n")?;
     }
     target
         .child("recorded-1.0.0.dist-info/RECORD")
         .write_str("recorded.py,,\n")?;
     target
-        .child("empty-record-1.0.0.dist-info/RECORD")
+        .child("empty_record-1.0.0.dist-info/RECORD")
         .write_str("")?;
     target
-        .child("broken-record-1.0.0.dist-info/RECORD")
+        .child("broken_record-1.0.0.dist-info/RECORD")
         .write_str("recorded.py,,not-a-size\n")?;
 
     uv_snapshot!(context.filters(), show(&context, target.path())
@@ -566,11 +569,11 @@ fn show_legacy_installed_files_windows_paths() -> Result<()> {
     let target = context.temp_dir.child("target");
     write_dist_info(
         &target,
-        "windows-paths",
+        "windows_paths",
         "Metadata-Version: 2.1\nName: windows-paths\nVersion: 1.0.0\n",
     )?;
     target
-        .child("windows-paths-1.0.0.dist-info/installed-files.txt")
+        .child("windows_paths-1.0.0.dist-info/installed-files.txt")
         .write_str(concat!(
             "Z:\\not-installed\\absolute.py\n",
             "Z:drive-relative.py\n",
