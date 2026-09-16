@@ -17,7 +17,8 @@ output confirms that standalone ty targets Python 3.12, the lower bound of `requ
 the uv-integrated invocation targets the Python 3.14 project environment. A maintainer confirmed
 that preferring the existing environment is intentional current behavior, while also noting that
 the project has been debating whether the safety of checking the full declared Python range should
-take precedence.
+take precedence. The reporter clarified that the practical impact is a `ty-pre-commit` failure:
+the hook runs `uv check`, while a direct `ty check` on the same project passes.
 
 ## Reproduction
 
@@ -83,6 +84,14 @@ Changing only the Python-version preference would not make `uv check` a drop-in 
 workspace members where `ty check` selects the current project, and `uv check` excludes PEP 723
 scripts unless explicitly requested while ty includes them without preparing their environments.
 
+## Reported workflow impact
+
+The reporter is comfortable with the commands having different semantics if the distinction is
+clear. Their unexpected failure came from `ty-pre-commit`: the hook invokes `uv check`, so it checks
+the concrete project environment and can fail even when a developer's direct `ty check` passes
+against the project's minimum declared Python version. They ask whether the hook should invoke ty
+directly instead. No maintainer decision on the hook behavior is present in the discussion yet.
+
 ## Draft response
 
 `requires-python` is not ignored when uv selects the project interpreter: `>=3.12` permits the
@@ -95,13 +104,13 @@ To check against Python 3.12 with `uv check`, use `uv check --python 3.12`.
 
 ## Classification
 
-This remains classified as a question because the report primarily asks why the commands differ,
-and a maintainer has confirmed that the existing-environment preference is intentional current
-behavior. `requires-python` is a compatibility range, and Python 3.14 satisfies `>=3.12`. The
-current uv source sets `TY_UV=1` for `uv check`, and workspace metadata exposes the selected
-environment's concrete interpreter. Observed verbose output confirms that ty uses that Python 3.14
-version under uv integration, while standalone ty uses the lower bound of
-`project.requires-python`.
+This remains classified as a question because a maintainer has confirmed that the
+existing-environment preference is intentional current behavior, and the reporter's follow-up asks
+which intentional command semantics `ty-pre-commit` should expose. `requires-python` is a
+compatibility range, and Python 3.14 satisfies `>=3.12`. The current uv source sets `TY_UV=1` for
+`uv check`, and workspace metadata exposes the selected environment's concrete interpreter.
+Observed verbose output confirms that ty uses that Python 3.14 version under uv integration, while
+standalone ty uses the lower bound of `project.requires-python`.
 
 The repository discussion treats the alternative as an unresolved product tradeoff, not a
 confirmed correctness defect: concrete-environment fidelity helps with Python-gated dependencies,
