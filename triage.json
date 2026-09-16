@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 6349,
+        "title": "Request for `uv.lock` to support different index urls across different developer machines and CI environments",
+        "url": "https://github.com/astral-sh/uv/issues/6349",
+        "state": "open",
+        "reason": "Canonical open discussion for installing one lockfile through different index or proxy URLs."
+      },
+      {
+        "kind": "issue",
+        "number": 19625,
+        "title": "`uv sync --frozen` ignores all index/mirror configuration and uses hardcoded URLs from `uv.lock`",
+        "url": "https://github.com/astral-sh/uv/issues/19625",
+        "state": "closed",
+        "reason": "Reports the same frozen-sync behavior, including `UV_DEFAULT_INDEX`; a maintainer confirmed frozen mode intentionally uses URLs recorded in `uv.lock`."
+      },
+      {
+        "kind": "pull_request",
+        "number": 20790,
+        "title": "Support proxy indexes through reversible artifact URLs",
+        "url": "https://github.com/astral-sh/uv/pull/20790",
+        "state": "open",
+        "reason": "Implements proxy routing for existing lockfile URLs and explicitly covers frozen installs; it is not yet merged."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal terms including `UV_DEFAULT_INDEX`, `UV_INDEX_STRATEGY`, `unsafe-any-match`, and `--frozen`; conceptual terms covering mirrors, proxies, lockfile URLs, and index portability; and version/fix-oriented queries. Followed the canonical chain astral-sh/uv#19625 to astral-sh/uv#6349 to astral-sh/uv#20790. Ruled out astral-sh/uv#16996 because it concerns warnings for ignored resolution options, astral-sh/uv#17068 because it concerns required-environment resolution, and astral-sh/uv#20612 because it concerns universal platform resolution."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#6349 already tracks the same request to install a lockfile through a different index or proxy. The exact frozen-sync behavior was confirmed as intentional in astral-sh/uv#19625: frozen mode performs no resolution and uses concrete artifact URLs from `uv.lock`, so `UV_INDEX_STRATEGY` is not consulted and `UV_DEFAULT_INDEX` does not replace locked URLs. No released fix was found, so this is not a regression.",
+  "summary": "The exact behavior is intentional today, while portable proxy routing for locked and frozen installs is already tracked in astral-sh/uv#6349 and implemented by the open astral-sh/uv#20790.",
+  "draft_response": "Thanks for the report. With `--frozen`, uv installs from `uv.lock` without performing resolution, and the lockfile contains the selected registry and artifact URLs. Therefore `UV_INDEX_STRATEGY` is not consulted, and changing `UV_DEFAULT_INDEX` does not replace URLs already recorded in the lockfile. This is the same behavior confirmed in astral-sh/uv#19625. The request to install one lockfile through a different index or proxy is tracked in astral-sh/uv#6349, with an open implementation in astral-sh/uv#20790. I would close this as a duplicate of astral-sh/uv#6349. Until that work is available, generate the lockfile with the index used for the frozen install or allow the sync to update the lockfile when changing indexes."
+}
