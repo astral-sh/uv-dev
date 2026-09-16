@@ -18,7 +18,7 @@ use uv_distribution_types::{
 };
 use uv_lock::Lock;
 use uv_normalize::{GroupName, PackageName};
-use uv_pep508::RequirementOrigin;
+use uv_pep508::{MarkerTree, RequirementOrigin};
 use uv_pypi_types::{Conflicts, SupportedEnvironments, VerbatimParsedUrl};
 use uv_scripts::Pep723Script;
 use uv_workspace::dependency_groups::{
@@ -183,6 +183,19 @@ impl<'lock> LockTarget<'lock> {
         match self {
             Self::Workspace(workspace) => Either::Left(workspace.members_requirements()),
             Self::Script(_) => Either::Right(std::iter::empty()),
+        }
+    }
+
+    /// Return the Python markers attached to explicitly configured resolution roots.
+    pub(crate) fn resolution_root_markers(self) -> Option<BTreeMap<PackageName, MarkerTree>> {
+        match self {
+            Self::Workspace(workspace) => workspace.resolution_roots().map(|_| {
+                workspace
+                    .members_requirements()
+                    .map(|requirement| (requirement.name, requirement.marker))
+                    .collect()
+            }),
+            Self::Script(_) => None,
         }
     }
 
