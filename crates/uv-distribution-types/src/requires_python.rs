@@ -83,6 +83,20 @@ impl RequiresPython {
         Some(Self { specifiers, range })
     }
 
+    /// Returns a [`RequiresPython`] covering the union of the given version specifiers.
+    pub fn union<'a>(specifiers: impl Iterator<Item = &'a VersionSpecifiers>) -> Option<Self> {
+        let range = specifiers
+            .map(|specifiers| release_specifiers_to_ranges(specifiers.clone()))
+            .reduce(|union, range| union.union(&range))?;
+        if range.is_empty() {
+            return None;
+        }
+        Some(Self {
+            specifiers: VersionSpecifiers::from_release_only_bounds(range.iter()),
+            range: RequiresPythonRange::from_range(&range),
+        })
+    }
+
     /// Split the [`RequiresPython`] at the given version.
     ///
     /// For example, if the current requirement is `>=3.10`, and the split point is `3.11`, then
@@ -629,6 +643,22 @@ mod tests {
     use uv_pep440::{LowerBound, UpperBound, Version, VersionSpecifiers};
 
     use crate::RequiresPython;
+
+    #[test]
+    fn requires_python_union() -> Result<(), Box<dyn std::error::Error>> {
+        for (left, right, expected) in [
+            (">=3.12,<3.13", ">=3.12,<3.15", ">=3.12,<3.15"),
+            (">=3.12,<3.13", ">=3.13,<3.15", ">=3.12,<3.15"),
+            (">=3.12,<3.13", ">=3.14,<3.15", ">=3.12,<3.15,!=3.13.*"),
+        ] {
+            let ranges = [left.parse()?, right.parse()?];
+            assert_eq!(
+                RequiresPython::union(ranges.iter()),
+                Some(RequiresPython::from_specifiers(expected.parse()?)),
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn requires_python_included() {

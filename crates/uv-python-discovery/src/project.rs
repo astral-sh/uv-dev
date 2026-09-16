@@ -282,6 +282,35 @@ fn find_workspace_python_requirement(
             }
         }
     }
+    if let Some(roots) = workspace.resolution_roots() {
+        let mut ranges = Vec::new();
+        for root in roots {
+            let root_requires = requires_python
+                .iter()
+                .filter(|((package, _), _)| package == root)
+                .map(|(source, specifiers)| (source.clone(), specifiers.clone()))
+                .collect::<RequiresPythonSources>();
+            if root_requires.is_empty() {
+                continue;
+            }
+            let Some(requires_python) = RequiresPython::intersection(
+                root_requires.iter().map(|(.., specifiers)| specifiers),
+            ) else {
+                return Err(ProjectError::DisjointRequiresPython(root_requires));
+            };
+            ranges.push(requires_python);
+        }
+        return Ok(RequiresPython::union(
+            ranges.iter().map(RequiresPython::specifiers),
+        )
+        .map(|intersection| ProjectPythonRequirement {
+            requires_python: intersection,
+            source: PythonRequirementSource::Workspace {
+                sources: requires_python,
+                multiple_members: workspace.packages().len() > 1,
+            },
+        }));
+    }
     match RequiresPython::intersection(requires_python.iter().map(|(.., specifiers)| specifiers)) {
         Some(intersection) => Ok(Some(ProjectPythonRequirement {
             requires_python: intersection,
