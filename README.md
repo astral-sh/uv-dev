@@ -14,9 +14,10 @@ standalone ty report the diagnostic, and selecting Python 3.12 with `uv check --
 
 The reported behavior is reproducible with the reported uv and ty versions on Linux. Verbose ty
 output confirms that standalone ty targets Python 3.12, the lower bound of `requires-python`, while
-the uv-integrated invocation targets the Python 3.14 project environment. This establishes the
-mechanism behind the different diagnostic results, but reproduction alone does not determine
-whether that precedence is the desired user-facing behavior.
+the uv-integrated invocation targets the Python 3.14 project environment. A maintainer confirmed
+that preferring the existing environment is intentional current behavior, while also noting that
+the project has been debating whether the safety of checking the full declared Python range should
+take precedence.
 
 ## Reproduction
 
@@ -64,6 +65,24 @@ does assert that metadata for an existing project environment includes its concr
 version, while `crates/uv/tests/project/check.rs` exercises `uv check` broadly. The latter does not
 compare its target Python version with standalone ty.
 
+## Maintainer assessment
+
+The current preference is intentional and follows the environment-oriented behavior of other uv
+commands: `uv check` uses the existing compatible project environment and passes its Python version
+to ty. This is useful when dependency selection changes with Python markers, since checking against
+the concrete environment keeps type analysis aligned with the packages actually selected there.
+
+The competing goal is minimum-version compatibility. Standalone ty derives its target from the
+lower bound of `project.requires-python`, which can catch use of Python or typing features that are
+unavailable on versions the project claims to support. The maintainer comment identifies this as a
+potentially more important safety property, so the precedence remains a design tradeoff rather than
+an accidental implementation difference.
+
+Changing only the Python-version preference would not make `uv check` a drop-in replacement for
+`ty check`. The commands also intentionally differ in scope: `uv check` can select multiple
+workspace members where `ty check` selects the current project, and `uv check` excludes PEP 723
+scripts unless explicitly requested while ty includes them without preparing their environments.
+
 ## Draft response
 
 `requires-python` is not ignored when uv selects the project interpreter: `>=3.12` permits the
@@ -76,17 +95,20 @@ To check against Python 3.12 with `uv check`, use `uv check --python 3.12`.
 
 ## Classification
 
-This remains classified as a question because the report primarily asks why the commands differ.
-`requires-python` is a compatibility range, and Python 3.14 satisfies `>=3.12`. The current uv
-source sets `TY_UV=1` for `uv check`, and workspace metadata exposes the selected environment's
-concrete interpreter. Observed verbose output confirms that ty uses that Python 3.14 version under
-uv integration, while standalone ty uses the lower bound of `project.requires-python`.
+This remains classified as a question because the report primarily asks why the commands differ,
+and a maintainer has confirmed that the existing-environment preference is intentional current
+behavior. `requires-python` is a compatibility range, and Python 3.14 satisfies `>=3.12`. The
+current uv source sets `TY_UV=1` for `uv check`, and workspace metadata exposes the selected
+environment's concrete interpreter. Observed verbose output confirms that ty uses that Python 3.14
+version under uv integration, while standalone ty uses the lower bound of
+`project.requires-python`.
 
-The reproduction confirms the command discrepancy but does not by itself establish that the
-precedence is incorrect. This is also not a duplicate of astral-sh/uv#19790: that issue concerns an
-invalid local-environment error when `/usr/local` is configured as a system project environment,
-whereas astral-sh/uv#21720 uses a valid `.venv` and successfully checks against its concrete Python
-version.
+The repository discussion treats the alternative as an unresolved product tradeoff, not a
+confirmed correctness defect: concrete-environment fidelity helps with Python-gated dependencies,
+while lower-bound checking provides broader compatibility protection. This is also not a duplicate
+of astral-sh/uv#19790: that issue concerns an invalid local-environment error when `/usr/local` is
+configured as a system project environment, whereas astral-sh/uv#21720 uses a valid `.venv` and
+successfully checks against its concrete Python version.
 
 ## Related
 
@@ -115,8 +137,9 @@ command forms, `.venv`, `--python`, `--ty-version`, Python 3.14, and `requires-p
 searches covered target Python/version, interpreter and virtual-environment discovery,
 `VIRTUAL_ENV`, `TY_UV`, workspace metadata, and the ty/uv project integration. Open and closed
 issues and open, closed, and merged pull requests were included. No exact prior tracker or later fix
-was found. The implementation deliberately enables uv metadata discovery for `uv check`; the
-reproduction does not determine whether the resulting target-version precedence is itself desired.
+was found. The implementation deliberately enables uv metadata discovery for `uv check`; a
+maintainer confirmed the resulting precedence is intentional current behavior while noting that
+the preferred long-term safety tradeoff remains under discussion.
 
 The implementation and discussion chains for astral-sh/uv#19605, astral-sh/uv#19655,
 astral-sh/uv#19763, astral-sh/uv#20501, and astral-sh/uv#20643 were inspected. In addition to
