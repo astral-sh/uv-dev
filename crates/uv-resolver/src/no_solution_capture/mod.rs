@@ -27,6 +27,13 @@ pub struct NoSolutionEvidence(wire::EvidenceWire);
 
 impl NoSolutionEvidence {
     /// Read a complete envelope under the fixed version-1 resource limits.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "capture reconstruction is restricted to internal validation"
+        )
+    )]
     pub(crate) fn from_json(bytes: &[u8], token: &CaptureToken) -> Result<Self, CaptureReadError> {
         reader::read(bytes, token, budget::CaptureLimits::V1)
     }
@@ -40,6 +47,13 @@ impl NoSolutionEvidence {
         self.0.request == token.request() && self.0.producer_pid == token.producer_pid()
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "capture status is inspected by internal validation"
+        )
+    )]
     pub(crate) const fn status(&self) -> CaptureStatus {
         self.0.status
     }
