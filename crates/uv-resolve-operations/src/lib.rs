@@ -64,7 +64,10 @@ pub async fn read_requirements(
         let has_editable = requirements
             .iter()
             .any(|source| matches!(source, RequirementsSource::Editable(_)));
-        return Err(Error::ExtrasWithoutSource { has_editable });
+        return Err(Error::ExtrasWithoutSource {
+            has_editable,
+            extra: extras.history().single_extra().cloned(),
+        });
     }
 
     // Read all requirements from the provided sources.
