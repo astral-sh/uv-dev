@@ -22,6 +22,8 @@ mod pip_list;
 
 mod pip_show;
 
+mod pip_show_metadata;
+
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod pip_sync;
 
