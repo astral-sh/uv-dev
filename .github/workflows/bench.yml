@@ -320,6 +320,187 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  benchmarks-walltime-aggregation:
+    name: "walltime aggregate retention"
+    needs:
+      - benchmarks-walltime-build
+      - benchmarks-walltime-run
+    if: ${{ github.repository == 'astral-sh/uv-dev' && github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' && needs.benchmarks-walltime-run.result == 'success' }}
+    runs-on: codspeed-macro
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      BENCHMARK_SOURCE_SHA: ${{ github.sha }}
+      BENCHMARK_ARTIFACT_ID: ${{ needs.benchmarks-walltime-build.outputs.artifact-id }}
+      BENCHMARK_ARTIFACT_DIGEST: ${{ needs.benchmarks-walltime-build.outputs.artifact-digest }}
+      BENCHMARK_ARCHIVE_SHA256: ${{ needs.benchmarks-walltime-build.outputs.archive-sha256 }}
+    steps:
+      - name: "Start aggregation evidence"
+        id: liveness
+        run: |
+          walltime_started_at=$(date +%s)
+          walltime_deadline=$((walltime_started_at + 7 * 60))
+          mkdir "$RUNNER_TEMP/uv-walltime-aggregation"
+          python3 - "$RUNNER_TEMP/uv-walltime-aggregation/job.json" "$walltime_started_at" "$walltime_deadline" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          record = {
+              "version": 1,
+              "source_commit": os.environ["BENCHMARK_SOURCE_SHA"],
+              "github": {
+                  name: os.environ[name]
+                  for name in ("GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_JOB")
+              },
+              "started_at_epoch": int(sys.argv[2]),
+              "deadline_epoch": int(sys.argv[3]),
+          }
+          Path(sys.argv[1]).write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+          PY
+          echo "deadline=$walltime_deadline" >> "$GITHUB_OUTPUT"
+
+      - name: "Checkout Branch"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: "Record aggregation source"
+        run: |
+          walltime_source=$(git rev-parse HEAD)
+          printf '%s\n' "$walltime_source" > "$RUNNER_TEMP/uv-walltime-aggregation/checkout-commit.txt"
+          test "$walltime_source" = "$BENCHMARK_SOURCE_SHA"
+
+      - name: "Install codspeed"
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
+        with:
+          tool: cargo-codspeed@5.0.1
+
+      - name: "Download benchmark artifacts"
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.benchmarks-walltime-build.outputs.artifact-id }}
+          merge-multiple: true
+          digest-mismatch: error
+
+      - name: "Verify downloaded walltime archive"
+        run: |
+          [[ "$BENCHMARK_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          walltime_archive_sha=$(sha256sum benchmarks-walltime.tar | cut -d ' ' -f 1)
+          test "$walltime_archive_sha" = "$BENCHMARK_ARCHIVE_SHA256"
+          python3 - "$RUNNER_TEMP/uv-walltime-aggregation/artifact.json" "$walltime_archive_sha" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          record = {
+              "artifact_id": int(os.environ["BENCHMARK_ARTIFACT_ID"]),
+              "artifact_digest": os.environ["BENCHMARK_ARTIFACT_DIGEST"],
+              "archive_name": "benchmarks-walltime.tar",
+              "archive_sha256": sys.argv[2],
+          }
+          Path(sys.argv[1]).write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: "Extract artifact archive"
+        run: |
+          tar -xvf benchmarks-walltime.tar
+          cp .cache/bench-walltime-shards.json "$RUNNER_TEMP/uv-walltime-aggregation/plan.json"
+
+      - name: "Upload aggregation inputs"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: walltime-aggregation-inputs-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/uv-walltime-aggregation
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: "Create venv"
+        run: ./target/debug/uv venv --cache-dir .cache
+
+      - name: "Check aggregation helpers"
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: python3 -I -B scripts/tests/test_walltime_aggregation.py
+
+      - name: "Compute remaining aggregation budget"
+        id: budget
+        env:
+          BENCHMARK_DEADLINE: ${{ steps.liveness.outputs.deadline }}
+        run: |
+          python3 - "$RUNNER_TEMP/uv-walltime-aggregation/budget.json" <<'PY'
+          import json
+          import math
+          import os
+          import sys
+          import time
+          from pathlib import Path
+
+          observed_at = time.time()
+          remaining = int(os.environ["BENCHMARK_DEADLINE"]) - observed_at
+          minutes = math.ceil((remaining + 60) / 60) if remaining > 0 else None
+          record = {
+              "observed_at_epoch": observed_at,
+              "remaining_seconds": remaining,
+              "step_timeout_minutes": minutes,
+          }
+          Path(sys.argv[1]).write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+          if minutes is None:
+              raise SystemExit(124)
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              print(f"minutes={minutes}", file=output)
+          PY
+
+      - name: "Check sequential walltime aggregation"
+        id: aggregation
+        timeout-minutes: ${{ fromJSON(steps.budget.outputs.minutes || '1') }}
+        uses: CodSpeedHQ/action@4296e51e7041e24dadb86d1d6e8b9320d223dbe8 # v5.0.3
+        env:
+          # The pinned runner maps this to `--skip-upload` before starting the command.
+          CODSPEED_SKIP_UPLOAD: "true"
+          BENCHMARK_DEADLINE: ${{ steps.liveness.outputs.deadline }}
+        with:
+          run: >-
+            python3 scripts/benchmark/check-walltime-aggregation.py
+            --output "$RUNNER_TEMP/uv-walltime-aggregation/run"
+            --deadline "$BENCHMARK_DEADLINE"
+          mode: walltime
+          runner-version: "5.0.2"
+
+      - name: "Record aggregation step outcome"
+        if: ${{ always() && steps.liveness.outcome == 'success' }}
+        env:
+          BENCHMARK_BUDGET_OUTCOME: ${{ steps.budget.outcome }}
+          BENCHMARK_STEP_OUTCOME: ${{ steps.aggregation.outcome }}
+        run: |
+          python3 - "$RUNNER_TEMP/uv-walltime-aggregation/outcome.json" <<'PY'
+          import json
+          import os
+          import sys
+          import time
+          from pathlib import Path
+
+          record = {
+              "budget_step": os.environ["BENCHMARK_BUDGET_OUTCOME"],
+              "aggregation_step": os.environ["BENCHMARK_STEP_OUTCOME"],
+              "recorded_at_epoch": time.time(),
+          }
+          Path(sys.argv[1]).write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: "Upload aggregation evidence"
+        if: ${{ always() && steps.liveness.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: walltime-aggregation-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/uv-walltime-aggregation
+          if-no-files-found: error
+          retention-days: 30
+
   benchmarks-simulated:
     name: "simulated"
     runs-on: depot-ubuntu-24.04-4

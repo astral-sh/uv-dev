@@ -31,6 +31,14 @@ interrupt cleanup or replace the first signal. An external hard kill can leave t
 marked as running, which is partial evidence rather than a completed result. The recorded elapsed
 times describe process liveness, not benchmark performance.
 
+`check-walltime-aggregation.py` checks the result-publication contract of `cargo-codspeed 5.0.1`
+inside CodSpeed runner `5.0.2`. It executes one short, exact-filtered benchmark from each of the
+prebuilt `uv` and `workspace_discovery` suites, verifies that the second invocation retains the
+first aggregate, and saves both original JSON records. A manual `CI` run on a non-main `uv-dev`
+branch performs this check after the ordinary walltime matrix, reusing its source-bound artifact.
+The evidence also keeps a separate final observation when a later command changes an aggregate. The
+check disables CodSpeed uploads; its short samples are not suitable for performance comparisons.
+
 ## Getting Started
 
 From the `scripts/benchmark` directory:
