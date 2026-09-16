@@ -38,9 +38,12 @@ use uv_torch::TorchMode;
 use uv_warnings::warn_user_once;
 use uv_workspace::pyproject_mut::AddBoundsKind;
 
+use crate::value_parser::RedactedValueParser;
+
 pub mod comma;
 pub mod compat;
 pub mod options;
+mod value_parser;
 pub mod version;
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -6822,7 +6825,7 @@ pub struct IndexArgs {
         long,
         env = EnvVars::UV_INDEX,
         hide_env_values = true,
-        value_parser = parse_indices,
+        value_parser = RedactedValueParser(parse_indices),
         help_heading = "Index options"
     )]
     pub index: Option<Vec<Vec<Maybe<IndexArg>>>>,
@@ -6841,7 +6844,7 @@ pub struct IndexArgs {
         long,
         env = EnvVars::UV_DEFAULT_INDEX,
         hide_env_values = true,
-        value_parser = parse_default_index,
+        value_parser = RedactedValueParser(parse_default_index),
         help_heading = "Index options"
     )]
     pub default_index: Option<Maybe<IndexArg>>,
@@ -6859,7 +6862,7 @@ pub struct IndexArgs {
         short,
         env = EnvVars::UV_INDEX_URL,
         hide_env_values = true,
-        value_parser = parse_index_url,
+        value_parser = RedactedValueParser(parse_index_url),
         help_heading = "Index options"
     )]
     pub index_url: Option<Maybe<PipIndex>>,
@@ -6878,7 +6881,7 @@ pub struct IndexArgs {
         env = EnvVars::UV_EXTRA_INDEX_URL,
         hide_env_values = true,
         value_delimiter = ' ',
-        value_parser = parse_extra_index_url,
+        value_parser = RedactedValueParser(parse_extra_index_url),
         help_heading = "Index options"
     )]
     pub extra_index_url: Option<Vec<Maybe<PipExtraIndex>>>,
@@ -6897,7 +6900,7 @@ pub struct IndexArgs {
         env = EnvVars::UV_FIND_LINKS,
         hide_env_values = true,
         value_delimiter = ',',
-        value_parser = parse_find_links,
+        value_parser = RedactedValueParser(parse_find_links),
         help_heading = "Index options"
     )]
     pub find_links: Option<Vec<Maybe<PipFindLinks>>>,
