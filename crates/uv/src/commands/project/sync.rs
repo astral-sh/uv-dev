@@ -197,7 +197,7 @@ pub(crate) async fn sync(
         SyncTarget::Manifest(SyncManifest::Project(project)) => {
             groups.with_defaults(match locked_default_groups {
                 Some(defaults) => defaults,
-                None => project.default_groups()?,
+                None => project.default_groups_for_packages(&package)?,
             })
         }
         SyncTarget::Manifest(SyncManifest::Script(..)) => {
