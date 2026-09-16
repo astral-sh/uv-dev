@@ -148,6 +148,8 @@ enum ReferenceType {
 struct Reference {
     #[serde(rename = "type")]
     reference_type: ReferenceType,
+    // OSV references are server-provided links, not manually entered credentials.
+    #[serde(deserialize_with = "DisplaySafeUrl::deserialize_from_url")]
     url: DisplaySafeUrl,
 }
 
@@ -528,7 +530,20 @@ mod tests {
     use crate::service::osv::{Filter, RangeType};
     use crate::types::{Dependency, Finding};
 
-    use super::{Event, OSV_QUERY_BATCH_SIZE, Osv};
+    use super::{Event, OSV_QUERY_BATCH_SIZE, Osv, Reference};
+
+    #[test]
+    fn deserialize_reference_url() -> Result<(), serde_json::Error> {
+        let reference: Reference = serde_json::from_value(json!({
+            "type": "WEB",
+            "url": "https://example.com/package:version@revision"
+        }))?;
+        assert_eq!(
+            reference.url.as_str(),
+            "https://example.com/package:version@revision"
+        );
+        Ok(())
+    }
 
     /// Create a [`CachedClient`] suitable for tests (no retries, no cache).
     fn test_client() -> CachedClient {
