@@ -1546,23 +1546,40 @@ pub(crate) fn find_python_installation(
     find_python_installation_with_catalog(request, environments, preference, cache, None)
 }
 
-/// Search with the cached catalog before refreshing metadata when no installation matches.
+/// A discovery outcome and the catalog used to select managed installations, if needed.
+pub(crate) struct PythonDiscovery {
+    pub(crate) result: Result<PythonInstallation, crate::Error>,
+    pub(crate) download_list: Option<ManagedPythonDownloadList>,
+}
+
+/// Apply catalog selection to the result of discovery without a catalog.
 ///
-/// Return the catalog with the result so downloads and fallback requests use the same metadata.
+/// Search with cached metadata before refreshing on a miss. Return the catalog with the result so
+/// downloads and fallback requests use the same metadata.
 pub(crate) async fn find_python_installation_with_cached_catalog(
+    result: Result<PythonInstallation, crate::Error>,
     request: &PythonRequest,
     environments: EnvironmentPreference,
     preference: PythonPreference,
     client_builder: &BaseClientBuilder<'_>,
     cache: &Cache,
     python_downloads_json_url: Option<&str>,
-) -> Result<
-    (
-        Result<PythonInstallation, crate::Error>,
-        ManagedPythonDownloadList,
-    ),
-    crate::Error,
-> {
+) -> Result<PythonDiscovery, crate::Error> {
+    match result {
+        Ok(installation)
+            if !installation.is_managed()
+                || PythonDownloadRequest::from_request(request).is_none() =>
+        {
+            return Ok(PythonDiscovery {
+                result: Ok(installation),
+                download_list: None,
+            });
+        }
+        Ok(_) | Err(crate::Error::MissingPython(..)) => {}
+        Err(crate::Error::Discovery(error)) if !error.is_critical() => {}
+        Err(error) => return Err(error),
+    }
+
     let find =
         |download_list: &ManagedPythonDownloadList| -> Result<PythonInstallation, crate::Error> {
             Ok(find_python_installation_with_catalog(
@@ -1578,7 +1595,12 @@ pub(crate) async fn find_python_installation_with_cached_catalog(
             .await?
     {
         match find(&download_list) {
-            Ok(installation) => return Ok((Ok(installation), download_list)),
+            Ok(installation) => {
+                return Ok(PythonDiscovery {
+                    result: Ok(installation),
+                    download_list: Some(download_list),
+                });
+            }
             Err(crate::Error::MissingPython(..)) => {}
             Err(crate::Error::Discovery(error)) if !error.is_critical() => {}
             Err(error) => return Err(error),
@@ -1588,7 +1610,10 @@ pub(crate) async fn find_python_installation_with_cached_catalog(
         ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url).await?
     };
     let result = find(&download_list);
-    Ok((result, download_list))
+    Ok(PythonDiscovery {
+        result,
+        download_list: Some(download_list),
+    })
 }
 
 pub(crate) fn find_python_installation_with_catalog(
@@ -1782,18 +1807,9 @@ pub(crate) async fn find_best_python_installation(
     // Catalog selection only applies to managed installations. System-only searches can proceed
     // directly through the fallback requests without loading download metadata.
     let (mut first_result, download_list) = if preference.allows_managed() {
-        match find_python_installation(request, environments, preference, cache) {
-            Ok(Ok(installation))
-                if !installation.is_managed()
-                    || PythonDownloadRequest::from_request(request).is_none() =>
-            {
-                warn_on_unsupported_python(installation.interpreter());
-                return Ok(installation);
-            }
-            Err(error) if error.is_critical() => return Err(error.into()),
-            Ok(_) | Err(_) => {}
-        }
-        let (result, download_list) = find_python_installation_with_cached_catalog(
+        let result = PythonInstallation::find_existing(request, environments, preference, cache);
+        let discovery = find_python_installation_with_cached_catalog(
+            result,
             request,
             environments,
             preference,
@@ -1802,7 +1818,7 @@ pub(crate) async fn find_best_python_installation(
             python_downloads_json_url,
         )
         .await?;
-        (Some(result), Some(download_list))
+        (Some(discovery.result), discovery.download_list)
     } else {
         (None, None)
     };
@@ -2446,14 +2462,12 @@ impl PythonRequest {
         let Some(key) = ManagedPythonInstallation::key_from_interpreter(interpreter) else {
             return Ok(true);
         };
-        let download_list = if let Some(download_list) =
-            ManagedPythonDownloadList::from_cache(client_builder, cache, python_downloads_json_url)
-                .await?
-        {
-            download_list
-        } else {
-            ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url).await?
-        };
+        let download_list = ManagedPythonDownloadList::cached_or_new(
+            client_builder,
+            cache,
+            python_downloads_json_url,
+        )
+        .await?;
         Ok(download_list.allows_installed_build(&request, &key))
     }
 

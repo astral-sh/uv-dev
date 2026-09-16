@@ -1155,6 +1155,21 @@ impl ManagedPythonDownloadList {
         Self::load(client_builder, cache, python_downloads_json_url, None).await
     }
 
+    /// Use the cached catalog for an installed interpreter, loading it if no snapshot is available.
+    pub(crate) async fn cached_or_new(
+        client_builder: &BaseClientBuilder<'_>,
+        cache: &Cache,
+        python_downloads_json_url: Option<&str>,
+    ) -> Result<Self, Error> {
+        if let Some(download_list) =
+            Self::from_cache(client_builder, cache, python_downloads_json_url).await?
+        {
+            Ok(download_list)
+        } else {
+            Self::new(client_builder, cache, python_downloads_json_url).await
+        }
+    }
+
     /// Load a cached remote catalog without contacting the server.
     ///
     /// HTTP expiration does not invalidate a catalog used to select an installed interpreter.
