@@ -525,6 +525,7 @@ impl ToolLock {
             &root,
             &BTreeMap::new(),
             &[],
+            None,
             &BTreeMap::new(),
             requirements,
             &BTreeMap::new(),
