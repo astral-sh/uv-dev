@@ -149,7 +149,7 @@ pub(crate) async fn sync(
 
     // Determine the groups and extras to include.
     let default_groups = match &target {
-        SyncTarget::Project(project) => project.default_groups()?,
+        SyncTarget::Project(project) => project.default_groups_for_packages(&package)?,
         SyncTarget::Script(..) => DefaultGroups::default(),
     };
     let default_extras = match &target {
