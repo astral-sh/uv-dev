@@ -18,7 +18,7 @@ mod tests;
 
 /// An internal capture was not a supported, bounded envelope for this invocation.
 #[derive(Debug)]
-pub struct CaptureReadError(ReadErrorKind);
+pub(crate) struct CaptureReadError(ReadErrorKind);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ReadErrorKind {

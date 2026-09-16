@@ -1,6 +1,9 @@
+use std::error::Error;
+
 use pubgrub::{Derived, Map};
 use reqwest::StatusCode;
-use uv_pep440::{LocalVersion, Prerelease, PrereleaseKind};
+use serde_json::json;
+use uv_pep440::VersionSpecifiers;
 use uv_pep508::{MarkerExpression, MarkerOperator, MarkerValueString};
 use uv_pypi_types::ResolverMarkerEnvironment;
 
@@ -11,7 +14,7 @@ use crate::no_solution_capture::test_support::{
 };
 
 #[test]
-fn original_graph_round_trips_through_the_checked_reader() -> anyhow::Result<()> {
+fn original_graph_round_trips_through_the_checked_reader() -> Result<(), Box<dyn Error>> {
     let mut fixture = Fixture::new();
     fixture.effective_python = fixture
         .original_python
@@ -139,10 +142,11 @@ fn deep_derivation_capture_stops_at_its_node_budget() {
 
 #[test]
 fn encoded_membership_and_logical_ranges_stay_distinct() {
-    let native = Range::from_range_bounds((
-        Bound::Included(version("1.0")),
-        Bound::Excluded(version("1.0").with_local(LocalVersion::Max)),
-    ));
+    let native = Range::from(
+        "==1.0"
+            .parse::<VersionSpecifiers>()
+            .expect("valid specifier"),
+    );
     let mut collector = Collector::new(CaptureLimits::V1);
     let captured = collector.range(&native).expect("supported sentinel range");
     assert_eq!(captured.encoded.to_ranges(), *native.encoded_versions());
@@ -165,18 +169,20 @@ fn encoded_membership_and_logical_ranges_stay_distinct() {
 
 #[test]
 fn native_component_preflight_handles_full_width_fields() {
-    let native = Version::new([u64::MAX, 0])
-        .with_epoch(u64::MAX)
-        .with_pre(Some(Prerelease {
-            kind: PrereleaseKind::Rc,
-            number: u64::MAX,
-        }))
-        .with_post(Some(u64::MAX))
-        .with_dev(Some(u64::MAX))
-        .with_local(LocalVersion::Segments(vec![
-            LocalSegment::Number(u64::MAX),
-            LocalSegment::String("18446744073709551616".to_owned()),
-        ]));
+    let maximum = u64::MAX.to_string();
+    let native = serde_json::from_value::<EncodedVersion>(json!({
+        "epoch": maximum,
+        "release": [maximum, "0"],
+        "pre": {"kind": "rc", "number": maximum},
+        "post": maximum,
+        "dev": maximum,
+        "local": {"kind": "segments", "segments": [
+            {"kind": "number", "value": maximum},
+            {"kind": "string", "value": "18446744073709551616"}
+        ]}
+    }))
+    .expect("supported full-width component encoding")
+    .into_version();
     let mut collector = Collector::new(CaptureLimits::V1);
     let encoded = collector
         .version(&native)
@@ -237,7 +243,7 @@ fn complemented_marker_edges_keep_their_signed_identity() {
 }
 
 #[test]
-fn json_escaping_is_bounded_before_publication() -> anyhow::Result<()> {
+fn json_escaping_is_bounded_before_publication() -> Result<(), Box<dyn Error>> {
     let mut fixture = Fixture::new();
     fixture.environment =
         ResolverEnvironment::universal(vec![MarkerTree::expression(MarkerExpression::String {
@@ -301,7 +307,8 @@ fn unsupported_marker_kinds_do_not_emit_partial_graphs() {
 }
 
 #[test]
-fn observations_distinguish_unobserved_listing_and_metadata_failure() -> anyhow::Result<()> {
+fn observations_distinguish_unobserved_listing_and_metadata_failure() -> Result<(), Box<dyn Error>>
+{
     let mut fixture = Fixture::new();
     let tree = basic_tree();
     let name = package_name("a");
@@ -365,7 +372,7 @@ fn observations_distinguish_unobserved_listing_and_metadata_failure() -> anyhow:
 }
 
 #[test]
-fn each_capture_budget_discards_the_partial_graph() -> anyhow::Result<()> {
+fn each_capture_budget_discards_the_partial_graph() -> Result<(), Box<dyn Error>> {
     let fixture = Fixture::new();
     let tree = basic_tree();
     let complete = options().capture(fixture.context(&tree));

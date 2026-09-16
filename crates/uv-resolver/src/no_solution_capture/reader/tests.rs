@@ -206,7 +206,7 @@ fn malformed_and_noncanonical_ranges_are_not_normalized_into_claims() {
 }
 
 #[test]
-fn status_headers_cannot_carry_a_partial_graph() -> anyhow::Result<()> {
+fn status_headers_cannot_carry_a_partial_graph() -> Result<(), Box<dyn Error>> {
     for (status, reason) in [
         ("truncated", "derivation_nodes"),
         ("unsupported", "unsupported_version"),
@@ -227,7 +227,7 @@ fn status_headers_cannot_carry_a_partial_graph() -> anyhow::Result<()> {
 }
 
 #[test]
-fn bounded_writer_does_not_extend_the_buffer_after_limit_failure() -> anyhow::Result<()> {
+fn bounded_writer_does_not_extend_the_buffer_after_limit_failure() -> Result<(), Box<dyn Error>> {
     let mut buffer = BoundedBuffer::new(3);
     buffer.write_all(b"ab")?;
     assert!(buffer.write_all(b"cd").is_err());
@@ -235,3 +235,4 @@ fn bounded_writer_does_not_extend_the_buffer_after_limit_failure() -> anyhow::Re
     assert_eq!(buffer.bytes, b"ab");
     Ok(())
 }
+use std::error::Error;

@@ -14,10 +14,10 @@ mod test_support;
 
 use std::fmt;
 
-pub use reader::{CaptureReadError, CaptureWriteError};
-pub use wire::{
-    CaptureMetadata, CaptureOperation, CaptureOptions, CaptureScope, CaptureStatus, CaptureToken,
-};
+pub(crate) use reader::CaptureReadError;
+pub use reader::CaptureWriteError;
+pub(crate) use wire::CaptureStatus;
+pub use wire::{CaptureMetadata, CaptureOperation, CaptureOptions, CaptureScope, CaptureToken};
 
 pub(crate) use producer::CaptureContext;
 
@@ -27,7 +27,7 @@ pub struct NoSolutionEvidence(wire::EvidenceWire);
 
 impl NoSolutionEvidence {
     /// Read a complete envelope under the fixed version-1 resource limits.
-    pub fn from_json(bytes: &[u8], token: &CaptureToken) -> Result<Self, CaptureReadError> {
+    pub(crate) fn from_json(bytes: &[u8], token: &CaptureToken) -> Result<Self, CaptureReadError> {
         reader::read(bytes, token, budget::CaptureLimits::V1)
     }
 
@@ -40,7 +40,7 @@ impl NoSolutionEvidence {
         self.0.request == token.request() && self.0.producer_pid == token.producer_pid()
     }
 
-    pub const fn status(&self) -> CaptureStatus {
+    pub(crate) const fn status(&self) -> CaptureStatus {
         self.0.status
     }
 }
