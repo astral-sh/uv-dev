@@ -43,7 +43,7 @@ use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger}
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_lock::{Installable, Lock};
 use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
-use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
+use uv_normalize::{DefaultExtras, DefaultGroups, GroupName, PackageName};
 use uv_preview::Preview;
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
@@ -86,6 +86,11 @@ struct GistFile {
     raw_url: String,
 }
 
+use crate::lock::{
+    command_workspace_group, select_workspace_group_lock, select_workspace_group_result,
+    workspace_selection_members,
+};
+
 /// Run a command.
 #[expect(clippy::fn_params_excessive_bools)]
 pub async fn run(
@@ -101,6 +106,7 @@ pub async fn run(
     isolated: bool,
     all_packages: bool,
     package: Option<PackageName>,
+    workspace_group: Option<GroupName>,
     no_project: bool,
     config_discovery: ConfigDiscovery,
     extras: ExtrasSpecification,
@@ -184,6 +190,9 @@ pub async fn run(
     // Determine whether the command to execute is a PEP 723 script.
     let temp_dir;
     let script_interpreter = if let Some(script) = script {
+        if workspace_group.is_some() {
+            bail!("Workspace groups are not supported for scripts");
+        }
         match &script {
             Pep723Item::Script(script) => {
                 debug!(
@@ -630,7 +639,46 @@ pub async fn run(
             }
         }
 
+        if project.is_none() && workspace_group.is_some() {
+            bail!("Workspace groups require a project");
+        }
         if let Some(project) = project {
+            let mut selection_members =
+                workspace_selection_members(&project, package.as_slice(), all_packages);
+            let explicit_workspace_group = workspace_group.is_some();
+            let workspace_group = command_workspace_group(
+                project.workspace(),
+                workspace_group.as_ref(),
+                &selection_members,
+                frozen,
+                &settings.resolver.sources,
+            )
+            .await?;
+            let select_group_roots = workspace_group
+                .as_ref()
+                .is_some_and(|group| explicit_workspace_group || group.definition.default);
+            if select_group_roots
+                && package.is_none()
+                && let Some(group) = &workspace_group
+            {
+                selection_members.clone_from(&group.definition.members);
+            }
+            let group_workspace = workspace_group.as_ref().map(|group| {
+                project
+                    .workspace()
+                    .with_workspace_groups(std::slice::from_ref(group))
+            });
+            let environment_workspace = group_workspace
+                .as_ref()
+                .unwrap_or_else(|| project.workspace());
+            let group_members = workspace_group
+                .as_ref()
+                .filter(|_| select_group_roots)
+                .map(|group| group.definition.members.iter().cloned().collect::<Vec<_>>());
+            let selected_workspace_group = workspace_group
+                .as_ref()
+                .filter(|_| select_group_roots)
+                .map(|group| &group.definition.name);
             if let Some(project_name) = project.project_name() {
                 debug!(
                     "Discovered project `{project_name}` at: {}",
@@ -657,7 +705,7 @@ pub async fn run(
                 // Resolve the Python request and requirement for the workspace.
                 let project_python = ProjectPythonRequest::from_request(
                     python.as_deref().map(PythonRequest::parse),
-                    Some(project.workspace()),
+                    Some(environment_workspace),
                     &groups,
                     project_dir,
                     config_discovery,
@@ -695,7 +743,7 @@ pub async fn run(
                 // If we're not isolating the environment, reuse the base environment for the
                 // project.
                 ProjectEnvironment::get_or_init(
-                    ProjectEnvironmentTarget::from(project.workspace()),
+                    ProjectEnvironmentTarget::from(environment_workspace),
                     None,
                     &groups,
                     python.as_deref().map(PythonRequest::parse),
@@ -722,12 +770,21 @@ pub async fn run(
                 // If we're not syncing, we should still attempt to respect the locked preferences
                 // in any `--with` requirements.
                 if !isolated && !requirements.is_empty() {
-                    base_lock = LockTarget::from(project.workspace())
+                    if let Some(lock) = LockTarget::from(project.workspace())
                         .read()
                         .await
                         .ok()
                         .flatten()
-                        .map(|lock| (lock, project.workspace().install_path().to_owned()));
+                    {
+                        base_lock = Some((
+                            select_workspace_group_lock(
+                                lock,
+                                selected_workspace_group,
+                                &selection_members,
+                            )?,
+                            project.workspace().install_path().to_owned(),
+                        ));
+                    }
                 }
                 // `--with` may still build an overlay under `--no-sync`. Unless explicitly frozen,
                 // use the current project build constraints, not those recorded in `uv.lock`.
@@ -783,20 +840,28 @@ pub async fn run(
                 )
                 .await
                 {
-                    Ok(result) => result,
+                    Ok(result) => select_workspace_group_result(
+                        result,
+                        selected_workspace_group,
+                        &selection_members,
+                    )?,
                     Err(err) => return Err(UvError::from(err).into()),
                 };
 
                 // Identify the installation target.
-                let target = InstallTarget::from_project(
-                    &project,
-                    result.lock(),
+                let selection = if let Some(names) = group_members.as_deref()
+                    && package.is_none()
+                    && !all_packages
+                {
+                    PackageSelection::Projects(names)
+                } else {
                     PackageSelection::from_args(
                         all_packages,
                         package.as_slice(),
                         project.project_name(),
-                    ),
-                );
+                    )
+                };
+                let target = InstallTarget::from_project(&project, result.lock(), selection);
 
                 let install_options = InstallOptions::default();
                 // Validate that the set of requested extras and development groups are defined in the lockfile.

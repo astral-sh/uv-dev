@@ -17,7 +17,7 @@ use uv_distribution_types::{
     UnresolvedRequirementSpecification,
 };
 use uv_git::ResolvedRepositoryReference;
-use uv_lock::{GroupMetadata, Lock, ResolverManifest};
+use uv_lock::{GroupMetadata, Lock, Package, ResolverManifest};
 use uv_normalize::PackageName;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictKind, SupportedEnvironments};
@@ -33,7 +33,7 @@ use uv_resolver::{
 use uv_settings::{LockedSource, ResolverSettings};
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
-use uv_workspace::WorkspaceCache;
+use uv_workspace::{ResolvedWorkspaceGroup, Workspace, WorkspaceCache};
 
 use crate::lock_target::find_lock_format_error;
 use crate::{LockError, LockTarget, LockValidationError, MissingLockfileSource, ValidatedLock};
@@ -280,6 +280,215 @@ impl<'env> LockOperation<'env> {
     }
 }
 
+/// Resolve named root sets together, splitting a failed shared solve into smaller contexts.
+async fn do_lock_workspace_groups(
+    workspace: &Workspace,
+    mut groups: Vec<ResolvedWorkspaceGroup>,
+    interpreter: &Interpreter,
+    existing_lock: Option<Lock>,
+    mode: LockMode<'_>,
+    check_lockfile_contents: Option<String>,
+    external: Vec<NameRequirementSpecification>,
+    first_party_exclusions: BTreeSet<PackageName>,
+    refresh: Option<&Refresh>,
+    settings: &ResolverSettings,
+    client_builder: &BaseClientBuilder<'_>,
+    state: &UniversalState,
+    logger: Box<dyn ResolveLogger>,
+    concurrency: &Concurrency,
+    cache: &Cache,
+    workspace_cache: &WorkspaceCache,
+    printer: Printer,
+    preview: Preview,
+) -> Result<LockResult, LockError> {
+    let start = std::time::Instant::now();
+    for group in &mut groups {
+        if group.requires_python.specifiers().is_empty() {
+            let default =
+                RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());
+            warn_user_once!(
+                "No `requires-python` value found in workspace group `{}`. Defaulting to `{default}`.",
+                group.definition.name
+            );
+            group.environments = group.environments.and(default.to_exact_marker_tree());
+            group.requires_python = RequiresPython::from_marker_tree(group.environments)
+                .ok_or_else(|| {
+                    uv_workspace::WorkspaceError::from(
+                        uv_workspace::WorkspaceErrorKind::DisjointWorkspaceGroupPython(
+                            group.definition.name.clone(),
+                        ),
+                    )
+                })?;
+        }
+    }
+    let mut pending = vec![groups.clone()];
+    let mut resolutions = Vec::new();
+    let mut preference_lock = None;
+    while let Some(batch) = pending.pop() {
+        let scoped = workspace.with_workspace_groups(&batch);
+        let previous = if let Some(existing) = &existing_lock {
+            if existing.workspace_groups().is_empty() {
+                Some(existing.clone())
+            } else {
+                let contexts = batch
+                    .iter()
+                    .map(|group| existing.select_workspace_group(&group.definition.name))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>();
+                let fallback = contexts.first().cloned();
+                Lock::merge_workspace_group_preferences(contexts)?.or(fallback)
+            }
+        } else {
+            None
+        }
+        .or_else(|| preference_lock.clone());
+        let result = Box::pin(do_lock(
+            LockTarget::Workspace(&scoped),
+            interpreter,
+            previous,
+            mode,
+            None,
+            external.clone(),
+            first_party_exclusions.clone(),
+            refresh,
+            settings,
+            client_builder,
+            state,
+            Box::new(SummaryResolveLogger),
+            concurrency,
+            cache,
+            workspace_cache,
+            printer,
+            preview,
+        ))
+        .await;
+        match result {
+            Ok(result) => {
+                let lock = result.into_lock();
+                preference_lock = Some(lock.clone());
+                resolutions.push((
+                    batch
+                        .into_iter()
+                        .map(|group| group.definition.name)
+                        .collect(),
+                    lock,
+                ));
+            }
+            Err(error) if batch.len() > 1 && workspace_group_conflict(&error) => {
+                debug!("Splitting {} incompatible workspace groups", batch.len());
+                let midpoint = batch.len() / 2;
+                pending.push(batch[midpoint..].to_vec());
+                pending.push(batch[..midpoint].to_vec());
+            }
+            Err(error) => {
+                if let [group] = batch.as_slice() {
+                    return Err(LockError::WorkspaceGroupResolution(
+                        group.definition.name.clone(),
+                        Box::new(error),
+                    ));
+                }
+                return Err(error);
+            }
+        }
+    }
+    let lock = Lock::from_workspace_groups(groups, resolutions)?
+        .ok_or(LockError::MissingWorkspaceGroupResolution)?;
+    logger.on_complete(lock.len(), start, printer)?;
+    let unchanged = if let Some(contents) = check_lockfile_contents {
+        existing_lock.is_some() && contents == lock.to_toml()?
+    } else if let Some(existing) = &existing_lock {
+        existing.to_toml()? == lock.to_toml()?
+    } else {
+        false
+    };
+    Ok(if unchanged {
+        LockResult::Unchanged(lock)
+    } else {
+        LockResult::Changed(existing_lock, lock)
+    })
+}
+
+/// Only incompatibilities in the dependency graph justify another resolution context.
+fn workspace_group_conflict(error: &LockError) -> bool {
+    fn resolver_conflict(error: &uv_resolver::ResolveError) -> bool {
+        use uv_resolver::ResolveError;
+
+        match error {
+            ResolveError::Dependencies(source, ..) => resolver_conflict(source),
+            ResolveError::NoSolution(_)
+            | ResolveError::ConflictingUrls { .. }
+            | ResolveError::ConflictingIndexesForEnvironment { .. }
+            | ResolveError::ConflictingIndexes(..) => true,
+            ResolveError::Client(_)
+            | ResolveError::Distribution(_)
+            | ResolveError::ChannelClosed
+            | ResolveError::UnregisteredTask(_)
+            | ResolveError::DisallowedUrl { .. }
+            | ResolveError::DistributionType(_)
+            | ResolveError::Dist(..)
+            | ResolveError::InvalidVersion(_)
+            | ResolveError::UnhashedPackage(_)
+            | ResolveError::ConflictingDistribution(_)
+            | ResolveError::PackageUnavailable(_)
+            | ResolveError::ConflictMarker(_)
+            | ResolveError::MismatchedPackageName { .. } => false,
+        }
+    }
+
+    match error {
+        LockError::Resolve(error) => match error.as_ref() {
+            ResolveError::NoSolution { .. } => true,
+            ResolveError::Resolve(error) => resolver_conflict(error),
+            ResolveError::Hash(_)
+            | ResolveError::ScopedOverride(_)
+            | ResolveError::Io(_)
+            | ResolveError::Fmt(_)
+            | ResolveError::Requirements(_)
+            | ResolveError::RequirementsWithContext { .. }
+            | ResolveError::ExtrasWithoutSource { .. }
+            | ResolveError::MissingExtras(_)
+            | ResolveError::MissingGroup { .. }
+            | ResolveError::DependencyGroups { .. }
+            | ResolveError::Anyhow(_) => false,
+        },
+        LockError::WorkspaceGroupResolution(_, source) => workspace_group_conflict(source),
+        LockError::LockMismatch(..)
+        | LockError::LockFormat(..)
+        | LockError::MissingLockfile(..)
+        | LockError::LockWorkspaceMismatch(..)
+        | LockError::MissingWorkspaceGroupResolution
+        | LockError::UnsupportedLockVersion(..)
+        | LockError::UnparsableLockVersion(..)
+        | LockError::LockSerialization(_)
+        | LockError::OverlappingMarkers(..)
+        | LockError::DisjointEnvironment(..)
+        | LockError::EmptyEnvironment
+        | LockError::UvLockParse(_)
+        | LockError::MissingGroupProject(_)
+        | LockError::MissingGroupProjects(_)
+        | LockError::MissingGroupScript(_)
+        | LockError::ClientBuild(_)
+        | LockError::FlatIndex(_)
+        | LockError::Lowering(_)
+        | LockError::Metadata(_)
+        | LockError::ExtraBuildRequires(_)
+        | LockError::IndexCredentials(_)
+        | LockError::IndexUrl(_)
+        | LockError::Lock(_)
+        | LockError::Tags(_)
+        | LockError::PythonContext(_)
+        | LockError::HashStrategy(_)
+        | LockError::DependencyGroup(_)
+        | LockError::DefaultGroups(_)
+        | LockError::Workspace(_)
+        | LockError::Fmt(_)
+        | LockError::Io(_)
+        | LockError::Anyhow(_) => false,
+    }
+}
+
 /// Lock the project requirements into a lockfile.
 async fn do_lock(
     target: LockTarget<'_>,
@@ -300,6 +509,34 @@ async fn do_lock(
     printer: Printer,
     preview: Preview,
 ) -> Result<LockResult, LockError> {
+    if let LockTarget::Workspace(workspace) = target
+        && !workspace.is_workspace_group_resolution()
+    {
+        let groups = workspace.workspace_groups_with_sources(&settings.sources)?;
+        if !groups.is_empty() {
+            return Box::pin(do_lock_workspace_groups(
+                workspace,
+                groups,
+                interpreter,
+                existing_lock,
+                mode,
+                check_lockfile_contents,
+                external,
+                first_party_exclusions,
+                refresh,
+                settings,
+                client_builder,
+                state,
+                logger,
+                concurrency,
+                cache,
+                workspace_cache,
+                printer,
+                preview,
+            ))
+            .await;
+        }
+    }
     let start = std::time::Instant::now();
 
     // Extract the project settings.
@@ -768,6 +1005,23 @@ async fn do_lock(
 
     // If any of the resolution-determining settings changed, invalidate the lock.
     let existing_lock = if let Some(existing_lock) = existing_lock {
+        let scoped_packages;
+        let packages = if matches!(target, LockTarget::Workspace(workspace) if workspace.is_workspace_group_resolution())
+        {
+            let names = existing_lock
+                .packages()
+                .iter()
+                .map(Package::name)
+                .collect::<BTreeSet<_>>();
+            scoped_packages = packages
+                .iter()
+                .filter(|(name, _)| names.contains(name) || members.contains(name))
+                .map(|(name, member)| (name.clone(), member.clone()))
+                .collect();
+            &scoped_packages
+        } else {
+            packages
+        };
         let validation_build_dispatch = build_dispatch.fork(&locked_build_hasher);
         let database = DistributionDatabase::new(
             &client,

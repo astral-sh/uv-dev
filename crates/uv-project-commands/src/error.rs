@@ -6,6 +6,7 @@ use owo_colors::OwoColorize;
 use uv_command_support::UvError;
 use uv_environment_operations::EnvironmentError;
 use uv_errors::{Hinted, Hints};
+use uv_normalize::GroupName;
 use uv_workspace::WorkspaceError;
 
 /// A failure from project metadata, editing, or a shared workflow.
@@ -27,10 +28,29 @@ pub enum ProjectError {
     Lock(#[from] uv_lock_operations::LockError),
 
     #[error(transparent)]
+    LockData(#[from] uv_lock::LockError),
+
+    #[error(transparent)]
     Environment(#[from] EnvironmentError),
 
     #[error(transparent)]
     Workspace(#[from] WorkspaceError),
+
+    #[error(
+        "The lockfile contains multiple workspace contexts; select one with `--workspace-group`"
+    )]
+    WorkspaceGroupRequired,
+
+    #[error("The selected packages are not all reachable in workspace group `{0}`")]
+    WorkspaceGroupTarget(GroupName),
+
+    #[error(
+        "The selected packages are not covered by a single workspace group; add them to a group or select a narrower target"
+    )]
+    WorkspaceGroupUncovered,
+
+    #[error("Workspace group `{0}` is not present in the lockfile; run `uv lock`")]
+    MissingWorkspaceGroupLock(GroupName),
 
     #[error(transparent)]
     MissingProjectVersion(WorkspaceError),
@@ -56,6 +76,11 @@ impl From<ProjectError> for UvError {
             | ProjectError::PyprojectMut(_)
             | ProjectError::Workspace(_)
             | ProjectError::MissingProjectVersion(_)
+            | ProjectError::WorkspaceGroupRequired
+            | ProjectError::WorkspaceGroupTarget(_)
+            | ProjectError::WorkspaceGroupUncovered
+            | ProjectError::MissingWorkspaceGroupLock(_)
+            | ProjectError::LockData(_)
             | ProjectError::Fmt(_)
             | ProjectError::Io(_)
             | ProjectError::Anyhow(_)) => Self::unexpected(error.into()),
@@ -77,6 +102,11 @@ impl Hinted for ProjectError {
             | Self::Pep723ScriptTomlParse(_)
             | Self::PyprojectMut(_)
             | Self::Workspace(_)
+            | Self::WorkspaceGroupRequired
+            | Self::WorkspaceGroupTarget(_)
+            | Self::WorkspaceGroupUncovered
+            | Self::MissingWorkspaceGroupLock(_)
+            | Self::LockData(_)
             | Self::Fmt(_)
             | Self::Io(_)
             | Self::Anyhow(_) => Hints::none(),

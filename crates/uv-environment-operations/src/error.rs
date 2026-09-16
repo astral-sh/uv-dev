@@ -28,6 +28,19 @@ pub enum EnvironmentError {
     #[error("PEP 723 scripts do not support dependency groups, but group `{0}` was specified")]
     MissingGroupScript(GroupName),
 
+    #[error("The selected packages are not all reachable in workspace group `{0}`")]
+    WorkspaceGroupTarget(GroupName),
+
+    #[error(
+        "The selected packages are not covered by a single workspace group; add them to a group or select a narrower target"
+    )]
+    WorkspaceGroupUncovered,
+
+    #[error(
+        "The lockfile contains multiple workspace contexts; select one with `--workspace-group`"
+    )]
+    WorkspaceGroupRequired,
+
     #[error("Extra `{0}` is not defined in the `optional-dependencies` table for `{1}`")]
     MissingExtraProject(ExtraName, PackageName),
 
@@ -212,6 +225,9 @@ impl From<EnvironmentError> for UvError {
             | EnvironmentError::MissingGroupProject(..)
             | EnvironmentError::MissingGroupProjects(..)
             | EnvironmentError::MissingGroupScript(..)
+            | EnvironmentError::WorkspaceGroupTarget(..)
+            | EnvironmentError::WorkspaceGroupUncovered
+            | EnvironmentError::WorkspaceGroupRequired
             | EnvironmentError::MissingExtraProject(..)
             | EnvironmentError::MissingExtraProjects(..)
             | EnvironmentError::MissingExtraScript(..)
@@ -265,6 +281,9 @@ impl uv_errors::Hinted for EnvironmentError {
             | Self::MissingGroupProject(..)
             | Self::MissingGroupProjects(..)
             | Self::MissingGroupScript(..)
+            | Self::WorkspaceGroupTarget(..)
+            | Self::WorkspaceGroupUncovered
+            | Self::WorkspaceGroupRequired
             | Self::MissingExtraProject(..)
             | Self::MissingExtraProjects(..)
             | Self::MissingExtraScript(..)

@@ -73,6 +73,12 @@ pub enum LockError {
     )]
     LockWorkspaceMismatch(PackageName, MissingLockfileSource),
 
+    #[error("Failed to resolve workspace group `{0}`")]
+    WorkspaceGroupResolution(GroupName, #[source] Box<Self>),
+
+    #[error("Workspace group resolution did not produce a lockfile")]
+    MissingWorkspaceGroupResolution,
+
     #[error(
         "The lockfile at `uv.lock` uses an unsupported schema version (v{1}, but only v{0} is supported). Downgrade to a compatible uv version, or remove the `uv.lock` prior to running `uv lock` or `uv sync`."
     )]
@@ -191,6 +197,8 @@ impl From<LockError> for UvError {
             error @ (LockError::UnsupportedLockVersion(..)
             | LockError::UnparsableLockVersion(..)
             | LockError::LockSerialization(_)
+            | LockError::WorkspaceGroupResolution(..)
+            | LockError::MissingWorkspaceGroupResolution
             | LockError::OverlappingMarkers(..)
             | LockError::DisjointEnvironment(..)
             | LockError::EmptyEnvironment
@@ -235,6 +243,8 @@ impl Hinted for LockError {
             Self::Lock(error) => error.hints(),
             Self::PythonSelection(error) => error.hints(),
             Self::MissingLockfile(..)
+            | Self::WorkspaceGroupResolution(..)
+            | Self::MissingWorkspaceGroupResolution
             | Self::UnsupportedLockVersion(..)
             | Self::UnparsableLockVersion(..)
             | Self::LockSerialization(_)
