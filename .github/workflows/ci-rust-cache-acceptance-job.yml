@@ -1,0 +1,494 @@
+name: Run one Linux Rust-cache acceptance case
+
+on:
+  workflow_call:
+    inputs:
+      case:
+        type: string
+        required: true
+      stage:
+        type: string
+        required: true
+    outputs:
+      artifact-id:
+        value: ${{ jobs.accept.outputs.artifact-id }}
+      artifact-digest:
+        value: ${{ jobs.accept.outputs.artifact-digest }}
+      result-sha256:
+        value: ${{ jobs.accept.outputs.result-sha256 }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_RETRY: "10"
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target
+  PYTHON_VERSION: "3.12"
+  RUSTC_BOOTSTRAP: "1"
+  RUSTUP_MAX_RETRIES: "10"
+  UV_LOCKED: "1"
+  UV_RUST_CACHE_ACCEPTANCE_STAGE: ${{ inputs.stage }}
+
+jobs:
+  accept:
+    if: ${{ github.repository == 'astral-sh/uv-dev' && github.event_name == 'workflow_dispatch' }}
+    name: ${{ inputs.case }}
+    timeout-minutes: 45
+    runs-on: depot-ubuntu-24.04-16
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      artifact-digest: ${{ steps.upload.outputs.artifact-digest }}
+      result-sha256: ${{ steps.finish.outputs.result-sha256 }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Start the bounded job budget
+        run: |
+          set -euo pipefail
+          cache_job_started=$(date +%s)
+          echo "UV_RUST_CACHE_JOB_STARTED=$cache_job_started" >> "$GITHUB_ENV"
+          echo "UV_RUST_CACHE_JOB_DEADLINE=$((cache_job_started + 2400))" >> "$GITHUB_ENV"
+
+      - name: Checkout acceptance controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: controller
+          persist-credentials: false
+
+      - name: Bind the acceptance case
+        id: plan
+        env:
+          ACCEPTANCE_CASE: ${{ inputs.case }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/code/tmp"
+          cache_plan_dir=$(mktemp -d "$HOME/code/tmp/uv-rust-cache-plan.XXXXXXXX")
+          python3 controller/.github/actions/uv-rust-cache/acceptance.py plan \
+            --case "$ACCEPTANCE_CASE" \
+            --output "$cache_plan_dir/plan.json" \
+            --github-output "$GITHUB_OUTPUT" \
+            --github-env "$GITHUB_ENV"
+
+      - name: Checkout the fixed test source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: astral-sh/uv-dev
+          ref: ${{ steps.plan.outputs.source-commit }}
+          path: ${{ steps.plan.outputs.source-relative-directory }}
+          persist-credentials: false
+
+      - name: Checkout process-control source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: astral-sh/uv-dev
+          ref: f1c904fb0930efeaf82232ea1884c41a18b93dd8
+          path: process-owner
+          sparse-checkout: scripts/benchmark/walltime-shards.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Record the clean source and runner
+        id: begin
+        run: |
+          set -euo pipefail
+          python3 controller/.github/actions/uv-rust-cache/acceptance.py begin \
+            --plan "$UV_RUST_CACHE_PLAN" \
+            --plan-sha256 "$UV_RUST_CACHE_PLAN_SHA256" \
+            --github-env "$GITHUB_ENV"
+
+      - name: Install mold
+        id: setup-mold
+        working-directory: ${{ steps.plan.outputs.source-directory }}
+        run: ./scripts/install-mold.sh
+
+      - name: Install Rust toolchain
+        id: setup-rust
+        working-directory: ${{ steps.plan.outputs.source-directory }}
+        run: rustup toolchain install --profile minimal
+
+      - name: Install uv
+        id: setup-uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.10"
+          checksum: "173d95a0c32d18c896c46ba6fafbf3cf9c14ab74b033f81b76c883ef492a976b"
+
+      - name: Install required Python versions
+        id: setup-python
+        working-directory: ${{ steps.plan.outputs.source-directory }}
+        run: uv python install
+
+      - name: Start a private test keyring
+        id: setup-keyring
+        run: |
+          set -euo pipefail
+          printf '%s\n' \
+            'Acquire::Retries "3";' \
+            'Acquire::http::Timeout "10";' \
+            'Acquire::https::Timeout "10";' \
+            | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
+          sudo apt install -y --no-install-recommends dbus-daemon gnome-keyring
+          DBUS_SESSION_BUS_ADDRESS="$(dbus-daemon --session --fork --print-address=1)"
+          export DBUS_SESSION_BUS_ADDRESS
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+          gnome-keyring-daemon --components=secrets --daemonize --unlock <<< 'foobar'
+
+      - name: Create the Linux test filesystems
+        id: setup-filesystems
+        run: |
+          set -euo pipefail
+          sudo apt install -y btrfs-progs
+          truncate -s 1G "$TMPDIR/btrfs.img"
+          mkfs.btrfs "$TMPDIR/btrfs.img"
+          sudo mkdir /btrfs
+          sudo mount -o loop "$TMPDIR/btrfs.img" /btrfs
+          sudo chown "$(id -u):$(id -g)" /btrfs
+          sudo mkdir /tmpfs
+          sudo mount -t tmpfs -o size=256m tmpfs /tmpfs
+          sudo chown "$(id -u):$(id -g)" /tmpfs
+          truncate -s 16M "$TMPDIR/minix.img"
+          mkfs.minix "$TMPDIR/minix.img"
+          sudo mkdir /minix
+          sudo mount -o loop "$TMPDIR/minix.img" /minix
+          sudo chown "$(id -u):$(id -g)" /minix
+
+      - name: Install cargo nextest
+        id: setup-nextest
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
+        with:
+          tool: cargo-nextest@0.9.143
+
+      - name: Verify the runtime fixtures
+        id: setup-evidence
+        run: |
+          set -euo pipefail
+          python3 controller/.github/actions/uv-rust-cache/acceptance.py setup \
+            --plan "$UV_RUST_CACHE_PLAN" \
+            --plan-sha256 "$UV_RUST_CACHE_PLAN_SHA256"
+
+      - name: Record setup completion
+        if: ${{ always() && steps.begin.outcome == 'success' }}
+        env:
+          PHASE_OUTCOME: ${{ steps.setup-evidence.outcome }}
+        run: |
+          set -euo pipefail
+          python3 controller/.github/actions/uv-rust-cache/acceptance.py phase \
+            --plan "$UV_RUST_CACHE_PLAN" \
+            --plan-sha256 "$UV_RUST_CACHE_PLAN_SHA256" \
+            --name setup --event end --outcome "$PHASE_OUTCOME"
+
+      - name: Start cache restore
+        id: restore-start
+        if: ${{ success() && steps.setup-evidence.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          python3 controller/.github/actions/uv-rust-cache/acceptance.py phase \
+            --plan "$UV_RUST_CACHE_PLAN" \
+            --plan-sha256 "$UV_RUST_CACHE_PLAN_SHA256" \
+            --name restore --event start
+
+      - name: Prepare the downloads-only identity
+        id: seed-prepare
+        if: ${{ success() && steps.plan.outputs.mode == 'seed' }}
+        run: |
+          set -euo pipefail
+          cache_seed_dir=$(mktemp -d "$HOME/code/tmp/uv-rust-cache-seed.XXXXXXXX")
+          python3 controller/.github/actions/uv-rust-cache/cache.py prepare \
+            --workspace "$GITHUB_WORKSPACE" \
+            --source "$UV_RUST_CACHE_SOURCE" \
+            --repository astral-sh/uv-dev \
+            --commit "$UV_RUST_CACHE_SOURCE_COMMIT" \
+            --save-if "$UV_RUST_CACHE_SAVE_ALLOWED" \
+            --key-namespace "$UV_RUST_CACHE_NAMESPACE" \
+            --output "$cache_seed_dir/identity.json" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Restore the downloads seed
+        id: seed-downloads
+        if: ${{ success() && steps.plan.outputs.mode == 'seed' }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.seed-prepare.outputs.downloads-paths }}
+          key: ${{ steps.seed-prepare.outputs.downloads-key }}
+          restore-keys: ${{ steps.seed-prepare.outputs.downloads-restore-key }}
+
+      - name: Record the downloads-only restore
+        id: seed-observe
+        if: ${{ success() && steps.plan.outputs.mode == 'seed' }}
+        env:
+          CACHE_IDENTITY: ${{ steps.seed-prepare.outputs.identity }}
+          CACHE_IDENTITY_SHA256: ${{ steps.seed-prepare.outputs.identity-sha256 }}
+          DOWNLOADS_PRIMARY: ${{ steps.seed-downloads.outputs.cache-primary-key }}
+          DOWNLOADS_MATCHED: ${{ steps.seed-downloads.outputs.cache-matched-key }}
+          DOWNLOADS_HIT: ${{ steps.seed-downloads.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          python3 controller/.github/actions/uv-rust-cache/cache.py observe \
+            --identity "$CACHE_IDENTITY" \
+            --identity-sha256 "$CACHE_IDENTITY_SHA256" \
+            --downloads-primary "$DOWNLOADS_PRIMARY" \
+            --downloads-matched "$DOWNLOADS_MATCHED" \
+            --downloads-hit "$DOWNLOADS_HIT" \
+            --output "$(dirname "$CACHE_IDENTITY")/manifest.json" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Restore the source-specific cache
+        id: restore
+        if: ${{ success() && steps.plan.outputs.mode != 'seed' }}
+        uses: ./controller/.github/actions/uv-rust-cache/restore
+        with:
+          source-directory: ${{ steps.plan.outputs.source-directory }}
+          source-repository: astral-sh/uv-dev
+          source-commit: ${{ steps.plan.outputs.source-commit }}
+          save-if: ${{ steps.plan.outputs.save-if }}
+          key-namespace: ${{ steps.plan.outputs.namespace }}
+
+      - name: Retain the actual restore observation
+        id: observation
+        if: ${{ success() && (steps.seed-observe.outcome == 'success' || steps.restore.outcome == 'success') }}
+        env:
+          CACHE_MANIFEST: ${{ steps.seed-observe.outputs.manifest || steps.restore.outputs.manifest }}
+          CACHE_MANIFEST_SHA256: ${{ steps.seed-observe.outputs.manifest-sha256 || steps.restore.outputs.manifest-sha256 }}
+        run: |
+          set -euo pipefail
+          python3 controller/.github/actions/uv-rust-cache/acceptance.py observe \
+            --plan "$UV_RUST_CACHE_PLAN" \
+            --plan-sha256 "$UV_RUST_CACHE_PLAN_SHA256" \
+            --manifest "$CACHE_MANIFEST" \
+            --manifest-sha256 "$CACHE_MANIFEST_SHA256" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Record restore completion
+        if: ${{ always() && steps.restore-start.outcome == 'success' }}
+        env:
+          PHASE_OUTCOME: ${{ steps.observation.outcome == 'success' && 'success' || 'failure' }}
+        run: |
+          set -euo pipefail
+          python3 controller/.github/actions/uv-rust-cache/acceptance.py phase \
+            --plan "$UV_RUST_CACHE_PLAN" \
+            --plan-sha256 "$UV_RUST_CACHE_PLAN_SHA256" \
+            --name restore --event end --outcome "$PHASE_OUTCOME"
+
+      - name: Run the complete declared workload
+        id: workload
+        if: ${{ success() && steps.plan.outputs.mode != 'fault-fixture' }}
+        env:
+          CACHE_MANIFEST: ${{ steps.observation.outputs.manifest }}
+          CACHE_MANIFEST_SHA256: ${{ steps.observation.outputs.manifest-sha256 }}
+        run: |
+          set -euo pipefail
+          python3 controller/.github/actions/uv-rust-cache/acceptance.py run \
+            --plan "$UV_RUST_CACHE_PLAN" \
+            --plan-sha256 "$UV_RUST_CACHE_PLAN_SHA256" \
+            --manifest "$CACHE_MANIFEST" \
+            --manifest-sha256 "$CACHE_MANIFEST_SHA256" \
+            --process-repository "$GITHUB_WORKSPACE/process-owner" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Start source-aware pruning
+        id: prune-start
+        if: ${{ success() && steps.plan.outputs.mode == 'full' && steps.workload.outputs.save-eligible == 'true' }}
+        run: |
+          set -euo pipefail
+          python3 controller/.github/actions/uv-rust-cache/acceptance.py phase \
+            --plan "$UV_RUST_CACHE_PLAN" \
+            --plan-sha256 "$UV_RUST_CACHE_PLAN_SHA256" \
+            --name prune --event start
+
+      - name: Prune superseded workspace artifacts
+        id: prune
+        if: ${{ success() && steps.prune-start.outcome == 'success' }}
+        env:
+          CACHE_MANIFEST: ${{ steps.observation.outputs.manifest }}
+          CACHE_MANIFEST_SHA256: ${{ steps.observation.outputs.manifest-sha256 }}
+        run: |
+          set -euo pipefail
+          python3 controller/.github/actions/uv-rust-cache/acceptance.py prune \
+            --plan "$UV_RUST_CACHE_PLAN" \
+            --plan-sha256 "$UV_RUST_CACHE_PLAN_SHA256" \
+            --manifest "$CACHE_MANIFEST" \
+            --manifest-sha256 "$CACHE_MANIFEST_SHA256" \
+            --process-repository "$GITHUB_WORKSPACE/process-owner"
+
+      - name: Record pruning completion
+        if: ${{ always() && steps.prune-start.outcome == 'success' }}
+        env:
+          PHASE_OUTCOME: ${{ steps.prune.outcome }}
+        run: |
+          set -euo pipefail
+          python3 controller/.github/actions/uv-rust-cache/acceptance.py phase \
+            --plan "$UV_RUST_CACHE_PLAN" \
+            --plan-sha256 "$UV_RUST_CACHE_PLAN_SHA256" \
+            --name prune --event end --outcome "$PHASE_OUTCOME"
+
+      - name: Revalidate the downloads fixture
+        id: seed-save-plan
+        if: ${{ success() && steps.plan.outputs.mode == 'seed' && steps.workload.outputs.save-eligible == 'true' }}
+        env:
+          CACHE_MANIFEST: ${{ steps.observation.outputs.manifest }}
+          CACHE_MANIFEST_SHA256: ${{ steps.observation.outputs.manifest-sha256 }}
+        run: |
+          set -euo pipefail
+          python3 controller/.github/actions/uv-rust-cache/acceptance.py seed-save-plan \
+            --plan "$UV_RUST_CACHE_PLAN" \
+            --plan-sha256 "$UV_RUST_CACHE_PLAN_SHA256" \
+            --manifest "$CACHE_MANIFEST" \
+            --manifest-sha256 "$CACHE_MANIFEST_SHA256" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Start the malformed-cache fixture
+        id: fault-start
+        if: ${{ success() && steps.plan.outputs.mode == 'fault-fixture' && steps.observation.outputs.restore-contract == 'true' }}
+        run: |
+          set -euo pipefail
+          python3 controller/.github/actions/uv-rust-cache/acceptance.py phase \
+            --plan "$UV_RUST_CACHE_PLAN" \
+            --plan-sha256 "$UV_RUST_CACHE_PLAN_SHA256" \
+            --name fault --event start
+
+      - name: Prepare the isolated malformed target
+        id: fault-prepare
+        if: ${{ success() && steps.fault-start.outcome == 'success' }}
+        env:
+          CACHE_MANIFEST: ${{ steps.observation.outputs.manifest }}
+          CACHE_MANIFEST_SHA256: ${{ steps.observation.outputs.manifest-sha256 }}
+        run: |
+          set -euo pipefail
+          python3 controller/.github/actions/uv-rust-cache/acceptance.py malformed-fixture \
+            --plan "$UV_RUST_CACHE_PLAN" \
+            --plan-sha256 "$UV_RUST_CACHE_PLAN_SHA256" \
+            --manifest "$CACHE_MANIFEST" \
+            --manifest-sha256 "$CACHE_MANIFEST_SHA256" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Record malformed-fixture preparation
+        if: ${{ always() && steps.fault-start.outcome == 'success' }}
+        env:
+          PHASE_OUTCOME: ${{ steps.fault-prepare.outcome }}
+        run: |
+          set -euo pipefail
+          python3 controller/.github/actions/uv-rust-cache/acceptance.py phase \
+            --plan "$UV_RUST_CACHE_PLAN" \
+            --plan-sha256 "$UV_RUST_CACHE_PLAN_SHA256" \
+            --name fault --event end --outcome "$PHASE_OUTCOME"
+
+      - name: Start the permitted cache publication
+        id: save-start
+        if: ${{ success() && (steps.seed-save-plan.outcome == 'success' || steps.prune.outcome == 'success' || steps.fault-prepare.outcome == 'success') }}
+        run: |
+          set -euo pipefail
+          python3 controller/.github/actions/uv-rust-cache/acceptance.py phase \
+            --plan "$UV_RUST_CACHE_PLAN" \
+            --plan-sha256 "$UV_RUST_CACHE_PLAN_SHA256" \
+            --name save --event start
+
+      - name: Publish the isolated downloads fixture
+        id: seed-save
+        if: ${{ success() && steps.save-start.outcome == 'success' && steps.seed-save-plan.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.seed-save-plan.outputs.downloads-paths }}
+          key: ${{ steps.seed-save-plan.outputs.downloads-key }}
+
+      - name: Save the completed source cache
+        id: save
+        if: ${{ success() && steps.save-start.outcome == 'success' && steps.prune.outcome == 'success' }}
+        uses: ./controller/.github/actions/uv-rust-cache/save
+        with:
+          manifest: ${{ steps.observation.outputs.manifest }}
+          manifest-sha256: ${{ steps.observation.outputs.manifest-sha256 }}
+
+      - name: Publish the isolated malformed fixture
+        id: fault-save
+        if: ${{ success() && steps.save-start.outcome == 'success' && steps.fault-prepare.outputs.fault-fixture-ready == 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.fault-prepare.outputs.target-paths }}
+          key: ${{ steps.fault-prepare.outputs.target-key }}
+
+      - name: Record cache publication outcome
+        if: ${{ always() && steps.save-start.outcome == 'success' }}
+        env:
+          PHASE_OUTCOME: ${{ (steps.seed-save.outcome == 'success' || steps.save.outcome == 'success' || steps.fault-save.outcome == 'success') && 'success' || 'failure' }}
+        run: |
+          set -euo pipefail
+          python3 controller/.github/actions/uv-rust-cache/acceptance.py phase \
+            --plan "$UV_RUST_CACHE_PLAN" \
+            --plan-sha256 "$UV_RUST_CACHE_PLAN_SHA256" \
+            --name save --event end --outcome "$PHASE_OUTCOME"
+
+      - name: Freeze case evidence
+        id: finish
+        if: ${{ always() && steps.begin.outcome == 'success' }}
+        env:
+          CACHE_MANIFEST: ${{ steps.observation.outputs.manifest }}
+          CACHE_MANIFEST_SHA256: ${{ steps.observation.outputs.manifest-sha256 }}
+          PRIOR_JOB_STATUS: ${{ job.status }}
+          OUTCOME_SETUP: ${{ steps.setup-evidence.outcome }}
+          OUTCOME_SETUP_MOLD: ${{ steps.setup-mold.outcome }}
+          OUTCOME_SETUP_RUST: ${{ steps.setup-rust.outcome }}
+          OUTCOME_SETUP_UV: ${{ steps.setup-uv.outcome }}
+          OUTCOME_SETUP_PYTHON: ${{ steps.setup-python.outcome }}
+          OUTCOME_SETUP_KEYRING: ${{ steps.setup-keyring.outcome }}
+          OUTCOME_SETUP_FILESYSTEMS: ${{ steps.setup-filesystems.outcome }}
+          OUTCOME_SETUP_NEXTEST: ${{ steps.setup-nextest.outcome }}
+          OUTCOME_SEED_PREPARE: ${{ steps.seed-prepare.outcome }}
+          OUTCOME_SEED_DOWNLOADS: ${{ steps.seed-downloads.outcome }}
+          OUTCOME_SEED_OBSERVE: ${{ steps.seed-observe.outcome }}
+          OUTCOME_RESTORE: ${{ steps.restore.outcome }}
+          OUTCOME_OBSERVATION: ${{ steps.observation.outcome }}
+          OUTCOME_WORKLOAD: ${{ steps.workload.outcome }}
+          OUTCOME_PRUNE: ${{ steps.prune.outcome }}
+          OUTCOME_SEED_SAVE_PLAN: ${{ steps.seed-save-plan.outcome }}
+          OUTCOME_SEED_SAVE: ${{ steps.seed-save.outcome }}
+          OUTCOME_SAVE: ${{ steps.save.outcome }}
+          OUTCOME_SAVE_DOWNLOADS: ${{ steps.save.outputs.downloads-save-outcome }}
+          OUTCOME_SAVE_TARGET: ${{ steps.save.outputs.target-save-outcome }}
+          OUTCOME_FAULT_PREPARE: ${{ steps.fault-prepare.outcome }}
+          OUTCOME_FAULT_SAVE: ${{ steps.fault-save.outcome }}
+        run: |
+          set -euo pipefail
+          python3 controller/.github/actions/uv-rust-cache/acceptance.py finish \
+            --plan "$UV_RUST_CACHE_PLAN" \
+            --plan-sha256 "$UV_RUST_CACHE_PLAN_SHA256" \
+            --manifest "$CACHE_MANIFEST" \
+            --manifest-sha256 "$CACHE_MANIFEST_SHA256" \
+            --job-status "$PRIOR_JOB_STATUS" \
+            --outcome "setup=$OUTCOME_SETUP" \
+            --outcome "setup-mold=$OUTCOME_SETUP_MOLD" \
+            --outcome "setup-rust=$OUTCOME_SETUP_RUST" \
+            --outcome "setup-uv=$OUTCOME_SETUP_UV" \
+            --outcome "setup-python=$OUTCOME_SETUP_PYTHON" \
+            --outcome "setup-keyring=$OUTCOME_SETUP_KEYRING" \
+            --outcome "setup-filesystems=$OUTCOME_SETUP_FILESYSTEMS" \
+            --outcome "setup-nextest=$OUTCOME_SETUP_NEXTEST" \
+            --outcome "seed-prepare=$OUTCOME_SEED_PREPARE" \
+            --outcome "seed-downloads=$OUTCOME_SEED_DOWNLOADS" \
+            --outcome "seed-observe=$OUTCOME_SEED_OBSERVE" \
+            --outcome "restore=$OUTCOME_RESTORE" \
+            --outcome "observation=$OUTCOME_OBSERVATION" \
+            --outcome "workload=$OUTCOME_WORKLOAD" \
+            --outcome "prune=$OUTCOME_PRUNE" \
+            --outcome "seed-save-plan=$OUTCOME_SEED_SAVE_PLAN" \
+            --outcome "seed-save=$OUTCOME_SEED_SAVE" \
+            --outcome "save=$OUTCOME_SAVE" \
+            --outcome "save-downloads=$OUTCOME_SAVE_DOWNLOADS" \
+            --outcome "save-target=$OUTCOME_SAVE_TARGET" \
+            --outcome "fault-prepare=$OUTCOME_FAULT_PREPARE" \
+            --outcome "fault-save=$OUTCOME_FAULT_SAVE" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Retain case evidence
+        id: upload
+        if: ${{ always() && steps.finish.outputs.artifact-safe == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-rust-cache-acceptance-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.case }}
+          path: results/${{ inputs.case }}/
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14

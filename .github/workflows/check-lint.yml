@@ -90,6 +90,7 @@ jobs:
           version: "0.12.10"
           checksum: "173d95a0c32d18c896c46ba6fafbf3cf9c14ab74b033f81b76c883ef492a976b"
       - run: uv --no-config run --locked --python 3.12 --script scripts/tests/test_ci_rust_cache.py
+      - run: uv --no-config run --locked --python 3.12 --script scripts/tests/test_ci_rust_cache_acceptance.py
 
   shellcheck:
     timeout-minutes: 10
