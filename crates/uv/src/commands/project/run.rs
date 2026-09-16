@@ -74,8 +74,8 @@ use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
     EnvironmentSpecification, LinkErrorReporting, PreferenceLocation, ProjectEnvironment,
     ProjectEnvironmentTarget, ProjectError, ProjectPythonRequest, ScriptEnvironment,
-    ScriptInterpreter, UniversalState, script_extra_build_requires, script_specification,
-    update_environment,
+    ScriptInterpreter, UniversalState, project_python_roots, script_extra_build_requires,
+    script_specification, update_environment,
 };
 use crate::commands::reporters::PythonDownloadReporter;
 use crate::commands::{ExitStatus, UvError, project, read_env_files};
@@ -642,6 +642,12 @@ pub(crate) async fn run(
             let default_extras = DefaultExtras::default();
             let groups = groups.with_defaults(default_groups);
             let extras = extras.with_defaults(default_extras);
+            let python_roots = project_python_roots(
+                project.workspace(),
+                project.project_name(),
+                all_packages,
+                &[],
+            );
 
             let venv = if isolated {
                 debug!("Creating isolated virtual environment");
@@ -650,12 +656,13 @@ pub(crate) async fn run(
                 // base environment for the project.
 
                 // Resolve the Python request and requirement for the workspace.
-                let project_python = ProjectPythonRequest::from_request(
+                let project_python = ProjectPythonRequest::from_request_for_roots(
                     python.as_deref().map(PythonRequest::parse),
                     Some(project.workspace()),
                     &groups,
                     project_dir,
                     config_discovery,
+                    python_roots.as_deref(),
                 )
                 .await?;
 
@@ -692,6 +699,7 @@ pub(crate) async fn run(
                 ProjectEnvironment::get_or_init(
                     ProjectEnvironmentTarget::from(project.workspace()),
                     None,
+                    python_roots.as_deref(),
                     &groups,
                     python.as_deref().map(PythonRequest::parse),
                     &install_mirrors,

@@ -66,6 +66,7 @@ use crate::commands::project::python::{
 };
 pub(crate) use crate::commands::project::python::{
     ProjectPythonRequest, PythonRequestSource, PythonRequirementConflicts, find_requires_python,
+    project_python_roots,
 };
 use crate::commands::reporters::{PythonDownloadReporter, ResolverReporter};
 use crate::commands::{capitalize, conjunction, pip};
@@ -163,6 +164,9 @@ pub(crate) enum ProjectError {
         "The current Python version ({0}) is not compatible with the locked Python requirement: `{1}`"
     )]
     LockedPythonIncompatibility(Version, RequiresPython),
+
+    #[error("The current Python version ({0}) is not supported by locked workspace member `{1}`")]
+    LockedRootPythonIncompatibility(Version, PackageName),
 
     #[error(
         "The current Python platform is not compatible with the lockfile's supported environments: {0}"
@@ -1696,6 +1700,7 @@ impl ProjectEnvironment {
     pub(crate) async fn get_or_init(
         target: ProjectEnvironmentTarget<'_>,
         frozen_target: Option<InstallTarget<'_>>,
+        python_roots: Option<&[PackageName]>,
         groups: &DependencyGroupsWithDefaults,
         python: Option<PythonRequest>,
         install_mirrors: &PythonInstallMirrors,
@@ -1744,12 +1749,13 @@ impl ProjectEnvironment {
             )
             .await?
         } else {
-            ProjectPythonRequest::from_request(
+            ProjectPythonRequest::from_request_for_roots(
                 python,
                 target.workspace(),
                 groups,
                 target.install_path(),
                 config_discovery,
+                python_roots,
             )
             .await?
         };

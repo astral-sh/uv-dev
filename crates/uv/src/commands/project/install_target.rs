@@ -13,6 +13,8 @@ use uv_configuration::{
 use uv_distribution_types::{Index, Resolution};
 use uv_lock::{Installable, InstallableRootKind, Lock, LockError, Package};
 use uv_normalize::{DEV_DEPENDENCIES, ExtraName, GroupName, PackageName};
+use uv_pep440::{Version, VersionSpecifier};
+use uv_pep508::{MarkerExpression, MarkerTree, MarkerValueVersion};
 use uv_platform_tags::Tags;
 use uv_pypi_types::{
     DependencyGroupSpecifier, DependencyGroups, LenientRequirement, ResolverMarkerEnvironment,
@@ -275,8 +277,41 @@ impl<'lock> InstallTarget<'lock> {
                 selection: PackageSelection::Projects([name]),
                 ..
             } => Some((name, None)),
-            _ => None,
+            Self::Projects { .. }
+            | Self::Workspace { .. }
+            | Self::NonProjectWorkspace { .. }
+            | Self::Lockfile { .. }
+            | Self::Script { .. } => None,
         }
+    }
+
+    /// Reject selected roots whose locked graph is unavailable on this Python version.
+    pub(crate) fn validate_python(self, version: &Version) -> Result<(), ProjectError> {
+        let workspace = match self {
+            Self::Project { workspace, .. }
+            | Self::Projects { workspace, .. }
+            | Self::Workspace { workspace, .. }
+            | Self::NonProjectWorkspace { workspace, .. } => workspace,
+            Self::Lockfile { .. } | Self::Script { .. } => return Ok(()),
+        };
+        if workspace.resolution_roots().is_none() {
+            return Ok(());
+        }
+        let marker = MarkerTree::expression(MarkerExpression::Version {
+            key: MarkerValueVersion::PythonFullVersion,
+            specifier: VersionSpecifier::equals_version(version.only_release()),
+        });
+        for name in self.roots() {
+            if let Ok(Some(package)) = self.lock().find_by_name(name)
+                && !package.is_included_by_marker(marker)
+            {
+                return Err(ProjectError::LockedRootPythonIncompatibility(
+                    version.clone(),
+                    name.clone(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Convert the target's locked packages to a [`Resolution`].

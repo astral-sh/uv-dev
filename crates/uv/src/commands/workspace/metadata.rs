@@ -25,7 +25,7 @@ use crate::commands::project::lockfile::FrozenWorkspace;
 use crate::commands::project::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectEnvironmentTarget,
     ProjectError, ProjectInterpreter, ProjectPythonRequest, ScriptEnvironment, ScriptInterpreter,
-    UniversalState,
+    UniversalState, project_python_roots,
 };
 use crate::commands::{ExitStatus, UvError};
 use crate::printer::{Printer, Stdout};
@@ -123,12 +123,14 @@ pub(crate) async fn metadata(
                     .await?
                     .into_interpreter(),
                     LockTarget::Workspace(workspace) => {
-                        let project_python = ProjectPythonRequest::from_request(
+                        let python_roots = project_python_roots(workspace, None, true, &[]);
+                        let project_python = ProjectPythonRequest::from_request_for_roots(
                             python.as_deref().map(PythonRequest::parse),
                             Some(workspace),
                             &groups,
                             project_dir,
                             config_discovery,
+                            python_roots.as_deref(),
                         )
                         .await?;
                         ProjectInterpreter::discover(
@@ -210,9 +212,11 @@ pub(crate) async fn metadata(
     let environment = if sync.is_some() {
         Some(match &source {
             MetadataSource::Manifest(LockTarget::Workspace(workspace)) => {
+                let python_roots = project_python_roots(workspace, None, true, &[]);
                 ProjectEnvironment::get_or_init(
                     ProjectEnvironmentTarget::from(*workspace),
                     None,
+                    python_roots.as_deref(),
                     &groups,
                     python.as_deref().map(PythonRequest::parse),
                     &install_mirrors,
@@ -254,6 +258,7 @@ pub(crate) async fn metadata(
                     lock,
                 },
                 Some(install_target),
+                None,
                 &groups,
                 python.as_deref().map(PythonRequest::parse),
                 &install_mirrors,

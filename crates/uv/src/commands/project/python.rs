@@ -20,6 +20,8 @@ use uv_settings::PythonInstallMirrors;
 use uv_warnings::warn_user_once;
 use uv_workspace::{RequiresPythonDeclaration, RequiresPythonSources, Workspace};
 
+use uv_normalize::PackageName;
+
 use crate::commands::project::ProjectError;
 use crate::commands::project::install_target::InstallTarget;
 use crate::commands::reporters::PythonDownloadReporter;
@@ -108,8 +110,28 @@ impl ProjectPythonRequest {
         project_dir: &Path,
         config_discovery: ConfigDiscovery,
     ) -> Result<Self, ProjectError> {
+        Self::from_request_for_roots(
+            python_request,
+            workspace,
+            groups,
+            project_dir,
+            config_discovery,
+            None,
+        )
+        .await
+    }
+
+    /// Resolve a Python request for the selected members of an explicit-roots workspace.
+    pub(crate) async fn from_request_for_roots(
+        python_request: Option<PythonRequest>,
+        workspace: Option<&Workspace>,
+        groups: &DependencyGroupsWithDefaults,
+        project_dir: &Path,
+        config_discovery: ConfigDiscovery,
+        roots: Option<&[PackageName]>,
+    ) -> Result<Self, ProjectError> {
         let requirement = workspace
-            .map(|workspace| find_workspace_python_requirement(workspace, groups))
+            .map(|workspace| find_workspace_python_requirement_for_roots(workspace, groups, roots))
             .transpose()?
             .flatten();
 
@@ -268,7 +290,20 @@ fn find_workspace_python_requirement(
     workspace: &Workspace,
     groups: &DependencyGroupsWithDefaults,
 ) -> Result<Option<ProjectPythonRequirement>, ProjectError> {
-    let requires_python = workspace.requires_python(groups)?;
+    find_workspace_python_requirement_for_roots(workspace, groups, None)
+}
+
+fn find_workspace_python_requirement_for_roots(
+    workspace: &Workspace,
+    groups: &DependencyGroupsWithDefaults,
+    roots: Option<&[PackageName]>,
+) -> Result<Option<ProjectPythonRequirement>, ProjectError> {
+    let roots = roots.filter(|_| workspace.resolution_roots().is_some());
+    let requires_python = if let Some(roots) = roots {
+        workspace.requires_python_for(groups, roots)?
+    } else {
+        workspace.requires_python(groups)?
+    };
     // If there are no `Requires-Python` specifiers in the workspace, return `None`.
     if requires_python.is_empty() {
         return Ok(None);
@@ -292,7 +327,9 @@ fn find_workspace_python_requirement(
             }
         }
     }
-    if let Some(roots) = workspace.resolution_roots() {
+    if roots.is_none()
+        && let Some(roots) = workspace.resolution_roots()
+    {
         let mut ranges = Vec::new();
         for root in roots {
             let root_requires = requires_python
@@ -330,6 +367,23 @@ fn find_workspace_python_requirement(
             },
         })),
         None => Err(ProjectError::DisjointRequiresPython(requires_python)),
+    }
+}
+
+/// Select the members whose Python requirements must hold in a project environment.
+pub(crate) fn project_python_roots(
+    workspace: &Workspace,
+    current: Option<&PackageName>,
+    all_packages: bool,
+    packages: &[PackageName],
+) -> Option<Vec<PackageName>> {
+    let roots = workspace.resolution_roots()?;
+    if all_packages || (packages.is_empty() && current.is_none()) {
+        Some(roots.iter().cloned().collect())
+    } else if packages.is_empty() {
+        Some(current.into_iter().cloned().collect())
+    } else {
+        Some(packages.to_vec())
     }
 }
 

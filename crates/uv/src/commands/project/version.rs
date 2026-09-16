@@ -41,6 +41,7 @@ use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectEnvironmentTarget,
     ProjectError, ProjectInterpreter, ProjectPythonRequest, UniversalState,
+    project_python_roots,
 };
 use crate::commands::{ExitStatus, UvError, project};
 use crate::printer::Printer;
@@ -576,16 +577,19 @@ async fn lock_and_sync(
     let groups = DependencyGroups::default().with_defaults(default_groups);
     let extras = ExtrasSpecification::default().with_defaults(default_extras);
     let install_options = InstallOptions::default();
+    let python_roots =
+        project_python_roots(project.workspace(), project.project_name(), false, &[]);
 
     // Convert to an `AddTarget` by attaching the appropriate interpreter or environment.
     let target = if no_sync {
         // Discover the interpreter.
-        let project_python = ProjectPythonRequest::from_request(
+        let project_python = ProjectPythonRequest::from_request_for_roots(
             python.as_deref().map(PythonRequest::parse),
             Some(project.workspace()),
             &groups,
             project_dir,
             config_discovery,
+            python_roots.as_deref(),
         )
         .await?;
         let interpreter = ProjectInterpreter::discover(
@@ -610,6 +614,7 @@ async fn lock_and_sync(
         let environment = ProjectEnvironment::get_or_init(
             ProjectEnvironmentTarget::from(project.workspace()),
             None,
+            python_roots.as_deref(),
             &groups,
             python.as_deref().map(PythonRequest::parse),
             &install_mirrors,

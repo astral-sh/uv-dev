@@ -58,7 +58,8 @@ use crate::commands::project::lockfile::FrozenWorkspace;
 use crate::commands::project::{
     EnvironmentUpdate, LinkErrorReporting, MalwareFindings, MissingLockfileSource, PlatformState,
     ProjectEnvironment, ProjectEnvironmentTarget, ProjectError, ScriptEnvironment, UniversalState,
-    detect_conflicts, script_extra_build_requires, script_specification, update_environment,
+    detect_conflicts, project_python_roots,
+    script_extra_build_requires, script_specification, update_environment,
 };
 use crate::commands::{ExitStatus, UvError};
 use crate::printer::Printer;
@@ -225,6 +226,16 @@ pub(crate) async fn sync(
         detect_conflicts(&install_target, &extras, &groups)?;
     }
 
+    let python_roots = match &target {
+        SyncTarget::Manifest(SyncManifest::Project(project)) => project_python_roots(
+            project.workspace(),
+            project.project_name(),
+            all_packages,
+            &package,
+        ),
+        SyncTarget::Manifest(SyncManifest::Script(_)) | SyncTarget::Lockfile { .. } => None,
+    };
+
     // Discover or create the virtual environment.
     let environment = match &target {
         SyncTarget::Manifest(SyncManifest::Project(project)) => SyncEnvironment::Project(
@@ -236,6 +247,7 @@ pub(crate) async fn sync(
                     .map(|lock| {
                         identify_installation_target(&target, lock, all_packages, &package)
                     }),
+                python_roots.as_deref(),
                 &groups,
                 python.as_deref().map(PythonRequest::parse),
                 &install_mirrors,
@@ -265,6 +277,7 @@ pub(crate) async fn sync(
                     all_packages,
                     &package,
                 )),
+                None,
                 &groups,
                 python.as_deref().map(PythonRequest::parse),
                 &install_mirrors,
@@ -988,6 +1001,7 @@ pub(crate) async fn do_sync<'a>(
             target.lock().requires_python().clone(),
         ));
     }
+    target.validate_python(venv.interpreter().python_version())?;
 
     // Validate that the set of requested extras and development groups are compatible.
     detect_conflicts(&target, extras, groups)?;
