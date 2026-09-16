@@ -1704,7 +1704,7 @@ impl WorkspacePython {
     }
 
     /// Resolve a Python request for the selected members of an explicit-roots workspace.
-    pub(crate) async fn from_request_for_roots(
+    async fn from_request_for_roots(
         python_request: Option<PythonRequest>,
         workspace: Option<&Workspace>,
         groups: &DependencyGroupsWithDefaults,

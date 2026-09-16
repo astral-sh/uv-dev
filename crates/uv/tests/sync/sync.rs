@@ -6111,6 +6111,45 @@ fn no_install_project_all_packages_virtual_workspace() -> Result<()> {
     Ok(())
 }
 
+/// Frozen sync can select explicit roots whose project metadata is absent.
+#[test]
+fn frozen_sync_missing_explicit_root_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "root-a"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [tool.uv]
+        package = false
+        [tool.uv.workspace]
+        members = ["root-b"]
+        roots = ["root-a", "root-b"]
+    "#,
+    )?;
+    let member = context.temp_dir.child("root-b/pyproject.toml");
+    member.write_str(
+        r#"
+        [project]
+        name = "root-b"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [tool.uv]
+        package = false
+    "#,
+    )?;
+    context.lock().arg("--no-index").assert().success();
+    fs_err::remove_file(member.path())?;
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen")
+        .arg("--package").arg("root-b").arg("--no-install-workspace"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+    Ok(())
+}
+
 /// Avoid syncing workspace members and the project when `--no-install-workspace` is provided, but
 /// include all dependencies.
 #[test]
