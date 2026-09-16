@@ -544,8 +544,9 @@ fn show_invalid_legacy_installed_files() -> Result<()> {
     let mut filters = context.filters();
     filters.push((
         r"Is a directory \(os error 21\)|Access is denied\. \(os error 5\)",
-        "[DIRECTORY_READ_ERROR]",
+        "[DIRECTORY_ACCESS_ERROR]",
     ));
+    #[cfg(not(windows))]
     uv_snapshot!(filters, show(&context, target.path()).arg("unreadable").arg("--files"), @"
     exit_code: 2 (failure)
     ----- stdout -----
@@ -557,7 +558,21 @@ fn show_invalid_legacy_installed_files() -> Result<()> {
     Files:
 
     ----- stderr -----
-    error: failed to read from file `[TEMP_DIR]/target/unreadable-1.0.0.dist-info/installed-files.txt`: [DIRECTORY_READ_ERROR]
+    error: failed to read from file `[TEMP_DIR]/target/unreadable-1.0.0.dist-info/installed-files.txt`: [DIRECTORY_ACCESS_ERROR]
+    ");
+    #[cfg(windows)]
+    uv_snapshot!(filters, show(&context, target.path()).arg("unreadable").arg("--files"), @"
+    exit_code: 2 (failure)
+    ----- stdout -----
+    Name: unreadable
+    Version: 1.0.0
+    Location: [TEMP_DIR]/target
+    Requires:
+    Required-by:
+    Files:
+
+    ----- stderr -----
+    error: failed to open file `[TEMP_DIR]/target/unreadable-1.0.0.dist-info/installed-files.txt`: [DIRECTORY_ACCESS_ERROR]
     ");
     Ok(())
 }
@@ -586,8 +601,10 @@ fn show_legacy_installed_files_windows_paths() -> Result<()> {
             r"\\?\UNC\server\share\pkg\link\..\missing.py",
             "\n",
         ))?;
-    // Assert the native prefixes before the standard separator filter can rewrite them.
-    uv_snapshot!(context.filters_without_standard_filters(), windows_filters=false, show(&context, target.path()).arg("windows-paths").arg("--files"), @r"
+    // The path snapshot must retain the verbatim prefixes that temporary-path filters remove.
+    let mut filters = context.filters_without_standard_filters();
+    filters.retain(|(pattern, _)| *pattern != r"\\\\\?\\");
+    uv_snapshot!(filters, windows_filters=false, show(&context, target.path()).arg("windows-paths").arg("--files"), @r"
     exit_code: 0 (success)
     ----- stdout -----
     Name: windows-paths
