@@ -149,6 +149,16 @@ pub(crate) async fn sync(
 
     // Determine the groups and extras to include.
     let default_groups = match &target {
+        SyncTarget::Project(project)
+            if frozen.is_some()
+                && package
+                    .iter()
+                    .any(|name| !project.workspace().packages().contains_key(name)) =>
+        {
+            // Frozen sync can select a locked member without its project files. Use the current
+            // project's defaults when the selected member's metadata is unavailable.
+            project.default_groups()?
+        }
         SyncTarget::Project(project) => project.default_groups_for_packages(&package)?,
         SyncTarget::Script(..) => DefaultGroups::default(),
     };

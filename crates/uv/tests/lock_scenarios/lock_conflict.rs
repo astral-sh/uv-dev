@@ -1116,6 +1116,26 @@ fn explicit_root_python_environment_selection() -> Result<()> {
     Creating virtual environment at: .venv
     error: The current Python version (3.12.[X]) is not supported by locked workspace member `root-b`
     ");
+
+    // Partial frozen workspaces still validate the selected root's locked Python domain.
+    fs_err::remove_file(root_b.path())?;
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--frozen").arg("--package").arg("root-b").arg("--no-install-workspace")
+        .arg("--python").arg("3.12"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The current Python version (3.12.[X]) is not supported by locked workspace member `root-b`
+    ");
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--frozen").arg("--package").arg("root-b").arg("--no-install-workspace")
+        .arg("--python").arg("3.13"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Checked in [TIME]
+    ");
     Ok(())
 }
 
