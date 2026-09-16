@@ -1003,7 +1003,7 @@ fn python_installations<'a>(
         .map(move |result| {
             let installation = result?;
             Ok(version
-                .matches_build_revision(installation.interpreter())?
+                .matches_build_revision(installation.managed_path())?
                 .then_some(installation))
         })
         .flatten_ok()
@@ -2485,20 +2485,22 @@ impl PythonRequest {
         let Some(request) = PythonDownloadRequest::from_request(self) else {
             return Ok(true);
         };
-        let managed_key = ManagedPythonInstallation::key_from_interpreter(interpreter);
+        let managed_identity =
+            ManagedPythonInstallation::path_and_key_from_interpreter(interpreter);
         if let Some(version) = request.version() {
-            let key = managed_key
-                .as_ref()
-                .map_or_else(|| Cow::Owned(interpreter.key()), Cow::Borrowed);
+            let key = managed_identity.as_ref().map_or_else(
+                || Cow::Owned(interpreter.key()),
+                |(_, key)| Cow::Borrowed(key),
+            );
             if !version.matches_installation_key(&key) {
                 return Ok(false);
             }
         }
-        let Some(key) = managed_key else {
+        let Some((path, key)) = managed_identity else {
             return Ok(true);
         };
         if let Some(version) = request.version()
-            && !version.matches_build_revision(interpreter)?
+            && !version.matches_build_revision(Some(&path))?
         {
             return Ok(false);
         }
@@ -3474,14 +3476,17 @@ impl VersionRequest {
 
     /// Check an explicitly requested build revision against a managed interpreter, regardless of
     /// which discovery source provided its executable.
-    fn matches_build_revision(&self, interpreter: &Interpreter) -> Result<bool, Error> {
+    fn matches_build_revision(&self, managed_path: Option<&Path>) -> Result<bool, Error> {
         if self
             .variants()
             .is_some_and(|variants| variants.build().is_some())
             && let Some(build) = python_build_variant_version_from_env()?
-            && ManagedPythonInstallation::key_from_interpreter(interpreter).is_some()
-            && ManagedPythonInstallation::try_from_interpreter(interpreter)
-                .is_none_or(|installation| installation.build() != Some(build.as_str()))
+            && let Some(path) = managed_path
+            && ManagedPythonInstallation::read_build_revision(path)
+                .ok()
+                .flatten()
+                .as_deref()
+                != Some(build.as_str())
         {
             debug!(
                 "The managed interpreter does not satisfy the requested build revision `{build}`"
