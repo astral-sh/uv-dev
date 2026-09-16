@@ -51,6 +51,9 @@ pub enum EnvironmentError {
     )]
     LockedPythonIncompatibility(Version, RequiresPython),
 
+    #[error("The current Python version ({0}) is not supported by locked workspace member `{1}`")]
+    LockedRootPythonIncompatibility(Version, PackageName),
+
     #[error(
         "The current Python platform is not compatible with the lockfile's supported environments: {0}"
     )]
@@ -217,6 +220,7 @@ impl From<EnvironmentError> for UvError {
             | EnvironmentError::MissingExtraScript(..)
             | EnvironmentError::DisjointLockedRequiresPython { .. }
             | EnvironmentError::LockedPythonIncompatibility(..)
+            | EnvironmentError::LockedRootPythonIncompatibility(..)
             | EnvironmentError::LockedPlatformIncompatibility(..)
             | EnvironmentError::InvalidProjectEnvironmentDir(..)
             | EnvironmentError::MalwareFound
@@ -270,6 +274,7 @@ impl uv_errors::Hinted for EnvironmentError {
             | Self::MissingExtraScript(..)
             | Self::DisjointLockedRequiresPython { .. }
             | Self::LockedPythonIncompatibility(..)
+            | Self::LockedRootPythonIncompatibility(..)
             | Self::LockedPlatformIncompatibility(..)
             | Self::InvalidProjectEnvironmentDir(..)
             | Self::MalwareFound

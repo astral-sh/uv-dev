@@ -160,6 +160,7 @@ pub async fn sync_from_lock(
             target.lock().requires_python().clone(),
         ));
     }
+    target.validate_python(venv.interpreter().python_version())?;
 
     // Validate that the set of requested extras and development groups are compatible.
     detect_conflicts(&target, extras, groups)?;
