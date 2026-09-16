@@ -20,8 +20,7 @@ fn rejection(value: &serde_json::Value) -> ReadErrorKind {
         &serde_json::to_vec(value).expect("serializable fixture"),
         &token(),
     )
-    .err()
-    .expect("invalid capture must be rejected")
+    .expect_err("invalid capture must be rejected")
     .0
 }
 

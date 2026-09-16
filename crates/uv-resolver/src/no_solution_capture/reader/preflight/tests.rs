@@ -179,8 +179,7 @@ fn escaped_string_scratch_is_bounded_by_decoded_utf8_bytes() {
     let too_many = format!("\"{}\"", "\\u0061".repeat(limit + 1));
     assert_eq!(
         scan_strings(too_many.as_bytes())
-            .err()
-            .expect("decoded atom limit")
+            .expect_err("decoded atom limit")
             .0,
         ReadErrorKind::Limit(CaptureReason::AtomBytes)
     );
@@ -190,8 +189,7 @@ fn escaped_string_scratch_is_bounded_by_decoded_utf8_bytes() {
     let too_many = format!("\"{}\\u0061\"", "\\ud83d\\ude00".repeat(limit / 4));
     assert_eq!(
         scan_strings(too_many.as_bytes())
-            .err()
-            .expect("surrogate-pair byte limit")
+            .expect_err("surrogate-pair byte limit")
             .0,
         ReadErrorKind::Limit(CaptureReason::AtomBytes)
     );
@@ -207,7 +205,7 @@ fn escaped_string_scratch_is_bounded_by_decoded_utf8_bytes() {
         &[b'"', 0xff, b'"'],
     ] {
         assert_eq!(
-            scan_strings(invalid).err().expect("invalid JSON string").0,
+            scan_strings(invalid).expect_err("invalid JSON string").0,
             ReadErrorKind::InvalidJson
         );
     }
