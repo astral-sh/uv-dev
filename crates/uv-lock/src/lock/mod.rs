@@ -83,20 +83,25 @@ mod installable;
 mod map;
 mod serialize;
 mod tree;
+mod workspace_groups;
+pub use workspace_groups::LockedWorkspaceGroup;
 
 /// The current version of the lockfile format.
 const VERSION: u32 = 1;
+const WORKSPACE_GROUPS_VERSION: u32 = 2;
 
 /// An error returned when parsing a lockfile.
 #[derive(Debug, thiserror::Error)]
 pub enum LockParseError {
     /// The lockfile uses an unsupported schema version.
-    #[error("unsupported lockfile schema version (v{version}, but only v{supported} is supported)")]
+    #[error(
+        "unsupported lockfile schema version (v{version}, but versions up to v{supported} are supported)"
+    )]
     UnsupportedVersion { supported: u32, version: u32 },
 
     /// The lockfile cannot be parsed and uses an unsupported schema version.
     #[error(
-        "failed to parse lockfile using an unsupported schema version (v{version}, but only v{supported} is supported)"
+        "failed to parse lockfile using an unsupported schema version (v{version}, but versions up to v{supported} are supported)"
     )]
     UnparsableVersion {
         supported: u32,
@@ -289,14 +294,12 @@ pub(crate) struct HashedDist {
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
 #[serde(try_from = "LockWire")]
 pub struct Lock {
+    workspace_groups: Vec<LockedWorkspaceGroup>,
     /// The (major) version of the lockfile format.
     ///
     /// Changes to the major version indicate backwards- and forwards-incompatible changes to the
-    /// lockfile format. A given uv version only supports a single major version of the lockfile
-    /// format.
-    ///
-    /// In other words, a version of uv that supports version 2 of the lockfile format will not be
-    /// able to read lockfiles generated under version 1 or 3.
+    /// lockfile format. Version 1 represents an ordinary resolution, while version 2 records named
+    /// workspace resolution contexts that version 1 readers must not combine.
     version: u32,
     /// The revision of the lockfile format.
     ///
@@ -2741,6 +2744,7 @@ impl Lock {
             }
         }
         let lock = Self {
+            workspace_groups: Vec::new(),
             version,
             revision,
             fork_markers,
@@ -2822,7 +2826,7 @@ impl Lock {
 
     /// Returns `true` if this [`Lock`] can validate packages without declaration metadata.
     pub fn supports_missing_package_metadata(&self) -> bool {
-        (self.version(), self.revision()) >= (VERSION, METADATA_FREE_REVISION)
+        self.revision() >= METADATA_FREE_REVISION
     }
 
     /// Returns `true` if this [`Lock`] includes entries for empty `dependency-group` metadata.
@@ -3544,9 +3548,10 @@ impl Lock {
                 Err(source) => {
                     if let Ok(lock) = toml::from_str::<LockVersion>(input)
                         && lock.version() != VERSION
+                        && lock.version() != WORKSPACE_GROUPS_VERSION
                     {
                         return Err(LockParseError::UnparsableVersion {
-                            supported: VERSION,
+                            supported: WORKSPACE_GROUPS_VERSION,
                             version: lock.version(),
                             source,
                         });
@@ -3556,9 +3561,9 @@ impl Lock {
             },
         };
 
-        if lock.version() != VERSION {
+        if lock.version() != VERSION && lock.version() != WORKSPACE_GROUPS_VERSION {
             return Err(LockParseError::UnsupportedVersion {
-                supported: VERSION,
+                supported: WORKSPACE_GROUPS_VERSION,
                 version: lock.version(),
             });
         }
@@ -6151,6 +6156,8 @@ impl ResolverManifest {
 struct LockWire {
     version: u32,
     revision: Option<u32>,
+    #[serde(rename = "workspace-group", default)]
+    workspace_groups: Vec<LockedWorkspaceGroup>,
     requires_python: RequiresPython,
     /// If this lockfile was built from a forking resolution with non-identical forks, store the
     /// forks in the lockfile so we can recreate them in subsequent resolutions.
@@ -6238,7 +6245,7 @@ impl TryFrom<LockWire> for Lock {
             fork_strategy: options_wire.fork_strategy,
             exclude_newer: options_wire.exclude_newer.into(),
         };
-        let lock = Self::new(
+        let mut lock = Self::new(
             wire.version,
             wire.revision.unwrap_or(0),
             packages,
@@ -6250,6 +6257,8 @@ impl TryFrom<LockWire> for Lock {
             required_environments,
             fork_markers,
         )?;
+
+        lock.workspace_groups = wire.workspace_groups;
 
         Ok(lock)
     }
@@ -10245,6 +10254,20 @@ fn canonical_marker_trees(
     markers: &[UniversalMarker],
     requires_python: &RequiresPython,
 ) -> Vec<MarkerTree> {
+    if markers.iter().any(|marker| marker.has_workspace_group()) {
+        let mut markers = markers
+            .iter()
+            .map(|marker| {
+                SimplifiedMarkerTree::new(requires_python, marker.combined())
+                    .as_simplified_marker_tree()
+            })
+            .collect::<Vec<_>>();
+        // Marker node IDs depend on interning order. Use the wire representation so a
+        // freshly resolved graph and a parsed graph have identical lockfile ordering.
+        markers.sort_by_cached_key(|marker| marker.try_to_string());
+        markers.dedup();
+        return markers;
+    }
     let mut pep508_only = vec![];
     let mut seen = FxHashSet::default();
     for marker in markers {

@@ -3513,6 +3513,9 @@ pub struct InitArgs {
 
 #[derive(Args)]
 pub struct RunArgs {
+    /// Run using the named workspace group's resolution.
+    #[arg(long, value_name = "NAME", conflicts_with = "no_project")]
+    pub workspace_group: Option<GroupName>,
     /// Include optional dependencies from the specified extra name.
     ///
     /// May be provided more than once.
@@ -3792,6 +3795,9 @@ pub struct RunArgs {
 
 #[derive(Args)]
 pub struct SyncArgs {
+    /// Sync the named workspace group's members and resolution.
+    #[arg(long, value_name = "NAME")]
+    pub workspace_group: Option<GroupName>,
     /// Include optional dependencies from the specified extra name.
     ///
     /// May be provided more than once.
@@ -4736,6 +4742,9 @@ pub struct TreeArgs {
 
 #[derive(Args)]
 pub struct ExportArgs {
+    /// Export the named workspace group's members and resolution.
+    #[arg(long, value_name = "NAME")]
+    pub workspace_group: Option<GroupName>,
     /// The format to which `uv.lock` should be exported.
     ///
     /// Supports `requirements.txt`, `pylock.toml` (PEP 751) and CycloneDX v1.5 JSON output formats.

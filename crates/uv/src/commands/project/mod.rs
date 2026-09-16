@@ -136,12 +136,12 @@ pub(crate) enum ProjectError {
     LockWorkspaceMismatch(PackageName, MissingLockfileSource),
 
     #[error(
-        "The lockfile at `uv.lock` uses an unsupported schema version (v{1}, but only v{0} is supported). Downgrade to a compatible uv version, or remove the `uv.lock` prior to running `uv lock` or `uv sync`."
+        "The lockfile at `uv.lock` uses an unsupported schema version (v{1}, but versions up to v{0} are supported). Downgrade to a compatible uv version, or remove the `uv.lock` prior to running `uv lock` or `uv sync`."
     )]
     UnsupportedLockVersion(u32, u32),
 
     #[error(
-        "Failed to parse `uv.lock`, which uses an unsupported schema version (v{1}, but only v{0} is supported). Downgrade to a compatible uv version, or remove the `uv.lock` prior to running `uv lock` or `uv sync`."
+        "Failed to parse `uv.lock`, which uses an unsupported schema version (v{1}, but versions up to v{0} are supported). Downgrade to a compatible uv version, or remove the `uv.lock` prior to running `uv lock` or `uv sync`."
     )]
     UnparsableLockVersion(u32, u32, #[source] toml::de::Error),
 
@@ -231,6 +231,28 @@ pub(crate) enum ProjectError {
         format_requires_python_sources(_0)
     )]
     DisjointRequiresPython(BTreeMap<(PackageName, Option<GroupName>), VersionSpecifiers>),
+
+    #[error("Failed to resolve workspace group `{0}`")]
+    WorkspaceGroupResolution(GroupName, #[source] Box<Self>),
+
+    #[error("Workspace group resolution did not produce a lockfile")]
+    MissingWorkspaceGroupResolution,
+
+    #[error(
+        "The lockfile contains multiple workspace contexts; select one with `--workspace-group`"
+    )]
+    WorkspaceGroupRequired,
+
+    #[error("The selected packages are not all reachable in workspace group `{0}`")]
+    WorkspaceGroupTarget(GroupName),
+
+    #[error(
+        "The selected packages are not covered by a single workspace group; add them to a group or select a narrower target"
+    )]
+    WorkspaceGroupUncovered,
+
+    #[error("Workspace group `{0}` is not present in the lockfile; run `uv lock`")]
+    MissingWorkspaceGroupLock(GroupName),
 
     #[error("Environment marker is empty")]
     EmptyEnvironment,
@@ -569,6 +591,18 @@ pub(crate) fn find_requires_python(
     workspace: &Workspace,
     groups: &DependencyGroupsWithDefaults,
 ) -> Result<Option<RequiresPython>, ProjectError> {
+    if let Some(requires_python) = workspace.workspace_group_requires_python()? {
+        let sources = workspace.requires_python(groups)?;
+        return RequiresPython::intersection(
+            std::iter::once(requires_python.specifiers()).chain(
+                sources
+                    .iter()
+                    .filter_map(|((_, group), specifiers)| group.as_ref().map(|_| specifiers)),
+            ),
+        )
+        .map(Some)
+        .ok_or(ProjectError::DisjointRequiresPython(sources));
+    }
     let requires_python = workspace.requires_python(groups)?;
     // If there are no `Requires-Python` specifiers in the workspace, return `None`.
     if requires_python.is_empty() {

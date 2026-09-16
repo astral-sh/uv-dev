@@ -4,6 +4,7 @@ expression: result
 ---
 Ok(
     Lock {
+        workspace_groups: [],
         version: 1,
         revision: 0,
         fork_markers: [],

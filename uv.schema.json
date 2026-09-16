@@ -2740,6 +2740,13 @@
             "$ref": "#/definitions/SerdePattern"
           }
         },
+        "groups": {
+          "description": "Named sets of workspace members to resolve together.\n\nAll groups share one lockfile, using shared versions where possible and separate solutions\nwhen their requirements conflict. Group members are package names, not paths. A group can\nrestrict `requires-python`; at most one group can set `default = true`.",
+          "type": ["array", "null"],
+          "items": {
+            "$ref": "#/definitions/WorkspaceGroup"
+          }
+        },
         "members": {
           "description": "Packages to include as workspace members.\n\nSupports both globs and explicit paths.\n\nFor more information on the glob syntax, refer to the [`glob` documentation](https://docs.rs/glob/latest/glob/struct.Pattern.html).",
           "type": ["array", "null"],
@@ -3048,6 +3055,38 @@
         }
       },
       "additionalProperties": false
+    },
+    "WorkspaceGroup": {
+      "description": "A named set of workspace resolution roots.",
+      "type": "object",
+      "properties": {
+        "default": {
+          "description": "Whether unqualified commands select this group's roots and resolution.",
+          "type": "boolean"
+        },
+        "members": {
+          "description": "The `project.name` values of the workspace members to use as resolution roots.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PackageName"
+          },
+          "uniqueItems": true
+        },
+        "name": {
+          "description": "The unique name used by `--workspace-group`.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/GroupName"
+            }
+          ]
+        },
+        "requires-python": {
+          "description": "An optional restriction on the Python versions supported by this group.",
+          "type": ["string", "null"]
+        }
+      },
+      "additionalProperties": false,
+      "required": ["name", "members"]
     },
     "WorkspaceReference": {
       "description": "A reference to either the current workspace or a workspace discovered from a path.",
