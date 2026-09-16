@@ -8333,9 +8333,9 @@ async fn find_links_uppercase_html() -> Result<()> {
     Ok(())
 }
 
-/// Treat an incorrect wheel size from the Simple API as advisory.
+/// Reject an incorrect wheel size from the Simple API.
 #[tokio::test]
-async fn registry_wheel_size_is_advisory() -> Result<()> {
+async fn registry_wheel_size_is_enforced() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let server = MockServer::start().await;
     let wheel_filename = "tqdm-1000.0.0-py3-none-any.whl";
@@ -8384,12 +8384,11 @@ async fn registry_wheel_size_is_advisory() -> Result<()> {
         .arg("tqdm==1000.0.0")
         .arg("--index-url")
         .arg(server.uri()), @"
-    exit_code: 0 (success)
+    exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + tqdm==1000.0.0
+    error: Failed to download `tqdm==1000.0.0`
+      cause: Size mismatch for `tqdm==1000.0.0`: expected 1 bytes, but downloaded 1017 bytes
     "
     );
 
