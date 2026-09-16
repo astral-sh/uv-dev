@@ -241,6 +241,11 @@ impl<'lock> InstallTarget<'lock> {
         // Other targets need the generic path to include manifest dependencies or evaluate
         // conflict markers from project roots.
         let use_concrete_roots = self.lock().conflicts().is_empty()
+            && !self
+                .lock()
+                .fork_markers()
+                .iter()
+                .any(|marker| marker.has_root_marker())
             && match self {
                 Self::Project { workspace, .. }
                 | Self::Projects { workspace, .. }

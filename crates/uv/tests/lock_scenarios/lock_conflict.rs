@@ -496,12 +496,12 @@ fn explicit_root_python_range_incompatible_member() -> Result<()> {
         .arg("--preview-features").arg("package-conflicts"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: No solution found when resolving dependencies for split (markers: python_full_version != '3.13.*'; included: root-a; excluded: root-b)
-      cause: Because the requested Python version (>=3.12, <3.14) does not satisfy Python>=3.13,<3.14 and member depends on Python>=3.13,<3.14, we can conclude that member's requirements are unsatisfiable.
+    error: No solution found when resolving dependencies for split (included: root-a; excluded: root-b)
+      cause: Because the requested Python version (==3.12.*) does not satisfy Python>=3.13,<3.14 and member depends on Python>=3.13,<3.14, we can conclude that member's requirements are unsatisfiable.
              And because root-a depends on member, we can conclude that root-a's requirements are unsatisfiable.
-             And because only root-a{python_full_version < '3.13'}==0.1.0 is available and your workspace requires root-a{python_full_version < '3.13'}, we can conclude that your workspace's requirements are unsatisfiable.
+             And because only root-a==0.1.0 is available and your workspace requires root-a, we can conclude that your workspace's requirements are unsatisfiable.
 
-    hint: The `requires-python` value (>=3.12, <3.14) includes Python versions that are not supported by your dependencies (e.g., member==0.1.0 only supports >=3.13, <3.14). Consider using a more restrictive `requires-python` value (like >=3.13, <3.14).
+    hint: The `requires-python` value (==3.12.*) includes Python versions that are not supported by your dependencies (e.g., member==0.1.0 only supports >=3.13, <3.14). Consider using a more restrictive `requires-python` value (like >=3.13, <3.14).
     ");
     assert!(!context.temp_dir.child("uv.lock").path().exists());
     Ok(())
@@ -552,8 +552,12 @@ fn explicit_root_python_environment_selection() -> Result<()> {
     revision = 3
     requires-python = ">=3.12, <3.14"
     resolution-markers = [
-        "python_full_version >= '3.13'",
-        "python_full_version < '3.13'",
+        "python_full_version < '3.13' and extra != 'project-6-root-a' and extra == 'project-6-root-b' and extra == 'root-6-root-a'",
+        "python_full_version < '3.13' and extra == 'project-6-root-a' and extra != 'project-6-root-b' and extra == 'root-6-root-a'",
+        "python_full_version < '3.13' and extra != 'project-6-root-a' and extra != 'project-6-root-b' and extra == 'root-6-root-a'",
+        "python_full_version >= '3.13' and extra != 'project-6-root-a' and extra == 'project-6-root-b' and extra == 'root-6-root-b'",
+        "python_full_version >= '3.13' and extra == 'project-6-root-a' and extra != 'project-6-root-b' and extra == 'root-6-root-b'",
+        "python_full_version >= '3.13' and extra != 'project-6-root-a' and extra != 'project-6-root-b' and extra == 'root-6-root-b'",
     ]
     conflicts = [[
         { package = "root-a" },
@@ -574,7 +578,7 @@ fn explicit_root_python_environment_selection() -> Result<()> {
     version = "0.1.0"
     source = { virtual = "." }
     resolution-markers = [
-        "python_full_version < '3.13'",
+        "python_full_version < '3.13' and extra == 'project-6-root-a' and extra == 'root-6-root-a'",
     ]
 
     [[package]]
@@ -582,7 +586,7 @@ fn explicit_root_python_environment_selection() -> Result<()> {
     version = "0.1.0"
     source = { virtual = "root-b" }
     resolution-markers = [
-        "python_full_version >= '3.13'",
+        "python_full_version >= '3.13' and extra == 'project-6-root-b' and extra == 'root-6-root-b'",
     ]
     "#);
     uv_snapshot!(context.filters(), context.sync()

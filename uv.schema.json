@@ -2748,7 +2748,7 @@
           }
         },
         "roots": {
-          "description": "Workspace members to use as resolution roots.\n\nOther discovered members remain available to workspace sources, but only participate in\nresolution when reached through a dependency. When omitted, every member is a root.",
+          "description": "Workspace members to use as resolution roots.\n\nOther discovered members remain available to workspace sources, but only participate in\nresolution when reached through a dependency. Each explicit root is resolved independently;\nselecting multiple roots requires their locked graphs to be compatible. When omitted, all\nmembers participate in one shared resolution.",
           "type": ["array", "null"],
           "items": {
             "$ref": "#/definitions/PackageName"

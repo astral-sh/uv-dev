@@ -1487,6 +1487,11 @@ pub struct WorkspaceMember {
 }
 
 impl WorkspaceMember {
+    /// The Python versions supported by this member's standalone resolution.
+    pub fn requires_python(&self) -> Option<&VersionSpecifiers> {
+        self.project.requires_python.as_ref()
+    }
+
     /// The path to the project root.
     pub fn root(&self) -> &PathBuf {
         &self.root
