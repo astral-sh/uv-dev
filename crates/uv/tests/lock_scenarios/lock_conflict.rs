@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use assert_fs::prelude::*;
-use insta::assert_snapshot;
+use insta::{assert_json_snapshot, assert_snapshot};
 
 use uv_test::packse::PackseServer;
 use uv_test::packse::scenario::Scenario;
@@ -12,6 +12,169 @@ use uv_test::uv_snapshot;
 //
 // They are split from `lock.rs` somewhat arbitrarily. Mostly because there are
 // a lot of them, and `lock.rs` was growing large enough as it is.
+
+/// Virtual root projects can select incompatible subsets of discovered workspace members.
+#[test]
+fn project_conflicts_with_explicit_workspace_roots() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(
+        r#"
+        name = "virtual-workspace-roots"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.shared-leaf.versions."1.0.0"]
+        sdist = false
+        [packages.shared-leaf.versions."2.0.0"]
+        sdist = false
+        [packages.common-leaf.versions."1.0.0"]
+        sdist = false
+        "#,
+    )?;
+    let server = PackseServer::from_scenario(&scenario);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "root-a"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["common", "legacy"]
+
+        [tool.uv]
+        package = false
+        conflicts = [[{ package = "root-a" }, { package = "root-b" }]]
+
+        [tool.uv.workspace]
+        members = ["members/*", "groups/*"]
+        roots = ["root-a", "root-b"]
+
+        [tool.uv.sources]
+        common = { workspace = true }
+        legacy = { workspace = true }
+        next = { workspace = true }
+        "#,
+    )?;
+    for (name, dependency) in [
+        ("common", "common-leaf==1"),
+        ("legacy", "shared-leaf<2"),
+        ("next", "shared-leaf>=2"),
+        ("unused", "missing-package==1"),
+    ] {
+        context
+            .temp_dir
+            .child("members")
+            .child(name)
+            .child("pyproject.toml")
+            .write_str(&format!(
+                r#"
+                [project]
+                name = "{name}"
+                version = "0.1.0"
+                requires-python = ">=3.12"
+                dependencies = ["{dependency}"]
+
+                [tool.uv]
+                package = false
+                "#,
+            ))?;
+    }
+    context
+        .temp_dir
+        .child("groups/root-b/pyproject.toml")
+        .write_str(
+            r#"
+            [project]
+            name = "root-b"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["common", "next"]
+
+            [tool.uv]
+            package = false
+            "#,
+        )?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features").arg("package-conflicts")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features").arg("package-conflicts")
+        .arg("--index-url").arg(server.index_url())
+        .arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    common-leaf==1.0.0
+    shared-leaf==1.0.0
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--package").arg("root-b")
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    common-leaf==1.0.0
+    shared-leaf==2.0.0
+    ");
+
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let packages = lock["package"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|package| {
+            Some((
+                package.get("name")?.as_str()?,
+                package.get("version")?.as_str()?,
+            ))
+        })
+        .collect::<Vec<_>>();
+    assert_json_snapshot!(packages, @r#"
+    [
+      [
+        "common",
+        "0.1.0"
+      ],
+      [
+        "common-leaf",
+        "1.0.0"
+      ],
+      [
+        "legacy",
+        "0.1.0"
+      ],
+      [
+        "next",
+        "0.1.0"
+      ],
+      [
+        "root-a",
+        "0.1.0"
+      ],
+      [
+        "root-b",
+        "0.1.0"
+      ],
+      [
+        "shared-leaf",
+        "1.0.0"
+      ],
+      [
+        "shared-leaf",
+        "2.0.0"
+      ]
+    ]
+    "#);
+    Ok(())
+}
 
 /// Conflict discovery can provisionally visit a package that is later excluded after all
 /// transitive extras have been activated. Its dependencies must be evaluated under the package's
