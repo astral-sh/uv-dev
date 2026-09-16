@@ -23,7 +23,7 @@ use url::Url;
 use walkdir::WalkDir;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{basic_auth, method, path},
+    matchers::{basic_auth, method, path, query_param},
 };
 
 use uv_extract::dirhash::{DirectoryDigest, dirhash_path};
@@ -11352,6 +11352,70 @@ fn cyclic_build_dependency() {
      + circular-one==0.2.0
     "
     );
+}
+
+#[tokio::test]
+async fn direct_url_json_signed_archive() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filter((r"(?m)^WARN Range requests not supported[^\n]*\n", ""));
+    let server = MockServer::start().await;
+    let (wheel_filename, wheel) = generate_wheel(
+        &"signed-archive".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+    );
+    Mock::given(method("GET"))
+        .and(path(format!("/{wheel_filename}")))
+        .and(basic_auth("user", "password"))
+        .and(query_param("sig", "signature"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .mount(&server)
+        .await;
+    let url = format!(
+        "http://user:password@{}/{wheel_filename}?sig=signature&keep=value",
+        server.address(),
+    );
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(&url), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + signed-archive==1.0.0 (from http://user:****@[LOCALHOST]/signed_archive-1.0.0-py3-none-any.whl?sig=****&keep=value)
+    ");
+
+    let direct_url = fs_err::read_to_string(
+        context
+            .site_packages()
+            .join("signed_archive-1.0.0.dist-info/direct_url.json"),
+    )?;
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(direct_url, @r#"{"url":"http://[LOCALHOST]/signed_archive-1.0.0-py3-none-any.whl?keep=value","archive_info":{}}"#);
+    });
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(&url), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked 1 package in [TIME]
+    ");
+
+    // Query parameters unrelated to authentication still distinguish installed artifacts.
+    uv_snapshot!(context.filters(), context.pip_install().arg(url.replace("keep=value", "keep=other")), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - signed-archive==1.0.0 (from http://[LOCALHOST]/signed_archive-1.0.0-py3-none-any.whl?keep=value)
+     + signed-archive==1.0.0 (from http://user:****@[LOCALHOST]/signed_archive-1.0.0-py3-none-any.whl?sig=****&keep=other)
+    ");
+    Ok(())
 }
 
 #[test]
