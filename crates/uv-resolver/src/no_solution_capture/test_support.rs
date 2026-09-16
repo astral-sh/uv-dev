@@ -4,7 +4,7 @@ use std::sync::{Arc, LazyLock};
 use papaya::HashMap;
 use pubgrub::{Derived, External, Map, Term};
 use rustc_hash::FxHashMap;
-use uv_distribution_types::RequiresPython;
+use uv_distribution_types::{IndexCapabilities, IndexLocations, RequiresPython};
 use uv_normalize::PackageName;
 use uv_pep440::{MIN_VERSION, Version};
 use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder, MarkerTree};
@@ -111,6 +111,8 @@ pub(super) struct Fixture {
     pub original_python: PythonRequirement,
     pub effective_python: PythonRequirement,
     pub index: InMemoryIndex,
+    pub index_locations: IndexLocations,
+    pub index_capabilities: IndexCapabilities,
     pub urls: Urls,
     pub indexes: Indexes,
     pub fork_urls: ForkUrls,
@@ -135,6 +137,8 @@ impl Fixture {
             original_python: python.clone(),
             effective_python: python,
             index: InMemoryIndex::default(),
+            index_locations: IndexLocations::default(),
+            index_capabilities: IndexCapabilities::default(),
             urls: Urls::default(),
             indexes: Indexes::default(),
             fork_urls: ForkUrls::default(),
@@ -154,6 +158,8 @@ impl Fixture {
             original_python: &self.original_python,
             effective_python: &self.effective_python,
             index: &self.index,
+            index_locations: &self.index_locations,
+            index_capabilities: &self.index_capabilities,
             urls: &self.urls,
             indexes: &self.indexes,
             fork_urls: &self.fork_urls,

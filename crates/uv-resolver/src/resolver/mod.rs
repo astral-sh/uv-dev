@@ -2881,6 +2881,8 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 original_python: &self.python_requirement,
                 effective_python: &effective_python,
                 index: &self.index,
+                index_locations: &self.locations,
+                index_capabilities: &self.capabilities,
                 urls: &self.urls,
                 indexes: &self.indexes,
                 fork_urls: &fork_urls,

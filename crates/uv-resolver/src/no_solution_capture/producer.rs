@@ -7,7 +7,7 @@ use papaya::HashMap;
 use pubgrub::{DerivationTree, External, Ranges, Term};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use uv_distribution_types::RequiresPython;
+use uv_distribution_types::{IndexCapabilities, IndexLocations, IndexUrl, RequiresPython};
 use uv_normalize::PackageName;
 use uv_pep440::{
     EncodedVersion, EncodedVersionRanges, LocalSegment, LocalVersionSlice, MIN_VERSION, Operator,
@@ -45,6 +45,8 @@ pub(crate) struct CaptureContext<'a> {
     pub original_python: &'a PythonRequirement,
     pub effective_python: &'a PythonRequirement,
     pub index: &'a InMemoryIndex,
+    pub index_locations: &'a IndexLocations,
+    pub index_capabilities: &'a IndexCapabilities,
     pub urls: &'a Urls,
     pub indexes: &'a Indexes,
     pub fork_urls: &'a ForkUrls,
@@ -124,6 +126,7 @@ impl Collector {
         for name in context.workspace_members {
             workspace_members.push(self.budget.string(name.as_ref())?);
         }
+        let index_authentication = self.index_authentication(&context)?;
         let observations = self.observations(&context)?;
         Ok(CapturedGraph {
             root,
@@ -136,8 +139,38 @@ impl Collector {
             environment,
             original_python,
             effective_python,
+            index_authentication,
             observations,
         })
+    }
+
+    fn index_authentication(
+        &mut self,
+        context: &CaptureContext<'_>,
+    ) -> Result<CapturedIndexAuthentication, Stop> {
+        let mut authentication = CapturedIndexAuthentication::default();
+        // `known_indexes` borrows the complete configured set without building a deduplication
+        // table. Including overridden indexes is conservative: a flag is not a causal claim.
+        for index in context.index_locations.known_indexes() {
+            observe_index_authentication(
+                &mut self.budget,
+                &mut authentication,
+                context.index_capabilities,
+                index.url(),
+            )?;
+        }
+        for name in &self.names {
+            self.budget.work(1)?;
+            if let Some(index) = context.fork_indexes.get(name) {
+                observe_index_authentication(
+                    &mut self.budget,
+                    &mut authentication,
+                    context.index_capabilities,
+                    index.url(),
+                )?;
+            }
+        }
+        Ok(authentication)
     }
 
     fn derivation(&mut self, root: &ErrorTree) -> Result<(Vec<CapturedNode>, u32), Stop> {
@@ -701,6 +734,20 @@ impl Collector {
         }
         Ok(observations)
     }
+}
+
+fn observe_index_authentication(
+    budget: &mut Budget,
+    authentication: &mut CapturedIndexAuthentication,
+    capabilities: &IndexCapabilities,
+    index: &IndexUrl,
+) -> Result<(), Stop> {
+    budget.work(1)?;
+    // Capability lookups hash the URL. Bound that work without copying or serializing it.
+    budget.check_atom(index.url().as_str().len())?;
+    authentication.unauthorized |= capabilities.unauthorized(index);
+    authentication.forbidden |= capabilities.forbidden(index);
+    Ok(())
 }
 
 impl From<CanonicalMarkerValueVersion> for VersionMarkerKey {

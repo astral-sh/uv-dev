@@ -158,7 +158,18 @@ pub(super) struct CapturedGraph {
     pub environment: CapturedEnvironment,
     pub original_python: CapturedPython,
     pub effective_python: CapturedPython,
+    pub index_authentication: CapturedIndexAuthentication,
     pub observations: Vec<CapturedObservation>,
+}
+
+/// Authentication failures observed for the configured or selected indexes as a whole.
+///
+/// These flags do not attribute a failure to an individual package or establish causality.
+#[derive(Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CapturedIndexAuthentication {
+    pub unauthorized: bool,
+    pub forbidden: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

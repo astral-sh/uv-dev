@@ -125,6 +125,53 @@ fn request_identity_and_declared_json_budget_are_admission_checks() {
 }
 
 #[test]
+fn index_authentication_is_required_and_has_only_two_boolean_fields() {
+    let mut missing = complete_value();
+    missing["graph"]
+        .as_object_mut()
+        .expect("graph object")
+        .remove("index_authentication");
+    assert_eq!(
+        check_value(&missing).err().expect("missing observation").0,
+        ReadErrorKind::InvalidSchema
+    );
+    for authentication in [
+        json!(null),
+        json!({}),
+        json!({"unauthorized": false}),
+        json!({"forbidden": false}),
+        json!({"unauthorized": 0, "forbidden": false}),
+        json!({"unauthorized": false, "forbidden": "false"}),
+        json!({"unauthorized": false, "forbidden": false, "index": "private"}),
+    ] {
+        let mut invalid = complete_value();
+        invalid["graph"]["index_authentication"] = authentication;
+        assert_eq!(
+            check_value(&invalid)
+                .err()
+                .expect("malformed authentication observation")
+                .0,
+            ReadErrorKind::InvalidSchema
+        );
+    }
+    let mut valid = complete_value();
+    valid["graph"]["index_authentication"] = json!({"unauthorized": true, "forbidden": true});
+    assert!(check_value(&valid).is_ok());
+
+    let valid = String::from_utf8(complete_bytes()).expect("fixture is UTF-8");
+    let duplicate = valid.replacen(
+        r#""index_authentication":{"unauthorized":false,"#,
+        r#""index_authentication":{"unauthorized":false,"\u0075nauthorized":false,"#,
+        1,
+    );
+    assert_ne!(duplicate, valid);
+    assert_eq!(
+        rejection(duplicate.as_bytes()),
+        ReadErrorKind::InvalidSchema
+    );
+}
+
+#[test]
 fn escaped_string_scratch_is_bounded_by_decoded_utf8_bytes() {
     let limit = CaptureLimits::V1.atom_bytes;
     let ascii = format!("\"{}\"", "\\u0061".repeat(limit));

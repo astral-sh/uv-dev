@@ -477,6 +477,7 @@ enum ObjectKind {
     Limits,
     Usage,
     Graph,
+    IndexAuthentication,
     NotRoot,
     NoVersions,
     FromDependencyOf,
@@ -622,7 +623,12 @@ impl ObjectKind {
                 Field::required("environment", Object(O::Environment)),
                 Field::required("original_python", Object(O::Python)),
                 Field::required("effective_python", Object(O::Python)),
+                Field::required("index_authentication", Object(O::IndexAuthentication)),
                 Field::required("observations", Array(A::Observations)),
+            ],
+            Self::IndexAuthentication => fields![
+                Field::required("unauthorized", Bool),
+                Field::required("forbidden", Bool),
             ],
             Self::NotRoot => fields![
                 Field::required("package", U32),
@@ -817,6 +823,7 @@ impl ObjectKind {
             | Self::Limits
             | Self::Usage
             | Self::Graph
+            | Self::IndexAuthentication
             | Self::Prerelease
             | Self::LocalVersion
             | Self::LocalSegment
@@ -1338,6 +1345,7 @@ fn finish_object<E: de::Error>(
             }
         }
         ObjectKind::Graph
+        | ObjectKind::IndexAuthentication
         | ObjectKind::NotRoot
         | ObjectKind::NoVersions
         | ObjectKind::FromDependencyOf

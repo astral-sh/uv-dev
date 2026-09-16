@@ -3,6 +3,9 @@ use std::error::Error;
 use pubgrub::{Derived, Map};
 use reqwest::StatusCode;
 use serde_json::json;
+use uv_distribution_types::{
+    Index, IndexMetadata, IndexStatusCodeDecision, IndexStatusCodeStrategy,
+};
 use uv_pep440::VersionSpecifiers;
 use uv_pep508::{MarkerExpression, MarkerOperator, MarkerValueString};
 use uv_pypi_types::ResolverMarkerEnvironment;
@@ -367,6 +370,157 @@ fn observations_distinguish_unobserved_listing_and_metadata_failure() -> Result<
         observation.incomplete[0].reason.kind,
         CapturedReasonKind::MetadataOffline
     );
+    NoSolutionEvidence::from_json(&evidence.to_json()?, &token())?;
+    Ok(())
+}
+
+#[test]
+fn index_authentication_uses_existing_global_capability_state() -> Result<(), Box<dyn Error>> {
+    let mut fixture = Fixture::new();
+    let first = IndexUrl::parse("https://first.example/simple", None)?;
+    let overridden = IndexUrl::parse("https://overridden.example/simple", None)?;
+    fixture.index_locations = IndexLocations::new(
+        vec![
+            Index::from_index_url(first.clone()),
+            Index::from_index_url(overridden.clone()),
+        ],
+        Vec::new(),
+        false,
+    );
+    let authentication = |fixture: &Fixture| {
+        options()
+            .capture(fixture.context(&basic_tree()))
+            .0
+            .graph
+            .expect("complete graph")
+            .index_authentication
+    };
+
+    assert_eq!(
+        IndexStatusCodeStrategy::Default.handle_status_code(
+            StatusCode::NOT_FOUND,
+            &first,
+            &fixture.index_capabilities,
+        ),
+        IndexStatusCodeDecision::Ignore
+    );
+    assert_eq!(
+        authentication(&fixture),
+        CapturedIndexAuthentication::default()
+    );
+    assert_eq!(
+        IndexStatusCodeStrategy::Default.handle_status_code(
+            StatusCode::UNAUTHORIZED,
+            &first,
+            &fixture.index_capabilities,
+        ),
+        IndexStatusCodeDecision::Fail(StatusCode::UNAUTHORIZED)
+    );
+    assert_eq!(
+        authentication(&fixture),
+        CapturedIndexAuthentication {
+            unauthorized: true,
+            forbidden: false,
+        }
+    );
+    assert_eq!(
+        IndexStatusCodeStrategy::Default.handle_status_code(
+            StatusCode::FORBIDDEN,
+            &overridden,
+            &fixture.index_capabilities,
+        ),
+        IndexStatusCodeDecision::Fail(StatusCode::FORBIDDEN)
+    );
+    assert_eq!(
+        authentication(&fixture),
+        CapturedIndexAuthentication {
+            unauthorized: true,
+            forbidden: true,
+        }
+    );
+
+    // A selected explicit index can be absent from the general configured-index inventory.
+    let mut fixture = Fixture::new();
+    let selected = IndexUrl::parse("https://selected.example/simple", None)?;
+    fixture.fork_indexes.insert(
+        &package_name("a"),
+        &IndexMetadata::from(selected.clone()),
+        &fixture.environment,
+    )?;
+    assert_eq!(
+        IndexStatusCodeStrategy::Default.handle_status_code(
+            StatusCode::FORBIDDEN,
+            &selected,
+            &fixture.index_capabilities,
+        ),
+        IndexStatusCodeDecision::Fail(StatusCode::FORBIDDEN)
+    );
+    assert_eq!(
+        authentication(&fixture),
+        CapturedIndexAuthentication {
+            unauthorized: false,
+            forbidden: true,
+        }
+    );
+
+    // Explicitly ignored authentication responses do not set the native capability flags.
+    // A consumer must independently reject that status-code policy before accepting absence.
+    let fixture = Fixture::new();
+    assert_eq!(
+        IndexStatusCodeStrategy::ignore_authentication_error_codes().handle_status_code(
+            StatusCode::UNAUTHORIZED,
+            &first,
+            &fixture.index_capabilities,
+        ),
+        IndexStatusCodeDecision::Ignore
+    );
+    assert_eq!(
+        authentication(&fixture),
+        CapturedIndexAuthentication::default()
+    );
+    let tree = basic_tree();
+    let evidence = options().capture(fixture.context(&tree));
+    NoSolutionEvidence::from_json(&evidence.to_json()?, &token())?;
+    Ok(())
+}
+
+#[test]
+fn index_authentication_scan_cannot_return_partial_false_flags() -> Result<(), Box<dyn Error>> {
+    let mut fixture = Fixture::new();
+    fixture.index_locations = IndexLocations::new(
+        vec![Index::from_index_url(IndexUrl::parse(
+            "https://second.example/simple",
+            None,
+        )?)],
+        Vec::new(),
+        false,
+    );
+    let tree = basic_tree();
+    let mut collector = Collector::new(CaptureLimits {
+        work: 1,
+        ..CaptureLimits::V1
+    });
+    assert_eq!(
+        collector
+            .index_authentication(&fixture.context(&tree))
+            .expect_err("the second lookup exceeds the work budget"),
+        Stop::truncated(CaptureReason::Work)
+    );
+    assert_eq!(collector.budget.usage.work, 2);
+
+    let long_url = format!(
+        "https://example.invalid/{}",
+        "a".repeat(CaptureLimits::V1.atom_bytes)
+    );
+    fixture.index_locations = IndexLocations::new(
+        vec![Index::from_index_url(IndexUrl::parse(&long_url, None)?)],
+        Vec::new(),
+        false,
+    );
+    let evidence = options().capture(fixture.context(&tree));
+    assert_eq!(evidence.status(), CaptureStatus::Truncated);
+    assert_eq!(evidence.0.reason, Some(CaptureReason::AtomBytes));
+    assert!(evidence.0.graph.is_none());
     NoSolutionEvidence::from_json(&evidence.to_json()?, &token())?;
     Ok(())
 }
