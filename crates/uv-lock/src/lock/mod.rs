@@ -49,7 +49,8 @@ use uv_git_types::{GitLfs, GitOid, GitReference, GitUrl, GitUrlParseError};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::{
-    MarkerEnvironment, MarkerTree, Scheme, VerbatimUrl, VerbatimUrlError, split_scheme,
+    MarkerEnvironment, MarkerExpression, MarkerTree, MarkerValueVersion, Scheme, VerbatimUrl,
+    VerbatimUrlError, split_scheme,
 };
 use uv_platform_tags::{
     AbiTag, IncompatibleTag, LanguageTag, PlatformTag, TagCompatibility, TagPriority, Tags,
@@ -2467,6 +2468,21 @@ impl Lock {
 
         // Lock all base packages.
         for (node_index, dist) in resolution.base_dists() {
+            let root_python_marker = manifest
+                .members
+                .contains(dist.name())
+                .then(|| dist.metadata.as_ref()?.requires_python.as_ref())
+                .flatten()
+                .map(|specifiers| {
+                    specifiers
+                        .iter()
+                        .fold(MarkerTree::TRUE, |marker, specifier| {
+                            marker.and(MarkerTree::expression(MarkerExpression::Version {
+                                key: MarkerValueVersion::PythonFullVersion,
+                                specifier: specifier.clone(),
+                            }))
+                        })
+                });
             // If there are multiple distributions for the same package, include the markers of all
             // forks that included the current distribution.
             //
@@ -2480,6 +2496,16 @@ impl Lock {
                     .copied()
                     .collect::<Vec<_>>();
                 canonicalize_universal_markers(&fork_markers, &requires_python)
+            } else if let Some(marker) = root_python_marker
+                && !requires_python.simplify_markers(marker).is_true()
+            {
+                // A selected workspace root can support only part of the lockfile's Python range.
+                // Retain that domain for freshness checks and frozen operations, even when the
+                // package name is unambiguous.
+                canonicalize_universal_markers(
+                    &[UniversalMarker::from_combined(marker)],
+                    &requires_python,
+                )
             } else {
                 vec![]
             };
@@ -6320,9 +6346,8 @@ pub struct Package {
     id: PackageId,
     sdist: Option<SourceDist>,
     wheels: Vec<Wheel>,
-    /// If there are multiple versions or sources for the same package name, we add the markers of
-    /// the fork(s) that contained this version or source, so we can set the correct preferences in
-    /// the next resolution.
+    /// The forks that contain this version or source. These disambiguate packages with multiple
+    /// versions or sources and retain narrower Python domains for workspace roots.
     ///
     /// Named `resolution-markers` in `uv.lock`.
     fork_markers: Vec<UniversalMarker>,
