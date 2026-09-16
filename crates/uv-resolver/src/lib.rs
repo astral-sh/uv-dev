@@ -58,6 +58,8 @@ mod graph_ops;
 mod lock;
 mod manifest;
 mod marker;
+#[doc(hidden)]
+pub mod no_solution_capture;
 mod options;
 mod pins;
 mod preferences;

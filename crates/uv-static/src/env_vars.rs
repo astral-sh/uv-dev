@@ -682,6 +682,17 @@ impl EnvVars {
     #[attr_added_in("0.3.0")]
     pub const UV_INTERNAL__SHOW_DERIVATION_TREE: &'static str = "UV_INTERNAL__SHOW_DERIVATION_TREE";
 
+    /// Destination for invocation-local, bounded original resolver failure evidence.
+    #[attr_hidden]
+    #[attr_added_in("next release")]
+    pub const UV_INTERNAL__RESOLVER_CAPTURE: &'static str = "UV_INTERNAL__RESOLVER_CAPTURE";
+
+    /// Request nonce paired with `UV_INTERNAL__RESOLVER_CAPTURE`.
+    #[attr_hidden]
+    #[attr_added_in("next release")]
+    pub const UV_INTERNAL__RESOLVER_CAPTURE_REQUEST: &'static str =
+        "UV_INTERNAL__RESOLVER_CAPTURE_REQUEST";
+
     /// Used to set a temporary directory for some tests.
     #[attr_hidden]
     #[attr_added_in("0.3.4")]

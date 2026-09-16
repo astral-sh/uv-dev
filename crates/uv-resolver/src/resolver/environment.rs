@@ -246,6 +246,26 @@ impl ResolverEnvironment {
         }
     }
 
+    /// Borrow the already-materialized universal state without combining conflict markers.
+    pub(crate) fn capture_parts(
+        &self,
+    ) -> Option<(
+        MarkerTree,
+        &[MarkerTree],
+        &crate::FxHashbrownSet<ConflictItem>,
+        &crate::FxHashbrownSet<ConflictItem>,
+    )> {
+        match &self.kind {
+            Kind::Specific { .. } => None,
+            Kind::Universal {
+                initial_forks,
+                markers,
+                include,
+                exclude,
+            } => Some((*markers, initial_forks, include, exclude)),
+        }
+    }
+
     /// Narrow this environment given the forking markers.
     ///
     /// This effectively intersects any markers in this environment with the

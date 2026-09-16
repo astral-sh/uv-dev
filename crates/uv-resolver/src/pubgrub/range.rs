@@ -122,6 +122,11 @@ impl Range<Version> {
         &self.encoded_versions
     }
 
+    /// Return the separately stored set used for PubGrub identity, when it differs.
+    pub(crate) fn canonical_versions(&self) -> Option<&Ranges<Version>> {
+        self.canonical_versions.as_deref()
+    }
+
     /// Return `true` if this range represents a single PEP 440 version constraint.
     ///
     /// A constraint like `==1.0` includes local versions such as `1.0+local`, so its encoded range

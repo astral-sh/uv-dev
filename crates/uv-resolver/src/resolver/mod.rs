@@ -50,6 +50,7 @@ use crate::fork_indexes::ForkIndexes;
 use crate::fork_strategy::ForkStrategy;
 use crate::fork_urls::ForkUrls;
 use crate::manifest::Manifest;
+use crate::no_solution_capture::{CaptureContext, CaptureOptions};
 use crate::pins::FilePins;
 use crate::preferences::{PreferenceSource, Preferences};
 use crate::pubgrub::{
@@ -72,7 +73,7 @@ use crate::resolver::environment::{
 };
 pub(crate) use crate::resolver::fork_map::{ForkMap, ForkSet};
 pub use crate::resolver::index::InMemoryIndex;
-use crate::resolver::indexes::Indexes;
+pub(crate) use crate::resolver::indexes::Indexes;
 pub use crate::resolver::provider::{
     DefaultResolverProvider, MetadataResponse, PackageVersionsResult, ResolverProvider,
     VersionsResponse, WheelMetadataResult,
@@ -143,6 +144,8 @@ struct ResolverState<InstalledPackages: InstalledPackagesProvider> {
     options: Options,
     /// The reporter to use for this resolver.
     reporter: Option<Arc<dyn Reporter>>,
+    /// Invocation-local evidence requested by the direct command, without a filesystem path.
+    no_solution_capture: Option<CaptureOptions>,
 }
 
 impl<'a, Context: BuildContext, InstalledPackages: InstalledPackagesProvider>
@@ -261,6 +264,7 @@ impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
             incomplete_packages: Box::default(),
             options,
             reporter: None,
+            no_solution_capture: None,
         };
         Self { state, provider }
     }
@@ -277,6 +281,14 @@ impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
                 .provider
                 .with_reporter(reporter.into_distribution_reporter()),
         }
+    }
+
+    /// Attach an invocation-local request for bounded, pre-display failure evidence.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_internal_no_solution_capture(mut self, capture: CaptureOptions) -> Self {
+        self.state.no_solution_capture = Some(capture);
+        self
     }
 
     /// Resolve a set of requirements into a set of pinned versions.
@@ -390,6 +402,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                     state.fork_indexes,
                                     &state.known_versions.0,
                                     state.env,
+                                    state.python_requirement,
                                     self.current_environment.clone(),
                                     &visited,
                                 ));
@@ -2855,9 +2868,28 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         fork_indexes: ForkIndexes,
         known_versions: &FxHashMap<PackageName, Arc<[Version]>>,
         env: ResolverEnvironment,
+        effective_python: PythonRequirement,
         current_environment: MarkerEnvironment,
         visited: &FxHashSet<PackageName>,
     ) -> ResolveError {
+        let capture = self.no_solution_capture.as_ref().map(|capture| {
+            capture.capture(CaptureContext {
+                error: &err,
+                project: self.project.as_ref(),
+                workspace_members: &self.workspace_members,
+                environment: &env,
+                original_python: &self.python_requirement,
+                effective_python: &effective_python,
+                index: &self.index,
+                urls: &self.urls,
+                indexes: &self.indexes,
+                fork_urls: &fork_urls,
+                fork_indexes: &fork_indexes,
+                known_versions,
+                unavailable_packages: &self.unavailable_packages,
+                incomplete_packages: &self.incomplete_packages,
+            })
+        });
         err = NoSolutionError::collapse_local_version_segments(NoSolutionError::collapse_proxies(
             err,
         ));
@@ -3005,6 +3037,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             self.tags.clone(),
             self.workspace_members.clone(),
             self.options.clone(),
+            capture,
         )))
     }
 

@@ -43,6 +43,7 @@ use uv_requirements::{
     GroupsSpecification, LookaheadResolver, NamedRequirementsResolver, RequirementsSource,
     RequirementsSpecification, SourceTree, SourceTreeResolution, SourceTreeResolver,
 };
+use uv_resolver::no_solution_capture::CaptureOptions;
 use uv_resolver::{
     DependencyMode, Exclusions, FlatIndex, InMemoryIndex, Manifest, NoSolutionError,
     NoSolutionHeader, Options, Preference, Preferences, PythonRequirement, ResolveError, Resolver,
@@ -130,6 +131,7 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
     options: Options,
     logger: Box<dyn ResolveLogger>,
     printer: Printer,
+    no_solution_capture: Option<CaptureOptions>,
 ) -> Result<(ResolverOutput, HashStrategy), Error> {
     let start = std::time::Instant::now();
 
@@ -394,6 +396,12 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
             ),
         )?
         .with_reporter(Arc::new(reporter));
+
+        let resolver = if let Some(capture) = no_solution_capture {
+            resolver.with_internal_no_solution_capture(capture)
+        } else {
+            resolver
+        };
 
         resolver.resolve().await?
     };
