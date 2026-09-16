@@ -235,6 +235,69 @@ fn show_legacy_metadata() -> Result<()> {
 }
 
 #[test]
+fn show_legacy_metadata_with_files() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let target = context.temp_dir.child("target");
+    target.create_dir_all()?;
+    target.child("egg_file-1.0.0.egg-info").write_str(
+        "Metadata-Version: 1.0\nName: egg-file\nVersion: 1.0.0\nSummary: An egg-info file\n",
+    )?;
+
+    let directory = target.child("egg_directory-1.0.0.egg-info");
+    directory.create_dir_all()?;
+    directory.child("PKG-INFO").write_str(
+        "Metadata-Version: 1.0\nName: egg-directory\nVersion: 1.0.0\nSummary: An egg-info directory\n",
+    )?;
+
+    let source = context.temp_dir.child("legacy-source");
+    let editable = source.child("legacy_editable.egg-info");
+    editable.create_dir_all()?;
+    editable.child("PKG-INFO").write_str(
+        "Metadata-Version: 1.0\nName: legacy-editable\nVersion: 1.0.0\nSummary: An editable egg\n",
+    )?;
+    target
+        .child("legacy-editable.egg-link")
+        .write_str(&format!("{}\n", source.path().display()))?;
+
+    uv_snapshot!(context.filters(), show(&context, target.path())
+        .arg("legacy-editable")
+        .arg("egg-file")
+        .arg("egg-directory")
+        .arg("--files"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Name: egg-directory
+    Version: 1.0.0
+    Summary: An egg-info directory
+    Location: [TEMP_DIR]/target
+    Requires:
+    Required-by:
+    Files:
+    Cannot locate RECORD or installed-files.txt
+    ---
+    Name: egg-file
+    Version: 1.0.0
+    Summary: An egg-info file
+    Location: [TEMP_DIR]/target
+    Requires:
+    Required-by:
+    Files:
+    Cannot locate RECORD or installed-files.txt
+    ---
+    Name: legacy-editable
+    Version: 1.0.0
+    Summary: An editable egg
+    Location: [TEMP_DIR]/legacy-source
+    Editable project location: [TEMP_DIR]/legacy-source
+    Requires:
+    Required-by:
+    Files:
+    Cannot locate RECORD or installed-files.txt
+    ");
+    Ok(())
+}
+
+#[test]
 fn show_metadata_strips_terminal_sequences() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let target = context.temp_dir.child("target");
