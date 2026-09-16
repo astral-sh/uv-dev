@@ -29,6 +29,7 @@ use uv_preview::Preview;
 use uv_project_edit::{DependencyTarget, Error, PyProjectTomlMut};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
+use uv_python_discovery::project_python_roots;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_settings::{
@@ -528,16 +529,19 @@ async fn lock_and_sync(
     let groups = DependencyGroups::default().with_defaults(default_groups);
     let extras = ExtrasSpecification::default().with_defaults(default_extras);
     let install_options = InstallOptions::default();
+    let python_roots =
+        project_python_roots(project.workspace(), project.project_name(), false, &[]);
 
     // Discover the interpreter or environment used to lock and sync the project.
     let python_target = if no_sync {
         // Discover the interpreter.
-        let project_python = ProjectPythonRequest::from_request(
+        let project_python = ProjectPythonRequest::from_request_for_roots(
             python.as_deref().map(PythonRequest::parse),
             Some(project.workspace()),
             &groups,
             project_dir,
             config_discovery,
+            python_roots.as_deref(),
         )
         .await?;
         let interpreter = ProjectInterpreter::discover(
@@ -562,6 +566,7 @@ async fn lock_and_sync(
         let environment = ProjectEnvironment::get_or_init(
             ProjectEnvironmentTarget::from(project.workspace()),
             None,
+            python_roots.as_deref(),
             &groups,
             python.as_deref().map(PythonRequest::parse),
             &install_mirrors,
