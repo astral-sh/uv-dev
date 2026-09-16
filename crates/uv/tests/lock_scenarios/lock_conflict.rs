@@ -201,6 +201,158 @@ fn project_conflicts_with_explicit_workspace_roots() -> Result<()> {
     Ok(())
 }
 
+/// Inferred conflicts separate incompatible roots without excluding compatible combinations.
+#[test]
+fn project_conflicts_are_inferred_for_explicit_roots() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(
+        r#"
+        name = "inferred-workspace-root-conflicts"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.shared-leaf.versions."1.0.0"]
+        sdist = false
+        [packages.shared-leaf.versions."2.0.0"]
+        sdist = false
+        "#,
+    )?;
+    let server = PackseServer::from_scenario(&scenario);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [tool.uv.workspace]
+        members = ["members/*"]
+        roots = ["root-a", "root-b", "root-c"]
+        "#,
+    )?;
+    for (name, dependency) in [
+        ("root-a", "shared-leaf<2"),
+        ("root-b", "shared-leaf>=2"),
+        ("root-c", "shared-leaf>=1"),
+    ] {
+        context
+            .temp_dir
+            .child("members")
+            .child(name)
+            .child("pyproject.toml")
+            .write_str(&format!(
+                r#"
+            [project]
+            name = "{name}"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["{dependency}"]
+
+            [tool.uv]
+            package = false
+            "#,
+            ))?;
+    }
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features").arg("package-conflicts")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features").arg("package-conflicts")
+        .arg("--index-url").arg(server.index_url()).arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert_json_snapshot!(lock["conflicts"], @r#"
+    [
+      [
+        {
+          "package": "root-a"
+        },
+        {
+          "package": "root-b"
+        }
+      ]
+    ]
+    "#);
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--package").arg("root-a").arg("--package").arg("root-c")
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shared-leaf==1.0.0
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--package").arg("root-b").arg("--package").arg("root-c")
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shared-leaf==2.0.0
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--package").arg("root-a").arg("--package").arg("root-b")
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `root-a` and package `root-b` are incompatible with the declared conflicts: {root-a, root-b}
+    ");
+    Ok(())
+}
+
+/// An unsatisfiable root is an error, not a conflict with an otherwise valid root.
+#[test]
+fn inferred_root_conflicts_do_not_hide_invalid_roots() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(
+        r#"
+        name = "invalid-workspace-root"
+        [root]
+        [expected]
+        satisfiable = false
+        [packages.shared-leaf.versions."1.0.0"]
+        sdist = false
+        "#,
+    )?;
+    let server = PackseServer::from_scenario(&scenario);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [tool.uv.workspace]
+        members = ["members/*"]
+        roots = ["good", "bad"]
+        "#,
+    )?;
+    for (name, dependency) in [("good", "shared-leaf==1"), ("bad", "shared-leaf==2")] {
+        context
+            .temp_dir
+            .child("members")
+            .child(name)
+            .child("pyproject.toml")
+            .write_str(&format!(
+                r#"
+            [project]
+            name = "{name}"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["{dependency}"]
+
+            [tool.uv]
+            package = false
+            "#,
+            ))?;
+    }
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features").arg("package-conflicts")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because there is no version of shared-leaf==2 and bad depends on shared-leaf==2, we can conclude that bad's requirements are unsatisfiable.
+             And because only bad==0.1.0 is available and your workspace requires bad, we can conclude that your workspace's requirements are unsatisfiable.
+    ");
+    assert!(!context.temp_dir.child("uv.lock").path().exists());
+    Ok(())
+}
+
 /// Explicit workspace roots can cover different Python ranges in one lockfile.
 #[test]
 fn project_conflicts_with_root_python_ranges() -> Result<()> {
