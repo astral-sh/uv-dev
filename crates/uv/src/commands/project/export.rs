@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::env;
 use std::ffi::OsStr;
 use std::io::Write;
@@ -29,7 +30,10 @@ use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, WorkspaceC
 
 use crate::commands::pip::loggers::DefaultResolveLogger;
 use crate::commands::project::install_target::InstallTarget;
-use crate::commands::project::lock::{LockMode, LockOperation};
+use crate::commands::project::lock::{
+    LockMode, LockOperation, command_workspace_group, select_workspace_group_lock,
+    workspace_selection_members,
+};
 use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
     ProjectEnvironmentPolicy, ProjectInterpreter, ScriptInterpreter, UniversalState,
@@ -132,7 +136,8 @@ pub(crate) async fn export(
     project_dir: &Path,
     format: Option<ExportFormat>,
     all_packages: bool,
-    package: Vec<PackageName>,
+    mut package: Vec<PackageName>,
+    workspace_group: Option<GroupName>,
     prune: Vec<PackageName>,
     hashes: bool,
     install_options: InstallOptions,
@@ -232,6 +237,49 @@ pub(crate) async fn export(
         ExportTarget::Project(project)
     };
 
+    let mut selection_members = match &target {
+        ExportTarget::Project(project) => {
+            workspace_selection_members(project, &package, all_packages)
+        }
+        ExportTarget::Script(_) => BTreeSet::new(),
+    };
+    let explicit_workspace_group = workspace_group.is_some();
+    let workspace_group = match &target {
+        ExportTarget::Project(project) => {
+            command_workspace_group(
+                project.workspace(),
+                workspace_group.as_ref(),
+                &selection_members,
+                frozen,
+                &settings.sources,
+            )
+            .await?
+        }
+        ExportTarget::Script(_) => {
+            if workspace_group.is_some() {
+                bail!("Workspace groups are not supported for scripts");
+            }
+            None
+        }
+    };
+    let group_workspace = match (&target, &workspace_group) {
+        (ExportTarget::Project(project), Some(group)) => Some(
+            project
+                .workspace()
+                .with_workspace_groups(std::slice::from_ref(group)),
+        ),
+        _ => None,
+    };
+    if let Some(group) = &workspace_group
+        && (explicit_workspace_group || group.definition.default)
+        && package.is_empty()
+    {
+        selection_members.clone_from(&group.definition.members);
+        if !all_packages {
+            package.extend(group.definition.members.iter().cloned());
+        }
+    }
+
     // Find an interpreter for the project, unless `--frozen` is set.
     let interpreter = if frozen.is_some() {
         None
@@ -264,14 +312,20 @@ pub(crate) async fn export(
                 };
                 let workspace_python = WorkspacePython::from_request(
                     python.as_deref().map(PythonRequest::parse),
-                    Some(project.workspace()),
+                    Some(
+                        group_workspace
+                            .as_ref()
+                            .unwrap_or_else(|| project.workspace()),
+                    ),
                     &interpreter_groups,
                     project_dir,
                     config_discovery,
                 )
                 .await?;
                 ProjectInterpreter::discover(
-                    project.workspace(),
+                    group_workspace
+                        .as_ref()
+                        .unwrap_or_else(|| project.workspace()),
                     &interpreter_groups,
                     workspace_python,
                     &client_builder,
@@ -324,7 +378,14 @@ pub(crate) async fn export(
     )
     .await
     {
-        Ok(result) => result.into_lock(),
+        Ok(result) => select_workspace_group_lock(
+            result.into_lock(),
+            workspace_group
+                .as_ref()
+                .filter(|group| explicit_workspace_group || group.definition.default)
+                .map(|group| &group.definition.name),
+            &selection_members,
+        )?,
         Err(err) => return Err(UvError::from(err).into()),
     };
 
