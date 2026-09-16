@@ -43,6 +43,7 @@ use uv_requirements::{
     GroupsSpecification, LookaheadResolver, NamedRequirementsResolver, RequirementsSource,
     RequirementsSpecification, SourceTree, SourceTreeResolution, SourceTreeResolver,
 };
+use uv_requirements_txt::RequirementsTxtRequirement;
 use uv_resolver::{
     DependencyMode, Exclusions, FlatIndex, InMemoryIndex, Manifest, NoSolutionError,
     NoSolutionHeader, Options, Preference, Preferences, PythonRequirement, ResolveError, Resolver,
@@ -73,9 +74,22 @@ pub(crate) async fn read_requirements(
         let has_editable = requirements
             .iter()
             .any(|source| matches!(source, RequirementsSource::Editable(_)));
+        // Only reconstruct a bare, semantically unconditional package requirement.
+        let package =
+            if let [RequirementsSource::Package(RequirementsTxtRequirement::Named(requirement))] =
+                requirements
+                && requirement.extras.is_empty()
+                && requirement.version_or_url.is_none()
+                && requirement.marker.is_true()
+            {
+                Some(requirement.name.clone())
+            } else {
+                None
+            };
         return Err(anyhow::Error::new(ExtrasWithoutSourceError {
             has_editable,
             extra: extras.history().single_extra().cloned(),
+            package,
         })
         .into());
     }
@@ -1554,10 +1568,14 @@ impl uv_errors::Hinted for Error {
 pub(crate) struct ExtrasWithoutSourceError {
     has_editable: bool,
     extra: Option<ExtraName>,
+    package: Option<PackageName>,
 }
 
 impl uv_errors::Hinted for ExtrasWithoutSourceError {
     fn hints(&self) -> uv_errors::Hints<'_> {
+        if let (Some(package), Some(extra)) = (&self.package, &self.extra) {
+            return uv_errors::Hints::from(format!("Use `{package}[{extra}]` syntax instead"));
+        }
         let extra = self.extra.as_ref().map_or("extra", ExtraName::as_str);
         uv_errors::Hints::from(if self.has_editable {
             format!("Use `<dir>[{extra}]` syntax or `-r <file>` instead")
