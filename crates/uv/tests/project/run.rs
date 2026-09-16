@@ -9,12 +9,128 @@ use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
 use std::path::Path;
 use uv_fs::copy_dir_all;
-use uv_python::PYTHON_VERSION_FILENAME;
+use uv_python::{PYTHON_VERSION_FILENAME, PyVenvConfiguration};
 use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_test::{TestContext, packse::PackseServer, uv_snapshot};
+
+#[test]
+fn run_with_uses_current_system_site_packages() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context
+        .venv()
+        .arg("--python")
+        .arg("3.12")
+        .arg("--system-site-packages")
+        .assert()
+        .success();
+
+    let script = indoc! {r"
+        import os, site, sys
+        normalize = lambda path: os.path.normcase(os.path.abspath(path))
+        prefixes = [sys.base_prefix, sys.base_exec_prefix]
+        # Windows also reports the installation root, which is needed for native modules.
+        system = {normalize(path) for path in site.getsitepackages(prefixes)} - {
+            normalize(prefix) for prefix in prefixes
+        }
+        assert system
+        print(any(normalize(path) in system for path in sys.path))
+    "};
+    let mut command = context.run();
+    command
+        .arg("--quiet")
+        .arg("--no-project")
+        .arg("--python")
+        .arg(context.interpreter())
+        .arg("--with")
+        .arg("iniconfig==2.0.0")
+        .arg("python")
+        .arg("-c")
+        .arg(script);
+
+    uv_snapshot!(context.filters(), &mut command, @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    True
+    ");
+
+    let configuration = context.venv.join("pyvenv.cfg");
+    let contents = fs_err::read_to_string(&configuration)?;
+    fs_err::write(
+        &configuration,
+        PyVenvConfiguration::set(&contents, "include-system-site-packages", "false"),
+    )?;
+
+    uv_snapshot!(context.filters(), &mut command, @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    False
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn run_recreated_virtualenv_uses_current_interpreter() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+
+    context
+        .venv()
+        .arg("--python")
+        .arg("3.12")
+        .assert()
+        .success();
+
+    // Windows venv launchers can have identical copied modification times across Python versions.
+    #[cfg(windows)]
+    let launcher_timestamp = filetime::FileTime::from_unix_time(1_700_000_000, 0);
+    #[cfg(windows)]
+    filetime::set_file_mtime(context.interpreter(), launcher_timestamp)?;
+
+    uv_snapshot!(context.filters(), context.run().arg("python").arg("--version"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.12.[X]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+
+    context
+        .venv()
+        .arg("--clear")
+        .arg("--python")
+        .arg("3.13")
+        .assert()
+        .success();
+    #[cfg(windows)]
+    filetime::set_file_mtime(context.interpreter(), launcher_timestamp)?;
+
+    uv_snapshot!(context.filters(), context.run().arg("python").arg("--version"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.13.[X]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+
+    Ok(())
+}
 
 #[test]
 fn run_with_python_version() -> Result<()> {
