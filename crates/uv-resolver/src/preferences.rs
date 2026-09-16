@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::str::FromStr;
 
 use rustc_hash::FxHashMap;
@@ -11,6 +12,7 @@ use uv_pypi_types::{HashDigest, HashDigests, HashError};
 use uv_requirements_txt::{RequirementEntry, RequirementsTxtRequirement};
 
 use crate::ResolverEnvironment;
+use crate::resolution::AnnotatedDist;
 use crate::universal_marker::UniversalMarker;
 
 #[derive(thiserror::Error, Debug)]
@@ -37,6 +39,32 @@ pub struct Preference {
 }
 
 impl Preference {
+    /// Prefer a version selected by an earlier independent workspace-root solve.
+    pub fn from_resolution(dist: &AnnotatedDist) -> Self {
+        Self {
+            name: dist.name.clone(),
+            version: dist.version.clone(),
+            marker: dist.marker.pep508(),
+            index: PreferenceIndex::from(dist.index().cloned()),
+            fork_markers: vec![UniversalMarker::from_combined(dist.marker.pep508())],
+            hashes: HashDigests::empty(),
+            source: PreferenceSource::Resolver,
+        }
+    }
+
+    /// Select the saved fork preferences belonging to one workspace root.
+    pub fn select_root(mut self, root: &PackageName) -> Option<Self> {
+        let roots = BTreeSet::from([root.clone()]);
+        let had_forks = !self.fork_markers.is_empty();
+        self.fork_markers = self
+            .fork_markers
+            .into_iter()
+            .map(|marker| marker.select_roots(&roots))
+            .filter(|marker| !marker.is_false())
+            .collect();
+        (!had_forks || !self.fork_markers.is_empty()).then_some(self)
+    }
+
     /// Create a [`Preference`] from a [`RequirementEntry`].
     pub fn from_entry(entry: RequirementEntry) -> Result<Option<Self>, PreferenceError> {
         let RequirementsTxtRequirement::Named(requirement) = entry.requirement else {

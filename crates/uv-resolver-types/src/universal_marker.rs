@@ -124,6 +124,37 @@ impl ActivatedConflictItems {
 }
 
 impl UniversalMarker {
+    /// Restrict a marker to one independently resolved workspace root.
+    pub fn for_root(package: &PackageName) -> Self {
+        let name = uv_pep508::MarkerValueExtra::Extra(encode_root(package));
+        Self::from_combined(MarkerTree::expression(MarkerExpression::Extra {
+            operator: ExtraOperator::Equal,
+            name,
+        }))
+    }
+
+    /// Evaluate workspace-root selections without activating transitive workspace members.
+    #[must_use]
+    pub fn select_roots(self, roots: &BTreeSet<PackageName>) -> Self {
+        let selected = roots.iter().map(encode_root).collect::<BTreeSet<_>>();
+        Self::from_combined(
+            self.marker
+                .simplify_extras_with(|extra| selected.contains(extra))
+                .simplify_not_extras_with(|extra| {
+                    extra.as_str().starts_with("root-") && !selected.contains(extra)
+                }),
+        )
+    }
+
+    /// Return whether this marker carries an independent workspace-root selection.
+    pub fn has_root_marker(self) -> bool {
+        let mut found = false;
+        self.marker.visit_extras(|_, extra| {
+            found |= extra.as_str().starts_with("root-");
+        });
+        found
+    }
+
     /// A constant universal marker that always evaluates to `true`.
     pub const TRUE: Self = Self {
         marker: MarkerTree::TRUE,
@@ -684,6 +715,13 @@ fn encode_project(package: &PackageName) -> ExtraName {
     ExtraName::from_owned(format!("project-{package_len}-{package}")).unwrap()
 }
 
+/// Root selections are distinct from projects activated through dependency edges.
+fn encode_root(package: &PackageName) -> ExtraName {
+    let package_len = package.as_str().len();
+    ExtraName::from_owned(format!("root-{package_len}-{package}"))
+        .expect("normalized package names form valid extra names")
+}
+
 #[derive(Debug)]
 enum ParsedRawExtra<'a> {
     Project { package: &'a str },
@@ -1007,6 +1045,36 @@ mod tests {
     /// Shortcut for creating a conflict marker from an extra name.
     fn create_extra_marker(name: &str) -> ConflictMarker {
         ConflictMarker::extra(&create_package("pkg"), &create_extra(name))
+    }
+
+    #[test]
+    fn root_selections_are_distinct_from_project_activation() {
+        let root_a = create_package("root-a");
+        let root_b = create_package("root-b");
+        let marker_a = UniversalMarker::for_root(&root_a);
+        let marker_b = UniversalMarker::for_root(&root_b);
+        assert!(marker_a.has_root_marker());
+        assert_eq!(
+            marker_a.select_roots(&BTreeSet::new()),
+            UniversalMarker::FALSE
+        );
+        assert_eq!(
+            marker_a.select_roots(&BTreeSet::from([root_a.clone()])),
+            UniversalMarker::TRUE
+        );
+        assert_eq!(
+            marker_a.select_roots(&BTreeSet::from([root_b.clone()])),
+            UniversalMarker::FALSE
+        );
+
+        let project_a = UniversalMarker::new(MarkerTree::TRUE, ConflictMarker::project(&root_a));
+        let mut contextual = marker_b;
+        contextual.and(project_a);
+        assert_eq!(
+            contextual.select_roots(&BTreeSet::from([root_b])),
+            project_a
+        );
+        assert!(!project_a.has_root_marker());
     }
 
     /// Shortcut for creating a conflict item from an extra name.
