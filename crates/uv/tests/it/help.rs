@@ -3,6 +3,75 @@ use uv_static::EnvVars;
 use uv_test::uv_snapshot;
 
 #[test]
+fn index_argument_errors_do_not_repeat_credentials() {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let value = "https://user/name:password@example.invalid/simple?sig=secret@value#fragment";
+
+    for (flag, placeholder, variable) in [
+        ("--index", "INDEX", EnvVars::UV_INDEX),
+        (
+            "--default-index",
+            "DEFAULT_INDEX",
+            EnvVars::UV_DEFAULT_INDEX,
+        ),
+        ("--index-url", "INDEX_URL", EnvVars::UV_INDEX_URL),
+        (
+            "--extra-index-url",
+            "EXTRA_INDEX_URL",
+            EnvVars::UV_EXTRA_INDEX_URL,
+        ),
+        ("--find-links", "FIND_LINKS", EnvVars::UV_FIND_LINKS),
+    ] {
+        let argument = format!("{flag} <{placeholder}>");
+        let mut filters = context.filters();
+        filters.push((&argument, "--index <INDEX>"));
+
+        uv_snapshot!(filters, context.command().args(["pip", "compile", "-", flag, value]), @"
+        exit_code: 2 (failure)
+        ----- stderr -----
+        error: invalid value '****' for '--index <INDEX>': ambiguous user/pass authority in URL (not percent-encoded?): https:***@example.invalid/simple
+
+        For more information, try '--help'.
+        ");
+
+        uv_snapshot!(filters, context.command().args(["pip", "compile", "-"]).env(variable, value), @"
+        exit_code: 2 (failure)
+        ----- stderr -----
+        error: invalid value '****' for '--index <INDEX>': ambiguous user/pass authority in URL (not percent-encoded?): https:***@example.invalid/simple
+
+        For more information, try '--help'.
+        ");
+    }
+}
+
+#[test]
+fn index_argument_errors_keep_the_parse_cause() {
+    let context = uv_test::test_context_with_versions!(&[]);
+
+    uv_snapshot!(context.filters(), context.command().args([
+        "pip", "compile", "-", "--default-index",
+        "https://user:password@example.invalid:bad/simple?sig=signature"
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: invalid value '****' for '--default-index <DEFAULT_INDEX>': invalid port number
+
+    For more information, try '--help'.
+    ");
+
+    uv_snapshot!(context.filters(), context.command().args([
+        "pip", "compile", "-", "--index",
+        "https://user:password@example.invalid/simple https://other/name:secret@other.invalid/simple?sig=signature"
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: invalid value '****' for '--index <INDEX>': ambiguous user/pass authority in URL (not percent-encoded?): https:***@other.invalid/simple
+
+    For more information, try '--help'.
+    ");
+}
+
+#[test]
 fn cert_is_limited_to_pip() {
     let context = uv_test::test_context_with_versions!(&[]);
 
