@@ -48,7 +48,7 @@ pub(crate) struct WorkspaceResolution {
 
 impl Workspace {
     /// Validate and resolve the named groups declared by the workspace root.
-    pub fn workspace_groups(&self) -> Result<Vec<ResolvedWorkspaceGroup>, WorkspaceError> {
+    fn workspace_groups(&self) -> Result<Vec<ResolvedWorkspaceGroup>, WorkspaceError> {
         self.workspace_groups_with_sources(&NoSources::None)
     }
 
@@ -221,22 +221,6 @@ impl Workspace {
             }
         }
         Ok(reached)
-    }
-
-    /// Return the named or default workspace group.
-    pub fn workspace_group(
-        &self,
-        name: Option<&GroupName>,
-    ) -> Result<Option<ResolvedWorkspaceGroup>, WorkspaceError> {
-        let groups = self.workspace_groups()?;
-        if let Some(name) = name {
-            return groups
-                .into_iter()
-                .find(|group| group.definition.name == *name)
-                .map(Some)
-                .ok_or_else(|| WorkspaceErrorKind::UnknownWorkspaceGroup(name.clone()).into());
-        }
-        Ok(groups.into_iter().find(|group| group.definition.default))
     }
 
     /// Create a resolution view while retaining all members for source lookup.
