@@ -1000,6 +1000,13 @@ fn python_installations<'a>(
         .filter_ok(move |installation| {
             installation.satisfies_preferences(version, environments, preference)
         })
+        .map(move |result| {
+            let installation = result?;
+            Ok(version
+                .matches_build_revision(installation.interpreter())?
+                .then_some(installation))
+        })
+        .flatten_ok()
         .map_ok(PythonInstallation::maybe_with_test_source),
     )
 }
@@ -2490,18 +2497,9 @@ impl PythonRequest {
         let Some(key) = managed_key else {
             return Ok(true);
         };
-        // Explicitly requested build variants opt into build revision selection.
-        if request
-            .version()
-            .and_then(VersionRequest::variants)
-            .is_some_and(|variants| variants.build().is_some())
-            && let Some(build) = python_build_variant_version_from_env().map_err(Error::from)?
-            && ManagedPythonInstallation::try_from_interpreter(interpreter)
-                .is_none_or(|installation| installation.build() != Some(build.as_str()))
+        if let Some(version) = request.version()
+            && !version.matches_build_revision(interpreter)?
         {
-            debug!(
-                "The managed interpreter does not satisfy the requested build revision `{build}`"
-            );
             return Ok(false);
         }
         let download_list = ManagedPythonDownloadList::cached_or_new(
@@ -3472,6 +3470,25 @@ impl VersionRequest {
     fn matches_build_variant(&self, key: &PythonInstallationKey) -> bool {
         self.variants()
             .is_none_or(|variants| variants.matches_build_variant(key))
+    }
+
+    /// Check an explicitly requested build revision against a managed interpreter, regardless of
+    /// which discovery source provided its executable.
+    fn matches_build_revision(&self, interpreter: &Interpreter) -> Result<bool, Error> {
+        if self
+            .variants()
+            .is_some_and(|variants| variants.build().is_some())
+            && let Some(build) = python_build_variant_version_from_env()?
+            && ManagedPythonInstallation::key_from_interpreter(interpreter).is_some()
+            && ManagedPythonInstallation::try_from_interpreter(interpreter)
+                .is_none_or(|installation| installation.build() != Some(build.as_str()))
+        {
+            debug!(
+                "The managed interpreter does not satisfy the requested build revision `{build}`"
+            );
+            return Ok(false);
+        }
+        Ok(true)
     }
 
     /// Check the interpreter's reported version and runtime variant.
