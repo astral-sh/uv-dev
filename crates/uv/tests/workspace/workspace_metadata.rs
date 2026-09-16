@@ -21,7 +21,7 @@ fn write_wheel(
     write_wheel_with_metadata(path, name, "0.1.0", dist_info_prefix, "", files)
 }
 
-fn write_wheel_with_metadata(
+pub(super) fn write_wheel_with_metadata(
     path: &Path,
     name: &str,
     version: &str,
