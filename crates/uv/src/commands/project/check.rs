@@ -31,7 +31,7 @@ use crate::commands::project::lock::LockMode;
 use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectInterpreter,
-    ScriptEnvironment, ScriptInterpreter, UniversalState, WorkspacePython,
+    ScriptEnvironment, ScriptInterpreter, UniversalState, WorkspacePython, project_python_roots,
     validate_project_requires_python,
 };
 use crate::commands::reporters::PythonDownloadReporter;
@@ -287,6 +287,15 @@ pub(crate) async fn check(
         DependencyGroupsWithDefaults::none()
     };
 
+    let python_roots = project.as_ref().and_then(|project| {
+        project_python_roots(
+            project.workspace(),
+            project.project_name(),
+            all_packages,
+            &package,
+        )
+    });
+
     // Create an isolated environment, if requested.
     let temp_dir;
     let isolated_venv = if isolated {
@@ -314,12 +323,13 @@ pub(crate) async fn check(
                 source,
                 python_request,
                 requires_python,
-            } = WorkspacePython::from_request(
+            } = WorkspacePython::from_request_for_roots(
                 python.as_deref().map(PythonRequest::parse),
                 workspace,
                 &groups,
                 project_dir,
                 config_discovery,
+                python_roots.as_deref(),
             )
             .await?;
 
@@ -500,6 +510,7 @@ pub(crate) async fn check(
         } else {
             ProjectEnvironment::get_or_init(
                 project.workspace(),
+                python_roots.as_deref(),
                 &groups,
                 python.as_deref().map(PythonRequest::parse),
                 &install_mirrors,
@@ -521,12 +532,13 @@ pub(crate) async fn check(
         // `--no-sync` intentionally permits an incompatible project environment, but locking must
         // still use an interpreter that satisfies the project and any explicit Python request.
         let lock_interpreter = if no_sync && !isolated && frozen.is_none() {
-            let workspace_python = WorkspacePython::from_request(
+            let workspace_python = WorkspacePython::from_request_for_roots(
                 python.as_deref().map(PythonRequest::parse),
                 Some(project.workspace()),
                 &groups,
                 project_dir,
                 config_discovery,
+                python_roots.as_deref(),
             )
             .await?;
             Some(

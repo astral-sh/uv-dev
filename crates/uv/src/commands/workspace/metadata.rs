@@ -21,6 +21,7 @@ use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectError,
     ProjectInterpreter, ScriptEnvironment, ScriptInterpreter, UniversalState, WorkspacePython,
+    project_python_roots,
 };
 use crate::commands::{ExitStatus, UvError};
 use crate::printer::{Printer, Stdout};
@@ -174,10 +175,17 @@ pub(crate) async fn metadata(
                 },
             };
             let mut export = metadata_for_target(install_target)?;
+            let python_roots = match target {
+                LockTarget::Workspace(workspace) => {
+                    project_python_roots(workspace, None, true, &[])
+                }
+                LockTarget::Script(_) => None,
+            };
             let environment = if sync.is_some() {
                 Some(match target {
                     LockTarget::Workspace(workspace) => ProjectEnvironment::get_or_init(
                         workspace,
+                        python_roots.as_deref(),
                         &groups,
                         python.as_deref().map(PythonRequest::parse),
                         &install_mirrors,

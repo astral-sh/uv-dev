@@ -52,8 +52,8 @@ use crate::commands::project::lock::{LockMode, LockOperation, LockResult};
 use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
     EnvironmentUpdate, LinkErrorReporting, MalwareFindings, PlatformState, ProjectEnvironment,
-    ProjectError, ScriptEnvironment, UniversalState, detect_conflicts, script_extra_build_requires,
-    script_specification, update_environment,
+    ProjectError, ScriptEnvironment, UniversalState, detect_conflicts, project_python_roots,
+    script_extra_build_requires, script_specification, update_environment,
 };
 use crate::commands::{ExitStatus, UvError};
 use crate::printer::Printer;
@@ -159,11 +159,22 @@ pub(crate) async fn sync(
     let groups = groups.with_defaults(default_groups);
     let extras = extras.with_defaults(default_extras);
 
+    let python_roots = match &target {
+        SyncTarget::Project(project) => project_python_roots(
+            project.workspace(),
+            project.project_name(),
+            all_packages,
+            &package,
+        ),
+        SyncTarget::Script(_) => None,
+    };
+
     // Discover or create the virtual environment.
     let environment = match &target {
         SyncTarget::Project(project) => SyncEnvironment::Project(
             ProjectEnvironment::get_or_init(
                 project.workspace(),
+                python_roots.as_deref(),
                 &groups,
                 python.as_deref().map(PythonRequest::parse),
                 &install_mirrors,
@@ -734,6 +745,7 @@ pub(crate) async fn do_sync<'a>(
             target.lock().requires_python().clone(),
         ));
     }
+    target.validate_python(venv.interpreter().python_version())?;
 
     // Validate that the set of requested extras and development groups are compatible.
     detect_conflicts(&target, extras, groups)?;
