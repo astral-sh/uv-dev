@@ -18,7 +18,7 @@ use uv_platform::{Arch, Libc, Os, Platform};
 
 use crate::discovery::{
     EnvironmentPreference, PythonRequest, VersionRequest, find_best_python_installation,
-    find_python_installation,
+    find_python_installation, parse_python_variants,
 };
 use crate::downloads::{
     DownloadResult, ManagedPythonDownload, ManagedPythonDownloadList, PythonDownloadRequest,
@@ -772,27 +772,6 @@ impl CacheKey for PythonInstallationKey {
     }
 }
 
-fn parse_installation_key_variants(
-    variants: &str,
-) -> Result<(PythonVariant, Option<LenientPythonBuildVariant>), ()> {
-    let variants = variants.to_ascii_lowercase();
-    if let Ok(python) = PythonVariant::from_str(&variants) {
-        return Ok((python, None));
-    }
-
-    for (index, _) in variants.rmatch_indices('+') {
-        if let Ok(python) = PythonVariant::from_str(&variants[..index]) {
-            let build = LenientPythonBuildVariant::from_str(&variants[index + 1..])?;
-            return Ok((python, Some(build)));
-        }
-    }
-
-    Ok((
-        PythonVariant::Default,
-        Some(LenientPythonBuildVariant::from_str(&variants)?),
-    ))
-}
-
 impl FromStr for PythonInstallationKey {
     type Err = PythonInstallationKeyError;
 
@@ -818,13 +797,12 @@ impl FromStr for PythonInstallationKey {
 
         let (version, variant, build_variant) = match version_str.split_once('+') {
             Some((version, variant)) => {
-                let (variant, build_variant) =
-                    parse_installation_key_variants(variant).map_err(|()| {
-                        PythonInstallationKeyError::ParseError(
-                            key.to_string(),
-                            format!("invalid Python variants: {variant}"),
-                        )
-                    })?;
+                let (variant, build_variant) = parse_python_variants(variant).map_err(|()| {
+                    PythonInstallationKeyError::ParseError(
+                        key.to_string(),
+                        format!("invalid Python variants: {variant}"),
+                    )
+                })?;
                 (version, variant, build_variant)
             }
             None => (*version_str, PythonVariant::Default, None),

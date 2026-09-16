@@ -3580,6 +3580,28 @@ impl FromStr for VersionRequest {
     }
 }
 
+/// Parse a suffix containing a [`PythonVariant`] and an optional [`LenientPythonBuildVariant`].
+pub(crate) fn parse_python_variants(
+    variants: &str,
+) -> Result<(PythonVariant, Option<LenientPythonBuildVariant>), ()> {
+    let variants = variants.to_ascii_lowercase();
+    if let Ok(python) = PythonVariant::from_str(&variants) {
+        return Ok((python, None));
+    }
+
+    for (index, _) in variants.rmatch_indices('+') {
+        if let Ok(python) = PythonVariant::from_str(&variants[..index]) {
+            let build = LenientPythonBuildVariant::from_str(&variants[index + 1..])?;
+            return Ok((python, Some(build)));
+        }
+    }
+
+    Ok((
+        PythonVariant::Default,
+        Some(LenientPythonBuildVariant::from_str(&variants)?),
+    ))
+}
+
 impl FromStr for PythonVariant {
     type Err = ();
 
