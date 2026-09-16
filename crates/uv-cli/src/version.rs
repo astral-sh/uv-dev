@@ -15,6 +15,7 @@ pub(crate) struct CommitInfo {
     commit_hash: String,
     commit_date: String,
     last_tag: Option<String>,
+    #[cfg_attr(feature = "schemars", schemars(range(max = u32::MAX)))]
     commits_since_last_tag: u32,
 }
 

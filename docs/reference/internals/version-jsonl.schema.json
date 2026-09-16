@@ -1,0 +1,139 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "uv version JSONL (preview)",
+  "description": "A single record in a command's preview JSONL stream.",
+  "anyOf": [
+    {
+      "$ref": "#/definitions/JsonlProgressEvent"
+    },
+    {
+      "$ref": "#/definitions/JsonlResult"
+    }
+  ],
+  "definitions": {
+    "JsonlProgressEvent": {
+      "title": "uv JSONL progress (preview)",
+      "description": "A progress update emitted before a command's final JSONL result.\n\nConcurrent operations are correlated using their process-wide `id`. Top-level\nphases omit `id`, since only one instance of each phase is active at a time.\nOperations can complete without an intermediate update.",
+      "type": "object",
+      "properties": {
+        "completed": {
+          "description": "Completed bytes for transfers, or completed packages for package phases.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "id": {
+          "description": "A process-wide identifier shared by all events for one concurrent operation.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "name": {
+          "description": "The package, distribution, or source currently being processed.",
+          "type": "string"
+        },
+        "phase": {
+          "description": "The operation being reported, such as `download`, `build`, or `install`.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProgressPhase"
+            }
+          ]
+        },
+        "revision": {
+          "description": "The Git revision associated with a checkout operation.",
+          "type": "string"
+        },
+        "status": {
+          "description": "The operation's current lifecycle state.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProgressStatus"
+            }
+          ]
+        },
+        "total": {
+          "description": "The fixed total bytes or packages for this operation, when known.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "type": {
+          "description": "Distinguishes progress updates from the final command result.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProgressType"
+            }
+          ]
+        },
+        "url": {
+          "description": "The source URL associated with a resolution or checkout operation.",
+          "type": "string"
+        },
+        "version": {
+          "description": "The selected package version, when available.",
+          "type": "string"
+        }
+      },
+      "required": ["type", "phase", "status"]
+    },
+    "JsonlResult": {
+      "title": "uv version",
+      "description": "An object-valued command result with the JSONL discriminator.",
+      "type": "object",
+      "properties": {
+        "commit_info": {
+          "description": "Always `null`; project versions do not include uv's build information.\nThis field remains in the output for backwards compatibility.",
+          "type": "null"
+        },
+        "package_name": {
+          "description": "Name of the package.",
+          "type": ["string", "null"]
+        },
+        "type": {
+          "description": "Distinguishes the final command result from progress updates.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResultType"
+            }
+          ]
+        },
+        "version": {
+          "description": "Version, such as \"0.5.1\".",
+          "type": "string"
+        }
+      },
+      "required": ["type", "package_name", "version", "commit_info"]
+    },
+    "ProgressPhase": {
+      "description": "An operation reported by the preview JSONL interface.",
+      "type": "string",
+      "enum": [
+        "audit",
+        "build",
+        "checkout",
+        "download",
+        "extract",
+        "hash",
+        "install",
+        "latest_version",
+        "prepare",
+        "resolve",
+        "upload"
+      ]
+    },
+    "ProgressStatus": {
+      "description": "The lifecycle of an operation: started, optionally updated, then completed.",
+      "type": "string",
+      "enum": ["started", "updated", "completed"]
+    },
+    "ProgressType": {
+      "type": "string",
+      "enum": ["progress"]
+    },
+    "ResultType": {
+      "type": "string",
+      "enum": ["result"]
+    }
+  }
+}
