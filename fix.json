@@ -1,0 +1,11 @@
+{
+  "outcome": "fixed",
+  "summary": "Project upgrade now resolves index and registry-client inputs before combining project settings, allowing matching extra-index credentials to authenticate explicit indexes. The regression test now asserts successful authenticated resolution, and the help snapshot covers the exposed index options.",
+  "validation": [
+    "Authenticated project-upgrade regression passed",
+    "Project-upgrade help snapshot passed",
+    "Focused integration target passed Clippy with warnings denied",
+    "Formatting and diff checks passed"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/1871"
+}

@@ -96,17 +96,47 @@ same project configuration and authentication input. The control commands authen
 resolved successfully, while `uv upgrade` omitted authentication and failed before it could update
 the dependency declaration.
 
-Current command wiring is consistent with the observation: `UpgradeArgs` has only package and
-exclusion fields, `uv upgrade --help` exposes no index or registry-client options, and
-`UpgradeSettings` begins with default resolver CLI options before combining filesystem and global
-environment settings. In contrast, resolving commands such as `uv lock` include the shared
-resolver arguments that parse `UV_EXTRA_INDEX_URL`. This is supporting implementation evidence;
-the reproduction itself confirms the command-specific request behavior without relying on a
-source-only root-cause inference.
+The confirmed cause is the project-upgrade command wiring: `UpgradeArgs` had only package and
+exclusion fields, so Clap never parsed index or registry-client environment variables and options
+for this command. `UpgradeSettings` consequently began with default command-line resolver options
+and retained the credential-free explicit index from project configuration. Other resolving
+commands parse `UV_EXTRA_INDEX_URL`, allowing its matching URL to seed authentication before the
+named explicit index is queried.
 
 Named-index credential variables (`UV_INDEX_PRIVATE_USERNAME` and
 `UV_INDEX_PRIVATE_PASSWORD`) were not part of the reported failing input and were not evaluated in
 this reproduction, so no workaround is claimed from that separate credential path.
+
+## Fix
+
+Outcome: **fixed**.
+
+Project `uv upgrade` now flattens the shared index and registry-client argument groups into
+`UpgradeArgs`. A dedicated conversion resolves those command-line and environment inputs against
+the configured named indexes before `UpgradeSettings` combines them with filesystem configuration.
+This keeps the command's existing package-selection upgrade behavior while making
+`UV_EXTRA_INDEX_URL`, the index flags, index strategy, and keyring provider available on the
+project-upgrade path. Settings resolution now propagates index parsing errors to the command.
+
+The parent regression in `crates/uv/tests/it/upgrade.rs` was changed from asserting the 401 failure
+to asserting a successful authenticated resolution. Before the production change, the desired
+snapshot failed with the reproduced missing-credentials diagnostic; afterward it resolved the
+private package successfully. The existing `upgrade_help` snapshot was updated to cover the newly
+available index and registry-client options. No additional behavioral test was added: the nearby
+explicit-index test already covers filesystem configuration, and alternate index flags feed the
+same newly connected parser rather than a distinct producer/consumer implementation.
+
+Successful focused validation:
+
+- `cargo test --package uv --test it upgrade::upgrade_uses_extra_index_url_credentials_for_registry_source -- --exact`
+- `cargo test --package uv --test it upgrade::upgrade_help -- --exact`
+- `cargo +stable fmt --all -- --check`
+- `cargo +stable clippy --package uv --test it -- -D warnings`
+- `git diff --check`
+
+The stable toolchain was used for formatting and Clippy because those components are unavailable
+for the repository's pinned toolchain in this runner; the focused integration tests used the pinned
+toolchain.
 
 ## Related
 
@@ -122,3 +152,5 @@ this reproduction, so no workaround is claimed from that separate credential pat
 
 No related issue or pull request listed above already fixes or tests the reproduced project
 `uv upgrade` behavior.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/1871
