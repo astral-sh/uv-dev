@@ -2174,7 +2174,12 @@ async fn workspace_path_aliases(
                 && !external_cache.is_some_and(|boundary| boundary.contains(&canonical_candidate))
                 && let Ok(suffix) = canonical_path.strip_prefix(&canonical_candidate)
             {
-                let candidate = candidate.join(suffix);
+                // Joining an empty suffix adds a separator that a literal pattern rejects.
+                let candidate = if suffix.as_os_str().is_empty() {
+                    candidate
+                } else {
+                    candidate.join(suffix)
+                };
                 if absolute_pattern.matches_path_with(candidate.simplified(), match_options) {
                     aliases.insert(candidate);
                 }
@@ -2203,7 +2208,11 @@ async fn workspace_path_aliases(
                 let Ok(suffix) = canonical_path.strip_prefix(&canonical_candidate) else {
                     continue;
                 };
-                candidate.join(suffix)
+                if suffix.as_os_str().is_empty() {
+                    candidate
+                } else {
+                    candidate.join(suffix)
+                }
             } else {
                 if canonical_candidate != canonical_path {
                     continue;
@@ -5293,6 +5302,8 @@ foo_bar = ["iniconfig"]
                     )
                     .await?,
                     Some(root.to_path_buf()),
+                    "pattern {pattern:?}, child path {}",
+                    child_root.display(),
                 );
             }
         }
