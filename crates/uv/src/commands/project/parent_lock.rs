@@ -30,7 +30,7 @@ impl ParentLockSnapshot {
         };
         let lock = info_span!("parse parent uv lock", path = %lock_path.display())
             .in_scope(|| Lock::from_toml(&encoded))
-            .map_err(|err| ParentLockError::Parse(lock_path, err))?;
+            .map_err(|err| ParentLockError::Parse(lock_path, Box::new(err)))?;
         Ok(Self { root, lock })
     }
 
@@ -45,7 +45,7 @@ impl ParentLockSnapshot {
         child_environment: MarkerTree,
     ) -> Result<Vec<Preference>, ParentLockError> {
         read_inherited_lock_preferences(&self.lock, &self.root, child_environment)
-            .map_err(|err| ParentLockError::Preferences(self.root.join("uv.lock"), err))
+            .map_err(|err| ParentLockError::Preferences(self.root.join("uv.lock"), Box::new(err)))
     }
 }
 
@@ -59,9 +59,9 @@ pub(crate) enum ParentLockError {
     #[error("Failed to read the parent workspace lockfile at `{0}`")]
     Read(PathBuf, #[source] std::io::Error),
     #[error("Failed to parse the parent workspace lockfile at `{0}`")]
-    Parse(PathBuf, #[source] LockParseError),
+    Parse(PathBuf, #[source] Box<LockParseError>),
     #[error("Failed to read preferences from the parent workspace lockfile at `{0}`")]
-    Preferences(PathBuf, #[source] LockError),
+    Preferences(PathBuf, #[source] Box<LockError>),
 }
 
 /// Warn when nested workspaces are used without enabling the preview feature.
