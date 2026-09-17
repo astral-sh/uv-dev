@@ -776,6 +776,186 @@ fn requirement_conflicts_multiple_boundaries() -> Result<()> {
     Ok(())
 }
 
+/// Partial assignments can overlap across independent three-way partitions.
+#[test]
+fn requirement_conflicts_partial_three_way_partitions() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(
+        r#"
+        name = "partial-three-way-requirement-conflicts"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.first-leaf.versions."1.0.0"]
+        sdist = false
+        [packages.first-leaf.versions."2.0.0"]
+        sdist = false
+        [packages.first-leaf.versions."3.0.0"]
+        sdist = false
+        [packages.second-leaf.versions."1.0.0"]
+        sdist = false
+        [packages.second-leaf.versions."2.0.0"]
+        sdist = false
+        [packages.second-leaf.versions."3.0.0"]
+        sdist = false
+    "#,
+    )?;
+    let server = PackseServer::from_scenario(&scenario);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [tool.uv]
+        conflicts = [
+            [
+                { requirement = "first-leaf<2" },
+                { requirement = "first-leaf>=2,<3" },
+                { requirement = "first-leaf>=3" },
+            ],
+            [
+                { requirement = "second-leaf<2" },
+                { requirement = "second-leaf>=2,<3" },
+                { requirement = "second-leaf>=3" },
+            ],
+        ]
+        [tool.uv.workspace]
+        members = ["members/*"]
+        roots = ["root-a", "root-b", "root-c", "root-d", "root-e", "root-f"]
+    "#,
+    )?;
+    for (name, dependencies) in [
+        ("root-a", r#""first-leaf<2", "second-leaf>=2,<3""#),
+        ("root-b", r#""first-leaf>=2,<3", "second-leaf>=3""#),
+        ("root-c", r#""first-leaf>=3", "second-leaf<2""#),
+        ("root-d", r#""first-leaf<2""#),
+        ("root-e", r#""second-leaf>=3""#),
+        ("root-f", r#""first-leaf>=1", "second-leaf>=1""#),
+    ] {
+        context
+            .temp_dir
+            .child(format!("members/{name}/pyproject.toml"))
+            .write_str(&format!(
+                r#"
+            [project]
+            name = "{name}"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = [{dependencies}]
+            [tool.uv]
+            package = false
+        "#
+            ))?;
+    }
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features").arg("package-conflicts")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 12 packages in [TIME]
+    ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert_json_snapshot!(lock["conflicts"], @r#"
+    [
+      [
+        {
+          "package": "root-a"
+        },
+        {
+          "package": "root-b"
+        }
+      ],
+      [
+        {
+          "package": "root-a"
+        },
+        {
+          "package": "root-c"
+        }
+      ],
+      [
+        {
+          "package": "root-a"
+        },
+        {
+          "package": "root-e"
+        }
+      ],
+      [
+        {
+          "package": "root-b"
+        },
+        {
+          "package": "root-c"
+        }
+      ],
+      [
+        {
+          "package": "root-b"
+        },
+        {
+          "package": "root-d"
+        }
+      ],
+      [
+        {
+          "package": "root-c"
+        },
+        {
+          "package": "root-d"
+        }
+      ],
+      [
+        {
+          "package": "root-c"
+        },
+        {
+          "package": "root-e"
+        }
+      ]
+    ]
+    "#);
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features").arg("package-conflicts")
+        .arg("--index-url").arg(server.index_url()).arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 12 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--package").arg("root-a").arg("--package").arg("root-d")
+        .arg("--package").arg("root-f")
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    first-leaf==1.0.0
+    second-leaf==2.0.0
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--package").arg("root-b").arg("--package").arg("root-e")
+        .arg("--package").arg("root-f")
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    first-leaf==2.0.0
+    second-leaf==3.0.0
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--package").arg("root-c").arg("--package").arg("root-f")
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    first-leaf==3.0.0
+    second-leaf==1.0.0
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--package").arg("root-d").arg("--package").arg("root-e")
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    first-leaf==1.0.0
+    second-leaf==3.0.0
+    ");
+    Ok(())
+}
+
 /// A package declaration must not hide conflicts on another package or inside one root.
 #[test]
 fn requirement_conflicts_reject_unrelated_and_internal_conflicts() -> Result<()> {
