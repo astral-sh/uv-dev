@@ -5,7 +5,6 @@ use anyhow::Result;
 use assert_cmd::prelude::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::indoc;
-use insta::assert_snapshot;
 use predicates::prelude::predicate;
 
 use uv_static::EnvVars;
@@ -78,15 +77,18 @@ fn init_nested_workspace_registrations() -> Result<()> {
             fs_err::read_to_string(parent.join("pyproject.toml"))?,
             parent_toml
         );
-        assert_snapshot!(fs_err::read_to_string(child.join("pyproject.toml"))?, @r#"
-        [project]
-        name = "child"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = []
+        assert_eq!(
+            fs_err::read_to_string(child.join("pyproject.toml"))?,
+            indoc! {r#"
+                [project]
+                name = "child"
+                version = "0.1.0"
+                requires-python = ">=3.12"
+                dependencies = []
 
-        [tool.uv.workspace]
-        "#);
+                [tool.uv.workspace]
+            "#}
+        );
 
         // Each generated workspace is independently lockable once its parent has a lock.
         lock(&context, parent.path()).assert().success();
