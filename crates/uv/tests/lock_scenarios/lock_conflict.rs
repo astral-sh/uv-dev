@@ -11595,6 +11595,23 @@ fn project_conflicts_with_own_extra() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock()
         .arg("--preview-features").arg("package-conflicts")
         .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies for split (included: root-a[modern]; excluded: root-a)
+      cause: Because root-a[modern] depends on shared-leaf>=2 and your project depends on shared-leaf<2, we can conclude that your project and root-a[modern] are incompatible.
+             And because your project requires root-a[modern], we can conclude that your project's requirements are unsatisfiable.
+    ");
+
+    // The extra remains an alternative resolution root, so its requirements
+    // must be compatible with the base distribution that it depends on.
+    context.temp_dir.child("pyproject.toml").write_str(
+        &context
+            .read("pyproject.toml")
+            .replace("shared-leaf>=2", "shared-leaf<2"),
+    )?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features").arg("package-conflicts")
+        .arg("--index-url").arg(server.index_url()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
