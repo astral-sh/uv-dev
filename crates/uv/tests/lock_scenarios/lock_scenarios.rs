@@ -821,6 +821,3393 @@ fn fork_conflict_unsatisfiable() -> Result<()> {
     Ok(())
 }
 
+/// Two independent parents in an earlier fork initially choose version `2` of
+/// their shared dependencies. A delayed sibling first requires `shared-a==1`,
+/// then reaches `shared-b==1` through a second dependency chain. The completed
+/// fork must accumulate both agreements on its original checkpoint. Satisfying
+/// the later `shared-b` agreement must not restore `switchable-a==2` and recreate
+/// the duplicate eliminated by the first agreement.
+///
+///
+/// ```text
+/// coordinated-agreement-accumulation
+/// ├── environment
+/// │   └── python3.12
+/// ├── root
+/// │   ├── requires later-entry ; python_full_version >= '3.13'
+/// │   │   └── satisfied by later-entry-1.0.0
+/// │   ├── requires switchable-a ; python_full_version < '3.13'
+/// │   │   ├── satisfied by switchable-a-1.0.0
+/// │   │   └── satisfied by switchable-a-2.0.0
+/// │   └── requires switchable-b ; python_full_version < '3.13'
+/// │       ├── satisfied by switchable-b-1.0.0
+/// │       └── satisfied by switchable-b-2.0.0
+/// ├── later-entry
+/// │   └── later-entry-1.0.0
+/// │       └── requires start-one
+/// │           └── satisfied by start-one-1.0.0
+/// ├── shared-a
+/// │   ├── shared-a-1.0.0
+/// │   └── shared-a-2.0.0
+/// ├── shared-b
+/// │   ├── shared-b-1.0.0
+/// │   └── shared-b-2.0.0
+/// ├── stage-a
+/// │   └── stage-a-1.0.0
+/// │       ├── requires shared-a==1.0.0
+/// │       │   └── satisfied by shared-a-1.0.0
+/// │       └── requires stage-b-one
+/// │           └── satisfied by stage-b-one-1.0.0
+/// ├── stage-b-one
+/// │   └── stage-b-one-1.0.0
+/// │       └── requires stage-b-two
+/// │           └── satisfied by stage-b-two-1.0.0
+/// ├── stage-b-three
+/// │   └── stage-b-three-1.0.0
+/// │       └── requires shared-b==1.0.0
+/// │           └── satisfied by shared-b-1.0.0
+/// ├── stage-b-two
+/// │   └── stage-b-two-1.0.0
+/// │       └── requires stage-b-three
+/// │           └── satisfied by stage-b-three-1.0.0
+/// ├── start-four
+/// │   └── start-four-1.0.0
+/// │       └── requires stage-a
+/// │           └── satisfied by stage-a-1.0.0
+/// ├── start-one
+/// │   └── start-one-1.0.0
+/// │       └── requires start-two
+/// │           └── satisfied by start-two-1.0.0
+/// ├── start-three
+/// │   └── start-three-1.0.0
+/// │       └── requires start-four
+/// │           └── satisfied by start-four-1.0.0
+/// ├── start-two
+/// │   └── start-two-1.0.0
+/// │       └── requires start-three
+/// │           └── satisfied by start-three-1.0.0
+/// ├── switchable-a
+/// │   ├── switchable-a-1.0.0
+/// │   │   └── requires shared-a==1.0.0
+/// │   │       └── satisfied by shared-a-1.0.0
+/// │   └── switchable-a-2.0.0
+/// │       └── requires shared-a==2.0.0
+/// │           └── satisfied by shared-a-2.0.0
+/// └── switchable-b
+///     ├── switchable-b-1.0.0
+///     │   └── requires shared-b==1.0.0
+///     │       └── satisfied by shared-b-1.0.0
+///     └── switchable-b-2.0.0
+///         └── requires shared-b==2.0.0
+///             └── satisfied by shared-b-2.0.0
+/// ```
+#[test]
+fn coordinated_agreement_accumulation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("fork/coordinated/coordinated-agreement-accumulation.toml");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r###"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        dependencies = [
+          '''switchable-a ; python_full_version < '3.13'''',
+          '''switchable-b ; python_full_version < '3.13'''',
+          '''later-entry ; python_full_version >= '3.13'''',
+        ]
+        requires-python = ">=3.12, <3.14"
+        [tool.uv]
+        fork-strategy = "fewest"
+        environments = [
+          '''python_full_version == '3.12.*'''',
+          '''python_full_version == '3.13.*'''',
+        ]
+        "###,
+    )?;
+
+    let filters = context.filters();
+
+    let mut cmd = context.lock();
+    cmd.env_remove(EnvVars::UV_EXCLUDE_NEWER);
+    cmd.arg("--index-url").arg(server.index_url());
+    uv_snapshot!(filters, cmd, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 14 packages in [TIME]
+    "
+    );
+
+    let lock = context.read("uv.lock");
+    insta::with_settings!({
+        filters => filters,
+    }, {
+        assert_snapshot!(
+            lock, @r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12, <3.14"
+        resolution-markers = [
+            "python_full_version < '3.13'",
+            "python_full_version >= '3.13'",
+        ]
+        supported-markers = [
+            "python_full_version < '3.13'",
+            "python_full_version >= '3.13'",
+        ]
+
+        [options]
+        fork-strategy = "fewest"
+
+        [[package]]
+        name = "later-entry"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "start-one" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/later_entry-1.0.0.tar.gz", hash = "sha256:0d76dedae8ca69f2eb43c6dad256cc4ab5b43f90fff683cd32d296a6ea8d6a18", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/later_entry-1.0.0-py3-none-any.whl", hash = "sha256:81af3d22ffa59437ee3a1468db173f77ee03ddbb53ed3e2f0f2cdcc65644a189", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "later-entry", marker = "python_full_version >= '3.13'" },
+            { name = "switchable-a", marker = "python_full_version < '3.13'" },
+            { name = "switchable-b", marker = "python_full_version < '3.13'" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "later-entry", marker = "python_full_version >= '3.13'" },
+            { name = "switchable-a", marker = "python_full_version < '3.13'" },
+            { name = "switchable-b", marker = "python_full_version < '3.13'" },
+        ]
+
+        [[package]]
+        name = "shared-a"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/shared_a-1.0.0.tar.gz", hash = "sha256:ab5cd85c53970d7431d7ffba2c7cd6401399a6d7829f15d491e5bbfce39e005b", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/shared_a-1.0.0-py3-none-any.whl", hash = "sha256:31a1838c977f8bd08eecf1c67185f114a5cf5d668e97d835af2412cd8d46c1a8", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "shared-b"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/shared_b-1.0.0.tar.gz", hash = "sha256:c42108896ea8f684bea39b436426c9db11dbb08726793f14e30657e9d21615ae", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/shared_b-1.0.0-py3-none-any.whl", hash = "sha256:302da71881eb0a1ff18d2163a14bbb3255e31a4a40e70655c8448351309adb40", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "stage-a"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "shared-a" },
+            { name = "stage-b-one" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/stage_a-1.0.0.tar.gz", hash = "sha256:8ea2f1182ba3054f969e180d8ff2b3a81fb751d00ea207113ece1d77f178d2ff", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/stage_a-1.0.0-py3-none-any.whl", hash = "sha256:d2d52720cbcb35d1ecfc24b336842d36a6355b7de3a858a99ff609f79c6355cf", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "stage-b-one"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "stage-b-two" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/stage_b_one-1.0.0.tar.gz", hash = "sha256:684e28d33573c19292970adeb21c582aeee800ab53ec8fb12e27c17d8b618f2e", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/stage_b_one-1.0.0-py3-none-any.whl", hash = "sha256:3504c86ed0906cd0ec182a12283e3c99360a32ca6d57147e3e78f07ae4f36aae", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "stage-b-three"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "shared-b" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/stage_b_three-1.0.0.tar.gz", hash = "sha256:f2e9bcf552320a6fd321439265ab52d74c0b91ed4b88332c1e502d3d50f19a0a", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/stage_b_three-1.0.0-py3-none-any.whl", hash = "sha256:7debf85011b0fe9081357e75b10d6a37f3561c51f36f3ee097792e1c41587b70", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "stage-b-two"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "stage-b-three" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/stage_b_two-1.0.0.tar.gz", hash = "sha256:542148c9d1c25f89e7e0254ae33663ff7b469709fbd3d99ae9f3ddb36c2f447b", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/stage_b_two-1.0.0-py3-none-any.whl", hash = "sha256:57f735647af2f79618b997e6f546e5862642d1778db99e1b4570b64781c35ee6", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "start-four"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "stage-a" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/start_four-1.0.0.tar.gz", hash = "sha256:5259472e93888c2c69e99c537b6e66c7b3aaaad226d3103cebb3d141b6f791ef", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/start_four-1.0.0-py3-none-any.whl", hash = "sha256:460d781dd55f4ce732c91f39ba657f5dfb16b5c37c50136a0bc7d3638bf68de3", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "start-one"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "start-two" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/start_one-1.0.0.tar.gz", hash = "sha256:22d25d454e961e26fef41b983e49015cab8b4c146c3ce9f16d93c0c87575f127", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/start_one-1.0.0-py3-none-any.whl", hash = "sha256:5f447eabf4147fa28087ad0d108371ea9b8b3845be40d386011c39fea68b4a38", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "start-three"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "start-four" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/start_three-1.0.0.tar.gz", hash = "sha256:1eec91e54802646ec54fd02a65431923d2557ed8dcda28f955c6d1a217ebbff2", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/start_three-1.0.0-py3-none-any.whl", hash = "sha256:a2393e533950f17a819923c5cdc5fe184cf8c84749f18d51bd36d06dd4c298eb", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "start-two"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "start-three" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/start_two-1.0.0.tar.gz", hash = "sha256:3f6155f68efda504903194ae10121704405c2d5d1e03ea36c181d49f4f8b73ac", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/start_two-1.0.0-py3-none-any.whl", hash = "sha256:81f078a796a83e7263d79b81b0b80f30e1d8e321c98e1a335725eba2ced5f0fd", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "switchable-a"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "shared-a" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/switchable_a-1.0.0.tar.gz", hash = "sha256:2b4b679289012946ed69b0eddc5128b0fa6ef849eb9ec94bb5222a24a64c58bd", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/switchable_a-1.0.0-py3-none-any.whl", hash = "sha256:915f35f479cd194fcbc870796ae6df875a127a94292401894f9ae7bbc62ea267", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "switchable-b"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "shared-b" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/switchable_b-1.0.0.tar.gz", hash = "sha256:91bdb2c42b9626de899ea3aa37d67d573bb8cb377979bd5b01bdd8ca804d8b17", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/switchable_b-1.0.0-py3-none-any.whl", hash = "sha256:107ee0f05cf2a5be1336eb15bc10eb5e2060e067e129fbac11f052282b42b224", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+        "#
+        );
+    });
+
+    // Assert the idempotence of `uv lock` when resolving from the lockfile (`--locked`).
+    context
+        .lock()
+        .arg("--locked")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+/// The earlier fork can eliminate the first duplicate by downgrading
+/// `switchable-a`. A delayed sibling then selects `leaf==2` before introducing
+/// `shared-b==1`. Downgrading `switchable-b` would make `shared-b` consistent, but
+/// would also introduce `leaf==1` and create a duplicate of `leaf`. The second
+/// agreement must be rejected because it does not improve the total number of
+/// duplicate versions. The first accepted agreement must remain in effect.
+///
+///
+/// ```text
+/// coordinated-agreement-non-improvement
+/// ├── environment
+/// │   └── python3.12
+/// ├── root
+/// │   ├── requires later-entry ; python_full_version >= '3.13'
+/// │   │   └── satisfied by later-entry-1.0.0
+/// │   ├── requires switchable-a ; python_full_version < '3.13'
+/// │   │   ├── satisfied by switchable-a-1.0.0
+/// │   │   └── satisfied by switchable-a-2.0.0
+/// │   └── requires switchable-b ; python_full_version < '3.13'
+/// │       ├── satisfied by switchable-b-1.0.0
+/// │       └── satisfied by switchable-b-2.0.0
+/// ├── later-entry
+/// │   └── later-entry-1.0.0
+/// │       └── requires start-one
+/// │           └── satisfied by start-one-1.0.0
+/// ├── leaf
+/// │   ├── leaf-1.0.0
+/// │   └── leaf-2.0.0
+/// ├── shared-a
+/// │   ├── shared-a-1.0.0
+/// │   └── shared-a-2.0.0
+/// ├── shared-b
+/// │   ├── shared-b-1.0.0
+/// │   └── shared-b-2.0.0
+/// ├── stage-a
+/// │   └── stage-a-1.0.0
+/// │       ├── requires shared-a==1.0.0
+/// │       │   └── satisfied by shared-a-1.0.0
+/// │       └── requires trade-gate
+/// │           └── satisfied by trade-gate-1.0.0
+/// ├── start-five
+/// │   └── start-five-1.0.0
+/// │       └── requires stage-a
+/// │           └── satisfied by stage-a-1.0.0
+/// ├── start-four
+/// │   └── start-four-1.0.0
+/// │       └── requires start-five
+/// │           └── satisfied by start-five-1.0.0
+/// ├── start-one
+/// │   └── start-one-1.0.0
+/// │       └── requires start-two
+/// │           └── satisfied by start-two-1.0.0
+/// ├── start-three
+/// │   └── start-three-1.0.0
+/// │       └── requires start-four
+/// │           └── satisfied by start-four-1.0.0
+/// ├── start-two
+/// │   └── start-two-1.0.0
+/// │       └── requires start-three
+/// │           └── satisfied by start-three-1.0.0
+/// ├── switchable-a
+/// │   ├── switchable-a-1.0.0
+/// │   │   └── requires shared-a==1.0.0
+/// │   │       └── satisfied by shared-a-1.0.0
+/// │   └── switchable-a-2.0.0
+/// │       └── requires shared-a==2.0.0
+/// │           └── satisfied by shared-a-2.0.0
+/// ├── switchable-b
+/// │   ├── switchable-b-1.0.0
+/// │   │   ├── requires leaf==1.0.0
+/// │   │   │   └── satisfied by leaf-1.0.0
+/// │   │   └── requires shared-b==1.0.0
+/// │   │       └── satisfied by shared-b-1.0.0
+/// │   └── switchable-b-2.0.0
+/// │       ├── requires leaf==2.0.0
+/// │       │   └── satisfied by leaf-2.0.0
+/// │       └── requires shared-b==2.0.0
+/// │           └── satisfied by shared-b-2.0.0
+/// ├── trade-delay-one
+/// │   └── trade-delay-one-1.0.0
+/// │       └── requires trade-delay-two
+/// │           └── satisfied by trade-delay-two-1.0.0
+/// ├── trade-delay-three
+/// │   └── trade-delay-three-1.0.0
+/// │       └── requires shared-b==1.0.0
+/// │           └── satisfied by shared-b-1.0.0
+/// ├── trade-delay-two
+/// │   └── trade-delay-two-1.0.0
+/// │       └── requires trade-delay-three
+/// │           └── satisfied by trade-delay-three-1.0.0
+/// └── trade-gate
+///     └── trade-gate-1.0.0
+///         ├── requires leaf==2.0.0
+///         │   └── satisfied by leaf-2.0.0
+///         └── requires trade-delay-one
+///             └── satisfied by trade-delay-one-1.0.0
+/// ```
+#[test]
+fn coordinated_agreement_non_improvement() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("fork/coordinated/coordinated-agreement-non-improvement.toml");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r###"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        dependencies = [
+          '''switchable-a ; python_full_version < '3.13'''',
+          '''switchable-b ; python_full_version < '3.13'''',
+          '''later-entry ; python_full_version >= '3.13'''',
+        ]
+        requires-python = ">=3.12, <3.14"
+        [tool.uv]
+        fork-strategy = "fewest"
+        environments = [
+          '''python_full_version == '3.12.*'''',
+          '''python_full_version == '3.13.*'''',
+        ]
+        "###,
+    )?;
+
+    let filters = context.filters();
+
+    let mut cmd = context.lock();
+    cmd.env_remove(EnvVars::UV_EXCLUDE_NEWER);
+    cmd.arg("--index-url").arg(server.index_url());
+    uv_snapshot!(filters, cmd, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 18 packages in [TIME]
+    "
+    );
+
+    let lock = context.read("uv.lock");
+    insta::with_settings!({
+        filters => filters,
+    }, {
+        assert_snapshot!(
+            lock, @r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12, <3.14"
+        resolution-markers = [
+            "python_full_version < '3.13'",
+            "python_full_version >= '3.13'",
+        ]
+        supported-markers = [
+            "python_full_version < '3.13'",
+            "python_full_version >= '3.13'",
+        ]
+
+        [options]
+        fork-strategy = "fewest"
+
+        [[package]]
+        name = "later-entry"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "start-one" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/later_entry-1.0.0.tar.gz", hash = "sha256:0d76dedae8ca69f2eb43c6dad256cc4ab5b43f90fff683cd32d296a6ea8d6a18", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/later_entry-1.0.0-py3-none-any.whl", hash = "sha256:81af3d22ffa59437ee3a1468db173f77ee03ddbb53ed3e2f0f2cdcc65644a189", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "leaf"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/leaf-2.0.0.tar.gz", hash = "sha256:bc5de13acb59a7f406cce765be6be6cbab785a7c9c9894dfc880580568cefc19", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/leaf-2.0.0-py3-none-any.whl", hash = "sha256:0eed3aff23491c8f604e933140e005dde855457c5a75508f39d416852a38d552", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "later-entry", marker = "python_full_version >= '3.13'" },
+            { name = "switchable-a", marker = "python_full_version < '3.13'" },
+            { name = "switchable-b", marker = "python_full_version < '3.13'" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "later-entry", marker = "python_full_version >= '3.13'" },
+            { name = "switchable-a", marker = "python_full_version < '3.13'" },
+            { name = "switchable-b", marker = "python_full_version < '3.13'" },
+        ]
+
+        [[package]]
+        name = "shared-a"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/shared_a-1.0.0.tar.gz", hash = "sha256:ab5cd85c53970d7431d7ffba2c7cd6401399a6d7829f15d491e5bbfce39e005b", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/shared_a-1.0.0-py3-none-any.whl", hash = "sha256:31a1838c977f8bd08eecf1c67185f114a5cf5d668e97d835af2412cd8d46c1a8", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "shared-b"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "python_full_version >= '3.13'",
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/shared_b-1.0.0.tar.gz", hash = "sha256:c42108896ea8f684bea39b436426c9db11dbb08726793f14e30657e9d21615ae", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/shared_b-1.0.0-py3-none-any.whl", hash = "sha256:302da71881eb0a1ff18d2163a14bbb3255e31a4a40e70655c8448351309adb40", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "shared-b"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "python_full_version < '3.13'",
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/shared_b-2.0.0.tar.gz", hash = "sha256:c14a44d12edd41387c48de54f142b7bf69e858f55bbf9e9fdc46fd4316d19ae9", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/shared_b-2.0.0-py3-none-any.whl", hash = "sha256:99f58fa1a17a9bc4b114cdf962677f3e92c9db1536a5cf9a68aaa95e199fdd89", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "stage-a"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "shared-a" },
+            { name = "trade-gate" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/stage_a-1.0.0.tar.gz", hash = "sha256:750d2449087e500b63ee350fd14cfaa263a1b3f76eccf7c94b02f74e09efc2a3", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/stage_a-1.0.0-py3-none-any.whl", hash = "sha256:2d8b5ab830bb0501985e36ce8c8f39d6bb8e59079b867e82237ca92fcb32907a", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "start-five"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "stage-a" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/start_five-1.0.0.tar.gz", hash = "sha256:c18f1540ce8094d38d94aeeb97936a7d7fbe656a3f0cd41646e20de01d746b25", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/start_five-1.0.0-py3-none-any.whl", hash = "sha256:79205ec72a9a5dd3f87900d8049e3d1196d2c05248af05729f62aff78f469b37", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "start-four"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "start-five" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/start_four-1.0.0.tar.gz", hash = "sha256:1f8df4f971b8c4f4af7e499da174fe8e59645ee2bb521ec57dbb752cca49311a", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/start_four-1.0.0-py3-none-any.whl", hash = "sha256:8457b106ec43027590bf6bcd99e32085334851efbc4299ffd20eb8c3fc97a7c0", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "start-one"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "start-two" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/start_one-1.0.0.tar.gz", hash = "sha256:22d25d454e961e26fef41b983e49015cab8b4c146c3ce9f16d93c0c87575f127", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/start_one-1.0.0-py3-none-any.whl", hash = "sha256:5f447eabf4147fa28087ad0d108371ea9b8b3845be40d386011c39fea68b4a38", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "start-three"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "start-four" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/start_three-1.0.0.tar.gz", hash = "sha256:1eec91e54802646ec54fd02a65431923d2557ed8dcda28f955c6d1a217ebbff2", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/start_three-1.0.0-py3-none-any.whl", hash = "sha256:a2393e533950f17a819923c5cdc5fe184cf8c84749f18d51bd36d06dd4c298eb", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "start-two"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "start-three" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/start_two-1.0.0.tar.gz", hash = "sha256:3f6155f68efda504903194ae10121704405c2d5d1e03ea36c181d49f4f8b73ac", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/start_two-1.0.0-py3-none-any.whl", hash = "sha256:81f078a796a83e7263d79b81b0b80f30e1d8e321c98e1a335725eba2ced5f0fd", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "switchable-a"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "shared-a" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/switchable_a-1.0.0.tar.gz", hash = "sha256:2b4b679289012946ed69b0eddc5128b0fa6ef849eb9ec94bb5222a24a64c58bd", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/switchable_a-1.0.0-py3-none-any.whl", hash = "sha256:915f35f479cd194fcbc870796ae6df875a127a94292401894f9ae7bbc62ea267", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "switchable-b"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "leaf" },
+            { name = "shared-b", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" } },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/switchable_b-2.0.0.tar.gz", hash = "sha256:e2e1d41fb96e7525fe47f6b813a521596ee54feae5e9ccd5293e0b5111b1582d", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/switchable_b-2.0.0-py3-none-any.whl", hash = "sha256:aaf1cdf12dc9bf606b402c44793525370956f15f019dc8317b305e02ab022df1", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "trade-delay-one"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "trade-delay-two" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/trade_delay_one-1.0.0.tar.gz", hash = "sha256:c95da5071a848848d38031c63c8efdad0710439bd9e8d5373b8a16782a2131dd", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/trade_delay_one-1.0.0-py3-none-any.whl", hash = "sha256:579c354eddf30b043a1c5ecc0c4d21773724509943f73e05e48269bf38535508", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "trade-delay-three"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "shared-b", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" } },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/trade_delay_three-1.0.0.tar.gz", hash = "sha256:f6a22e010a04efee423c24756888fccf297284da184ba3ef55d28f37e9362c9b", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/trade_delay_three-1.0.0-py3-none-any.whl", hash = "sha256:aacffb55fa0ef514307b0a47da333c61697f06cae729d64e92f67b13ac827077", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "trade-delay-two"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "trade-delay-three" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/trade_delay_two-1.0.0.tar.gz", hash = "sha256:829ce9dd69a745736ce9c6297ca1d8983a524a5ad4ec63ccfeb32eb9f584e008", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/trade_delay_two-1.0.0-py3-none-any.whl", hash = "sha256:40be011b2776cae33e5405fe417c3d78082efa025d0d83e9f9b41e0f2bd5c176", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "trade-gate"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "leaf" },
+            { name = "trade-delay-one" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/trade_gate-1.0.0.tar.gz", hash = "sha256:db5f1aedbea54a54984125162877bbf529b1ff67f1838f51db3b06ad84d54fdf", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/trade_gate-1.0.0-py3-none-any.whl", hash = "sha256:35f1c71b14f769e7de7a227bad74f4c9b89ffe96322019077206c44993036261", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+        "#
+        );
+    });
+
+    // Assert the idempotence of `uv lock` when resolving from the lockfile (`--locked`).
+    context
+        .lock()
+        .arg("--locked")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+/// An earlier fork finishes with `switchable==2` and `shared==2`. A delayed sibling
+/// initially selects `flaky==2`, which requires `shared==1` and `leaf==1`.
+/// Coordination can therefore replace the earlier parent with `switchable==1`.
+/// A separate dependency chain eventually requires `leaf==2`, forcing the live
+/// sibling to backtrack to `flaky==1` and `shared==2`. The earlier fork must then
+/// replace its `shared==1` agreement with `shared==2`, without retaining the
+/// incompatibilities learned from the withdrawn agreement or the sibling's
+/// retracted `shared==1` decision.
+///
+/// The final lock contains `shared==2` in both environments. A resolver trace is
+/// also needed to distinguish agreement replacement from never coordinating.
+///
+///
+/// ```text
+/// coordinated-agreement-replacement
+/// ├── environment
+/// │   └── python3.12
+/// ├── root
+/// │   ├── requires later-entry ; python_full_version >= '3.13'
+/// │   │   └── satisfied by later-entry-1.0.0
+/// │   └── requires switchable ; python_full_version < '3.13'
+/// │       ├── satisfied by switchable-1.0.0
+/// │       └── satisfied by switchable-2.0.0
+/// ├── conflict-five
+/// │   └── conflict-five-1.0.0
+/// │       └── requires leaf==2.0.0
+/// │           └── satisfied by leaf-2.0.0
+/// ├── conflict-four
+/// │   └── conflict-four-1.0.0
+/// │       └── requires conflict-five
+/// │           └── satisfied by conflict-five-1.0.0
+/// ├── conflict-one
+/// │   └── conflict-one-1.0.0
+/// │       └── requires conflict-two
+/// │           └── satisfied by conflict-two-1.0.0
+/// ├── conflict-three
+/// │   └── conflict-three-1.0.0
+/// │       └── requires conflict-four
+/// │           └── satisfied by conflict-four-1.0.0
+/// ├── conflict-two
+/// │   └── conflict-two-1.0.0
+/// │       └── requires conflict-three
+/// │           └── satisfied by conflict-three-1.0.0
+/// ├── flaky
+/// │   ├── flaky-1.0.0
+/// │   │   ├── requires leaf==2.0.0
+/// │   │   │   └── satisfied by leaf-2.0.0
+/// │   │   └── requires shared==2.0.0
+/// │   │       └── satisfied by shared-2.0.0
+/// │   └── flaky-2.0.0
+/// │       ├── requires leaf==1.0.0
+/// │       │   └── satisfied by leaf-1.0.0
+/// │       └── requires shared==1.0.0
+/// │           └── satisfied by shared-1.0.0
+/// ├── later-entry
+/// │   └── later-entry-1.0.0
+/// │       └── requires start-one
+/// │           └── satisfied by start-one-1.0.0
+/// ├── later-root
+/// │   └── later-root-1.0.0
+/// │       ├── requires conflict-one
+/// │       │   └── satisfied by conflict-one-1.0.0
+/// │       └── requires flaky>=1.0.0,<=2.0.0
+/// │           ├── satisfied by flaky-1.0.0
+/// │           └── satisfied by flaky-2.0.0
+/// ├── leaf
+/// │   ├── leaf-1.0.0
+/// │   └── leaf-2.0.0
+/// ├── shared
+/// │   ├── shared-1.0.0
+/// │   └── shared-2.0.0
+/// ├── start-one
+/// │   └── start-one-1.0.0
+/// │       └── requires start-two
+/// │           └── satisfied by start-two-1.0.0
+/// ├── start-three
+/// │   └── start-three-1.0.0
+/// │       └── requires later-root
+/// │           └── satisfied by later-root-1.0.0
+/// ├── start-two
+/// │   └── start-two-1.0.0
+/// │       └── requires start-three
+/// │           └── satisfied by start-three-1.0.0
+/// └── switchable
+///     ├── switchable-1.0.0
+///     │   └── requires shared==1.0.0
+///     │       └── satisfied by shared-1.0.0
+///     └── switchable-2.0.0
+///         └── requires shared==2.0.0
+///             └── satisfied by shared-2.0.0
+/// ```
+#[test]
+fn coordinated_agreement_replacement() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("fork/coordinated/coordinated-agreement-replacement.toml");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r###"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        dependencies = [
+          '''switchable ; python_full_version < '3.13'''',
+          '''later-entry ; python_full_version >= '3.13'''',
+        ]
+        requires-python = ">=3.12, <3.14"
+        [tool.uv]
+        fork-strategy = "fewest"
+        environments = [
+          '''python_full_version == '3.12.*'''',
+          '''python_full_version == '3.13.*'''',
+        ]
+        "###,
+    )?;
+
+    let filters = context.filters();
+
+    let mut cmd = context.lock();
+    cmd.env_remove(EnvVars::UV_EXCLUDE_NEWER);
+    cmd.arg("--index-url").arg(server.index_url());
+    uv_snapshot!(filters, cmd, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 15 packages in [TIME]
+    "
+    );
+
+    let lock = context.read("uv.lock");
+    insta::with_settings!({
+        filters => filters,
+    }, {
+        assert_snapshot!(
+            lock, @r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12, <3.14"
+        resolution-markers = [
+            "python_full_version < '3.13'",
+            "python_full_version >= '3.13'",
+        ]
+        supported-markers = [
+            "python_full_version < '3.13'",
+            "python_full_version >= '3.13'",
+        ]
+
+        [options]
+        fork-strategy = "fewest"
+
+        [[package]]
+        name = "conflict-five"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "leaf" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/conflict_five-1.0.0.tar.gz", hash = "sha256:bb2a56c743437ed9b58ab0fe4158bfcfe4e28f18aab0a5142801e22477bb25be", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/conflict_five-1.0.0-py3-none-any.whl", hash = "sha256:2d8ee608a045ecb4892562012e227c492581959ff837a7413159eacf7b22d92b", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "conflict-four"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "conflict-five" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/conflict_four-1.0.0.tar.gz", hash = "sha256:0393b49b14a41fdfa51fdc5660ddc4e47f4e0e547219c7aab59add2ed692f119", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/conflict_four-1.0.0-py3-none-any.whl", hash = "sha256:69402caf2ab3b26c97bdcd75c7647dd1d558d529b68dfd2892c0816136c397e4", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "conflict-one"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "conflict-two" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/conflict_one-1.0.0.tar.gz", hash = "sha256:a82a37ca7389207222cde57673c887005a04be4d9df34326693736a8c55d07cc", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/conflict_one-1.0.0-py3-none-any.whl", hash = "sha256:200ec100c51a20cd445c337ac40d412a7f483b801803f585ca117810897d1b11", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "conflict-three"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "conflict-four" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/conflict_three-1.0.0.tar.gz", hash = "sha256:c7014f0e450ef8c2c609aee9558d992ae862726c6d66a8689c06a291ad148432", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/conflict_three-1.0.0-py3-none-any.whl", hash = "sha256:b299b9e96162f27cd34ed14b5fb20d1ab9d64d43907f16e6b7fba81537d70276", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "conflict-two"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "conflict-three" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/conflict_two-1.0.0.tar.gz", hash = "sha256:e0271489b445a0572c6cbab20d4c44e2b6a650ff1cd8d9f8861bc1388944845d", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/conflict_two-1.0.0-py3-none-any.whl", hash = "sha256:8acad3db9c99c801dceec54a161b64c0024e8dfa94abced8784127108ac720a4", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "flaky"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "leaf" },
+            { name = "shared" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/flaky-1.0.0.tar.gz", hash = "sha256:4676b6abb2f92a49223a91c49944f44cd13b0b1c4dc7f7438d18ff70459190b4", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/flaky-1.0.0-py3-none-any.whl", hash = "sha256:66cdac3ab80dc00f2399847371a28f8d52bbc9082cd5cf6114986b8ca7a70a1e", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "later-entry"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "start-one" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/later_entry-1.0.0.tar.gz", hash = "sha256:0d76dedae8ca69f2eb43c6dad256cc4ab5b43f90fff683cd32d296a6ea8d6a18", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/later_entry-1.0.0-py3-none-any.whl", hash = "sha256:81af3d22ffa59437ee3a1468db173f77ee03ddbb53ed3e2f0f2cdcc65644a189", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "later-root"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "conflict-one" },
+            { name = "flaky" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/later_root-1.0.0.tar.gz", hash = "sha256:377905791c707afb37b110e815d501fe67ad59c01eed467c8d1c4393f56c161a", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/later_root-1.0.0-py3-none-any.whl", hash = "sha256:66900ac6ce68e770a96d9f14903481de2b1ff27dc2787ec5480c3abbde00bf40", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "leaf"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/leaf-2.0.0.tar.gz", hash = "sha256:bc5de13acb59a7f406cce765be6be6cbab785a7c9c9894dfc880580568cefc19", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/leaf-2.0.0-py3-none-any.whl", hash = "sha256:0eed3aff23491c8f604e933140e005dde855457c5a75508f39d416852a38d552", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "later-entry", marker = "python_full_version >= '3.13'" },
+            { name = "switchable", marker = "python_full_version < '3.13'" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "later-entry", marker = "python_full_version >= '3.13'" },
+            { name = "switchable", marker = "python_full_version < '3.13'" },
+        ]
+
+        [[package]]
+        name = "shared"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/shared-2.0.0.tar.gz", hash = "sha256:c09e0026550169997ff12b4c435b88e8ef9aed1fbd7d24265daea1f686f46059", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/shared-2.0.0-py3-none-any.whl", hash = "sha256:50654d921e335114898f26df3c573dfe4d21fae95abdb27584dbbc624137a5d0", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "start-one"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "start-two" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/start_one-1.0.0.tar.gz", hash = "sha256:22d25d454e961e26fef41b983e49015cab8b4c146c3ce9f16d93c0c87575f127", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/start_one-1.0.0-py3-none-any.whl", hash = "sha256:5f447eabf4147fa28087ad0d108371ea9b8b3845be40d386011c39fea68b4a38", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "start-three"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "later-root" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/start_three-1.0.0.tar.gz", hash = "sha256:586769f0408dcf60773e7f9ad8f6a3ede2aa94802a4dbe3be6b7244d7168ed1c", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/start_three-1.0.0-py3-none-any.whl", hash = "sha256:b49a7c02dc2a267ebf9864cc6b1d2f83d3fc7266cf3fb176787709cec3ae7536", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "start-two"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "start-three" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/start_two-1.0.0.tar.gz", hash = "sha256:3f6155f68efda504903194ae10121704405c2d5d1e03ea36c181d49f4f8b73ac", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/start_two-1.0.0-py3-none-any.whl", hash = "sha256:81f078a796a83e7263d79b81b0b80f30e1d8e321c98e1a335725eba2ced5f0fd", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "switchable"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "shared" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/switchable-2.0.0.tar.gz", hash = "sha256:2e2ea479ce728997d329e9b97a99baf12da7795b7589055ed7727e0013abfa23", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/switchable-2.0.0-py3-none-any.whl", hash = "sha256:9fcc98c965309c0a9dbb24ac7a6e1bc64b1ce31ea7d73f36bca2b0339f8105fa", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+        "#
+        );
+    });
+
+    // Assert the idempotence of `uv lock` when resolving from the lockfile (`--locked`).
+    context
+        .lock()
+        .arg("--locked")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+/// `shared` is a direct requirement in the earlier fork and a transitive
+/// requirement in the delayed sibling. The `lowest-direct` mode must select
+/// `shared==1` for the direct requirement and `shared==2` for the transitive
+/// requirement. The `fewest` fork strategy must not coordinate these different
+/// resolution policies.
+///
+///
+/// ```text
+/// coordinated-mode-lowest-direct
+/// ├── environment
+/// │   └── python3.12
+/// ├── root
+/// │   ├── requires later-entry>=1.0.0 ; python_full_version >= '3.13'
+/// │   │   └── satisfied by later-entry-1.0.0
+/// │   └── requires shared>=1.0.0,<=2.0.0 ; python_full_version < '3.13'
+/// │       ├── satisfied by shared-1.0.0
+/// │       └── satisfied by shared-2.0.0
+/// ├── broad-parent
+/// │   └── broad-parent-1.0.0
+/// │       └── requires shared>=1.0.0,<=2.0.0
+/// │           ├── satisfied by shared-1.0.0
+/// │           └── satisfied by shared-2.0.0
+/// ├── delay-one
+/// │   └── delay-one-1.0.0
+/// │       └── requires delay-two>=1.0.0
+/// │           └── satisfied by delay-two-1.0.0
+/// ├── delay-two
+/// │   └── delay-two-1.0.0
+/// │       └── requires broad-parent>=1.0.0
+/// │           └── satisfied by broad-parent-1.0.0
+/// ├── later-entry
+/// │   └── later-entry-1.0.0
+/// │       └── requires delay-one>=1.0.0
+/// │           └── satisfied by delay-one-1.0.0
+/// └── shared
+///     ├── shared-1.0.0
+///     └── shared-2.0.0
+/// ```
+#[test]
+fn coordinated_mode_lowest_direct() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("fork/coordinated/coordinated-mode-lowest-direct.toml");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r###"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        dependencies = [
+          '''shared>=1.0.0,<=2.0.0 ; python_full_version < '3.13'''',
+          '''later-entry>=1.0.0 ; python_full_version >= '3.13'''',
+        ]
+        requires-python = ">=3.12, <3.14"
+        [tool.uv]
+        resolution = "lowest-direct"
+        fork-strategy = "fewest"
+        environments = [
+          '''python_full_version == '3.12.*'''',
+          '''python_full_version == '3.13.*'''',
+        ]
+        "###,
+    )?;
+
+    let filters = context.filters();
+
+    let mut cmd = context.lock();
+    cmd.env_remove(EnvVars::UV_EXCLUDE_NEWER);
+    cmd.arg("--index-url").arg(server.index_url());
+    // The direct fork keeps `shared==1`, while the transitive fork selects `shared==2`.
+    uv_snapshot!(filters, cmd, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 7 packages in [TIME]
+    "
+    );
+
+    let lock = context.read("uv.lock");
+    insta::with_settings!({
+        filters => filters,
+    }, {
+        assert_snapshot!(
+            lock, @r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12, <3.14"
+        resolution-markers = [
+            "python_full_version < '3.13'",
+            "python_full_version >= '3.13'",
+        ]
+        supported-markers = [
+            "python_full_version < '3.13'",
+            "python_full_version >= '3.13'",
+        ]
+
+        [options]
+        resolution-mode = "lowest-direct"
+        fork-strategy = "fewest"
+
+        [[package]]
+        name = "broad-parent"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "shared", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" } },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/broad_parent-1.0.0.tar.gz", hash = "sha256:e7eeb667f6b83b5afe2855b494e99a8795e2b38051011a0ada68871f6513072d", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/broad_parent-1.0.0-py3-none-any.whl", hash = "sha256:0f74a08085bb43f963113ab17e9c1e06078c42b78366687858710618f5578ce3", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-one"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-two" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/delay_one-1.0.0.tar.gz", hash = "sha256:403ead681ca0a78d58f3996de50d22766c4e4098b5e95103746fe562ebefed04", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_one-1.0.0-py3-none-any.whl", hash = "sha256:36700dfdae3859f49695f43ff5b559ce038dda022265b1c102ff848172d34f1d", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-two"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "broad-parent" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/delay_two-1.0.0.tar.gz", hash = "sha256:be5332d53d9ce6169c1c53b4523ceb8f211f654c0d8e7460e121a56ff9ddafb7", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_two-1.0.0-py3-none-any.whl", hash = "sha256:826a03f79a94b62a3741368175a0a747de8f71172f52eb695e3cd2241c16036f", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "later-entry"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-one" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/later_entry-1.0.0.tar.gz", hash = "sha256:6e257987a0e7dd1e168349ee03fa5af2c05e30bf7ae65c5aa0e301948d7b280c", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/later_entry-1.0.0-py3-none-any.whl", hash = "sha256:1e09290e5b717943e91f8dd21ba9cad5af6ac4fda7d5c2039875df5764d884ae", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "later-entry", marker = "python_full_version >= '3.13'" },
+            { name = "shared", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "python_full_version < '3.13'" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "later-entry", marker = "python_full_version >= '3.13'", specifier = ">=1.0.0" },
+            { name = "shared", marker = "python_full_version < '3.13'", specifier = ">=1.0.0,<=2.0.0" },
+        ]
+
+        [[package]]
+        name = "shared"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "python_full_version < '3.13'",
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/shared-1.0.0.tar.gz", hash = "sha256:29242e0032cd4abe8ec185a5f0c198167191709b20778c7ff188dbd0037923f5", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/shared-1.0.0-py3-none-any.whl", hash = "sha256:9681756b32d3ae501a9e7129df974fe86476066cf3fcec82c82594bb91ecca07", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "shared"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "python_full_version >= '3.13'",
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/shared-2.0.0.tar.gz", hash = "sha256:c09e0026550169997ff12b4c435b88e8ef9aed1fbd7d24265daea1f686f46059", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/shared-2.0.0-py3-none-any.whl", hash = "sha256:50654d921e335114898f26df3c573dfe4d21fae95abdb27584dbbc624137a5d0", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+        "#
+        );
+    });
+
+    // Assert the idempotence of `uv lock` when resolving from the lockfile (`--locked`).
+    context
+        .lock()
+        .arg("--locked")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+/// The `lowest` mode finishes the earlier fork with `switchable==1` and `shared==1`.
+/// A delayed sibling then requires `shared==2`. The completed fork must backtrack
+/// the parent to `switchable==2` so both environments can use `shared==2`, even
+/// though that moves the earlier decisions upward in version order.
+///
+///
+/// ```text
+/// coordinated-mode-lowest-inverse
+/// ├── environment
+/// │   └── python3.12
+/// ├── root
+/// │   ├── requires later-entry>=1.0.0 ; python_full_version >= '3.13'
+/// │   │   └── satisfied by later-entry-1.0.0
+/// │   └── requires switchable>=1.0.0 ; python_full_version < '3.13'
+/// │       ├── satisfied by switchable-1.0.0
+/// │       └── satisfied by switchable-2.0.0
+/// ├── constrained
+/// │   └── constrained-1.0.0
+/// │       └── requires shared==2.0.0
+/// │           └── satisfied by shared-2.0.0
+/// ├── delay-one
+/// │   └── delay-one-1.0.0
+/// │       └── requires delay-two>=1.0.0
+/// │           └── satisfied by delay-two-1.0.0
+/// ├── delay-two
+/// │   └── delay-two-1.0.0
+/// │       └── requires constrained>=1.0.0
+/// │           └── satisfied by constrained-1.0.0
+/// ├── later-entry
+/// │   └── later-entry-1.0.0
+/// │       └── requires delay-one>=1.0.0
+/// │           └── satisfied by delay-one-1.0.0
+/// ├── shared
+/// │   ├── shared-1.0.0
+/// │   └── shared-2.0.0
+/// └── switchable
+///     ├── switchable-1.0.0
+///     │   └── requires shared==1.0.0
+///     │       └── satisfied by shared-1.0.0
+///     └── switchable-2.0.0
+///         └── requires shared==2.0.0
+///             └── satisfied by shared-2.0.0
+/// ```
+#[test]
+fn coordinated_mode_lowest_inverse() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("fork/coordinated/coordinated-mode-lowest-inverse.toml");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r###"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        dependencies = [
+          '''switchable>=1.0.0 ; python_full_version < '3.13'''',
+          '''later-entry>=1.0.0 ; python_full_version >= '3.13'''',
+        ]
+        requires-python = ">=3.12, <3.14"
+        [tool.uv]
+        resolution = "lowest"
+        fork-strategy = "fewest"
+        environments = [
+          '''python_full_version == '3.12.*'''',
+          '''python_full_version == '3.13.*'''',
+        ]
+        "###,
+    )?;
+
+    let filters = context.filters();
+
+    let mut cmd = context.lock();
+    cmd.env_remove(EnvVars::UV_EXCLUDE_NEWER);
+    cmd.arg("--index-url").arg(server.index_url());
+    // Both forks use `shared==2`, and the earlier fork selects `switchable==2`.
+    uv_snapshot!(filters, cmd, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 7 packages in [TIME]
+    "
+    );
+
+    let lock = context.read("uv.lock");
+    insta::with_settings!({
+        filters => filters,
+    }, {
+        assert_snapshot!(
+            lock, @r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12, <3.14"
+        resolution-markers = [
+            "python_full_version < '3.13'",
+            "python_full_version >= '3.13'",
+        ]
+        supported-markers = [
+            "python_full_version < '3.13'",
+            "python_full_version >= '3.13'",
+        ]
+
+        [options]
+        resolution-mode = "lowest"
+        fork-strategy = "fewest"
+
+        [[package]]
+        name = "constrained"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "shared" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/constrained-1.0.0.tar.gz", hash = "sha256:05b2f346efcd08146ff8540a5ac30f8063e26bd44fc442307b58cad8281e6cab", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/constrained-1.0.0-py3-none-any.whl", hash = "sha256:f04a64c8f5a1b3eb168f28480f029bf1478d5f69b4c962d6f4f5ef0980464186", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-one"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-two" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/delay_one-1.0.0.tar.gz", hash = "sha256:403ead681ca0a78d58f3996de50d22766c4e4098b5e95103746fe562ebefed04", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_one-1.0.0-py3-none-any.whl", hash = "sha256:36700dfdae3859f49695f43ff5b559ce038dda022265b1c102ff848172d34f1d", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-two"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "constrained" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/delay_two-1.0.0.tar.gz", hash = "sha256:024bd7b5e6d14f285a06cce9dcd8ea410e2425abd320d91bda9558672b441662", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_two-1.0.0-py3-none-any.whl", hash = "sha256:1e561c24038081847af22722b2d55b482e81311782db56be0e75b13ab4a6967b", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "later-entry"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-one" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/later_entry-1.0.0.tar.gz", hash = "sha256:6e257987a0e7dd1e168349ee03fa5af2c05e30bf7ae65c5aa0e301948d7b280c", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/later_entry-1.0.0-py3-none-any.whl", hash = "sha256:1e09290e5b717943e91f8dd21ba9cad5af6ac4fda7d5c2039875df5764d884ae", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "later-entry", marker = "python_full_version >= '3.13'" },
+            { name = "switchable", marker = "python_full_version < '3.13'" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "later-entry", marker = "python_full_version >= '3.13'", specifier = ">=1.0.0" },
+            { name = "switchable", marker = "python_full_version < '3.13'", specifier = ">=1.0.0" },
+        ]
+
+        [[package]]
+        name = "shared"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/shared-2.0.0.tar.gz", hash = "sha256:c09e0026550169997ff12b4c435b88e8ef9aed1fbd7d24265daea1f686f46059", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/shared-2.0.0-py3-none-any.whl", hash = "sha256:50654d921e335114898f26df3c573dfe4d21fae95abdb27584dbbc624137a5d0", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "switchable"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "shared" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/switchable-2.0.0.tar.gz", hash = "sha256:2e2ea479ce728997d329e9b97a99baf12da7795b7589055ed7727e0013abfa23", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/switchable-2.0.0-py3-none-any.whl", hash = "sha256:9fcc98c965309c0a9dbb24ac7a6e1bc64b1ce31ea7d73f36bca2b0339f8105fa", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+        "#
+        );
+    });
+
+    // Assert the idempotence of `uv lock` when resolving from the lockfile (`--locked`).
+    context
+        .lock()
+        .arg("--locked")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+/// A completed Python fork has a valid newer `parent`. Reusing a delayed sibling's
+/// `shared` and `aux` versions selects an older `parent` and creates two platform
+/// forks. The Windows child can resolve, but the other conflicts with the root's
+/// `blocker==2` requirement. The incomplete replacement must not remove any of the
+/// original Python region from the lock.
+///
+///
+/// ```text
+/// coordinated-nested-platform-unsatisfiable
+/// ├── environment
+/// │   └── python3.12
+/// ├── root
+/// │   ├── requires blocker==2.0.0 ; python_full_version < '3.13'
+/// │   │   └── satisfied by blocker-2.0.0
+/// │   ├── requires delayed ; python_full_version >= '3.13'
+/// │   │   └── satisfied by delayed-1.0.0
+/// │   └── requires parent ; python_full_version < '3.13'
+/// │       ├── satisfied by parent-1.0.0
+/// │       └── satisfied by parent-2.0.0
+/// ├── aux
+/// │   ├── aux-1.0.0
+/// │   └── aux-2.0.0
+/// ├── blocker
+/// │   ├── blocker-1.0.0
+/// │   └── blocker-2.0.0
+/// ├── branch
+/// │   ├── branch-1.0.0
+/// │   └── branch-2.0.0
+/// │       └── requires blocker==1.0.0
+/// │           └── satisfied by blocker-1.0.0
+/// ├── constrained
+/// │   └── constrained-1.0.0
+/// │       ├── requires aux==1.0.0
+/// │       │   └── satisfied by aux-1.0.0
+/// │       └── requires shared==1.0.0
+/// │           └── satisfied by shared-1.0.0
+/// ├── delay-eight
+/// │   └── delay-eight-1.0.0
+/// │       └── requires constrained
+/// │           └── satisfied by constrained-1.0.0
+/// ├── delay-five
+/// │   └── delay-five-1.0.0
+/// │       └── requires delay-six
+/// │           └── satisfied by delay-six-1.0.0
+/// ├── delay-four
+/// │   └── delay-four-1.0.0
+/// │       └── requires delay-five
+/// │           └── satisfied by delay-five-1.0.0
+/// ├── delay-one
+/// │   └── delay-one-1.0.0
+/// │       └── requires delay-two
+/// │           └── satisfied by delay-two-1.0.0
+/// ├── delay-seven
+/// │   └── delay-seven-1.0.0
+/// │       └── requires delay-eight
+/// │           └── satisfied by delay-eight-1.0.0
+/// ├── delay-six
+/// │   └── delay-six-1.0.0
+/// │       └── requires delay-seven
+/// │           └── satisfied by delay-seven-1.0.0
+/// ├── delay-three
+/// │   └── delay-three-1.0.0
+/// │       └── requires delay-four
+/// │           └── satisfied by delay-four-1.0.0
+/// ├── delay-two
+/// │   └── delay-two-1.0.0
+/// │       └── requires delay-three
+/// │           └── satisfied by delay-three-1.0.0
+/// ├── delayed
+/// │   └── delayed-1.0.0
+/// │       └── requires delay-one
+/// │           └── satisfied by delay-one-1.0.0
+/// ├── parent
+/// │   ├── parent-1.0.0
+/// │   │   ├── requires aux==1.0.0
+/// │   │   │   └── satisfied by aux-1.0.0
+/// │   │   ├── requires branch==1.0.0 ; sys_platform == 'win32'
+/// │   │   │   └── satisfied by branch-1.0.0
+/// │   │   ├── requires branch==2.0.0 ; sys_platform != 'win32'
+/// │   │   │   └── satisfied by branch-2.0.0
+/// │   │   └── requires shared==1.0.0
+/// │   │       └── satisfied by shared-1.0.0
+/// │   └── parent-2.0.0
+/// │       ├── requires aux==2.0.0
+/// │       │   └── satisfied by aux-2.0.0
+/// │       └── requires shared==2.0.0
+/// │           └── satisfied by shared-2.0.0
+/// └── shared
+///     ├── shared-1.0.0
+///     └── shared-2.0.0
+/// ```
+#[test]
+fn coordinated_nested_platform_unsatisfiable() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server =
+        PackseServer::new("fork/coordinated/coordinated-nested-platform-unsatisfiable.toml");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r###"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        dependencies = [
+          '''parent ; python_full_version < '3.13'''',
+          '''blocker==2.0.0 ; python_full_version < '3.13'''',
+          '''delayed ; python_full_version >= '3.13'''',
+        ]
+        requires-python = ">=3.12, <3.14"
+        [tool.uv]
+        fork-strategy = "fewest"
+        environments = [
+          '''python_full_version < '3.13'''',
+          '''python_full_version >= '3.13'''',
+        ]
+        "###,
+    )?;
+
+    let filters = context.filters();
+
+    let mut cmd = context.lock();
+    cmd.env_remove(EnvVars::UV_EXCLUDE_NEWER);
+    cmd.arg("--index-url").arg(server.index_url());
+    // `parent==2`, `shared==2`, `aux==2`, and `blocker==2` cover every platform below
+    // Python 3.13. The delayed sibling uses `shared==1` and `aux==1` at Python 3.13
+    // and later. Neither `branch` version belongs in the final lock because one
+    // replacement child fails.
+    uv_snapshot!(filters, cmd, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 17 packages in [TIME]
+    "
+    );
+
+    let lock = context.read("uv.lock");
+    insta::with_settings!({
+        filters => filters,
+    }, {
+        assert_snapshot!(
+            lock, @r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12, <3.14"
+        resolution-markers = [
+            "python_full_version < '3.13'",
+            "python_full_version >= '3.13'",
+        ]
+        supported-markers = [
+            "python_full_version < '3.13'",
+            "python_full_version >= '3.13'",
+        ]
+
+        [options]
+        fork-strategy = "fewest"
+
+        [[package]]
+        name = "aux"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "python_full_version >= '3.13'",
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/aux-1.0.0-py3-none-any.whl", hash = "sha256:76e9112337ba8f38a89501b8abdcf23ae73f487f366f7fe7c5e74a6b248f2fa4", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "aux"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "python_full_version < '3.13'",
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/aux-2.0.0-py3-none-any.whl", hash = "sha256:4eab674a6374bc42eb45ebe034518eef9d82efc986454b276d8ce42bc3247a1c", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "blocker"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/blocker-2.0.0-py3-none-any.whl", hash = "sha256:7bd797901a191398430389e811ad4b7a7f82d3fdd63b9137107ae32a3553c7df", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "constrained"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "aux", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" } },
+            { name = "shared", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" } },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/constrained-1.0.0-py3-none-any.whl", hash = "sha256:706bf893fd899f3c3acb07fd59b054b696d265171aea40613d75c10b4ad00011", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-eight"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "constrained" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_eight-1.0.0-py3-none-any.whl", hash = "sha256:f89061af255396de298e836c047c569d32f8fde1c65ac24c13b59b97decf8c10", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-five"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-six" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_five-1.0.0-py3-none-any.whl", hash = "sha256:67fc06e45f34f82ad35ac8d3c235ef309870276103673a01fb82ddb6af4ccf04", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-four"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-five" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_four-1.0.0-py3-none-any.whl", hash = "sha256:f67d6b3860d2c4b96b4be7fe5c1dc5e237e192f2cdeb8468f68aaf2d67339001", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-one"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-two" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_one-1.0.0-py3-none-any.whl", hash = "sha256:c1e8aca4b1866ffedbf054bd89c0d7d4fbc8647de899909cff7dadf9ff9d59ef", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-seven"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-eight" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_seven-1.0.0-py3-none-any.whl", hash = "sha256:76582914299bdc5b08fadd5acbadeba3049ca9e2fadcc2b0658bf3b72a13bed3", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-six"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-seven" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_six-1.0.0-py3-none-any.whl", hash = "sha256:ac6db54d2dfa64b7d55b1ab5e2232b2bc2235f9bac2cbd68147566d61253c17c", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-three"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-four" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_three-1.0.0-py3-none-any.whl", hash = "sha256:26f1c369f51d6166a6aa01528946f16d91dd0e7ff260c6b9695a1c7dec262a6b", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-two"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-three" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_two-1.0.0-py3-none-any.whl", hash = "sha256:e9559538559209b102813ee3eb862d70a1853ff9913312d501ca6cc7dddf796d", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delayed"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-one" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delayed-1.0.0-py3-none-any.whl", hash = "sha256:cc3bd7eea5a6d2263f0ee72930379019167956dfc6b5941b33f133964aeb696c", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "parent"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "aux", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" } },
+            { name = "shared", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" } },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/parent-2.0.0-py3-none-any.whl", hash = "sha256:65cacc6faed073f9ea0d2f0bb9c764f95ca69c45393dd0ec2deed81fa47e3a8b", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "blocker", marker = "python_full_version < '3.13'" },
+            { name = "delayed", marker = "python_full_version >= '3.13'" },
+            { name = "parent", marker = "python_full_version < '3.13'" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "blocker", marker = "python_full_version < '3.13'", specifier = "==2.0.0" },
+            { name = "delayed", marker = "python_full_version >= '3.13'" },
+            { name = "parent", marker = "python_full_version < '3.13'" },
+        ]
+
+        [[package]]
+        name = "shared"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "python_full_version >= '3.13'",
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/shared-1.0.0-py3-none-any.whl", hash = "sha256:9681756b32d3ae501a9e7129df974fe86476066cf3fcec82c82594bb91ecca07", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "shared"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "python_full_version < '3.13'",
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/shared-2.0.0-py3-none-any.whl", hash = "sha256:50654d921e335114898f26df3c573dfe4d21fae95abdb27584dbbc624137a5d0", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+        "#
+        );
+    });
+
+    // Assert the idempotence of `uv lock` when resolving from the lockfile (`--locked`).
+    context
+        .lock()
+        .arg("--locked")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+/// A completed Python fork must change its `parent` version to reuse the `shared`
+/// and `aux` versions required by a delayed sibling. The replacement introduces
+/// two platform-specific versions of `branch`. Both new platform forks must resolve
+/// before their combined result can replace the completed Python region.
+///
+///
+/// ```text
+/// coordinated-nested-platform
+/// ├── environment
+/// │   └── python3.12
+/// ├── root
+/// │   ├── requires delayed ; python_full_version >= '3.13'
+/// │   │   └── satisfied by delayed-1.0.0
+/// │   └── requires parent ; python_full_version < '3.13'
+/// │       ├── satisfied by parent-1.0.0
+/// │       └── satisfied by parent-2.0.0
+/// ├── aux
+/// │   ├── aux-1.0.0
+/// │   └── aux-2.0.0
+/// ├── branch
+/// │   ├── branch-1.0.0
+/// │   └── branch-2.0.0
+/// ├── constrained
+/// │   └── constrained-1.0.0
+/// │       ├── requires aux==1.0.0
+/// │       │   └── satisfied by aux-1.0.0
+/// │       └── requires shared==1.0.0
+/// │           └── satisfied by shared-1.0.0
+/// ├── delay-eight
+/// │   └── delay-eight-1.0.0
+/// │       └── requires constrained
+/// │           └── satisfied by constrained-1.0.0
+/// ├── delay-five
+/// │   └── delay-five-1.0.0
+/// │       └── requires delay-six
+/// │           └── satisfied by delay-six-1.0.0
+/// ├── delay-four
+/// │   └── delay-four-1.0.0
+/// │       └── requires delay-five
+/// │           └── satisfied by delay-five-1.0.0
+/// ├── delay-one
+/// │   └── delay-one-1.0.0
+/// │       └── requires delay-two
+/// │           └── satisfied by delay-two-1.0.0
+/// ├── delay-seven
+/// │   └── delay-seven-1.0.0
+/// │       └── requires delay-eight
+/// │           └── satisfied by delay-eight-1.0.0
+/// ├── delay-six
+/// │   └── delay-six-1.0.0
+/// │       └── requires delay-seven
+/// │           └── satisfied by delay-seven-1.0.0
+/// ├── delay-three
+/// │   └── delay-three-1.0.0
+/// │       └── requires delay-four
+/// │           └── satisfied by delay-four-1.0.0
+/// ├── delay-two
+/// │   └── delay-two-1.0.0
+/// │       └── requires delay-three
+/// │           └── satisfied by delay-three-1.0.0
+/// ├── delayed
+/// │   └── delayed-1.0.0
+/// │       └── requires delay-one
+/// │           └── satisfied by delay-one-1.0.0
+/// ├── parent
+/// │   ├── parent-1.0.0
+/// │   │   ├── requires aux==1.0.0
+/// │   │   │   └── satisfied by aux-1.0.0
+/// │   │   ├── requires branch==1.0.0 ; sys_platform == 'win32'
+/// │   │   │   └── satisfied by branch-1.0.0
+/// │   │   ├── requires branch==2.0.0 ; sys_platform != 'win32'
+/// │   │   │   └── satisfied by branch-2.0.0
+/// │   │   └── requires shared==1.0.0
+/// │   │       └── satisfied by shared-1.0.0
+/// │   └── parent-2.0.0
+/// │       ├── requires aux==2.0.0
+/// │       │   └── satisfied by aux-2.0.0
+/// │       └── requires shared==2.0.0
+/// │           └── satisfied by shared-2.0.0
+/// └── shared
+///     ├── shared-1.0.0
+///     └── shared-2.0.0
+/// ```
+#[test]
+fn coordinated_nested_platform() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("fork/coordinated/coordinated-nested-platform.toml");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r###"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        dependencies = [
+          '''parent ; python_full_version < '3.13'''',
+          '''delayed ; python_full_version >= '3.13'''',
+        ]
+        requires-python = ">=3.12, <3.14"
+        [tool.uv]
+        fork-strategy = "fewest"
+        environments = [
+          '''python_full_version < '3.13'''',
+          '''python_full_version >= '3.13'''',
+        ]
+        "###,
+    )?;
+
+    let filters = context.filters();
+
+    let mut cmd = context.lock();
+    cmd.env_remove(EnvVars::UV_EXCLUDE_NEWER);
+    cmd.arg("--index-url").arg(server.index_url());
+    // The final lock has `parent==1`, `shared==1`, and `aux==1`. `branch==1` is needed
+    // on Windows below Python 3.13, and `branch==2` is needed on other platforms below
+    // Python 3.13. Removing two duplicate versions outweighs the new `branch` duplicate.
+    uv_snapshot!(filters, cmd, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 16 packages in [TIME]
+    "
+    );
+
+    let lock = context.read("uv.lock");
+    insta::with_settings!({
+        filters => filters,
+    }, {
+        assert_snapshot!(
+            lock, @r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12, <3.14"
+        resolution-markers = [
+            "python_full_version < '3.13' and sys_platform == 'win32'",
+            "python_full_version < '3.13' and sys_platform != 'win32'",
+            "python_full_version >= '3.13'",
+        ]
+        supported-markers = [
+            "python_full_version < '3.13'",
+            "python_full_version >= '3.13'",
+        ]
+
+        [options]
+        fork-strategy = "fewest"
+
+        [[package]]
+        name = "aux"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/aux-1.0.0-py3-none-any.whl", hash = "sha256:76e9112337ba8f38a89501b8abdcf23ae73f487f366f7fe7c5e74a6b248f2fa4", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "branch"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "python_full_version < '3.13' and sys_platform == 'win32'",
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/branch-1.0.0-py3-none-any.whl", hash = "sha256:5eebeb6b9f6199175ec2467ebbce39fd236b7df54ab9d66166e7096858513220", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "branch"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "python_full_version < '3.13' and sys_platform != 'win32'",
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/branch-2.0.0-py3-none-any.whl", hash = "sha256:6d0e8da4a4868adb7804032f92e8f68d7521eef2ad9888e287a1db2bdfd9f92e", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "constrained"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "aux" },
+            { name = "shared" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/constrained-1.0.0-py3-none-any.whl", hash = "sha256:706bf893fd899f3c3acb07fd59b054b696d265171aea40613d75c10b4ad00011", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-eight"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "constrained" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_eight-1.0.0-py3-none-any.whl", hash = "sha256:f89061af255396de298e836c047c569d32f8fde1c65ac24c13b59b97decf8c10", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-five"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-six" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_five-1.0.0-py3-none-any.whl", hash = "sha256:67fc06e45f34f82ad35ac8d3c235ef309870276103673a01fb82ddb6af4ccf04", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-four"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-five" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_four-1.0.0-py3-none-any.whl", hash = "sha256:f67d6b3860d2c4b96b4be7fe5c1dc5e237e192f2cdeb8468f68aaf2d67339001", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-one"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-two" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_one-1.0.0-py3-none-any.whl", hash = "sha256:c1e8aca4b1866ffedbf054bd89c0d7d4fbc8647de899909cff7dadf9ff9d59ef", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-seven"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-eight" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_seven-1.0.0-py3-none-any.whl", hash = "sha256:76582914299bdc5b08fadd5acbadeba3049ca9e2fadcc2b0658bf3b72a13bed3", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-six"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-seven" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_six-1.0.0-py3-none-any.whl", hash = "sha256:ac6db54d2dfa64b7d55b1ab5e2232b2bc2235f9bac2cbd68147566d61253c17c", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-three"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-four" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_three-1.0.0-py3-none-any.whl", hash = "sha256:26f1c369f51d6166a6aa01528946f16d91dd0e7ff260c6b9695a1c7dec262a6b", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-two"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-three" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_two-1.0.0-py3-none-any.whl", hash = "sha256:e9559538559209b102813ee3eb862d70a1853ff9913312d501ca6cc7dddf796d", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delayed"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-one" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delayed-1.0.0-py3-none-any.whl", hash = "sha256:cc3bd7eea5a6d2263f0ee72930379019167956dfc6b5941b33f133964aeb696c", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "parent"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "aux" },
+            { name = "branch", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "sys_platform == 'win32'" },
+            { name = "branch", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "sys_platform != 'win32'" },
+            { name = "shared" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/parent-1.0.0-py3-none-any.whl", hash = "sha256:7cc1603e0ae3f839a336e53fd35185ed9d91de960bf968fc745da016f91637c8", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "delayed", marker = "python_full_version >= '3.13'" },
+            { name = "parent", marker = "python_full_version < '3.13'" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "delayed", marker = "python_full_version >= '3.13'" },
+            { name = "parent", marker = "python_full_version < '3.13'" },
+        ]
+
+        [[package]]
+        name = "shared"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/shared-1.0.0-py3-none-any.whl", hash = "sha256:9681756b32d3ae501a9e7129df974fe86476066cf3fcec82c82594bb91ecca07", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+        "#
+        );
+    });
+
+    // Assert the idempotence of `uv lock` when resolving from the lockfile (`--locked`).
+    context
+        .lock()
+        .arg("--locked")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+/// `parent[feature]` belongs to a completed platform fork. Reusing the delayed
+/// sibling's `shared` and `aux` versions requires backtracking both `parent` and
+/// its `feature` extra to an older release. That extra introduces disjoint Python
+/// requirements on `branch`, so the replacement must retain the extra's dependency
+/// edges across new Python forks while narrowing each child's supported Python range.
+///
+///
+/// ```text
+/// coordinated-nested-python-extra
+/// ├── environment
+/// │   └── python3.12
+/// ├── root
+/// │   ├── requires delayed ; sys_platform != 'win32'
+/// │   │   └── satisfied by delayed-1.0.0
+/// │   └── requires parent[feature] ; sys_platform == 'win32'
+/// │       ├── satisfied by parent-1.0.0
+/// │       ├── satisfied by parent-1.0.0[feature]
+/// │       ├── satisfied by parent-2.0.0
+/// │       └── satisfied by parent-2.0.0[feature]
+/// ├── aux
+/// │   ├── aux-1.0.0
+/// │   └── aux-2.0.0
+/// ├── branch
+/// │   ├── branch-1.0.0
+/// │   └── branch-2.0.0
+/// │       └── requires python>=3.13 (incompatible with environment)
+/// ├── constrained
+/// │   └── constrained-1.0.0
+/// │       ├── requires aux==1.0.0
+/// │       │   └── satisfied by aux-1.0.0
+/// │       └── requires shared==1.0.0
+/// │           └── satisfied by shared-1.0.0
+/// ├── delay-eight
+/// │   └── delay-eight-1.0.0
+/// │       └── requires constrained
+/// │           └── satisfied by constrained-1.0.0
+/// ├── delay-five
+/// │   └── delay-five-1.0.0
+/// │       └── requires delay-six
+/// │           └── satisfied by delay-six-1.0.0
+/// ├── delay-four
+/// │   └── delay-four-1.0.0
+/// │       └── requires delay-five
+/// │           └── satisfied by delay-five-1.0.0
+/// ├── delay-one
+/// │   └── delay-one-1.0.0
+/// │       └── requires delay-two
+/// │           └── satisfied by delay-two-1.0.0
+/// ├── delay-seven
+/// │   └── delay-seven-1.0.0
+/// │       └── requires delay-eight
+/// │           └── satisfied by delay-eight-1.0.0
+/// ├── delay-six
+/// │   └── delay-six-1.0.0
+/// │       └── requires delay-seven
+/// │           └── satisfied by delay-seven-1.0.0
+/// ├── delay-three
+/// │   └── delay-three-1.0.0
+/// │       └── requires delay-four
+/// │           └── satisfied by delay-four-1.0.0
+/// ├── delay-two
+/// │   └── delay-two-1.0.0
+/// │       └── requires delay-three
+/// │           └── satisfied by delay-three-1.0.0
+/// ├── delayed
+/// │   └── delayed-1.0.0
+/// │       └── requires delay-one
+/// │           └── satisfied by delay-one-1.0.0
+/// ├── parent
+/// │   ├── parent-1.0.0
+/// │   │   ├── requires aux==1.0.0
+/// │   │   │   └── satisfied by aux-1.0.0
+/// │   │   └── requires shared==1.0.0
+/// │   │       └── satisfied by shared-1.0.0
+/// │   ├── parent-1.0.0[feature]
+/// │   │   ├── requires branch==1.0.0 ; python_full_version < '3.13'
+/// │   │   │   └── satisfied by branch-1.0.0
+/// │   │   └── requires branch==2.0.0 ; python_full_version >= '3.13'
+/// │   │       └── satisfied by branch-2.0.0
+/// │   ├── parent-2.0.0
+/// │   │   ├── requires aux==2.0.0
+/// │   │   │   └── satisfied by aux-2.0.0
+/// │   │   └── requires shared==2.0.0
+/// │   │       └── satisfied by shared-2.0.0
+/// │   └── parent-2.0.0[feature]
+/// └── shared
+///     ├── shared-1.0.0
+///     └── shared-2.0.0
+/// ```
+#[test]
+fn coordinated_nested_python_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("fork/coordinated/coordinated-nested-python-extra.toml");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r###"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        dependencies = [
+          '''parent[feature] ; sys_platform == 'win32'''',
+          '''delayed ; sys_platform != 'win32'''',
+        ]
+        requires-python = ">=3.12, <3.14"
+        [tool.uv]
+        fork-strategy = "fewest"
+        environments = [
+          '''sys_platform == 'win32'''',
+          '''sys_platform != 'win32'''',
+        ]
+        "###,
+    )?;
+
+    let filters = context.filters();
+
+    let mut cmd = context.lock();
+    cmd.env_remove(EnvVars::UV_EXCLUDE_NEWER);
+    cmd.arg("--index-url").arg(server.index_url());
+    // `parent[feature]==1` is selected only on Windows. `shared==1` and `aux==1` are
+    // used on every platform. On Windows, `branch==1` covers Python below 3.13 and
+    // `branch==2` covers Python 3.13 and later. The older `parent` introduces one
+    // duplicate while removing the two duplicates of `shared` and `aux`.
+    uv_snapshot!(filters, cmd, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 16 packages in [TIME]
+    "
+    );
+
+    let lock = context.read("uv.lock");
+    insta::with_settings!({
+        filters => filters,
+    }, {
+        assert_snapshot!(
+            lock, @r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12, <3.14"
+        resolution-markers = [
+            "python_full_version < '3.13' and sys_platform == 'win32'",
+            "python_full_version >= '3.13' and sys_platform == 'win32'",
+            "sys_platform != 'win32'",
+        ]
+        supported-markers = [
+            "sys_platform == 'win32'",
+            "sys_platform != 'win32'",
+        ]
+
+        [options]
+        fork-strategy = "fewest"
+
+        [[package]]
+        name = "aux"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/aux-1.0.0-py3-none-any.whl", hash = "sha256:76e9112337ba8f38a89501b8abdcf23ae73f487f366f7fe7c5e74a6b248f2fa4", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "branch"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "python_full_version < '3.13' and sys_platform == 'win32'",
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/branch-1.0.0-py3-none-any.whl", hash = "sha256:5eebeb6b9f6199175ec2467ebbce39fd236b7df54ab9d66166e7096858513220", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "branch"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "python_full_version >= '3.13' and sys_platform == 'win32'",
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/branch-2.0.0-py3-none-any.whl", hash = "sha256:e7c116b7f14ec99e3d423c485eb8e5f4336853fb8f4907114a3bdb61ef7de935", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "constrained"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "aux" },
+            { name = "shared" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/constrained-1.0.0-py3-none-any.whl", hash = "sha256:706bf893fd899f3c3acb07fd59b054b696d265171aea40613d75c10b4ad00011", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-eight"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "constrained" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_eight-1.0.0-py3-none-any.whl", hash = "sha256:f89061af255396de298e836c047c569d32f8fde1c65ac24c13b59b97decf8c10", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-five"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-six" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_five-1.0.0-py3-none-any.whl", hash = "sha256:67fc06e45f34f82ad35ac8d3c235ef309870276103673a01fb82ddb6af4ccf04", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-four"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-five" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_four-1.0.0-py3-none-any.whl", hash = "sha256:f67d6b3860d2c4b96b4be7fe5c1dc5e237e192f2cdeb8468f68aaf2d67339001", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-one"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-two" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_one-1.0.0-py3-none-any.whl", hash = "sha256:c1e8aca4b1866ffedbf054bd89c0d7d4fbc8647de899909cff7dadf9ff9d59ef", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-seven"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-eight" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_seven-1.0.0-py3-none-any.whl", hash = "sha256:76582914299bdc5b08fadd5acbadeba3049ca9e2fadcc2b0658bf3b72a13bed3", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-six"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-seven" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_six-1.0.0-py3-none-any.whl", hash = "sha256:ac6db54d2dfa64b7d55b1ab5e2232b2bc2235f9bac2cbd68147566d61253c17c", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-three"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-four" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_three-1.0.0-py3-none-any.whl", hash = "sha256:26f1c369f51d6166a6aa01528946f16d91dd0e7ff260c6b9695a1c7dec262a6b", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-two"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-three" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_two-1.0.0-py3-none-any.whl", hash = "sha256:e9559538559209b102813ee3eb862d70a1853ff9913312d501ca6cc7dddf796d", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delayed"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-one" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delayed-1.0.0-py3-none-any.whl", hash = "sha256:cc3bd7eea5a6d2263f0ee72930379019167956dfc6b5941b33f133964aeb696c", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "parent"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "aux" },
+            { name = "shared" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/parent-1.0.0-py3-none-any.whl", hash = "sha256:0e55165f293da760058a286f58b5485a1a21b0eac3df9825e59c3bab7bab9cd7", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [package.optional-dependencies]
+        feature = [
+            { name = "branch", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "python_full_version < '3.13'" },
+            { name = "branch", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "python_full_version >= '3.13'" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "delayed", marker = "sys_platform != 'win32'" },
+            { name = "parent", extra = ["feature"], marker = "sys_platform == 'win32'" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "delayed", marker = "sys_platform != 'win32'" },
+            { name = "parent", extras = ["feature"], marker = "sys_platform == 'win32'" },
+        ]
+
+        [[package]]
+        name = "shared"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/shared-1.0.0-py3-none-any.whl", hash = "sha256:9681756b32d3ae501a9e7129df974fe86476066cf3fcec82c82594bb91ecca07", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+        "#
+        );
+    });
+
+    // Assert the idempotence of `uv lock` when resolving from the lockfile (`--locked`).
+    context
+        .lock()
+        .arg("--locked")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+/// An earlier fork initially selects `switchable==2`, whose dependencies include
+/// `shared==2` and an otherwise-unused `orphan`. A delayed sibling requires
+/// `shared==1`. Backtracking the earlier parent to `switchable==1` removes `shared`
+/// and `orphan` from that environment entirely, replacing them with `survivor`.
+/// The coordinated version restriction is conditional on a package remaining
+/// necessary; it must not introduce a synthetic root dependency on `shared==1`
+/// or retain abandoned dependencies in the lockfile.
+///
+///
+/// ```text
+/// coordinated-package-disappears
+/// ├── environment
+/// │   └── python3.12
+/// ├── root
+/// │   ├── requires later-entry ; python_full_version >= '3.13'
+/// │   │   └── satisfied by later-entry-1.0.0
+/// │   └── requires switchable ; python_full_version < '3.13'
+/// │       ├── satisfied by switchable-1.0.0
+/// │       └── satisfied by switchable-2.0.0
+/// ├── delay-four
+/// │   └── delay-four-1.0.0
+/// │       └── requires shared==1.0.0
+/// │           └── satisfied by shared-1.0.0
+/// ├── delay-one
+/// │   └── delay-one-1.0.0
+/// │       └── requires delay-two
+/// │           └── satisfied by delay-two-1.0.0
+/// ├── delay-three
+/// │   └── delay-three-1.0.0
+/// │       └── requires delay-four
+/// │           └── satisfied by delay-four-1.0.0
+/// ├── delay-two
+/// │   └── delay-two-1.0.0
+/// │       └── requires delay-three
+/// │           └── satisfied by delay-three-1.0.0
+/// ├── later-entry
+/// │   └── later-entry-1.0.0
+/// │       └── requires delay-one
+/// │           └── satisfied by delay-one-1.0.0
+/// ├── orphan
+/// │   └── orphan-1.0.0
+/// ├── shared
+/// │   ├── shared-1.0.0
+/// │   └── shared-2.0.0
+/// ├── survivor
+/// │   └── survivor-1.0.0
+/// └── switchable
+///     ├── switchable-1.0.0
+///     │   └── requires survivor==1.0.0
+///     │       └── satisfied by survivor-1.0.0
+///     └── switchable-2.0.0
+///         ├── requires orphan==1.0.0
+///         │   └── satisfied by orphan-1.0.0
+///         └── requires shared==2.0.0
+///             └── satisfied by shared-2.0.0
+/// ```
+#[test]
+fn coordinated_package_disappears() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("fork/coordinated/coordinated-package-disappears.toml");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r###"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        dependencies = [
+          '''switchable ; python_full_version < '3.13'''',
+          '''later-entry ; python_full_version >= '3.13'''',
+        ]
+        requires-python = ">=3.12, <3.14"
+        [tool.uv]
+        fork-strategy = "fewest"
+        environments = [
+          '''python_full_version == '3.12.*'''',
+          '''python_full_version == '3.13.*'''',
+        ]
+        "###,
+    )?;
+
+    let filters = context.filters();
+
+    let mut cmd = context.lock();
+    cmd.env_remove(EnvVars::UV_EXCLUDE_NEWER);
+    cmd.arg("--index-url").arg(server.index_url());
+    uv_snapshot!(filters, cmd, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 9 packages in [TIME]
+    "
+    );
+
+    let lock = context.read("uv.lock");
+    insta::with_settings!({
+        filters => filters,
+    }, {
+        assert_snapshot!(
+            lock, @r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12, <3.14"
+        resolution-markers = [
+            "python_full_version < '3.13'",
+            "python_full_version >= '3.13'",
+        ]
+        supported-markers = [
+            "python_full_version < '3.13'",
+            "python_full_version >= '3.13'",
+        ]
+
+        [options]
+        fork-strategy = "fewest"
+
+        [[package]]
+        name = "delay-four"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "shared" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/delay_four-1.0.0.tar.gz", hash = "sha256:e153efe023397a0b7b95196c883e38e1efa687a0545a74c19f49d71ce41d4684", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_four-1.0.0-py3-none-any.whl", hash = "sha256:0296b7d032be3dda11854567c4ef3b8f770a5e50ffae4de76fd97d9e9d5ddab0", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-one"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-two" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/delay_one-1.0.0.tar.gz", hash = "sha256:24641f1b68d386ea2a2ef23ebc54305cb347d9a2745618057697c3ff4dbc5648", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_one-1.0.0-py3-none-any.whl", hash = "sha256:c1e8aca4b1866ffedbf054bd89c0d7d4fbc8647de899909cff7dadf9ff9d59ef", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-three"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-four" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/delay_three-1.0.0.tar.gz", hash = "sha256:66cbfc4abb20d334d5650fd5c98686a824e3e8ac1e9a80676c240f303243279b", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_three-1.0.0-py3-none-any.whl", hash = "sha256:26f1c369f51d6166a6aa01528946f16d91dd0e7ff260c6b9695a1c7dec262a6b", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-two"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-three" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/delay_two-1.0.0.tar.gz", hash = "sha256:5be60b7e5f0ceac15ea6128221b7dc5b47061c5551b80a7ea6549315cdefdd4f", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_two-1.0.0-py3-none-any.whl", hash = "sha256:e9559538559209b102813ee3eb862d70a1853ff9913312d501ca6cc7dddf796d", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "later-entry"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-one" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/later_entry-1.0.0.tar.gz", hash = "sha256:acce4eb5036ef90939082d27627aada5ec64781cf3e7ad62dcd5c8c4d0f27100", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/later_entry-1.0.0-py3-none-any.whl", hash = "sha256:b5b0da84fbb498341c35f39ab4218ad9644df46d6c4044b47e05a0a5a56b98f8", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "later-entry", marker = "python_full_version >= '3.13'" },
+            { name = "switchable", marker = "python_full_version < '3.13'" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "later-entry", marker = "python_full_version >= '3.13'" },
+            { name = "switchable", marker = "python_full_version < '3.13'" },
+        ]
+
+        [[package]]
+        name = "shared"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/shared-1.0.0.tar.gz", hash = "sha256:29242e0032cd4abe8ec185a5f0c198167191709b20778c7ff188dbd0037923f5", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/shared-1.0.0-py3-none-any.whl", hash = "sha256:9681756b32d3ae501a9e7129df974fe86476066cf3fcec82c82594bb91ecca07", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "survivor"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/survivor-1.0.0.tar.gz", hash = "sha256:acbc4e7cb12a681d138ec327409ad31b3b159b5ac5ab17d86fc580fe9a516518", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/survivor-1.0.0-py3-none-any.whl", hash = "sha256:5ab98f40fa608fa8ced6610cb7235dcb31c9090937075136be031a46c66e4bc5", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "switchable"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "survivor" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/switchable-1.0.0.tar.gz", hash = "sha256:9576efc4c064b93a3416383c6cc1985c92956157244c57f2ebd19dedd60a8f32", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/switchable-1.0.0-py3-none-any.whl", hash = "sha256:d309ab8102d958f22c4c83bb48ff43816f74ecb25f4a6c92d47c0b8987e85972", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+        "#
+        );
+    });
+
+    // Assert the idempotence of `uv lock` when resolving from the lockfile (`--locked`).
+    context
+        .lock()
+        .arg("--locked")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+/// The earlier fork requires `shared==2.0rc1` and finishes before a delayed
+/// sibling reaches its broader `shared` requirement. With prereleases globally
+/// allowed, the sibling can reuse the selected prerelease even though stable
+/// `shared==3` is also available.
+///
+///
+/// ```text
+/// coordinated-prerelease-eligible
+/// ├── environment
+/// │   └── python3.12
+/// ├── root
+/// │   ├── requires later-entry ; python_full_version >= '3.13'
+/// │   │   └── satisfied by later-entry-1.0.0
+/// │   └── requires prerelease-parent ; python_full_version < '3.13'
+/// │       └── satisfied by prerelease-parent-1.0.0
+/// ├── broad-parent
+/// │   └── broad-parent-1.0.0
+/// │       └── requires shared>=1.0.0,<=3.0.0
+/// │           ├── satisfied by shared-1.0.0
+/// │           ├── satisfied by shared-2.0.0rc1
+/// │           └── satisfied by shared-3.0.0
+/// ├── delay-one
+/// │   └── delay-one-1.0.0
+/// │       └── requires delay-two
+/// │           └── satisfied by delay-two-1.0.0
+/// ├── delay-two
+/// │   └── delay-two-1.0.0
+/// │       └── requires broad-parent
+/// │           └── satisfied by broad-parent-1.0.0
+/// ├── later-entry
+/// │   └── later-entry-1.0.0
+/// │       └── requires delay-one
+/// │           └── satisfied by delay-one-1.0.0
+/// ├── prerelease-parent
+/// │   └── prerelease-parent-1.0.0
+/// │       └── requires shared==2.0.0rc1
+/// │           └── satisfied by shared-2.0.0rc1
+/// └── shared
+///     ├── shared-1.0.0
+///     ├── shared-2.0.0rc1
+///     └── shared-3.0.0
+/// ```
+#[test]
+fn coordinated_prerelease_eligible() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("fork/coordinated/coordinated-prerelease-eligible.toml");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r###"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        dependencies = [
+          '''prerelease-parent ; python_full_version < '3.13'''',
+          '''later-entry ; python_full_version >= '3.13'''',
+        ]
+        requires-python = ">=3.12, <3.14"
+        [tool.uv]
+        fork-strategy = "fewest"
+        prerelease = "allow"
+        environments = [
+          '''python_full_version == '3.12.*'''',
+          '''python_full_version == '3.13.*'''',
+        ]
+        "###,
+    )?;
+
+    let filters = context.filters();
+
+    let mut cmd = context.lock();
+    cmd.env_remove(EnvVars::UV_EXCLUDE_NEWER);
+    cmd.arg("--index-url").arg(server.index_url());
+    // Both forks use `shared==2.0rc1` because the sibling prerelease preference is eligible.
+    uv_snapshot!(filters, cmd, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 7 packages in [TIME]
+    "
+    );
+
+    let lock = context.read("uv.lock");
+    insta::with_settings!({
+        filters => filters,
+    }, {
+        assert_snapshot!(
+            lock, @r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12, <3.14"
+        resolution-markers = [
+            "python_full_version < '3.13'",
+            "python_full_version >= '3.13'",
+        ]
+        supported-markers = [
+            "python_full_version < '3.13'",
+            "python_full_version >= '3.13'",
+        ]
+
+        [options]
+        prerelease-mode = "allow"
+        fork-strategy = "fewest"
+
+        [[package]]
+        name = "broad-parent"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "shared" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/broad_parent-1.0.0.tar.gz", hash = "sha256:ea3df34078180961e582e959e3feb9a31412785ff53401cc93cf059e891b23d4", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/broad_parent-1.0.0-py3-none-any.whl", hash = "sha256:2ce5f5e07476301dbe46177269aa079f255032a035ca79637c78355a2953453a", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-one"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-two" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/delay_one-1.0.0.tar.gz", hash = "sha256:24641f1b68d386ea2a2ef23ebc54305cb347d9a2745618057697c3ff4dbc5648", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_one-1.0.0-py3-none-any.whl", hash = "sha256:c1e8aca4b1866ffedbf054bd89c0d7d4fbc8647de899909cff7dadf9ff9d59ef", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-two"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "broad-parent" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/delay_two-1.0.0.tar.gz", hash = "sha256:79cc650b9649bb8b8b6c3c9734e88c4cdfe57c1da3547b1ae6e231cdb0f21035", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_two-1.0.0-py3-none-any.whl", hash = "sha256:6358aa460b7153880e4a15d9cc104c34fb0a2e2e868d25bb849191b3452e1db9", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "later-entry"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-one" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/later_entry-1.0.0.tar.gz", hash = "sha256:acce4eb5036ef90939082d27627aada5ec64781cf3e7ad62dcd5c8c4d0f27100", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/later_entry-1.0.0-py3-none-any.whl", hash = "sha256:b5b0da84fbb498341c35f39ab4218ad9644df46d6c4044b47e05a0a5a56b98f8", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "prerelease-parent"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "shared" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/prerelease_parent-1.0.0.tar.gz", hash = "sha256:178e058eff414839fbee62d2d2bd8a67bda83699fc3ece0d7dafcd1b301465c3", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/prerelease_parent-1.0.0-py3-none-any.whl", hash = "sha256:addc83cfcf41f61b672efe4616f7286484b8a3643aa1202f67733ae3b2d98127", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "later-entry", marker = "python_full_version >= '3.13'" },
+            { name = "prerelease-parent", marker = "python_full_version < '3.13'" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "later-entry", marker = "python_full_version >= '3.13'" },
+            { name = "prerelease-parent", marker = "python_full_version < '3.13'" },
+        ]
+
+        [[package]]
+        name = "shared"
+        version = "2.0.0rc1"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/shared-2.0.0rc1.tar.gz", hash = "sha256:8a3bcf89f01d3d0e31c40605c0e4e4cf9b9249b6b7f4aeddd5c025de2157f72c", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/shared-2.0.0rc1-py3-none-any.whl", hash = "sha256:2bd04770cfd6a4ea46d2e1ba4eb9bbac2c0e24fa4bd4742759c80cf1924c4e27", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+        "#
+        );
+    });
+
+    // Assert the idempotence of `uv lock` when resolving from the lockfile (`--locked`).
+    context
+        .lock()
+        .arg("--locked")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+/// The earlier broad fork finishes with stable `shared==2` before a delayed sibling
+/// requires `shared==2.5rc1`. Although the earlier version range contains that
+/// prerelease, a hard cross-fork agreement must not force a prerelease into the
+/// completed stable solution. Only stable versions are hard coordination
+/// proposals.
+///
+///
+/// ```text
+/// coordinated-prerelease-hard-proposal-isolation
+/// ├── environment
+/// │   └── python3.12
+/// ├── root
+/// │   ├── requires later-entry ; python_full_version >= '3.13'
+/// │   │   └── satisfied by later-entry-1.0.0
+/// │   └── requires stable-parent ; python_full_version < '3.13'
+/// │       └── satisfied by stable-parent-1.0.0
+/// ├── delay-one
+/// │   └── delay-one-1.0.0
+/// │       └── requires delay-two
+/// │           └── satisfied by delay-two-1.0.0
+/// ├── delay-two
+/// │   └── delay-two-1.0.0
+/// │       └── requires prerelease-parent
+/// │           └── satisfied by prerelease-parent-1.0.0
+/// ├── later-entry
+/// │   └── later-entry-1.0.0
+/// │       └── requires delay-one
+/// │           └── satisfied by delay-one-1.0.0
+/// ├── prerelease-parent
+/// │   └── prerelease-parent-1.0.0
+/// │       └── requires shared==2.5.0rc1
+/// │           └── satisfied by shared-2.5.0rc1
+/// ├── shared
+/// │   ├── shared-1.0.0
+/// │   ├── shared-2.0.0
+/// │   └── shared-2.5.0rc1
+/// └── stable-parent
+///     └── stable-parent-1.0.0
+///         └── requires shared>=1.0.0,<3.0.0
+///             ├── satisfied by shared-1.0.0
+///             ├── satisfied by shared-2.0.0
+///             └── satisfied by shared-2.5.0rc1
+/// ```
+#[test]
+fn coordinated_prerelease_hard_proposal_isolation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server =
+        PackseServer::new("fork/coordinated/coordinated-prerelease-hard-proposal-isolation.toml");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r###"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        dependencies = [
+          '''stable-parent ; python_full_version < '3.13'''',
+          '''later-entry ; python_full_version >= '3.13'''',
+        ]
+        requires-python = ">=3.12, <3.14"
+        [tool.uv]
+        fork-strategy = "fewest"
+        environments = [
+          '''python_full_version == '3.12.*'''',
+          '''python_full_version == '3.13.*'''',
+        ]
+        "###,
+    )?;
+
+    let filters = context.filters();
+
+    let mut cmd = context.lock();
+    cmd.env_remove(EnvVars::UV_EXCLUDE_NEWER);
+    cmd.arg("--index-url").arg(server.index_url());
+    // The completed broad fork retains stable `shared==2`, while the delayed fork uses `shared==2.5rc1`.
+    uv_snapshot!(filters, cmd, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    "
+    );
+
+    let lock = context.read("uv.lock");
+    insta::with_settings!({
+        filters => filters,
+    }, {
+        assert_snapshot!(
+            lock, @r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12, <3.14"
+        resolution-markers = [
+            "python_full_version < '3.13'",
+            "python_full_version >= '3.13'",
+        ]
+        supported-markers = [
+            "python_full_version < '3.13'",
+            "python_full_version >= '3.13'",
+        ]
+
+        [options]
+        fork-strategy = "fewest"
+
+        [[package]]
+        name = "delay-one"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-two" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/delay_one-1.0.0.tar.gz", hash = "sha256:24641f1b68d386ea2a2ef23ebc54305cb347d9a2745618057697c3ff4dbc5648", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_one-1.0.0-py3-none-any.whl", hash = "sha256:c1e8aca4b1866ffedbf054bd89c0d7d4fbc8647de899909cff7dadf9ff9d59ef", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-two"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "prerelease-parent" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/delay_two-1.0.0.tar.gz", hash = "sha256:a6cefd4928344ec64301bcea849ed375f4668947eac0a525d8eef8c1f974b2c5", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_two-1.0.0-py3-none-any.whl", hash = "sha256:0e6e6ae48be25fba4b695cbbfc8a7513472a6ae17b244c2d04702e2334830f6c", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "later-entry"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-one" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/later_entry-1.0.0.tar.gz", hash = "sha256:acce4eb5036ef90939082d27627aada5ec64781cf3e7ad62dcd5c8c4d0f27100", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/later_entry-1.0.0-py3-none-any.whl", hash = "sha256:b5b0da84fbb498341c35f39ab4218ad9644df46d6c4044b47e05a0a5a56b98f8", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "prerelease-parent"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "shared", version = "2.5.0rc1", source = { registry = "http://[LOCALHOST]/simple/" } },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/prerelease_parent-1.0.0.tar.gz", hash = "sha256:12cd85d6d5948502c33d30c338df23cdb34156f8f6e45a834e1d425c29c93f99", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/prerelease_parent-1.0.0-py3-none-any.whl", hash = "sha256:91e352323c2e7844568bed5abe11884a9ca9212ea5f80fd3a776577d970b02af", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "later-entry", marker = "python_full_version >= '3.13'" },
+            { name = "stable-parent", marker = "python_full_version < '3.13'" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "later-entry", marker = "python_full_version >= '3.13'" },
+            { name = "stable-parent", marker = "python_full_version < '3.13'" },
+        ]
+
+        [[package]]
+        name = "shared"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "python_full_version < '3.13'",
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/shared-2.0.0.tar.gz", hash = "sha256:c09e0026550169997ff12b4c435b88e8ef9aed1fbd7d24265daea1f686f46059", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/shared-2.0.0-py3-none-any.whl", hash = "sha256:50654d921e335114898f26df3c573dfe4d21fae95abdb27584dbbc624137a5d0", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "shared"
+        version = "2.5.0rc1"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "python_full_version >= '3.13'",
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/shared-2.5.0rc1.tar.gz", hash = "sha256:4051453fb51a05c15ada0451a1fa809c3e0410dd6a813a1d7af33ae2f88618c0", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/shared-2.5.0rc1-py3-none-any.whl", hash = "sha256:cf5380d67ac47d8cd30e26b41e09ebe02e6f0ce801f7a7097df48adb1a406070", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "stable-parent"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "shared", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" } },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/stable_parent-1.0.0.tar.gz", hash = "sha256:2aaceac14d902caa49ef96712d879cd276cdfc56d345547312697ea0d5edbbbd", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/stable_parent-1.0.0-py3-none-any.whl", hash = "sha256:de8003bb1a5667c032e5c6cdee4ed49c1c3f68696a2769f25bb68a69fb61f68d", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+        "#
+        );
+    });
+
+    // Assert the idempotence of `uv lock` when resolving from the lockfile (`--locked`).
+    context
+        .lock()
+        .arg("--locked")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+/// The earlier fork requires `shared==2.0rc1` and finishes before a delayed
+/// sibling reaches its broader `shared` requirement. The sibling has stable
+/// `shared==3` available, so the resolver-sourced prerelease preference must not
+/// override its preference for stable versions.
+///
+///
+/// ```text
+/// coordinated-prerelease-stable-isolation
+/// ├── environment
+/// │   └── python3.12
+/// ├── root
+/// │   ├── requires later-entry ; python_full_version >= '3.13'
+/// │   │   └── satisfied by later-entry-1.0.0
+/// │   └── requires prerelease-parent ; python_full_version < '3.13'
+/// │       └── satisfied by prerelease-parent-1.0.0
+/// ├── broad-parent
+/// │   └── broad-parent-1.0.0
+/// │       └── requires shared>=1.0.0,<=3.0.0
+/// │           ├── satisfied by shared-1.0.0
+/// │           ├── satisfied by shared-2.0.0rc1
+/// │           └── satisfied by shared-3.0.0
+/// ├── delay-one
+/// │   └── delay-one-1.0.0
+/// │       └── requires delay-two
+/// │           └── satisfied by delay-two-1.0.0
+/// ├── delay-two
+/// │   └── delay-two-1.0.0
+/// │       └── requires broad-parent
+/// │           └── satisfied by broad-parent-1.0.0
+/// ├── later-entry
+/// │   └── later-entry-1.0.0
+/// │       └── requires delay-one
+/// │           └── satisfied by delay-one-1.0.0
+/// ├── prerelease-parent
+/// │   └── prerelease-parent-1.0.0
+/// │       └── requires shared==2.0.0rc1
+/// │           └── satisfied by shared-2.0.0rc1
+/// └── shared
+///     ├── shared-1.0.0
+///     ├── shared-2.0.0rc1
+///     └── shared-3.0.0
+/// ```
+#[test]
+fn coordinated_prerelease_stable_isolation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("fork/coordinated/coordinated-prerelease-stable-isolation.toml");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r###"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        dependencies = [
+          '''prerelease-parent ; python_full_version < '3.13'''',
+          '''later-entry ; python_full_version >= '3.13'''',
+        ]
+        requires-python = ">=3.12, <3.14"
+        [tool.uv]
+        fork-strategy = "fewest"
+        environments = [
+          '''python_full_version == '3.12.*'''',
+          '''python_full_version == '3.13.*'''',
+        ]
+        "###,
+    )?;
+
+    let filters = context.filters();
+
+    let mut cmd = context.lock();
+    cmd.env_remove(EnvVars::UV_EXCLUDE_NEWER);
+    cmd.arg("--index-url").arg(server.index_url());
+    // The earlier fork uses `shared==2.0rc1`; the broad sibling keeps stable `shared==3`.
+    uv_snapshot!(filters, cmd, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    "
+    );
+
+    let lock = context.read("uv.lock");
+    insta::with_settings!({
+        filters => filters,
+    }, {
+        assert_snapshot!(
+            lock, @r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12, <3.14"
+        resolution-markers = [
+            "python_full_version < '3.13'",
+            "python_full_version >= '3.13'",
+        ]
+        supported-markers = [
+            "python_full_version < '3.13'",
+            "python_full_version >= '3.13'",
+        ]
+
+        [options]
+        fork-strategy = "fewest"
+
+        [[package]]
+        name = "broad-parent"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "shared", version = "3.0.0", source = { registry = "http://[LOCALHOST]/simple/" } },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/broad_parent-1.0.0.tar.gz", hash = "sha256:ea3df34078180961e582e959e3feb9a31412785ff53401cc93cf059e891b23d4", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/broad_parent-1.0.0-py3-none-any.whl", hash = "sha256:2ce5f5e07476301dbe46177269aa079f255032a035ca79637c78355a2953453a", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-one"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-two" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/delay_one-1.0.0.tar.gz", hash = "sha256:24641f1b68d386ea2a2ef23ebc54305cb347d9a2745618057697c3ff4dbc5648", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_one-1.0.0-py3-none-any.whl", hash = "sha256:c1e8aca4b1866ffedbf054bd89c0d7d4fbc8647de899909cff7dadf9ff9d59ef", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "delay-two"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "broad-parent" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/delay_two-1.0.0.tar.gz", hash = "sha256:79cc650b9649bb8b8b6c3c9734e88c4cdfe57c1da3547b1ae6e231cdb0f21035", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/delay_two-1.0.0-py3-none-any.whl", hash = "sha256:6358aa460b7153880e4a15d9cc104c34fb0a2e2e868d25bb849191b3452e1db9", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "later-entry"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "delay-one" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/later_entry-1.0.0.tar.gz", hash = "sha256:acce4eb5036ef90939082d27627aada5ec64781cf3e7ad62dcd5c8c4d0f27100", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/later_entry-1.0.0-py3-none-any.whl", hash = "sha256:b5b0da84fbb498341c35f39ab4218ad9644df46d6c4044b47e05a0a5a56b98f8", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "prerelease-parent"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "shared", version = "2.0.0rc1", source = { registry = "http://[LOCALHOST]/simple/" } },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/prerelease_parent-1.0.0.tar.gz", hash = "sha256:178e058eff414839fbee62d2d2bd8a67bda83699fc3ece0d7dafcd1b301465c3", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/prerelease_parent-1.0.0-py3-none-any.whl", hash = "sha256:addc83cfcf41f61b672efe4616f7286484b8a3643aa1202f67733ae3b2d98127", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "later-entry", marker = "python_full_version >= '3.13'" },
+            { name = "prerelease-parent", marker = "python_full_version < '3.13'" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "later-entry", marker = "python_full_version >= '3.13'" },
+            { name = "prerelease-parent", marker = "python_full_version < '3.13'" },
+        ]
+
+        [[package]]
+        name = "shared"
+        version = "2.0.0rc1"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "python_full_version < '3.13'",
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/shared-2.0.0rc1.tar.gz", hash = "sha256:8a3bcf89f01d3d0e31c40605c0e4e4cf9b9249b6b7f4aeddd5c025de2157f72c", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/shared-2.0.0rc1-py3-none-any.whl", hash = "sha256:2bd04770cfd6a4ea46d2e1ba4eb9bbac2c0e24fa4bd4742759c80cf1924c4e27", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "shared"
+        version = "3.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "python_full_version >= '3.13'",
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/shared-3.0.0.tar.gz", hash = "sha256:fdf45d886aa52e132d5ef8fa678aed76cc1d1f154a072cacb70af7a9752412b2", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/shared-3.0.0-py3-none-any.whl", hash = "sha256:c6ae0879137e17eef27f067478241ee39169c34af4c5b78be26f61753dc4022d", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+        "#
+        );
+    });
+
+    // Assert the idempotence of `uv lock` when resolving from the lockfile (`--locked`).
+    context
+        .lock()
+        .arg("--locked")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+
+    Ok(())
+}
+
 /// This tests that sibling dependencies of a package that provokes a
 /// fork are correctly filtered out of forks where they are otherwise
 /// impossible.

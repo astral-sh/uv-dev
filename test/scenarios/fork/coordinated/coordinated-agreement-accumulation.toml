@@ -1,0 +1,75 @@
+name = "coordinated-agreement-accumulation"
+description = '''
+Two independent parents in an earlier fork initially choose version `2` of
+their shared dependencies. A delayed sibling first requires `shared-a==1`,
+then reaches `shared-b==1` through a second dependency chain. The completed
+fork must accumulate both agreements on its original checkpoint. Satisfying
+the later `shared-b` agreement must not restore `switchable-a==2` and recreate
+the duplicate eliminated by the first agreement.
+'''
+
+[testgen]
+kind = "lock"
+
+[environment]
+python = "3.12"
+
+[resolver_options]
+universal = true
+fork_strategy = "fewest"
+environments = ["python_version == '3.12'", "python_version == '3.13'"]
+
+[expected]
+satisfiable = true
+
+[root]
+requires_python = ">=3.12,<3.14"
+requires = [
+  "switchable-a; python_version < '3.13'",
+  "switchable-b; python_version < '3.13'",
+  "later-entry; python_version >= '3.13'",
+]
+
+[packages.switchable-a.versions."1.0.0"]
+requires = ["shared-a==1.0.0"]
+
+[packages.switchable-a.versions."2.0.0"]
+requires = ["shared-a==2.0.0"]
+
+[packages.switchable-b.versions."1.0.0"]
+requires = ["shared-b==1.0.0"]
+
+[packages.switchable-b.versions."2.0.0"]
+requires = ["shared-b==2.0.0"]
+
+[packages.later-entry.versions."1.0.0"]
+requires = ["start-one"]
+
+[packages.start-one.versions."1.0.0"]
+requires = ["start-two"]
+
+[packages.start-two.versions."1.0.0"]
+requires = ["start-three"]
+
+[packages.start-three.versions."1.0.0"]
+requires = ["start-four"]
+
+[packages.start-four.versions."1.0.0"]
+requires = ["stage-a"]
+
+[packages.stage-a.versions."1.0.0"]
+requires = ["shared-a==1.0.0", "stage-b-one"]
+
+[packages.stage-b-one.versions."1.0.0"]
+requires = ["stage-b-two"]
+
+[packages.stage-b-two.versions."1.0.0"]
+requires = ["stage-b-three"]
+
+[packages.stage-b-three.versions."1.0.0"]
+requires = ["shared-b==1.0.0"]
+
+[packages.shared-a.versions."1.0.0"]
+[packages.shared-a.versions."2.0.0"]
+[packages.shared-b.versions."1.0.0"]
+[packages.shared-b.versions."2.0.0"]
