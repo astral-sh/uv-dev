@@ -1,0 +1,46 @@
+name = "coordinated-mode-lowest-direct"
+description = '''
+`shared` is a direct requirement in the earlier fork and a transitive
+requirement in the delayed sibling. The `lowest-direct` mode must select
+`shared==1` for the direct requirement and `shared==2` for the transitive
+requirement. The `fewest` fork strategy must not coordinate these different
+resolution policies.
+'''
+
+[testgen]
+kind = "lock"
+
+[environment]
+python = "3.12"
+
+[resolver_options]
+universal = true
+fork_strategy = "fewest"
+resolution = "lowest-direct"
+environments = ["python_version == '3.12'", "python_version == '3.13'"]
+
+[expected]
+satisfiable = true
+explanation = "The direct fork keeps `shared==1`, while the transitive fork selects `shared==2`."
+
+[root]
+requires_python = ">=3.12,<3.14"
+requires = [
+  "shared>=1.0.0,<=2.0.0; python_version < '3.13'",
+  "later-entry>=1.0.0; python_version >= '3.13'",
+]
+
+[packages.later-entry.versions."1.0.0"]
+requires = ["delay-one>=1.0.0"]
+
+[packages.delay-one.versions."1.0.0"]
+requires = ["delay-two>=1.0.0"]
+
+[packages.delay-two.versions."1.0.0"]
+requires = ["broad-parent>=1.0.0"]
+
+[packages.broad-parent.versions."1.0.0"]
+requires = ["shared>=1.0.0,<=2.0.0"]
+
+[packages.shared.versions."1.0.0"]
+[packages.shared.versions."2.0.0"]
