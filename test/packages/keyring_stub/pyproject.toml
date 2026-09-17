@@ -1,0 +1,15 @@
+[build-system]
+requires = ["flit_core >=3.2,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "keyring"
+description = "A local subprocess keyring stub for uv integration tests."
+requires-python = ">=3.7"
+version = "0.1.0"
+
+[project.scripts]
+keyring = "keyring.cli:main"
+
+[tool.flit.module]
+name = "keyring"
