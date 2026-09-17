@@ -149,6 +149,7 @@ pub(crate) fn from_state(
         graph,
         requires_python,
         fork_markers,
+        conflicts: conflicts.clone(),
         diagnostics,
         requirements,
         constraints,

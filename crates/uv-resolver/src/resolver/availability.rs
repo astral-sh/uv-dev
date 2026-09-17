@@ -95,6 +95,8 @@ impl Display for UnsatisfiableRequirement {
 /// the source and we want to merge unavailable messages across versions.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum UnavailableVersion {
+    /// The version is outside an exhaustive requirement-conflict partition.
+    RequirementConflict(VersionSpecifiers),
     /// The version has a dependency whose version specifiers resolve to an empty range.
     UnsatisfiableDependency(UnsatisfiableRequirement),
     /// Version is incompatible because it has no usable distributions
@@ -117,6 +119,9 @@ pub enum UnavailableVersion {
 impl UnavailableVersion {
     fn message(&self) -> Cow<'static, str> {
         match self {
+            Self::RequirementConflict(specifiers) => {
+                Cow::Owned(format!("the declared version partition `{specifiers}`"))
+            }
             Self::UnsatisfiableDependency(requirement) => Cow::Owned(requirement.to_string()),
             Self::IncompatibleDist(invalid_dist) => Cow::Owned(format!("{invalid_dist}")),
             Self::InvalidMetadata => Cow::Borrowed("invalid metadata"),
@@ -132,6 +137,7 @@ impl UnavailableVersion {
 
     pub(crate) fn singular_message(&self) -> String {
         match self {
+            Self::RequirementConflict(_) => format!("is outside {self}"),
             Self::UnsatisfiableDependency(requirement) => {
                 format!("depends on {requirement}")
             }
@@ -147,6 +153,7 @@ impl UnavailableVersion {
 
     pub(crate) fn plural_message(&self) -> String {
         match self {
+            Self::RequirementConflict(_) => format!("are outside {self}"),
             Self::UnsatisfiableDependency(requirement) => format!("depend on {requirement}"),
             Self::IncompatibleDist(invalid_dist) => invalid_dist.plural_message(),
             Self::InvalidMetadata => format!("have {self}"),
@@ -164,6 +171,7 @@ impl UnavailableVersion {
         requires_python: Option<AbiTag>,
     ) -> Option<String> {
         match self {
+            Self::RequirementConflict(_) => None,
             Self::UnsatisfiableDependency(_) => None,
             Self::IncompatibleDist(invalid_dist) => {
                 invalid_dist.context_message(tags, requires_python)

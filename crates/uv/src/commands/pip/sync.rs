@@ -441,6 +441,7 @@ pub(crate) async fn pip_sync(
             source_trees,
             project,
             BTreeSet::default(),
+            None,
             extras,
             &groups,
             preferences,
