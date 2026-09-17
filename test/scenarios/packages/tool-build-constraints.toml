@@ -1,0 +1,21 @@
+name = "tool-build-constraints"
+description = "An executable with a source-only requirement using the implicit setuptools backend."
+
+[root]
+requires = ["build-tool", "legacy-build-requirement"]
+
+[expected]
+satisfiable = true
+
+[packages.build-tool.versions."1.0.0"]
+requires_python = ">=3.8"
+scripts = { build-tool = "build_tool:main" }
+sdist_backend = "in-tree"
+
+[packages.legacy-build-requirement.versions."1.2.0"]
+requires_python = false
+wheel = false
+sdist_backend = "legacy-setuptools"
+
+[testgen]
+disable = true
