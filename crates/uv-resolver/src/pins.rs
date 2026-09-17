@@ -33,6 +33,13 @@ enum PinMetadata<'index> {
 pub(crate) struct FilePins<'index>(FxHashMap<(PackageName, Version), FilePin<'index>>);
 
 impl<'index> FilePins<'index> {
+    // Inserts are common (every time we select a version) while reads are rare (converting the
+    // final resolution).
+    /// Return the names of packages with any pinned version, including versions no longer selected.
+    pub(crate) fn names(&self) -> impl Iterator<Item = &PackageName> {
+        self.0.keys().map(|(name, _)| name)
+    }
+
     /// Pin a registry candidate, registering its metadata at most once in this fork.
     ///
     /// Within a fork, each `(name, version)` selects the same artifact. Proxy packages may pin it
