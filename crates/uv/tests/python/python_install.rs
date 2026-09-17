@@ -1532,11 +1532,21 @@ fn python_uninstall_build_variant() -> anyhow::Result<()> {
     optimized.assert(predicate::path::missing());
     reordered.assert(predicate::path::exists());
 
-    // A version request can still select builds by a subset of tags.
+    // A request missing build tags must leave the composite build installed.
     uv_snapshot!(context.filters(), context.python_uninstall().arg("3.13+custom"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Searching for Python versions matching: Python 3.13+custom
+    No existing installations found for: Python 3.13+custom
+    No Python installations found matching the requests
+    ");
+    reordered.assert(predicate::path::exists());
+
+    // Version requests match the same build tags in any order.
+    uv_snapshot!(context.filters(), context.python_uninstall().arg("3.13+custom+pgo+lto"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Searching for Python versions matching: Python 3.13+custom+pgo+lto
     Uninstalled Python 3.13.7 in [TIME]
      - cpython-3.13.7+lto+custom+pgo-[PLATFORM]
     ");
@@ -1585,11 +1595,11 @@ fn python_uninstall_prerelease_build_variant() -> anyhow::Result<()> {
     custom.assert(predicate::path::missing());
     optimized.assert(predicate::path::exists());
 
-    // A version request can still match a build containing additional tags.
-    uv_snapshot!(context.filters(), context.python_uninstall().arg("3.14rc1+custom"), @"
+    // Prerelease version requests also match the same build tags in any order.
+    uv_snapshot!(context.filters(), context.python_uninstall().arg("3.14rc1+lto+pgo+custom"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Searching for Python versions matching: Python 3.14rc1+custom
+    Searching for Python versions matching: Python 3.14rc1+lto+pgo+custom
     Uninstalled Python 3.14.0rc1 in [TIME]
      - cpython-3.14.0rc1+custom+pgo+lto-[PLATFORM]
     ");
@@ -1600,7 +1610,7 @@ fn python_uninstall_prerelease_build_variant() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn python_reinstall_build_variant() -> anyhow::Result<()> {
-    for target in [Some("3.13+custom+pgo"), None] {
+    for target in [Some("3.13+custom+pgo"), Some("3.13+pgo+custom"), None] {
         let context = uv_test::test_context_with_versions!(&[])
             .with_managed_python_dirs()
             .with_http_retries("0");
