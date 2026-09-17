@@ -499,7 +499,9 @@ fn build_hatchling_pyproject_toml(
     } else {
         let mut project_scripts = String::from("\n[project.scripts]\n");
         for (script_name, target) in scripts {
-            writeln!(&mut project_scripts, "{script_name} = \"{target}\"")
+            let script_name = toml::Value::String(script_name.clone());
+            let target = toml::Value::String(target.clone());
+            writeln!(&mut project_scripts, "{script_name} = {target}")
                 .expect("writing project scripts into a string should succeed");
         }
         project_scripts
@@ -663,6 +665,29 @@ mod tests {
     use tokio_util::compat::FuturesAsyncReadCompatExt;
 
     use super::*;
+
+    #[test]
+    fn hatchling_script_names_are_literal_keys() -> anyhow::Result<()> {
+        let pyproject = build_hatchling_pyproject_toml(
+            &"scenario-tool".parse()?,
+            &"1.0.0".parse()?,
+            &[],
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::from([(
+                "scenario.tool".to_string(),
+                "scenario_tool.cli:main".to_string(),
+            )]),
+            "scenario_tool",
+            None,
+        );
+        let pyproject: toml::Value = toml::from_str(&pyproject)?;
+        assert_eq!(
+            pyproject["project"]["scripts"]["scenario.tool"].as_str(),
+            Some("scenario_tool.cli:main"),
+        );
+        Ok(())
+    }
 
     #[test]
     fn generate_simple_wheel() {
