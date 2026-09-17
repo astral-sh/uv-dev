@@ -1,0 +1,134 @@
+# Find related issues and pull requests when a pull request is opened.
+name: "Pull request similar search"
+
+on:
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: "A pull request number"
+        required: true
+        type: number
+      head_sha:
+        description: "The pull request head SHA at dispatch time"
+        required: false
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.pull_request }}
+  cancel-in-progress: true
+
+env:
+  UV_LOCKED: 1
+
+jobs:
+  search:
+    if: github.repository == 'astral-sh/uv' && github.ref == 'refs/heads/main'
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    environment: automations
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: "Collect pull request context"
+        id: context
+        run: |
+          gh pr view "$PULL_REQUEST_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json number,title,body,author,url,state,baseRefName,baseRefOid,headRefName,headRefOid,isDraft,labels,files,additions,deletions,changedFiles,closingIssuesReferences \
+            > .pull-request-similar-search-event.json
+
+          if ! jq --exit-status \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --argjson number "$PULL_REQUEST_NUMBER" \
+            '.number == $number and .url == "https://github.com/\($repository)/pull/\($number)"' \
+            .pull-request-similar-search-event.json > /dev/null; then
+            echo "The pull request must belong to $GITHUB_REPOSITORY." >&2
+            exit 1
+          fi
+
+          if ! jq --exit-status --arg head "$HEAD_SHA" \
+            '.state == "OPEN" and ($head == "" or .headRefOid == $head)' \
+            .pull-request-similar-search-event.json > /dev/null; then
+            echo "The pull request is closed or its head changed; skipping stale dispatch."
+            exit 0
+          fi
+
+          gh pr diff "$PULL_REQUEST_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" > .pull-request-similar-search.diff
+
+          gh pr view "$PULL_REQUEST_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json state,baseRefOid,headRefOid \
+            > "$RUNNER_TEMP/pull-request-similar-search-current.json"
+
+          if ! jq --exit-status \
+            --slurpfile current "$RUNNER_TEMP/pull-request-similar-search-current.json" \
+            '$current[0].state == "OPEN" and .baseRefOid == $current[0].baseRefOid and .headRefOid == $current[0].headRefOid' \
+            .pull-request-similar-search-event.json > /dev/null; then
+            echo "The pull request changed while collecting its diff; skipping stale search."
+            exit 0
+          fi
+
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+
+      - name: "Find related issues and pull requests"
+        id: search
+        if: steps.context.outputs.ready == 'true'
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          codex-version: "0.147.0"
+          codex-home: "agents/codex"
+          effort: high
+          permission-profile: "pull-request-similar-search"
+          safety-strategy: drop-sudo
+          allow-users: "*"
+          allow-bot-users: "astral-automations-bot[bot]"
+          prompt-file: "agents/prompts/pull-request-similar-search.md"
+          output-schema-file: "agents/schemas/pull-request-similar-search.json"
+
+      - name: "Write related issues and pull requests"
+        if: steps.search.outputs.final-message != ''
+        run: |
+          printf '%s\n' "$SEARCH_RESULT" | jq '.' \
+            > "$RUNNER_TEMP/pull-request-similar-search-result.json"
+          {
+            jq --raw-output \
+              '"Related items for \(.url) at `\(.headRefOid)`\n"' \
+              .pull-request-similar-search-event.json
+            printf '%s\n' '```json'
+            jq '.' "$RUNNER_TEMP/pull-request-similar-search-result.json"
+            printf '%s\n' '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          SEARCH_RESULT: ${{ steps.search.outputs.final-message }}
+
+      - name: "Upload search result"
+        if: steps.search.outputs.final-message != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pull-request-similar-search-${{ inputs.pull_request }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pull-request-similar-search-result.json
+          if-no-files-found: error
+
+      - name: "Upload Codex thread"
+        if: always() && steps.context.outputs.ready == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-thread-pull-request-similar-search-${{ inputs.pull_request }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: agents/codex/sessions
+          if-no-files-found: warn
