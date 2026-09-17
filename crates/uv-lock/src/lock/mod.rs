@@ -57,6 +57,7 @@ use uv_preview::PreviewFeature;
 use uv_pypi_types::{
     ConflictItem, ConflictKindRef, ConflictSet, Conflicts, HashAlgorithm, HashDigest, HashDigests,
     Hashes, ParsedArchiveUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl, PyProjectToml,
+    without_non_workspace_axis_markers,
 };
 use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 use uv_resolver_types::{
@@ -83,12 +84,20 @@ mod installable;
 mod map;
 mod serialize;
 mod tree;
+mod workspace_axes;
+mod workspace_axis_manifest;
 mod workspace_groups;
+pub use workspace_axes::{
+    LockedWorkspaceAxes, LockedWorkspaceAxisContext, WorkspaceAxisCommandPolicy,
+    WorkspaceAxisSelectionError,
+};
+use workspace_axis_manifest::WorkspaceAxisManifestRoots;
 pub use workspace_groups::LockedWorkspaceGroup;
 
 /// The current version of the lockfile format.
 const VERSION: u32 = 1;
 const WORKSPACE_GROUPS_VERSION: u32 = 2;
+const WORKSPACE_AXES_VERSION: u32 = 3;
 
 /// An error returned when parsing a lockfile.
 #[derive(Debug, thiserror::Error)]
@@ -294,12 +303,18 @@ pub(crate) struct HashedDist {
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
 #[serde(try_from = "LockWire")]
 pub struct Lock {
+    workspace_axes: Option<LockedWorkspaceAxes>,
+    workspace_axis_command: Option<WorkspaceAxisCommandPolicy>,
+    /// Exact manifest roots retained by an ordinary axis solve or projection. Ordinary v1/v2
+    /// lockfiles do not serialize this resolver-only provenance.
+    workspace_axis_manifest_roots: Option<WorkspaceAxisManifestRoots>,
     workspace_groups: Vec<LockedWorkspaceGroup>,
     /// The (major) version of the lockfile format.
     ///
     /// Changes to the major version indicate backwards- and forwards-incompatible changes to the
     /// lockfile format. Version 1 represents an ordinary resolution, while version 2 records named
-    /// workspace resolution contexts that version 1 readers must not combine.
+    /// workspace resolution contexts that version 1 readers must not combine. Version 3 records
+    /// independent workspace resolution axes, which older readers must not project implicitly.
     version: u32,
     /// The revision of the lockfile format.
     ///
@@ -2744,6 +2759,9 @@ impl Lock {
             }
         }
         let lock = Self {
+            workspace_axes: None,
+            workspace_axis_command: None,
+            workspace_axis_manifest_roots: None,
             workspace_groups: Vec::new(),
             version,
             revision,
@@ -2997,6 +3015,12 @@ impl Lock {
 
     /// Returns `true` if the package is a workspace member.
     fn is_workspace_member(&self, package: &Package) -> bool {
+        if let Some(policy) = &self.workspace_axis_command {
+            return policy.is_member_package(package);
+        }
+        if let Some(axes) = &self.workspace_axes {
+            return axes.is_member_package(package);
+        }
         self.members().contains(&package.id.name)
             || self.members().is_empty() && self.root().is_some_and(|root| root.id == package.id)
     }
@@ -3254,21 +3278,27 @@ impl Lock {
         groups: &'lock DependencyGroupsWithDefaults,
         collect_filter: impl Fn(&Package) -> bool,
     ) -> Auditable<'lock> {
-        // Dedupe and sort by `(name, version)` during the walk itself. Keep
-        // the first `Package` reference we see for each key so that
-        // downstream views (e.g. index lookup) have access to the lockfile
-        // package.
+        // Vulnerability databases are keyed by `(name, version)`, while project status belongs
+        // to a package's registry. Keep both views during the same walk so equal versions from
+        // different registries do not hide each other's project status.
         let mut by_name_version: BTreeMap<(&PackageName, &Version), &Package> = BTreeMap::default();
+        let mut by_registry_package: BTreeMap<&PackageId, &Package> = BTreeMap::default();
         self.walk_auditable(extras, groups, collect_filter, |package, version| {
             by_name_version
                 .entry((package.name(), version))
                 .or_insert(package);
+            if matches!(&package.id.source, Source::Registry(_)) {
+                by_registry_package.entry(&package.id).or_insert(package);
+            }
         });
         let packages = by_name_version
             .into_iter()
             .map(|((_, version), package)| (package, version))
             .collect();
-        Auditable { packages }
+        Auditable {
+            packages,
+            registry_packages: by_registry_package.into_values().collect(),
+        }
     }
 
     /// Walk the auditable dependency graph, invoking `visit` once per
@@ -3302,20 +3332,15 @@ impl Lock {
             }
         }
 
-        // Identify workspace members (the implicit root counts for single-member workspaces).
-        let workspace_members: FxHashSet<PackageIndex> = if self.members().is_empty() {
-            self.root()
-                .into_iter()
-                .map(|package| self.by_id[&package.id])
-                .collect()
-        } else {
-            self.packages
-                .iter()
-                .enumerate()
-                .filter(|(_, package)| self.members().contains(&package.id.name))
-                .map(|(index, _)| PackageIndex(index))
-                .collect()
-        };
+        // Identify exact workspace distributions. A registry package with the same name as a
+        // workspace member in another resolution context must still be audited.
+        let workspace_members: FxHashSet<PackageIndex> = self
+            .packages
+            .iter()
+            .enumerate()
+            .filter(|(_, package)| self.is_workspace_member(package))
+            .map(|(index, _)| PackageIndex(index))
+            .collect();
 
         // Lockfile traversal state: (package, optional extra to activate on that package).
         let mut queue: VecDeque<(PackageIndex, Option<&ExtraName>)> = VecDeque::new();
@@ -3493,6 +3518,18 @@ impl Lock {
     ///
     /// Returns the actually covered and the expected marker space on validation error.
     pub fn check_marker_coverage(&self) -> Result<(), (MarkerTree, MarkerTree)> {
+        if let Some(environments_union) = self.workspace_axes_coverage() {
+            let fork_markers_union = without_non_workspace_axis_markers(
+                self.fork_markers
+                    .iter()
+                    .fold(MarkerTree::FALSE, |marker, fork| marker.or(fork.combined())),
+            );
+            return if fork_markers_union.negate().is_disjoint(environments_union) {
+                Ok(())
+            } else {
+                Err((fork_markers_union, environments_union))
+            };
+        }
         let fork_markers_union = self.fork_markers_union();
         let environments_union = implicit_constraints_marker(
             self.requires_python.to_marker_tree(),
@@ -3549,9 +3586,10 @@ impl Lock {
                     if let Ok(lock) = toml::from_str::<LockVersion>(input)
                         && lock.version() != VERSION
                         && lock.version() != WORKSPACE_GROUPS_VERSION
+                        && lock.version() != WORKSPACE_AXES_VERSION
                     {
                         return Err(LockParseError::UnparsableVersion {
-                            supported: WORKSPACE_GROUPS_VERSION,
+                            supported: WORKSPACE_AXES_VERSION,
                             version: lock.version(),
                             source,
                         });
@@ -3561,9 +3599,12 @@ impl Lock {
             },
         };
 
-        if lock.version() != VERSION && lock.version() != WORKSPACE_GROUPS_VERSION {
+        if lock.version() != VERSION
+            && lock.version() != WORKSPACE_GROUPS_VERSION
+            && lock.version() != WORKSPACE_AXES_VERSION
+        {
             return Err(LockParseError::UnsupportedVersion {
-                supported: WORKSPACE_GROUPS_VERSION,
+                supported: WORKSPACE_AXES_VERSION,
                 version: lock.version(),
             });
         }
@@ -3597,6 +3638,9 @@ impl Lock {
 
     /// Return whether a source tree belongs to the workspace or represents its root.
     fn is_workspace_package(&self, package: &Package) -> bool {
+        if let Some(policy) = &self.workspace_axis_command {
+            return policy.is_member_package(package);
+        }
         self.members().contains(&package.id.name)
             || matches!(
                 &package.id.source,
@@ -5799,6 +5843,8 @@ impl Lock {
 pub struct Auditable<'lock> {
     /// Packages deduplicated by `(name, version)` and sorted by the same key.
     packages: Vec<(&'lock Package, &'lock Version)>,
+    /// Registry packages deduplicated by their complete distribution identity.
+    registry_packages: Vec<&'lock Package>,
 }
 
 #[derive(Clone)]
@@ -5831,8 +5877,9 @@ impl<'lock> Auditable<'lock> {
     /// (Git, direct URL, path, editable) are excluded.
     pub fn projects(&self, root: &Path) -> Result<Vec<(&'lock PackageName, IndexUrl)>, LockError> {
         let mut seen: FxHashSet<(&PackageName, String)> = FxHashSet::default();
-        let mut projects: Vec<(&PackageName, IndexUrl)> = Vec::with_capacity(self.packages.len());
-        for (package, _version) in &self.packages {
+        let mut projects: Vec<(&PackageName, IndexUrl)> =
+            Vec::with_capacity(self.registry_packages.len());
+        for package in &self.registry_packages {
             if let Some(index) = package.index(root)?
                 && seen.insert((package.name(), index.url().to_string()))
             {
@@ -6030,7 +6077,7 @@ impl From<ExcludeNewer> for ExcludeNewerWire {
     }
 }
 
-#[derive(Clone, Debug, Default, serde::Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub struct ResolverManifest {
     /// The workspace members included in the lockfile.
@@ -6156,6 +6203,8 @@ impl ResolverManifest {
 struct LockWire {
     version: u32,
     revision: Option<u32>,
+    #[serde(rename = "workspace-axes", default)]
+    workspace_axes: Option<LockedWorkspaceAxes>,
     #[serde(rename = "workspace-group", default)]
     workspace_groups: Vec<LockedWorkspaceGroup>,
     requires_python: RequiresPython,
@@ -6181,7 +6230,29 @@ struct LockWire {
 impl TryFrom<LockWire> for Lock {
     type Error = LockError;
 
-    fn try_from(wire: LockWire) -> Result<Self, LockError> {
+    fn try_from(mut wire: LockWire) -> Result<Self, LockError> {
+        if let Some(axes) = &wire.workspace_axes {
+            wire.fork_markers = if wire.fork_markers.is_empty() {
+                vec![SimplifiedMarkerTree::new(
+                    &wire.requires_python,
+                    axes.environment(),
+                )]
+            } else {
+                std::mem::take(&mut wire.fork_markers)
+                    .into_iter()
+                    .map(|marker| {
+                        Ok(SimplifiedMarkerTree::new(
+                            &wire.requires_python,
+                            axes.restore_wire_marker(marker.into_marker(&wire.requires_python))?,
+                        ))
+                    })
+                    .collect::<Result<_, LockError>>()?
+            };
+            wire.packages = std::mem::take(&mut wire.packages)
+                .into_iter()
+                .map(|package| axes.restore_wire_package(package, &wire.requires_python))
+                .collect::<Result<_, _>>()?;
+        }
         // Count the number of sources for each package name. When
         // there's only one source for a particular package name (the
         // overwhelmingly common case), we can omit some data (like source and
@@ -6207,7 +6278,10 @@ impl TryFrom<LockWire> for Lock {
             .collect::<Vec<_>>();
         let environment = SimplifiedMarkerTree::new(
             &wire.requires_python,
-            fork_markers_union(&fork_markers, &wire.requires_python),
+            wire.workspace_axes.as_ref().map_or_else(
+                || fork_markers_union(&fork_markers, &wire.requires_python),
+                LockedWorkspaceAxes::environment,
+            ),
         );
         // Most dependency entries omit their marker, so reuse the result of intersecting the
         // default marker with the lock's environment.
@@ -6259,6 +6333,8 @@ impl TryFrom<LockWire> for Lock {
         )?;
 
         lock.workspace_groups = wire.workspace_groups;
+        lock.workspace_axes = wire.workspace_axes;
+        lock.validate_workspace_axes()?;
 
         Ok(lock)
     }
@@ -6302,6 +6378,11 @@ pub struct Package {
 }
 
 impl Package {
+    /// Return the source-aware identity of this locked distribution.
+    pub fn identity(&self) -> LockedPackageIdentity {
+        LockedPackageIdentity(self.id.clone())
+    }
+
     pub fn is_from_pypi_registry(&self) -> bool {
         self.id.source.is_pypi_registry()
     }
@@ -7220,6 +7301,29 @@ pub(crate) struct PackageId {
     name: PackageName,
     version: Option<Version>,
     source: Source,
+}
+
+/// A stable locked distribution identity, including its version and exact source.
+///
+/// This can be compared across ordinary lockfiles without exposing the lockfile's internal source
+/// representation. Different registries, direct URLs, or local source paths remain distinct.
+#[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub struct LockedPackageIdentity(PackageId);
+
+impl LockedPackageIdentity {
+    pub fn name(&self) -> &PackageName {
+        &self.0.name
+    }
+
+    pub fn version(&self) -> Option<&Version> {
+        self.0.version.as_ref()
+    }
+}
+
+impl Display for LockedPackageIdentity {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self.0, formatter)
+    }
 }
 
 impl PackageId {
@@ -9737,6 +9841,13 @@ impl std::fmt::Display for WheelTagHint {
 /// is with the caller somewhere in such cases.
 #[derive(Debug, thiserror::Error)]
 enum LockErrorKind {
+    #[error(
+        "Workspace resolution axes must be selected before installation or export; use `--resolution-axis AXIS=SECTION`"
+    )]
+    WorkspaceAxesRequireSelection,
+    /// Invalid or incomplete selector-aware workspace lock metadata.
+    #[error("Invalid workspace resolution axes in lockfile: {0}")]
+    WorkspaceAxes(String),
     /// An error that occurs when the overrides for validating a
     /// metadata-free lockfile cannot be scoped to their packages.
     #[error(transparent)]
@@ -10254,7 +10365,10 @@ fn canonical_marker_trees(
     markers: &[UniversalMarker],
     requires_python: &RequiresPython,
 ) -> Vec<MarkerTree> {
-    if markers.iter().any(|marker| marker.has_workspace_group()) {
+    if markers
+        .iter()
+        .any(|marker| marker.has_workspace_group() || marker.has_workspace_axis())
+    {
         let mut markers = markers
             .iter()
             .map(|marker| {
@@ -10266,6 +10380,7 @@ fn canonical_marker_trees(
         // freshly resolved graph and a parsed graph have identical lockfile ordering.
         markers.sort_by_cached_key(|marker| marker.try_to_string());
         markers.dedup();
+        markers.retain(|marker| !marker.is_true());
         return markers;
     }
     let mut pep508_only = vec![];
@@ -10546,6 +10661,142 @@ mod tests {
             sys_platform: "darwin",
         })
         .expect("valid marker environment")
+    }
+
+    #[test]
+    fn auditable_workspace_axes_use_exact_member_sources() -> Result<(), Box<dyn Error>> {
+        let definitions: uv_workspace::WorkspaceAxes = toml::from_str(
+            r#"
+[runtime]
+local = { members = ["legacy"] }
+registry = { members = ["consumer"] }
+"#,
+        )?;
+        let axes = uv_workspace::ResolvedWorkspaceAxes::from_parts(
+            definitions,
+            BTreeSet::from(["legacy".parse()?, "consumer".parse()?]),
+        )?;
+        let domain = axes.domain();
+        let local = domain
+            .restrict(&uv_workspace::WorkspaceAxisSelection::from_assignments([
+                "runtime=local".parse()?,
+            ])?)
+            .ok_or("missing local domain")?;
+        let registry = domain
+            .restrict(&uv_workspace::WorkspaceAxisSelection::from_assignments([
+                "runtime=registry".parse()?,
+            ])?)
+            .ok_or("missing registry domain")?;
+        let local = (
+            local,
+            Lock::from_toml(
+                r#"
+version = 1
+requires-python = ">=3.12"
+[manifest]
+members = ["legacy"]
+[[package]]
+name = "legacy"
+version = "0.1.0"
+source = { virtual = "members/legacy" }
+"#,
+            )?,
+        );
+        let registry = (
+            registry,
+            Lock::from_toml(
+                r#"
+version = 1
+requires-python = ">=3.12"
+[manifest]
+members = ["consumer"]
+[[package]]
+name = "consumer"
+version = "0.1.0"
+source = { virtual = "members/consumer" }
+dependencies = [{ name = "legacy" }]
+[[package]]
+name = "legacy"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+"#,
+            )?,
+        );
+        let lock = Lock::from_workspace_axes(axes, vec![local, registry])?
+            .ok_or("missing combined lock")?;
+        let extras = uv_configuration::ExtrasSpecification::default()
+            .with_defaults(uv_normalize::DefaultExtras::default());
+        let groups = uv_configuration::DependencyGroups::default()
+            .with_defaults(uv_normalize::DefaultGroups::default());
+        let auditable = lock.auditable(&extras, &groups, |_| true);
+        assert_eq!(
+            auditable
+                .packages()
+                .map(|(name, version)| (name.to_string(), version.to_string()))
+                .collect::<Vec<_>>(),
+            [("legacy".to_string(), "0.1.0".to_string())]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn auditable_projects_keep_each_registry() -> Result<(), Box<dyn Error>> {
+        let lock = Lock::from_toml(
+            r#"
+version = 1
+requires-python = ">=3.12"
+resolution-markers = ["sys_platform == 'darwin'", "sys_platform != 'darwin'"]
+
+[manifest]
+members = ["app"]
+
+[[package]]
+name = "app"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "demo", version = "1.0.0", source = { registry = "https://one.example/simple" }, marker = "sys_platform == 'darwin'" },
+    { name = "demo", version = "1.0.0", source = { registry = "https://two.example/simple" }, marker = "sys_platform != 'darwin'" },
+]
+
+[[package]]
+name = "demo"
+version = "1.0.0"
+source = { registry = "https://one.example/simple" }
+resolution-markers = ["sys_platform == 'darwin'"]
+
+[[package]]
+name = "demo"
+version = "1.0.0"
+source = { registry = "https://two.example/simple" }
+resolution-markers = ["sys_platform != 'darwin'"]
+"#,
+        )?;
+        let extras = uv_configuration::ExtrasSpecification::default()
+            .with_defaults(uv_normalize::DefaultExtras::default());
+        let groups = uv_configuration::DependencyGroupsWithDefaults::none();
+        let auditable = lock.auditable(&extras, &groups, |_| true);
+
+        assert_eq!(auditable.len(), 1);
+        assert_eq!(
+            auditable
+                .packages()
+                .map(|(name, version)| (name.to_string(), version.to_string()))
+                .collect::<Vec<_>>(),
+            [("demo".to_string(), "1.0.0".to_string())]
+        );
+        assert_eq!(
+            auditable
+                .projects(Path::new("."))?
+                .into_iter()
+                .map(|(name, index)| (name.to_string(), index.url().to_string()))
+                .collect::<Vec<_>>(),
+            [
+                ("demo".to_string(), "https://one.example/simple".to_string()),
+                ("demo".to_string(), "https://two.example/simple".to_string()),
+            ]
+        );
+        Ok(())
     }
 
     #[test]

@@ -11,10 +11,12 @@ use uv_normalize::PackageName;
 use uv_pep508::MarkerTree;
 use uv_pypi_types::ConflictKind;
 
+use super::workspace_axis_manifest::WorkspaceAxisManifestRoots;
 use super::{
-    Dependency, DirectSource, ExcludeNewerOverride, ExcludeNewerValue, ForkStrategy, Lock, Package,
-    PackageId, PrereleaseMode, RegistrySource, ResolutionMode, ResolverManifest, ResolverOptions,
-    Source, SourceDist, Wheel, WheelWireSource, simplified_universal_markers,
+    Dependency, DirectSource, ExcludeNewerOverride, ExcludeNewerValue, ForkStrategy, Lock,
+    LockedWorkspaceAxes, Package, PackageId, PrereleaseMode, RegistrySource, ResolutionMode,
+    ResolverManifest, ResolverOptions, Source, SourceDist, Wheel, WheelWireSource,
+    simplified_universal_markers,
 };
 
 /// Serializes a lockfile directly while preserving the canonical `uv.lock` layout.
@@ -33,6 +35,8 @@ fn write_lock(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
     // Catch a lockfile where the union of fork markers doesn't cover the supported
     // environments.
     debug_assert!(lock.check_marker_coverage().is_ok());
+    lock.validate_workspace_axes()
+        .map_err(|error| toml_edit::ser::Error::Custom(error.to_string()))?;
 
     writer.key_value("version", lock.version)?;
     if lock.revision > 0 {
@@ -41,7 +45,11 @@ fn write_lock(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
     writer.key_value("requires-python", lock.requires_python.to_string())?;
 
     if !lock.fork_markers.is_empty() {
-        let markers = simplified_universal_markers(&lock.fork_markers, &lock.requires_python);
+        let markers = if let Some(axes) = &lock.workspace_axes {
+            axes.wire_markers(&lock.fork_markers, &lock.requires_python)
+        } else {
+            simplified_universal_markers(&lock.fork_markers, &lock.requires_python)
+        };
         if !markers.is_empty() {
             writer.key_multiline_array("resolution-markers", markers, |writer, marker| {
                 writer.value(&marker)
@@ -60,10 +68,13 @@ fn write_lock(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
             .iter()
             .copied()
             .map(|marker| SimplifiedMarkerTree::new(&lock.requires_python, marker))
-            .filter_map(SimplifiedMarkerTree::try_to_string);
-        writer.key_multiline_array("supported-markers", markers, |writer, marker| {
-            writer.value(&marker)
-        })?;
+            .filter_map(SimplifiedMarkerTree::try_to_string)
+            .collect::<Vec<_>>();
+        if !markers.is_empty() {
+            writer.key_multiline_array("supported-markers", markers, |writer, marker| {
+                writer.value(&marker)
+            })?;
+        }
     }
 
     if !lock.required_environments.is_empty() {
@@ -72,10 +83,13 @@ fn write_lock(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
             .iter()
             .copied()
             .map(|marker| SimplifiedMarkerTree::new(&lock.requires_python, marker))
-            .filter_map(SimplifiedMarkerTree::try_to_string);
-        writer.key_multiline_array("required-markers", markers, |writer, marker| {
-            writer.value(&marker)
-        })?;
+            .filter_map(SimplifiedMarkerTree::try_to_string)
+            .collect::<Vec<_>>();
+        if !markers.is_empty() {
+            writer.key_multiline_array("required-markers", markers, |writer, marker| {
+                writer.value(&marker)
+            })?;
+        }
     }
 
     if !lock.conflicts.is_empty() {
@@ -129,6 +143,36 @@ fn write_lock(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
         }
     }
 
+    if let Some(axes) = &lock.workspace_axes {
+        writer.table(&["workspace-axes"])?;
+        writer.key_value("model", serialize_value(&axes.model)?)?;
+        writer.key_value("member-paths", serialize_value(&axes.member_paths)?)?;
+        writer.key_value("group-metadata", serialize_value(&axes.group_metadata)?)?;
+        // The independent promise is written as product terms, avoiding DNF expansion of the
+        // complete selector universe. Validation above proves these terms equal that promise.
+        writer.key_start("environment")?;
+        writer.multiline_array(&axes.contexts, |writer, context| {
+            let mut first = true;
+            writer.start_inline_table();
+            writer.inline_value(&mut first, "domain", serialize_value(&context.domain)?)?;
+            if let Some(environment) = context.environment.contents() {
+                writer.inline_value(&mut first, "environment", environment.to_string())?;
+            }
+            writer.finish_inline_table(first);
+            Ok(())
+        })?;
+        for context in &axes.contexts {
+            writer.array_of_tables(&["workspace-axes", "context"])?;
+            writer.key_value("id", context.id)?;
+            writer.key_value("domain", serialize_value(&context.domain)?)?;
+            if let Some(environment) = context.environment.contents() {
+                writer.key_value("environment", environment.to_string())?;
+            }
+            writer.key_value("manifest", serialize_value(&context.manifest)?)?;
+            write_workspace_axis_manifest_roots(writer, &context.manifest_roots)?;
+        }
+    }
+
     write_options(writer, &lock.options)?;
     write_manifest(writer, &lock.manifest)?;
 
@@ -148,12 +192,73 @@ fn write_lock(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
             package,
             &lock.requires_python,
             simplified_environment,
+            lock.workspace_axes.as_ref(),
             &dist_count_by_name,
             lock.supports_missing_package_metadata(),
         )?;
     }
 
     Ok(())
+}
+
+fn write_workspace_axis_manifest_roots(
+    writer: &mut LockWriter,
+    roots: &WorkspaceAxisManifestRoots,
+) -> Result<(), WriteError> {
+    writer.key_multiline_array("manifest-roots", &roots.0, |writer, root| {
+        let mut first = true;
+        writer.start_inline_table();
+        if let Some(group) = &root.group {
+            writer.inline_value(&mut first, "group", group.as_ref())?;
+        }
+        writer.inline_value(
+            &mut first,
+            "requirement",
+            serialize_value(&root.requirement)?,
+        )?;
+        writer.inline_key_start(&mut first, "resolutions")?;
+        writer.array(&root.resolutions, |writer, resolution| {
+            let mut first = true;
+            writer.start_inline_table();
+            writer.inline_value(
+                &mut first,
+                "requirement",
+                serialize_value(&resolution.requirement)?,
+            )?;
+            writer.inline_value(&mut first, "kind", serialize_value(&resolution.kind)?)?;
+            if resolution.environment.is_false() {
+                writer.inline_value(&mut first, "environment", false)?;
+            } else if let Some(environment) = resolution.environment.contents() {
+                writer.inline_value(&mut first, "environment", environment.to_string())?;
+            }
+            writer.inline_key_start(&mut first, "sources")?;
+            writer.array(&resolution.sources, write_source_inline)?;
+            writer.inline_key_start(&mut first, "targets")?;
+            writer.array(&resolution.targets, |writer, target| {
+                let mut first = true;
+                writer.start_inline_table();
+                writer.inline_key_start(&mut first, "package")?;
+                let mut package_first = true;
+                writer.start_inline_table();
+                write_package_id(
+                    writer,
+                    &target.package,
+                    None,
+                    PackageIdLocation::Inline(&mut package_first),
+                )?;
+                writer.finish_inline_table(package_first);
+                if let Some(marker) = target.marker.contents() {
+                    writer.inline_value(&mut first, "marker", marker.to_string())?;
+                }
+                writer.finish_inline_table(first);
+                Ok(())
+            })?;
+            writer.finish_inline_table(first);
+            Ok(())
+        })?;
+        writer.finish_inline_table(first);
+        Ok(())
+    })
 }
 
 fn write_options(writer: &mut LockWriter, options: &ResolverOptions) -> Result<(), WriteError> {
@@ -295,6 +400,7 @@ fn write_package(
     package: &Package,
     requires_python: &RequiresPython,
     simplified_environment: MarkerTree,
+    workspace_axes: Option<&LockedWorkspaceAxes>,
     dist_count_by_name: &FxHashMap<PackageName, u64>,
     preserve_empty_contexts: bool,
 ) -> Result<(), WriteError> {
@@ -302,7 +408,11 @@ fn write_package(
     write_package_id(writer, &package.id, None, PackageIdLocation::Table)?;
 
     if !package.fork_markers.is_empty() {
-        let markers = simplified_universal_markers(&package.fork_markers, requires_python);
+        let markers = if let Some(axes) = workspace_axes {
+            axes.wire_markers(&package.fork_markers, requires_python)
+        } else {
+            simplified_universal_markers(&package.fork_markers, requires_python)
+        };
         if !markers.is_empty() {
             writer.key_multiline_array("resolution-markers", markers, |writer, marker| {
                 writer.value(&marker)
@@ -318,7 +428,9 @@ fn write_package(
                 write_dependency_inline(
                     writer,
                     dependency,
+                    requires_python,
                     simplified_environment,
+                    workspace_axes,
                     dist_count_by_name,
                 )
             },
@@ -353,7 +465,9 @@ fn write_package(
                 write_dependency_inline(
                     writer,
                     dependency,
+                    requires_python,
                     simplified_environment,
+                    workspace_axes,
                     dist_count_by_name,
                 )
             })?;
@@ -378,7 +492,9 @@ fn write_package(
                 write_dependency_inline(
                     writer,
                     dependency,
+                    requires_python,
                     simplified_environment,
+                    workspace_axes,
                     dist_count_by_name,
                 )
             })?;
@@ -581,7 +697,9 @@ fn write_wheel_inline(writer: &mut LockWriter, wheel: &Wheel) -> Result<(), Writ
 fn write_dependency_inline(
     writer: &mut LockWriter,
     dependency: &Dependency,
+    requires_python: &RequiresPython,
     simplified_environment: MarkerTree,
+    workspace_axes: Option<&LockedWorkspaceAxes>,
     dist_count_by_name: &FxHashMap<PackageName, u64>,
 ) -> Result<(), WriteError> {
     let mut first = true;
@@ -602,12 +720,16 @@ fn write_dependency_inline(
     }
 
     // Avoid restating the resolution's environment on every dependency edge.
-    if let Some(marker) = dependency
-        .simplified_marker
-        .as_simplified_marker_tree()
-        .restrict(simplified_environment)
-        .try_to_string()
-    {
+    let marker = if let Some(axes) = workspace_axes {
+        axes.wire_marker(dependency.complexified_marker.combined(), requires_python)
+    } else {
+        dependency
+            .simplified_marker
+            .as_simplified_marker_tree()
+            .restrict(simplified_environment)
+            .try_to_string()
+    };
+    if let Some(marker) = marker {
         writer.inline_value(&mut first, "marker", &marker)?;
     }
 

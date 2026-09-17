@@ -4,6 +4,9 @@ expression: result
 ---
 Ok(
     Lock {
+        workspace_axes: None,
+        workspace_axis_command: None,
+        workspace_axis_manifest_roots: None,
         workspace_groups: [],
         version: 1,
         revision: 0,

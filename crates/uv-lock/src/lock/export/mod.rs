@@ -18,6 +18,7 @@ use uv_pypi_types::ConflictItem;
 use uv_resolver_types::graph_ops::Reachable;
 use uv_resolver_types::universal_marker::resolve_activated_extras;
 
+use crate::lock::PackageIndex;
 pub use crate::lock::export::metadata::{Metadata, PythonReport};
 pub(crate) use crate::lock::export::metadata::{
     MetadataNode, MetadataNodeId, MetadataNodeKind, MetadataScript, MetadataWorkspace,
@@ -25,13 +26,32 @@ pub(crate) use crate::lock::export::metadata::{
 };
 pub use crate::lock::export::pylock_toml::{PylockToml, PylockTomlError, PylockTomlErrorKind};
 pub use crate::lock::export::requirements_txt::RequirementsTxtExport;
-use crate::lock::{LockErrorKind, PackageIndex};
 use crate::{Installable, InstallableRootKind, LockError, Package};
 
 pub mod cyclonedx_json;
 mod metadata;
 mod pylock_toml;
 mod requirements_txt;
+
+/// Resolve the package activation conditions for one concrete command selection.
+pub(super) fn workspace_axis_package_markers<'lock>(
+    target: &impl Installable<'lock>,
+    extras: &ExtrasSpecificationWithDefaults,
+    groups: &DependencyGroupsWithDefaults,
+) -> Result<Vec<(&'lock Package, MarkerTree)>, LockError> {
+    Ok(ExportableRequirements::from_lock(
+        target,
+        &[],
+        extras,
+        groups,
+        false,
+        &InstallOptions::default(),
+    )?
+    .0
+    .into_iter()
+    .map(|requirement| (requirement.package, requirement.marker))
+    .collect())
+}
 
 /// A flat requirement, with its associated marker.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,8 +76,9 @@ impl<'lock> ExportableRequirements<'lock> {
         extras: &ExtrasSpecificationWithDefaults,
         groups: &DependencyGroupsWithDefaults,
         annotate: bool,
-        install_options: &'lock InstallOptions,
+        install_options: &InstallOptions,
     ) -> Result<Self, LockError> {
+        target.lock().ensure_workspace_axes_selected()?;
         let size_guess = target.lock().packages.len();
         let mut graph = Graph::<Node<'lock>, Edge<'lock>>::with_capacity(size_guess, size_guess);
         let mut inverse = vec![None; size_guess];
@@ -82,15 +103,7 @@ impl<'lock> ExportableRequirements<'lock> {
                 continue;
             }
 
-            let dist = target
-                .lock()
-                .find_by_name(root_name)
-                .map_err(|_| LockErrorKind::MultipleRootPackages {
-                    name: root_name.clone(),
-                })?
-                .ok_or_else(|| LockErrorKind::MissingRootPackage {
-                    name: root_name.clone(),
-                })?;
+            let dist = target.root_package(root_name)?;
 
             if root_kind == InstallableRootKind::Production {
                 // Track the activated package in the list of known conflicts.
@@ -179,76 +192,122 @@ impl<'lock> ExportableRequirements<'lock> {
 
         // Add requirements that are exclusive to the workspace root (e.g., dependency groups in
         // non-project workspace roots).
-        let root_requirements = target
-            .lock()
-            .requirements()
-            .iter()
-            .chain(
-                target
+        if let Some(dependencies) = target.lock().workspace_axis_manifest_dependencies()? {
+            for dependency in dependencies {
+                if dependency
+                    .group
+                    .is_some_and(|group| !target.includes_group(None, group, groups))
+                    || prune.contains(&dependency.package.id.name)
+                {
+                    continue;
+                }
+                if let Some((package, group)) = dependency.activated_group {
+                    let item = ConflictItem::from((package.clone(), group.clone()));
+                    let marker = activated_items.entry(item).or_insert(MarkerTree::FALSE);
+                    *marker = marker.or(dependency.marker.combined());
+                }
+                let package_index = target.lock().by_id[&dependency.package.id];
+                let dep_index = *inverse[package_index.0]
+                    .get_or_insert_with(|| graph.add_node(Node::Package(dependency.package)));
+                let marker = target
                     .lock()
-                    .dependency_groups()
-                    .iter()
-                    .filter_map(|(group, deps)| {
-                        if target.includes_group(None, group, groups) {
-                            Some(deps)
-                        } else {
-                            None
-                        }
-                    })
-                    .flatten(),
-            )
-            .filter(|dep| !prune.contains(&dep.name))
-            .collect::<Vec<_>>();
-
-        // Index the lockfile by package name, to avoid making multiple passes over the lockfile.
-        if !root_requirements.is_empty() {
-            let by_name: FxHashMap<_, Vec<_>> = {
-                let names = root_requirements
-                    .iter()
-                    .map(|dep| &dep.name)
-                    .collect::<FxHashSet<_>>();
-                target.lock().packages().iter().fold(
-                    FxHashMap::with_capacity_and_hasher(size_guess, FxBuildHasher),
-                    |mut map, package| {
-                        if names.contains(&package.id.name) {
-                            map.entry(&package.id.name).or_default().push(package);
-                        }
-                        map
-                    },
-                )
-            };
-
-            for requirement in root_requirements {
-                for dist in by_name.get(&requirement.name).into_iter().flatten() {
-                    // Determine whether this entry is relevant for the requirement by
-                    // intersecting and simplifying the markers.
-                    let Some(marker) = target.lock().root_requirement_marker(requirement, dist)
-                    else {
-                        continue;
-                    };
-                    let package_index = target.lock().by_id[&dist.id];
-
-                    // Add the dependency to the graph and get its index.
-                    let dep_index = *inverse[package_index.0]
-                        .get_or_insert_with(|| graph.add_node(Node::Package(dist)));
-
-                    // Add an edge from the root.
-                    graph.add_edge(
-                        root,
-                        dep_index,
-                        Edge::Prod {
+                    .simplify_environment(dependency.marker.combined());
+                graph.add_edge(
+                    root,
+                    dep_index,
+                    match dependency.group {
+                        Some(group) => Edge::Dev {
+                            group,
                             marker,
-                            dep_extras: requirement.extras.iter().collect(),
+                            dep_extras: dependency.extras.clone(),
                         },
-                    );
-
-                    // Push its dependencies on the queue.
-                    if seen.insert((package_index, None)) {
-                        queue.push_back((package_index, None));
+                        None => Edge::Prod {
+                            marker,
+                            dep_extras: dependency.extras.clone(),
+                        },
+                    },
+                );
+                if seen.insert((package_index, None)) {
+                    queue.push_back((package_index, None));
+                }
+                for extra in dependency.extras {
+                    if seen.insert((package_index, Some(extra))) {
+                        queue.push_back((package_index, Some(extra)));
                     }
-                    for extra in &requirement.extras {
-                        if seen.insert((package_index, Some(extra))) {
-                            queue.push_back((package_index, Some(extra)));
+                }
+            }
+        } else {
+            let root_requirements = target
+                .lock()
+                .requirements()
+                .iter()
+                .chain(
+                    target
+                        .lock()
+                        .dependency_groups()
+                        .iter()
+                        .filter_map(|(group, deps)| {
+                            if target.includes_group(None, group, groups) {
+                                Some(deps)
+                            } else {
+                                None
+                            }
+                        })
+                        .flatten(),
+                )
+                .filter(|dep| !prune.contains(&dep.name))
+                .collect::<Vec<_>>();
+
+            // Index the lockfile by package name, to avoid making multiple passes over the lockfile.
+            if !root_requirements.is_empty() {
+                let by_name: FxHashMap<_, Vec<_>> = {
+                    let names = root_requirements
+                        .iter()
+                        .map(|dep| &dep.name)
+                        .collect::<FxHashSet<_>>();
+                    target.lock().packages().iter().fold(
+                        FxHashMap::with_capacity_and_hasher(size_guess, FxBuildHasher),
+                        |mut map, package| {
+                            if names.contains(&package.id.name) {
+                                map.entry(&package.id.name).or_default().push(package);
+                            }
+                            map
+                        },
+                    )
+                };
+
+                for requirement in root_requirements {
+                    for dist in by_name.get(&requirement.name).into_iter().flatten() {
+                        // Determine whether this entry is relevant for the requirement by
+                        // intersecting and simplifying the markers.
+                        let Some(marker) = target.lock().root_requirement_marker(requirement, dist)
+                        else {
+                            continue;
+                        };
+                        let package_index = target.lock().by_id[&dist.id];
+
+                        // Add the dependency to the graph and get its index.
+                        let dep_index = *inverse[package_index.0]
+                            .get_or_insert_with(|| graph.add_node(Node::Package(dist)));
+
+                        // Add an edge from the root.
+                        graph.add_edge(
+                            root,
+                            dep_index,
+                            Edge::Prod {
+                                marker,
+                                dep_extras: requirement.extras.iter().collect(),
+                            },
+                        );
+
+                        // Push its dependencies on the queue.
+                        if seen.insert((package_index, None)) {
+                            queue.push_back((package_index, None));
+                        }
+                        for extra in &requirement.extras {
+                            if seen.insert((package_index, Some(extra))) {
+                                queue.push_back((package_index, Some(extra)));
+                            }
                         }
                     }
                 }
@@ -325,10 +384,10 @@ impl<'lock> ExportableRequirements<'lock> {
                 Node::Package(package) => Some((index, package)),
             })
             .filter(|(_index, package)| {
-                install_options.include_package(
-                    package.as_install_target(),
+                target.lock().includes_install_target(
+                    package,
                     target.project_name(),
-                    target.lock().members(),
+                    install_options,
                 )
             })
             .map(|(index, package)| ExportableRequirement {
