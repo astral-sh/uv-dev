@@ -19,10 +19,19 @@ and a maintainer confirms that uv does not manage such environments automaticall
 workaround is to give each configuration a distinct `UV_PROJECT_ENVIRONMENT` path, as demonstrated
 by a maintainer in astral-sh/uv#9906.
 
-The reporter clarified that the project code is not shared: each run receives a separate copy of
-the Python files. Only read-only data is shared. The `.venv` is linked rather than copied because
-each environment is roughly 10 GB. This rules out the maintainer's example of a shared project
-checkout with a distinct home/cache per hardware environment.
+The reporter clarified that a submission shim copies the current Python scripts to a per-run
+directory and gives Slurm the copied entry-point path, allowing development to continue without
+changing the submitted code. Only read-only data is shared. In contrast, every job executes the
+same binaries from one shared `.venv`, because copying an approximately 10 GB environment to every
+runner is impractical. This rules out the maintainer's example of a shared project checkout with a
+distinct home/cache per hardware environment.
+
+The concrete failure sequence is now clear: an NVIDIA job runs `uv sync --extra cuda` and starts
+executing from the shared environment; before it finishes, an AMD job runs
+`uv sync --extra rocm` against that same environment. The second sync replaces the mutually
+exclusive package set while the first process is still using it, and the reporter observes runtime
+errors. uv's installer lock serializes sync operations but is not held for the lifetime of the
+executing job, so it does not protect a running process from a later sync.
 
 The `centralized-project-envs` preview feature derives an environment from the project path and
 interpreter identity, not from the selected accelerator extra. With a different copied project path
@@ -76,15 +85,16 @@ not dynamically redirect installed packages based on GPU hardware.
 
 Confirmed by the reporter:
 
-- Every run receives its own copy of the Python scripts; project code is not shared between runners.
+- A submission shim copies the current Python scripts into a per-run directory and submits that
+  copied entry point to Slurm; project code is not shared between runners.
 - Data files are shared read-only and are not implicated in the environment race.
-- `.venv` is linked because copying an approximately 10 GB environment to every runner is not
-  practical.
+- All runners use the same binaries in one `.venv`, regardless of whether the assigned GPU is
+  NVIDIA or AMD; copying the approximately 10 GB environment per runner is not practical.
+- The failure occurs while a job is still executing: a second job's sync changes the shared
+  environment from CUDA to ROCm or vice versa underneath the first job.
 
 Still needed to evaluate the available workarounds:
 
-- What does each runner's `.venv` link point to, and do CUDA and ROCm runners currently share that
-  same target?
 - Are the uv cache and home directory shared across runners, and are the cache and environment on a
   filesystem that supports hardlinks or reflinks?
 - Are copied project paths stable and reused across jobs, or unique for every run?
@@ -106,6 +116,19 @@ as the collision-free options available with the current setup.
   `centralized-project-envs` preview feature, but the maintainer cautions that centralized
   environment keys can clash because they are not keyed by the selected accelerator extra. It is
   therefore not yet established as a safe replacement for two explicit targets in this topology.
+
+## Requested capability
+
+The reporter agrees that separate `.venv-cuda` and `.venv-rocm` targets selected through
+`UV_PROJECT_ENVIRONMENT` would address the immediate failure. The remaining request is for uv to
+automatically select or manage the appropriate persistent environment from the detected accelerator
+or chosen mutually exclusive extra. That automatic accelerator-aware selection is not currently
+available and aligns with the broader multi-environment work tracked in astral-sh/uv#20247.
+
+The reporter also notes that the current centralized-project-environment and preview-feature
+documentation does not include an example detailed enough for them to evaluate or deploy it in this
+Slurm topology. This is a documentation gap reported by the user, not yet a maintainer decision to
+expand the documentation.
 
 ## Related
 
