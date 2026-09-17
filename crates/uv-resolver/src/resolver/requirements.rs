@@ -98,7 +98,7 @@ impl<'a> RequirementExpander<'a> {
         &'data self,
         dependencies: &'data [Requirement],
         context: RequirementContext<'data>,
-    ) -> impl Iterator<Item = Cow<'data, Requirement>> {
+    ) -> impl Iterator<Item = (Cow<'data, Requirement>, bool)> {
         let requirements = self.requirements_for_context(dependencies, context);
         let (name, version) = match context {
             // Dependency groups can include the project itself, so they do not flatten recursive
@@ -126,6 +126,7 @@ impl<'a> RequirementExpander<'a> {
         let mut seen = FxHashSet::<(ExtraName, MarkerTree)>::default();
         let mut queue: VecDeque<_> = requirements
             .iter()
+            .map(|(requirement, _)| requirement)
             .filter(|req| name == &req.name)
             .flat_map(|req| req.extras.iter().cloned().map(|extra| (extra, req.marker)))
             .collect();
@@ -133,7 +134,7 @@ impl<'a> RequirementExpander<'a> {
             if !seen.insert((extra.clone(), marker)) {
                 continue;
             }
-            for requirement in self.requirements_for_context(
+            for (requirement, replacement) in self.requirements_for_context(
                 dependencies,
                 RequirementContext::Extra {
                     name,
@@ -182,7 +183,7 @@ impl<'a> RequirementExpander<'a> {
                 }
 
                 // Retain the requirement, including any recursively reached self-constraint.
-                requirements.push(Cow::Owned(requirement));
+                requirements.push((Cow::Owned(requirement), replacement));
             }
         }
 
@@ -190,22 +191,25 @@ impl<'a> RequirementExpander<'a> {
         // `project[bar]>1.0`, as a dependency, we need to propagate `project>1.0`, in addition to
         // transitively expanding `project[bar]`.
         let mut self_constraints = vec![];
-        for req in &requirements {
+        for (req, replacement) in &requirements {
             if name == &req.name && !req.extras.is_empty() && !req.source.is_empty() {
-                self_constraints.push(Requirement {
-                    name: req.name.clone(),
-                    extras: Box::new([]),
-                    groups: req.groups.clone(),
-                    source: req.source.clone(),
-                    origin: req.origin.clone(),
-                    marker: req.marker,
-                });
+                self_constraints.push((
+                    Cow::Owned(Requirement {
+                        name: req.name.clone(),
+                        extras: Box::new([]),
+                        groups: req.groups.clone(),
+                        source: req.source.clone(),
+                        origin: req.origin.clone(),
+                        marker: req.marker,
+                    }),
+                    *replacement,
+                ));
             }
         }
 
         // Drop all the self-requirements now that we flattened them out.
-        requirements.retain(|req| name != &req.name || req.extras.is_empty());
-        requirements.extend(self_constraints.into_iter().map(Cow::Owned));
+        requirements.retain(|(req, _)| name != &req.name || req.extras.is_empty());
+        requirements.extend(self_constraints);
 
         Either::Right(requirements.into_iter())
     }
@@ -216,19 +220,19 @@ impl<'a> RequirementExpander<'a> {
         &'data self,
         dependencies: impl IntoIterator<Item = &'data Requirement> + 'parameters,
         context: RequirementContext<'parameters>,
-    ) -> impl Iterator<Item = Cow<'data, Requirement>> + 'parameters
+    ) -> impl Iterator<Item = (Cow<'data, Requirement>, bool)> + 'parameters
     where
         'data: 'parameters,
     {
         let extra = context.extra();
         self.overrides
-            .apply_for_package(context.override_package(), dependencies)
-            .filter(move |requirement| {
+            .apply_for_package_with_replacements(context.override_package(), dependencies)
+            .filter(move |(requirement, _)| {
                 !self
                     .excludes
                     .contains_for_package(context.package(), &requirement.name)
             })
-            .map(move |mut requirement| {
+            .map(move |(mut requirement, replacement)| {
                 // Split the marker into production and optional components. If we have e.g.
                 // `foo; sys_platform == 'win32' or extra == 'feature'`
                 // we split it into
@@ -255,12 +259,13 @@ impl<'a> RequirementExpander<'a> {
                     requirement.to_mut().marker = marker;
                 }
 
-                requirement
+                (requirement, replacement)
             })
-            .filter(move |requirement| self.is_requirement_applicable(requirement, extra))
-            .flat_map(move |requirement| {
+            .filter(move |(requirement, _)| self.is_requirement_applicable(requirement, extra))
+            .flat_map(move |(requirement, replacement)| {
                 iter::once(requirement.clone())
                     .chain(self.constraints_for_requirement(requirement, extra))
+                    .map(move |requirement| (requirement, replacement))
             })
     }
 

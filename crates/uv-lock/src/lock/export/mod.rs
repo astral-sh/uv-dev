@@ -58,6 +58,7 @@ impl<'lock> ExportableRequirements<'lock> {
         groups: &DependencyGroupsWithDefaults,
         annotate: bool,
         install_options: &'lock InstallOptions,
+        allow_conflicts: bool,
     ) -> Result<Self, LockError> {
         let size_guess = target.lock().packages.len();
         let mut graph = Graph::<Node<'lock>, Edge<'lock>>::with_capacity(size_guess, size_guess);
@@ -319,7 +320,13 @@ impl<'lock> ExportableRequirements<'lock> {
         let mut reachability =
             conflict_marker_reachability(&graph, &[], &activated_items, target.lock().conflicts());
 
-        for set in target.lock().conflicts().iter() {
+        // SBOMs describe all dependencies, including combinations that cannot be installed.
+        for set in target
+            .lock()
+            .conflicts()
+            .iter()
+            .filter(|_| !allow_conflicts)
+        {
             let projects = set
                 .iter()
                 .filter(|item| item.kind().as_ref() == ConflictKindRef::Project)

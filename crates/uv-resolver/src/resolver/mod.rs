@@ -3832,10 +3832,10 @@ impl Fork {
                 return true;
             }
             match conflicting_item.kind() {
-                // Enforce a selected package's self-constraints, but do not let another
-                // package pull an excluded project back into the fork.
+                // Required project dependencies cannot be discarded by a conflict fork.
+                // Replacement overrides omit the parent so their edges can be filtered.
                 ConflictKindRef::Project => {
-                    if dep.parent.as_ref() == Some(conflicting_item.package()) {
+                    if dep.parent.is_some() {
                         return true;
                     }
                 }

@@ -422,10 +422,23 @@ impl Overrides {
     where
         I: IntoIterator<Item = &'a Requirement>,
     {
+        self.apply_for_package_with_replacements(package, requirements)
+            .map(|(requirement, _)| requirement)
+    }
+
+    /// Apply overrides, retaining whether a requirement was replaced with a different package.
+    pub fn apply_for_package_with_replacements<'a, I>(
+        &'a self,
+        package: Option<(&PackageName, &Version)>,
+        requirements: I,
+    ) -> impl Iterator<Item = (Cow<'a, Requirement>, bool)> + use<'a, I>
+    where
+        I: IntoIterator<Item = &'a Requirement>,
+    {
         let package_name = package.map(|(name, _)| name.clone());
         let requirements = self.apply_same_name(requirements, package);
         if self.replacements.is_empty() {
-            return Either::Left(requirements);
+            return Either::Left(requirements.map(|requirement| (requirement, false)));
         }
         Either::Right(requirements.flat_map(move |requirement| {
             self.apply_replacement(requirement, package_name.as_ref())
@@ -436,9 +449,9 @@ impl Overrides {
         &'a self,
         requirement: Cow<'a, Requirement>,
         package: Option<&PackageName>,
-    ) -> Vec<Cow<'a, Requirement>> {
+    ) -> Vec<(Cow<'a, Requirement>, bool)> {
         let Some(replacements) = self.replacements.get(&requirement.name) else {
-            return vec![requirement];
+            return vec![(requirement, false)];
         };
         let RequirementSource::Registry {
             specifier,
@@ -447,10 +460,10 @@ impl Overrides {
             ..
         } = &requirement.source
         else {
-            return vec![requirement];
+            return vec![(requirement, false)];
         };
         if !requirement.extras.is_empty() || !requirement.groups.is_empty() {
-            return vec![requirement];
+            return vec![(requirement, false)];
         }
         let requested = Ranges::from(specifier.clone());
         let mut result = Vec::new();
@@ -466,16 +479,19 @@ impl Overrides {
             // A replacement may depend on the original library. Rewriting that edge would
             // replace the library with a self-dependency and remove it from the environment.
             if package == Some(&entry.replacement.name) {
-                return vec![requirement];
+                return vec![(requirement, false)];
             }
             let marker = requirement.marker.and(entry.replacement.marker);
-            result.push(Cow::Owned(Requirement {
-                marker,
-                ..entry.replacement.clone()
-            }));
+            result.push((
+                Cow::Owned(Requirement {
+                    marker,
+                    ..entry.replacement.clone()
+                }),
+                true,
+            ));
         }
         if result.is_empty() {
-            vec![requirement]
+            vec![(requirement, false)]
         } else {
             result
         }
@@ -621,6 +637,19 @@ mod tests {
             .map(Cow::into_owned)
             .collect::<Vec<_>>();
         assert_eq!(actual, dependencies);
+
+        let dependencies = [requirement("lib<2")?, requirement("virtual-lib1")?];
+        let actual = overrides
+            .apply_for_package_with_replacements(None, &dependencies)
+            .map(|(requirement, replacement)| (requirement.into_owned(), replacement))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            [
+                (requirement("virtual-lib1")?, true),
+                (requirement("virtual-lib1")?, false),
+            ]
+        );
         Ok(())
     }
 
