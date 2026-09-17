@@ -13,6 +13,11 @@ use crate::resolver::ResolverEnvironment;
 pub(crate) struct ForkUrls(FxHashMap<PackageName, VerbatimParsedUrl>);
 
 impl ForkUrls {
+    /// Iterate over every URL recorded for this fork, including packages no longer selected.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&PackageName, &VerbatimParsedUrl)> {
+        self.0.iter()
+    }
+
     /// Get the URL previously used for a package in this fork.
     pub(crate) fn get(&self, package_name: &PackageName) -> Option<&VerbatimParsedUrl> {
         self.0.get(package_name)
