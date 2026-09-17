@@ -11,7 +11,7 @@ use uv_test::uv_snapshot;
 /// - 3.7: 2024-04-11
 #[test]
 fn pip_install_exclude_newer_relative() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let current_timestamp = "2024-05-01T00:00:00Z";
 
     // 3 weeks before 2024-05-01 is 2024-04-10, which is before idna 3.7.
@@ -44,11 +44,7 @@ fn pip_install_exclude_newer_relative() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - idna==3.6
-     + idna==3.7
+    Checked 1 package in [TIME]
     ");
 }
 
@@ -59,7 +55,7 @@ fn pip_install_exclude_newer_relative() {
 /// - 3.7: 2024-04-11
 #[test]
 fn pip_install_exclude_newer_relative_config() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let current_timestamp = "2024-05-01T00:00:00Z";
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
 
@@ -100,11 +96,7 @@ fn pip_install_exclude_newer_relative_config() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - idna==3.6
-     + idna==3.7
+    Checked 1 package in [TIME]
     ");
 
     Ok(())

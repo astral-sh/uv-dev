@@ -54,7 +54,7 @@ fn write_fork_upgrade_project(
 
 #[test]
 fn upgrade_help() {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
 
     uv_snapshot!(
         context.filters(),
@@ -139,9 +139,8 @@ fn upgrade_help() {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn upgrade_selects_normalized_production_dependency() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let pyproject_toml = r#"
         [project]
         name = "example"
@@ -191,7 +190,7 @@ exclude-newer = "2024-03-25T00:00:00Z"
 
 #[test]
 fn upgrade_ignores_disjoint_fork_version_for_selected_requirement() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("fork/fork-upgrade.toml");
     let pyproject_toml =
         write_fork_upgrade_project(&context, &server, "bar==2 ; sys_platform != 'linux'")?;
@@ -216,7 +215,7 @@ fn upgrade_ignores_disjoint_fork_version_for_selected_requirement() -> Result<()
 
 #[test]
 fn upgrade_preserves_constraint_that_admits_multiple_fork_versions() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("fork/fork-upgrade.toml");
     let pyproject_toml = write_fork_upgrade_project(&context, &server, "bar>=1")?;
 
@@ -240,7 +239,7 @@ fn upgrade_preserves_constraint_that_admits_multiple_fork_versions() -> Result<(
 
 #[test]
 fn upgrade_skips_inapplicable_marked_dependency() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
     let pyproject_toml = r#"
         [project]
         name = "project"
@@ -263,7 +262,7 @@ fn upgrade_skips_inapplicable_marked_dependency() -> Result<()> {
 
 #[test]
 fn upgrade_skips_undefined_extra() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
     let pyproject_toml = r#"
         [project]
         name = "project"
@@ -289,7 +288,7 @@ fn upgrade_skips_undefined_extra() -> Result<()> {
 
 #[test]
 fn upgrade_warns_for_skipped_requirement_before_validation_error() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
     let pyproject_toml = r#"
         [project]
         name = "project"
@@ -316,7 +315,7 @@ fn upgrade_warns_for_skipped_requirement_before_validation_error() -> Result<()>
 
 #[test]
 fn upgrade_rejects_conflicting_extra_declarations() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("fork/fork-upgrade.toml");
     let pyproject_toml = format!(
         r#"
@@ -373,7 +372,7 @@ fn upgrade_rejects_conflicting_extra_declarations() -> Result<()> {
 
 #[test]
 fn upgrade_expands_constraint_for_multiple_fork_versions() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("fork/fork-upgrade.toml");
     let pyproject_toml = write_fork_upgrade_project(&context, &server, "bar<2")?;
 
@@ -404,7 +403,7 @@ fn upgrade_expands_constraint_for_multiple_fork_versions() -> Result<()> {
 
 #[test]
 fn upgrade_expands_compatible_constraint_for_multiple_fork_versions() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("fork/filter-sibling-dependencies.toml");
     let pyproject_toml = format!(
         r#"
@@ -458,9 +457,8 @@ fn upgrade_expands_compatible_constraint_for_multiple_fork_versions() -> Result<
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn upgrade_updates_requirement_without_updating_lockfile_or_environment() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let initial_pyproject_toml = r#"
         [project]
         name = "project"
@@ -525,9 +523,8 @@ fn upgrade_updates_requirement_without_updating_lockfile_or_environment() -> Res
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn upgrade_reports_no_solution_without_mutation() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let pyproject_toml = r#"
         [project]
         name = "project"
@@ -556,9 +553,8 @@ fn upgrade_reports_no_solution_without_mutation() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn upgrade_reports_no_version_change_without_mutation() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let pyproject_toml = r#"
         [project]
         name = "project"
@@ -603,7 +599,7 @@ fn upgrade_reports_no_version_change_without_mutation() -> Result<()> {
 
 #[test]
 fn upgrade_rejects_dynamic_project_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let pyproject_toml = r#"
         [project]
         name = "project"
@@ -628,7 +624,7 @@ fn upgrade_rejects_dynamic_project_version() -> Result<()> {
 
 #[test]
 fn upgrade_requires_production_dependency() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
     let pyproject_toml = r#"
         [project]
         name = "example"
@@ -671,7 +667,7 @@ fn upgrade_requires_production_dependency() -> Result<()> {
 
 #[test]
 fn upgrade_updates_multiple_marked_production_dependencies() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("fork/fork-upgrade.toml");
     let pyproject_toml = format!(
         r#"
@@ -755,7 +751,7 @@ fn upgrade_updates_multiple_marked_production_dependencies() -> Result<()> {
 
 #[test]
 fn upgrade_updates_multiple_named_packages_together() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("fork/fork-upgrade.toml");
     let pyproject_toml = format!(
         r#"
@@ -826,7 +822,7 @@ fn upgrade_updates_multiple_named_packages_together() -> Result<()> {
 
 #[test]
 fn upgrade_without_package_selects_all_production_dependencies() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("fork/fork-upgrade.toml");
     let pyproject_toml = format!(
         r#"
@@ -893,7 +889,7 @@ fn upgrade_without_package_selects_all_production_dependencies() -> Result<()> {
 
 #[test]
 fn upgrade_without_package_rejects_direct_url_requirement() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
     let pyproject_toml = r#"
         [project]
         name = "example"
@@ -924,7 +920,7 @@ fn upgrade_without_package_rejects_direct_url_requirement() -> Result<()> {
 
 #[test]
 fn upgrade_without_package_rejects_non_registry_source() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
     let pyproject_toml = r#"
         [project]
         name = "example"
@@ -951,7 +947,7 @@ fn upgrade_without_package_rejects_non_registry_source() -> Result<()> {
 
 #[test]
 fn upgrade_reports_selection_errors_before_interpreter_failure() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
     let pyproject_toml = r#"
         [project]
         name = "project"
@@ -1000,7 +996,7 @@ fn upgrade_reports_selection_errors_before_interpreter_failure() -> Result<()> {
 
 #[test]
 fn upgrade_redacts_malformed_direct_url_dependency() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
     let pyproject_toml = r#"
         [project]
         name = "project"
@@ -1025,7 +1021,7 @@ fn upgrade_redacts_malformed_direct_url_dependency() -> Result<()> {
 
 #[test]
 fn upgrade_exclude_leaves_dependency_as_hard_constraint() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("fork/fork-upgrade.toml");
     let pyproject_toml = format!(
         r#"
@@ -1099,7 +1095,7 @@ fn upgrade_exclude_leaves_dependency_as_hard_constraint() -> Result<()> {
 
 #[test]
 fn upgrade_updates_safe_declarations_and_warns_for_blocked_declarations() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("fork/upgrade-outcomes.toml");
     let pyproject_toml = format!(
         r#"
@@ -1195,7 +1191,7 @@ fn upgrade_updates_safe_declarations_and_warns_for_blocked_declarations() -> Res
 
 #[test]
 fn upgrade_updates_requirement_constrained_by_conflicting_groups() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("fork/upgrade-outcomes.toml");
     let pyproject_toml = format!(
         r#"
@@ -1256,7 +1252,7 @@ fn upgrade_updates_requirement_constrained_by_conflicting_groups() -> Result<()>
 
 #[test]
 fn upgrade_succeeds_when_all_selected_declarations_are_blocked() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("fork/upgrade-outcomes.toml");
     let pyproject_toml = format!(
         r#"
@@ -1304,7 +1300,7 @@ fn upgrade_succeeds_when_all_selected_declarations_are_blocked() -> Result<()> {
 
 #[test]
 fn upgrade_rejects_mixed_updates_after_unrepresentable_blocker() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("fork/upgrade-outcomes.toml");
     let pyproject_toml = format!(
         r#"
@@ -1355,7 +1351,7 @@ fn upgrade_rejects_mixed_updates_after_unrepresentable_blocker() -> Result<()> {
 
 #[test]
 fn upgrade_preserves_hard_constraint_no_solution_failure() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("fork/upgrade-outcomes.toml");
     let pyproject_toml = format!(
         r#"
@@ -1413,7 +1409,7 @@ fn upgrade_preserves_hard_constraint_no_solution_failure() -> Result<()> {
 
 #[test]
 fn upgrade_ignores_unrelated_path_package_when_attributing_versions() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("fork/fork-upgrade.toml");
     let pyproject_toml = format!(
         r#"
@@ -1499,7 +1495,7 @@ fn upgrade_ignores_unrelated_path_package_when_attributing_versions() -> Result<
 
 #[test]
 fn upgrade_rejects_direct_url_requirement() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
     let pyproject_toml = r#"
         [project]
         name = "example"
@@ -1528,7 +1524,7 @@ fn upgrade_rejects_direct_url_requirement() -> Result<()> {
 
 #[test]
 fn upgrade_rejects_self_dependency() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
     let pyproject_toml = r#"
         [project]
         name = "project"
@@ -1551,7 +1547,7 @@ fn upgrade_rejects_self_dependency() -> Result<()> {
 
 #[test]
 fn upgrade_rejects_git_revision() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
     let pyproject_toml = r#"
         [project]
         name = "example"
@@ -1581,7 +1577,7 @@ fn upgrade_rejects_git_revision() -> Result<()> {
 
 #[test]
 fn upgrade_rejects_non_registry_sources() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
 
     allow_duplicates! {
         for source in [
@@ -1627,7 +1623,7 @@ fn upgrade_rejects_non_registry_sources() -> Result<()> {
 
 #[test]
 fn upgrade_skips_non_registry_source_for_undefined_extra() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
     let pyproject_toml = r#"
         [project]
         name = "example"
@@ -1656,9 +1652,9 @@ fn upgrade_skips_non_registry_source_for_undefined_extra() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn upgrade_allows_registry_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let server = uv_test::packse::PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let empty_index = context.temp_dir.child("empty-index");
     empty_index.create_dir_all()?;
     let empty_index = Url::from_directory_path(empty_index.path())
@@ -1679,14 +1675,15 @@ fn upgrade_allows_registry_source() -> Result<()> {
 
         [[tool.uv.index]]
         name = "pypi"
-        url = "https://pypi.org/simple"
+        url = "{index_url}"
         explicit = true
 
         [[tool.uv.index]]
         name = "empty"
         url = "{empty_index}"
         default = true
-    "#
+    "#,
+        index_url = server.index_url(),
     );
     context
         .temp_dir
@@ -1718,8 +1715,8 @@ fn upgrade_allows_registry_source() -> Result<()> {
 
 #[tokio::test]
 async fn upgrade_uses_extra_index_url_credentials_for_registry_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let proxy = crate::pypi_proxy::start().await;
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let proxy = crate::pypi_proxy::start_local().await;
     let pyproject_toml = format!(
         r#"
         [project]
@@ -1766,9 +1763,8 @@ async fn upgrade_uses_extra_index_url_credentials_for_registry_source() -> Resul
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn upgrade_ignores_inapplicable_non_registry_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let pyproject_toml = r#"
         [project]
         name = "example"
@@ -1815,7 +1811,7 @@ fn upgrade_ignores_inapplicable_non_registry_source() -> Result<()> {
 
 #[test]
 fn upgrade_ignores_inapplicable_non_registry_source_without_requires_python() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("fork/upgrade-outcomes.toml");
     let pyproject_toml = format!(
         r#"
@@ -1877,7 +1873,7 @@ fn upgrade_ignores_inapplicable_non_registry_source_without_requires_python() ->
 
 #[test]
 fn upgrade_skips_excluded_declarations_and_updates_applicable_requirement() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("fork/fork-upgrade.toml");
     let pyproject_toml = format!(
         r#"
@@ -1937,7 +1933,7 @@ fn upgrade_skips_excluded_declarations_and_updates_applicable_requirement() -> R
 
 #[test]
 fn upgrade_rejects_workspace_root_non_registry_source() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
     let workspace_pyproject_toml = r#"
         [tool.uv.workspace]
         members = ["project"]
@@ -1989,9 +1985,8 @@ fn upgrade_rejects_workspace_root_non_registry_source() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn upgrade_updates_nested_workspace_member_only() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let workspace_pyproject_toml = r#"
         [tool.uv.workspace]
         members = ["project"]
@@ -2048,7 +2043,7 @@ fn upgrade_updates_nested_workspace_member_only() -> Result<()> {
 
 #[test]
 fn upgrade_requires_current_project() {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
 
     uv_snapshot!(
         context.filters(),
@@ -2066,7 +2061,7 @@ fn upgrade_requires_current_project() {
 
 #[test]
 fn upgrade_rejects_virtual_workspace_root() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
     let pyproject_toml = r"
         [tool.uv.workspace]
         members = []
@@ -2091,7 +2086,7 @@ fn upgrade_rejects_virtual_workspace_root() -> Result<()> {
 
 #[test]
 fn upgrade_rejects_multi_member_workspace() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
     let pyproject_toml = r#"
         [project]
         name = "example"

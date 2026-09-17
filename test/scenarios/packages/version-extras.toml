@@ -1,0 +1,25 @@
+name = "version-extras"
+description = "Packages used by version tests that resolve conflicting extras."
+
+[root]
+requires = ["extra-foo", "extra-bar", "extra-baz"]
+
+[expected]
+satisfiable = true
+
+[expected.packages]
+extra-foo = "1.0.0"
+extra-bar = "1.0.0"
+extra-baz = "1.0.0"
+
+[packages.extra-foo.versions."1.0.0"]
+sdist_backend = "in-tree"
+
+[packages.extra-bar.versions."1.0.0"]
+sdist_backend = "in-tree"
+
+[packages.extra-baz.versions."1.0.0"]
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true

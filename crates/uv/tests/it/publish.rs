@@ -8,7 +8,9 @@ use std::env::current_dir;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use uv_static::EnvVars;
-use uv_test::{uv_snapshot, venv_bin_path};
+use uv_test::uv_snapshot;
+#[cfg(feature = "test-pypi")]
+use uv_test::venv_bin_path;
 use wiremock::matchers::{basic_auth, body_json, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
@@ -72,8 +74,12 @@ async fn mock_trusted_publishing(server: &MockServer, runs: u64) {
 }
 
 #[test]
+#[cfg(feature = "test-pypi")]
 fn username_password_no_longer_supported() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_pypi_access()
+        .with_filtered_sizes();
 
     uv_snapshot!(context.filters(), context.publish()
         .arg("-u")
@@ -95,8 +101,12 @@ fn username_password_no_longer_supported() {
 }
 
 #[test]
+#[cfg(feature = "test-pypi")]
 fn invalid_token() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_pypi_access()
+        .with_filtered_sizes();
 
     uv_snapshot!(context.filters(), context.publish()
         .arg("-u")
@@ -120,7 +130,7 @@ fn invalid_token() {
 /// Emulate a missing `permission` `id-token: write` situation.
 #[test]
 fn mixed_credentials() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.publish()
         .arg("--username")
@@ -143,13 +153,20 @@ fn mixed_credentials() {
 }
 
 /// Emulate a missing `permission` `id-token: write` situation.
-#[test]
-fn missing_trusted_publishing_permission() {
-    let context = uv_test::test_context!("3.12");
+#[tokio::test]
+async fn missing_trusted_publishing_permission() {
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/_/oidc/audience"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "audience": "pypi" })))
+        .expect(1)
+        .mount(&server)
+        .await;
 
     uv_snapshot!(context.filters(), context.publish()
         .arg("--publish-url")
-        .arg("https://test.pypi.org/legacy/")
+        .arg(format!("{}/legacy/", server.uri()))
         .arg("--trusted-publishing")
         .arg("always")
         .arg(dummy_wheel())
@@ -157,7 +174,7 @@ fn missing_trusted_publishing_permission() {
         .env(EnvVars::GITHUB_ACTIONS, "true"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Publishing 1 file to https://test.pypi.org/legacy/
+    Publishing 1 file to http://[LOCALHOST]/legacy/
     error: Failed to obtain token for trusted publishing
       cause: Failed to obtain OIDC token: is the `id-token: write` permission missing?
       cause: GitHub Actions detection error
@@ -168,19 +185,28 @@ fn missing_trusted_publishing_permission() {
 
 /// Check the error when there are no credentials provided on GitHub Actions. Is it an incorrect
 /// trusted publishing configuration?
-#[test]
-fn no_credentials() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+#[tokio::test]
+async fn no_credentials() {
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_sizes();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/_/oidc/audience"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "audience": "pypi" })))
+        .expect(1)
+        .mount(&server)
+        .await;
 
     uv_snapshot!(context.filters(), context.publish()
         .arg("--publish-url")
-        .arg("https://test.pypi.org/legacy/")
+        .arg(format!("{}/legacy/", server.uri()))
         .arg(dummy_wheel())
         // Emulate CI
         .env(EnvVars::GITHUB_ACTIONS, "true"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Publishing 1 file to https://test.pypi.org/legacy/
+    Publishing 1 file to http://[LOCALHOST]/legacy/
     Note: Neither credentials nor keyring are configured, and there was an error fetching the trusted publishing token. If you don't want to use trusted publishing, you can ignore this error, but you need to provide credentials.
     error: Trusted publishing failed
       cause: Failed to obtain OIDC token: is the `id-token: write` permission missing?
@@ -188,9 +214,9 @@ fn no_credentials() {
       cause: insufficient permissions: missing ACTIONS_ID_TOKEN_REQUEST_URL
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
     Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to https://test.pypi.org/legacy/
+    error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to http://[LOCALHOST]/legacy/
       cause: Failed to send POST request
-      cause: Missing credentials for https://test.pypi.org/legacy/
+      cause: Missing credentials for http://[LOCALHOST]/legacy/
     "
     );
 }
@@ -198,7 +224,7 @@ fn no_credentials() {
 /// Hint people that it's not `--skip-existing` but `--check-url`.
 #[test]
 fn skip_existing_redirect() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.publish()
         .arg("--skip-existing")
@@ -213,7 +239,7 @@ fn skip_existing_redirect() {
 
 #[test]
 fn dubious_filenames() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context.temp_dir.child("not-a-wheel.whl").touch().unwrap();
     context.temp_dir.child("data.tar.gz").touch().unwrap();
@@ -244,7 +270,9 @@ fn dubious_filenames() {
 
 #[tokio::test]
 async fn publish_wheels_before_sdist_in_filename_order() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_sizes();
     let server = MockServer::start().await;
     let app_wheel = basic_app_wheel();
     let sdist = basic_package_sdist();
@@ -283,8 +311,12 @@ async fn publish_wheels_before_sdist_in_filename_order() {
 
 /// Check that we (don't) use the keyring and warn for missing keyring behaviors correctly.
 #[test]
+#[cfg(feature = "test-pypi")]
 fn check_keyring_behaviours() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_pypi_access()
+        .with_filtered_sizes();
 
     // Install our keyring plugin
     context
@@ -400,7 +432,7 @@ fn check_keyring_behaviours() {
 
 #[test]
 fn invalid_index() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = indoc! {r#"
         [project]
@@ -462,7 +494,9 @@ fn invalid_index() {
 /// <https://github.com/astral-sh/uv/issues/11836#issuecomment-3022735011>
 #[tokio::test]
 async fn read_index_credential_env_vars_for_check_url() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_sizes();
 
     let server = MockServer::start().await;
 
@@ -559,7 +593,9 @@ async fn read_index_credential_env_vars_for_check_url() {
 
 #[tokio::test]
 async fn check_url_missing_package_ignores_content_type() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_sizes();
 
     let server = MockServer::start().await;
 
@@ -599,7 +635,9 @@ async fn check_url_missing_package_ignores_content_type() {
 
 #[tokio::test]
 async fn check_url_missing_package_follows_redirect() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_sizes();
 
     let gitlab_server = MockServer::start().await;
     let pypi_server = MockServer::start().await;
@@ -651,7 +689,9 @@ async fn check_url_missing_package_follows_redirect() {
 /// Native GitLab CI trusted publishing using `PYPI_ID_TOKEN` revokes the token after all uploads.
 #[tokio::test]
 async fn gitlab_trusted_publishing_pypi_id_token() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_sizes();
 
     let server = MockServer::start().await;
 
@@ -729,7 +769,9 @@ async fn gitlab_trusted_publishing_pypi_id_token() {
 /// Native GitLab CI trusted publishing using `TESTPYPI_ID_TOKEN`
 #[tokio::test]
 async fn gitlab_trusted_publishing_testpypi_id_token() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_sizes();
 
     let server = MockServer::start().await;
 
@@ -790,7 +832,9 @@ async fn gitlab_trusted_publishing_testpypi_id_token() {
 /// Failure to revoke a token must not change the outcome of publishing.
 #[tokio::test]
 async fn trusted_publishing_burn_failure() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_sizes();
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
@@ -871,7 +915,9 @@ async fn trusted_publishing_burn_failure() {
 /// A token is revoked even if reading distribution metadata fails before the upload.
 #[tokio::test]
 async fn trusted_publishing_burn_after_prepare_failure() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_sizes();
     let server = MockServer::start().await;
     let wheel = context.temp_dir.child("a-1.0.0-py3-none-any.whl");
     wheel.touch().expect("Failed to create wheel");
@@ -970,7 +1016,9 @@ async fn trusted_publishing_burn_after_prepare_failure() {
 /// Both successful and failed dry runs finalize the session without uploading.
 #[tokio::test]
 async fn trusted_publishing_dry_run() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_sizes();
     let server = MockServer::start().await;
 
     mock_trusted_publishing(&server, 2).await;
@@ -1042,7 +1090,9 @@ async fn trusted_publishing_dry_run() {
 /// Skipped files are not prepared, and the session still invalidates its token.
 #[tokio::test]
 async fn trusted_publishing_all_skipped() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_sizes();
     let server = MockServer::start().await;
     let non_normalized = context.temp_dir.child("ok-1.01.0-py3-none-any.whl");
     non_normalized.touch().expect("Failed to create wheel");
@@ -1123,7 +1173,9 @@ async fn trusted_publishing_all_skipped() {
 /// Explicit credentials are not revoked, even in a trusted publishing environment.
 #[tokio::test]
 async fn trusted_publishing_does_not_burn_explicit_token() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_sizes();
     let server = MockServer::start().await;
 
     Mock::given(method("POST"))
@@ -1160,7 +1212,9 @@ async fn trusted_publishing_does_not_burn_explicit_token() {
 /// PyPI returns `application/json` errors with a `code` field.
 #[tokio::test]
 async fn upload_error_pypi_json() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_sizes();
     let server = MockServer::start().await;
 
     Mock::given(method("POST"))
@@ -1194,7 +1248,9 @@ async fn upload_error_pypi_json() {
 /// Handle `application/problem+json` errors with RFC 9457 Problem Details.
 #[tokio::test]
 async fn upload_error_problem_details() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_sizes();
     let server = MockServer::start().await;
 
     Mock::given(method("POST"))
@@ -1228,7 +1284,9 @@ async fn upload_error_problem_details() {
 /// A dry run checks valid distribution metadata without uploading the file.
 #[tokio::test]
 async fn dry_run_does_not_upload() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_sizes();
     let server = MockServer::start().await;
 
     Mock::given(method("POST"))
@@ -1256,7 +1314,9 @@ async fn dry_run_does_not_upload() {
 /// stopping at the first failure.
 #[test]
 fn dry_run_reports_all_errors() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_sizes();
 
     // Create two fake wheel files that will fail metadata reading.
     let wheel_a = context.temp_dir.child("a-1.0.0-py3-none-any.whl");
@@ -1293,7 +1353,9 @@ fn dry_run_reports_all_errors() {
 /// Preparation validates attestations, including during dry runs, unless they are disabled.
 #[tokio::test]
 async fn publish_invalid_attestations() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_sizes();
     let server = MockServer::start().await;
     let app_attestation = context
         .temp_dir
@@ -1404,7 +1466,7 @@ async fn publish_invalid_attestations() {
 /// Skip distributions with non-normalized filenames (e.g., leading zeros in version).
 #[test]
 fn non_normalized_filename_skip() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Create wheel and source distribution files with non-normalized versions.
     let wheel = context.temp_dir.child("ok-1.01.0-py3-none-any.whl");

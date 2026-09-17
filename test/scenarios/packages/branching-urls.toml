@@ -1,0 +1,34 @@
+name = "branching-urls"
+description = "Registry packages and wheel URLs for branching source tests."
+
+[root]
+requires = ["branch-splitter==4.3.0", "branch-url==2.0.0"]
+
+[expected]
+satisfiable = true
+
+[expected.packages]
+branch-splitter = "4.3.0"
+branch-url = "2.0.0"
+
+[packages.branch-splitter.versions."4.2.0"]
+requires_python = ">=3.11"
+sdist_backend = "in-tree"
+[packages.branch-splitter.versions."4.3.0"]
+requires_python = ">=3.11"
+sdist_backend = "in-tree"
+
+[packages.branch-url.versions."1.1.1"]
+requires_python = ">=3.11"
+sdist_backend = "in-tree"
+[packages.branch-url.versions."2.0.0"]
+requires_python = ">=3.11"
+
+# Used with git source branching tests.
+sdist_backend = "in-tree"
+[packages.git-branch.versions."1.1.1"]
+requires_python = ">=3.11"
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true
