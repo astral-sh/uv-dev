@@ -7,7 +7,7 @@ use async_zip::base::read::mem::ZipFileReader;
 use futures::executor::block_on;
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
-use predicates::prelude::{PredicateStrExt, predicate};
+use predicates::prelude::predicate;
 use sha2::{Digest, Sha256};
 use std::env::current_dir;
 use std::path::Path;
@@ -112,7 +112,11 @@ fn build_packse_in_tree_sdist() -> Result<()> {
     context
         .assert_command("from build_package import main; main()")
         .success()
-        .stdout(predicate::str::diff("build-package 1.0.0\n").normalize());
+        .stdout(predicate::str::diff(if cfg!(windows) {
+            "build-package 1.0.0\r\n"
+        } else {
+            "build-package 1.0.0\n"
+        }));
     Ok(())
 }
 
