@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use uv_configuration::NoSources;
@@ -44,6 +45,11 @@ pub(crate) struct WorkspaceResolution {
     pub roots: BTreeMap<PackageName, MarkerTree>,
     pub requires_python: RequiresPython,
     pub environments: SupportedEnvironments,
+    pub constraints: Vec<Requirement<VerbatimParsedUrl>>,
+    /// Local workspace identities unavailable throughout this resolution context.
+    pub unavailable_members: BTreeMap<PackageName, PathBuf>,
+    /// The supplied Python domain already includes the command's exact dependency-group policy.
+    pub group_python_complete: bool,
 }
 
 impl Workspace {
@@ -243,6 +249,9 @@ impl Workspace {
         self.with_resolution(WorkspaceResolution {
             roots,
             requires_python,
+            constraints: Vec::new(),
+            unavailable_members: BTreeMap::new(),
+            group_python_complete: false,
             environments: SupportedEnvironments::from_markers(match self.environments() {
                 Some(configured) if !configured.is_empty() => configured
                     .iter()
@@ -254,12 +263,20 @@ impl Workspace {
         })
     }
 
-    /// Return the Python domain of a scoped or grouped workspace.
+    /// Return the Python domain of a scoped or independently resolved workspace.
     pub fn workspace_group_requires_python(
         &self,
     ) -> Result<Option<RequiresPython>, WorkspaceError> {
         if let Some(requires_python) = self.resolution_requires_python() {
             return Ok(Some(requires_python.clone()));
+        }
+        if let Some(axes) = self.resolution_axes()? {
+            // Python-only callers do not carry a source policy. Member guards provide the
+            // physical union; source-aware locking validates the local dependency closure.
+            return Ok(Some(
+                self.environment_for_domain(&axes, &axes.domain(), &NoSources::All)?
+                    .requires_python,
+            ));
         }
         let groups = self.workspace_groups()?;
         Ok(RequiresPython::union(
