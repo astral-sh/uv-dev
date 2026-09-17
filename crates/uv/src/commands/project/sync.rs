@@ -58,8 +58,8 @@ use crate::commands::project::lockfile::FrozenWorkspace;
 use crate::commands::project::{
     EnvironmentUpdate, LinkErrorReporting, MalwareFindings, MissingLockfileSource, PlatformState,
     ProjectEnvironment, ProjectEnvironmentTarget, ProjectError, ScriptEnvironment, UniversalState,
-    detect_conflicts, project_python_roots,
-    script_extra_build_requires, script_specification, update_environment,
+    detect_conflicts, project_python_roots, script_extra_build_requires, script_specification,
+    update_environment,
 };
 use crate::commands::{ExitStatus, UvError};
 use crate::printer::Printer;
@@ -197,11 +197,10 @@ pub(crate) async fn sync(
         SyncTarget::Manifest(SyncManifest::Project(project)) => {
             groups.with_defaults(match locked_default_groups {
                 Some(defaults) => defaults,
-                None
-                    if frozen.is_some()
-                        && package
-                            .iter()
-                            .any(|name| !project.workspace().packages().contains_key(name)) =>
+                None if frozen.is_some()
+                    && package
+                        .iter()
+                        .any(|name| !project.workspace().packages().contains_key(name)) =>
                 {
                     // Frozen sync can select locked members whose metadata is intentionally absent.
                     // Use the available project defaults and leave membership checks to the lockfile.
