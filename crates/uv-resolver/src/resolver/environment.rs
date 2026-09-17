@@ -104,19 +104,10 @@ enum Kind {
         markers: MarkerTree,
         /// Conflicting group inclusions.
         ///
-        /// Inclusions are checked in `included_by_group` only when
-        /// a project-level exclusion exists for the same package:
-        /// an explicit inclusion overrides the project-level
-        /// exclusion, allowing a specific extra/group to remain
-        /// active even when the project as a whole is excluded.
-        ///
-        /// We also record inclusions because if we somehow wind up
-        /// with an inclusion and exclusion rule for the same conflict
-        /// item, then we treat the resulting fork as impossible.
-        /// (You cannot require that an extra is both included and
-        /// excluded. Such a rule can never be satisfied.) Finally,
-        /// we use the inclusion rules to write conflict markers
-        /// after resolution is finished.
+        /// We record inclusions to reject impossible forks: an item cannot
+        /// be both included and excluded, and an included extra requires its
+        /// base project. We also use the inclusion rules to write conflict
+        /// markers after resolution is finished.
         include: Arc<crate::FxHashbrownSet<ConflictItem>>,
         /// Conflicting group exclusions.
         exclude: Arc<crate::FxHashbrownSet<ConflictItem>>,
@@ -190,17 +181,12 @@ impl ResolverEnvironment {
     pub(crate) fn included_by_group(&self, group: ConflictItemRef<'_>) -> bool {
         match self.kind {
             Kind::Specific { .. } => true,
-            Kind::Universal {
-                ref include,
-                ref exclude,
-                ..
-            } => {
+            Kind::Universal { ref exclude, .. } => {
                 if exclude.contains(&group) {
                     return false;
                 }
                 // When a project-level conflict item is excluded, the
-                // project's extras should be excluded too (unless they
-                // are explicitly included). This is because extras
+                // project's extras should be excluded too. This is because extras
                 // transitively depend on the base package, so leaving
                 // them in a fork that excludes the project would pull
                 // the project's dependencies back in.
@@ -209,13 +195,10 @@ impl ResolverEnvironment {
                 // package — they are independent dependency sets — so
                 // they can safely remain active even when the project
                 // itself is excluded.
-                if matches!(group.kind(), ConflictKindRef::Extra(_)) {
-                    if exclude.contains(&ConflictItemRef::from(group.package())) {
-                        // But if this specific extra is explicitly
-                        // included (e.g., in a conflict between a project
-                        // and one of its own extras), respect the inclusion.
-                        return include.contains(&group);
-                    }
+                if matches!(group.kind(), ConflictKindRef::Extra(_))
+                    && exclude.contains(&ConflictItemRef::from(group.package()))
+                {
+                    return false;
                 }
                 true
             }
@@ -285,13 +268,12 @@ impl ResolverEnvironment {
     /// When a group is excluded from a resolver environment,
     /// `ResolverEnvironment::included_by_group` will return false. The idea
     /// is that a dependency with a corresponding group should be excluded by
-    /// forks in the resolver with this environment. (Include rules also
-    /// affect `included_by_group`: when a project-level exclusion exists,
-    /// an explicit inclusion for a specific extra overrides it.)
+    /// forks in the resolver with this environment.
     ///
     /// If calling this routine results in the same conflict item being both
-    /// included and excluded, then this returns `None` (since it would
-    /// otherwise result in a fork that can never be satisfied).
+    /// included and excluded, or includes an extra while excluding its base
+    /// project, then this returns `None` (since it would otherwise result in a
+    /// fork that can never be satisfied).
     ///
     /// # Panics
     ///
@@ -328,6 +310,12 @@ impl ResolverEnvironment {
                             exclude.insert(item);
                         }
                     }
+                }
+                if include.iter().any(|item| {
+                    matches!(item.kind(), ConflictKind::Extra(_))
+                        && exclude.contains(&ConflictItemRef::from(item.package()))
+                }) {
+                    return None;
                 }
                 let kind = Kind::Universal {
                     initial_forks: Arc::clone(initial_forks),
@@ -707,6 +695,7 @@ mod tests {
     use std::ops::Bound;
     use std::sync::LazyLock;
 
+    use uv_normalize::{ExtraName, GroupName, PackageName};
     use uv_pep440::{LowerBound, UpperBound, Version};
     use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder};
 
@@ -756,6 +745,49 @@ mod tests {
     fn python_requirement(python_version_greater_than_equal: &str) -> PythonRequirement {
         let requires_python = requires_python_lower(python_version_greater_than_equal);
         PythonRequirement::from_marker_environment(&MARKER_ENV, requires_python)
+    }
+
+    #[test]
+    fn excluded_project_rejects_included_extra() {
+        let package = "pkg".parse::<PackageName>().expect("valid package name");
+        let project = ConflictItem::from(package.clone());
+        let extra = ConflictItem::from((
+            package,
+            "feature".parse::<ExtraName>().expect("valid extra name"),
+        ));
+        let env = ResolverEnvironment::universal(vec![]);
+
+        assert!(
+            env.filter_by_group([Ok(extra.clone()), Err(project.clone())])
+                .is_none()
+        );
+        assert!(
+            env.filter_by_group([Err(project.clone()), Ok(extra.clone())])
+                .is_none()
+        );
+        let env = env
+            .filter_by_group([Ok(extra.clone())])
+            .expect("included extra is valid");
+        assert!(env.filter_by_group([Err(project.clone())]).is_none());
+        let env = ResolverEnvironment::universal(vec![])
+            .filter_by_group([Err(project)])
+            .expect("excluded project is valid");
+        assert!(!env.included_by_group(extra.as_ref()));
+        assert!(env.filter_by_group([Ok(extra)]).is_none());
+    }
+
+    #[test]
+    fn excluded_project_allows_included_group() {
+        let package = "pkg".parse::<PackageName>().expect("valid package name");
+        let project = ConflictItem::from(package.clone());
+        let group = ConflictItem::from((
+            package,
+            "dev".parse::<GroupName>().expect("valid group name"),
+        ));
+        let env = ResolverEnvironment::universal(vec![])
+            .filter_by_group([Ok(group.clone()), Err(project)])
+            .expect("groups do not require their base project");
+        assert!(env.included_by_group(group.as_ref()));
     }
 
     /// Tests that narrowing a Python requirement when resolving for a
