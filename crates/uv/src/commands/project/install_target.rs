@@ -216,7 +216,15 @@ impl<'lock> InstallTarget<'lock> {
                 names,
                 lock,
             },
-            Self::Workspace { workspace, .. } => InstallTarget::Workspace { workspace, lock },
+            Self::Workspace {
+                workspace,
+                project_name,
+                ..
+            } => InstallTarget::Workspace {
+                workspace,
+                project_name,
+                lock,
+            },
             Self::NonProjectWorkspace { workspace, .. } => {
                 InstallTarget::NonProjectWorkspace { workspace, lock }
             }

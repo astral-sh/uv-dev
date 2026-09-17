@@ -121,6 +121,11 @@ impl RequiresPython {
                         range = range.union(&child);
                     }
                 }
+                MarkerTreeKind::VersionString(node) => {
+                    for (_, child) in node.edges() {
+                        range = range.union(&project(child, memo));
+                    }
+                }
                 MarkerTreeKind::String(node) => {
                     for (_, child) in node.children() {
                         range = range.union(&project(child, memo));
@@ -729,6 +734,13 @@ mod tests {
         assert_eq!(
             requires_python.to_exact_marker_tree(),
             MarkerTree::from_str("python_version == '3.12' or python_version >= '3.14'")?
+        );
+        let marker =
+            MarkerTree::from_str("platform_release >= '24.0.0' and python_version >= '3.12'")?;
+        let requires_python = RequiresPython::from_marker_tree(marker).expect("nonempty domain");
+        assert_eq!(
+            requires_python.to_exact_marker_tree(),
+            MarkerTree::from_str("python_version >= '3.12'")?
         );
         assert!(RequiresPython::from_marker_tree(MarkerTree::FALSE).is_none());
         assert!(
