@@ -10,6 +10,7 @@ use insta::assert_json_snapshot;
 use predicates::str::contains;
 use serde::Deserialize;
 
+use uv_static::EnvVars;
 use uv_test::packse::{PackseServer, scenario::Scenario};
 use uv_test::{TestContext, copy_dir_ignore};
 
@@ -246,6 +247,7 @@ fn nested_workspaces_prefer_parent_and_backtrack() -> Result<()> {
     context
         .run()
         .current_dir(incompatible.path())
+        .env_remove(EnvVars::VIRTUAL_ENV)
         .args([
             "--no-sync",
             "python",
@@ -404,6 +406,45 @@ fn nested_workspaces_choose_nearest_parent() -> Result<()> {
     "#);
     assert_eq!(fs_err::read(parent.join("uv.lock"))?, parent_lock);
     assert_eq!(fs_err::read(child.join("uv.lock"))?, child_lock);
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn nested_workspaces_follow_canonical_parent() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = index()?;
+    let parent = context.temp_dir.child("parent");
+    let nearer = parent.child("services");
+    let child = nearer.child("child");
+    let alias = parent.child("aliases/child");
+
+    write_workspace(
+        &parent,
+        "parent",
+        &["shared==1.0.0"],
+        &["services", "aliases/*"],
+    )?;
+    write_workspace(&nearer, "nearer", &["shared==2.0.0"], &["child"])?;
+    write_workspace(&child, "child", &["shared>=1"], &[])?;
+    fs_err::create_dir_all(parent.join("aliases"))?;
+    std::os::unix::fs::symlink(child.path(), alias.path())?;
+    lock(&context, parent.path(), &server).assert().success();
+    lock(&context, nearer.path(), &server).assert().success();
+
+    lock(&context, alias.path(), &server).assert().success();
+    let aliased_lock = fs_err::read(child.join("uv.lock"))?;
+    assert_json_snapshot!(registry_versions(child.path())?, @r#"
+    {
+      "shared": [
+        "2.0.0"
+      ]
+    }
+    "#);
+
+    fs_err::remove_file(child.join("uv.lock"))?;
+    lock(&context, child.path(), &server).assert().success();
+    assert_eq!(fs_err::read(child.join("uv.lock"))?, aliased_lock);
     Ok(())
 }
 
