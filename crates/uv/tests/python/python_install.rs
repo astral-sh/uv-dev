@@ -1674,6 +1674,95 @@ async fn python_reinstall_build_variant() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn python_reinstall_exact_key() -> anyhow::Result<()> {
+    for exact in [true, false] {
+        let context = uv_test::test_context_with_versions!(&[])
+            .with_managed_python_dirs()
+            .with_http_retries("0");
+        let platform = platform_key_from_env()?;
+        let stock_key = format!("cpython-3.13.7-{platform}");
+        let custom_key = format!("cpython-3.13.7+custom-{platform}");
+        let key = stock_key.parse::<PythonInstallationKey>()?;
+        for installed_key in [&stock_key, &custom_key] {
+            context
+                .temp_dir
+                .child("managed")
+                .child(installed_key)
+                .create_dir_all()?;
+        }
+
+        let server = MockServer::start().await;
+        let entry = |build_variant: Option<&str>, archive: &str| {
+            serde_json::json!({
+                "name": "cpython",
+                "arch": { "family": key.arch().family().to_string(), "variant": null },
+                "os": key.os().to_string(),
+                "libc": key.libc().to_string(),
+                "major": 3,
+                "minor": 13,
+                "patch": 7,
+                "prerelease": "",
+                "url": format!("{}/{archive}", server.uri()),
+                "sha256": null,
+                "variant": null,
+                "build_variant": build_variant,
+                "default": build_variant.is_none(),
+                "build": null
+            })
+        };
+        let metadata = serde_json::json!({
+            "version": 1,
+            "downloads": {
+                (stock_key.clone()): entry(None, "stock.tar.gz"),
+                (custom_key): entry(Some("custom"), "custom.tar.gz")
+            }
+        });
+        Mock::given(method("GET"))
+            .and(path("/metadata"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(metadata))
+            .mount(&server)
+            .await;
+
+        // Archives return 404 so the request log identifies every selected build.
+        context
+            .python_install()
+            .arg("--reinstall")
+            .arg(if exact { stock_key.as_str() } else { "3.13.7" })
+            .arg("--python-downloads-json-url")
+            .arg(format!("{}/metadata", server.uri()))
+            .assert()
+            .failure();
+
+        let requests = server
+            .received_requests()
+            .await
+            .context("Missing request log")?;
+        let mut request_paths: Vec<_> = requests.iter().map(|request| request.url.path()).collect();
+        request_paths.sort_unstable();
+        if exact {
+            // A full stock key must not select the custom installation.
+            insta::assert_debug_snapshot!(request_paths, @r#"
+            [
+                "/metadata",
+                "/stock.tar.gz",
+            ]
+            "#);
+        } else {
+            // Filling platform fields must not turn a version request into an exact key.
+            insta::assert_debug_snapshot!(request_paths, @r#"
+            [
+                "/custom.tar.gz",
+                "/metadata",
+                "/stock.tar.gz",
+            ]
+            "#);
+        }
+    }
+
+    Ok(())
+}
+
 #[test]
 fn python_reinstall_missing_build_variant() -> anyhow::Result<()> {
     let context = uv_test::test_context_with_versions!(&[])

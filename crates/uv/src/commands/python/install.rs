@@ -534,7 +534,15 @@ async fn perform_install(
 
             let mut matching_installations = existing_installations
                 .iter()
-                .filter(|installation| request.matches_installation(installation))
+                .filter(|installation| {
+                    if let PythonRequest::Key(download_request) = &request.request
+                        && download_request.is_exact_installation_key()
+                    {
+                        download_request.satisfied_by_exact_key(installation.key())
+                    } else {
+                        request.matches_installation(installation)
+                    }
+                })
                 .peekable();
 
             if matching_installations.peek().is_none() {
