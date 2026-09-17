@@ -1,5 +1,5 @@
 name = "marker-growth-cpu"
-description = "Pinned dependency graph for repeated resolution-marker normalization."
+description = "Platform-specific local versions for repeated conflict resolution."
 
 [root]
 requires = []
@@ -7,15 +7,15 @@ requires = []
 [expected]
 satisfiable = true
 
-[packages.growth-engine.versions."2.6.0"]
+[packages.growth-engine.versions."1.0.0"]
 requires_python = ">=3.12"
-requires = ["growth-filelock==3.17.0", "growth-fsspec==2025.2.0", "growth-jinja2==3.1.5", "growth-networkx==3.4.2", "growth-setuptools==75.8.0", "growth-sympy==1.13.1", "growth-typing-extensions==4.12.2"]
+requires = ["growth-shared==1.0.0"]
 sdist = false
 wheel_tags = ["cp312-none-macosx_11_0_arm64", "cp313-none-macosx_11_0_arm64"]
 
-[packages.growth-engine.versions."2.6.0+cpu"]
+[packages.growth-engine.versions."1.0.0+cpu"]
 requires_python = ">=3.12"
-requires = ["growth-filelock==3.17.0", "growth-fsspec==2025.2.0", "growth-jinja2==3.1.5", "growth-networkx==3.4.2", "growth-setuptools==75.8.0", "growth-sympy==1.13.1", "growth-typing-extensions==4.12.2"]
+requires = ["growth-shared==1.0.0"]
 sdist = false
 wheel_tags = ["cp312-cp312-linux_x86_64", "cp312-cp312-manylinux_2_28_aarch64", "cp312-cp312-win_amd64", "cp313-cp313-linux_x86_64", "cp313-cp313-manylinux_2_28_aarch64", "cp313-cp313-win_amd64", "cp313-cp313t-linux_x86_64", "cp313-cp313t-manylinux_2_28_aarch64"]
 
