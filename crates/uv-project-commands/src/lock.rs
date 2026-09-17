@@ -156,7 +156,7 @@ pub(crate) fn lockfile_selection_members(
         }
         members
     } else if packages.is_empty() {
-        project_name.iter().cloned().cloned().collect()
+        project_name.iter().copied().cloned().collect()
     } else {
         packages.iter().cloned().collect()
     }

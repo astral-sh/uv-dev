@@ -167,7 +167,7 @@ pub async fn sync(
             &package,
             all_packages,
         ),
-        SyncTarget::Manifest(SyncManifest::Script(_)) => Default::default(),
+        SyncTarget::Manifest(SyncManifest::Script(_)) => BTreeSet::default(),
     };
     let explicit_workspace_group = workspace_group.is_some();
     let workspace_group = match &target {

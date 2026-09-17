@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::env;
 use std::ffi::OsStr;
 use std::io::Write;
@@ -283,7 +284,7 @@ pub async fn export(
             &package,
             all_packages,
         ),
-        ExportSource::Manifest(ExportTarget::Script(_)) => Default::default(),
+        ExportSource::Manifest(ExportTarget::Script(_)) => BTreeSet::default(),
     };
     let explicit_workspace_group = workspace_group.is_some();
     let workspace_group = match &source {
