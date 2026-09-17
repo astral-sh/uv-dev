@@ -891,7 +891,7 @@ async fn do_lock(
                         .parent_workspace_root(&DiscoveryOptions::default(), cache)
                         .await?
                     {
-                        warn_nested_workspaces(preview);
+                        warn_nested_workspaces();
                         Some(ParentLockSnapshot::read(root).await?)
                     } else {
                         None
