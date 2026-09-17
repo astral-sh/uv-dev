@@ -26,7 +26,7 @@ use crate::vendor::{VendorArtifact, vendor_artifacts};
 
 use super::scenario::{Scenario, WheelTag};
 use super::scenarios_dir;
-use super::wheel::{generate_sdist, generate_wheel, sha256_hex};
+use super::wheel::{generate_scenario_sdist, generate_scenario_wheel, sha256_hex};
 
 const PACKSE_UPLOAD_TIME: &str = "2024-03-24T00:00:00Z";
 
@@ -150,15 +150,8 @@ fn build_server_index(scenario: &Scenario) -> ServerIndex {
                 };
 
                 for tag in tags {
-                    let (filename, bytes) = generate_wheel(
-                        package_name,
-                        version,
-                        &meta.requires,
-                        &meta.extras,
-                        meta.requires_python.as_ref(),
-                        tag,
-                        &meta.entry_points,
-                    );
+                    let (filename, bytes) =
+                        generate_scenario_wheel(package_name, version, meta, tag);
                     let sha256 = sha256_hex(&bytes);
                     files.insert(filename.clone(), FileData::Bytes(bytes.into()));
                     dists.push(DistInfo {
@@ -172,14 +165,7 @@ fn build_server_index(scenario: &Scenario) -> ServerIndex {
             }
 
             if let Some(sdist_metadata) = &meta.sdist {
-                let (filename, bytes) = generate_sdist(
-                    package_name,
-                    version,
-                    &meta.requires,
-                    &meta.extras,
-                    meta.requires_python.as_ref(),
-                    &meta.entry_points,
-                );
+                let (filename, bytes) = generate_scenario_sdist(package_name, version, meta);
                 let sha256 = sha256_hex(&bytes);
                 files.insert(filename.clone(), FileData::Bytes(bytes.into()));
                 dists.push(DistInfo {
