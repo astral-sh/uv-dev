@@ -5,6 +5,7 @@ mod error;
 mod lock;
 mod lock_target;
 mod lockfile;
+mod parent_lock;
 mod validated_lock;
 
 pub use discovery::DiscoveredProject;
