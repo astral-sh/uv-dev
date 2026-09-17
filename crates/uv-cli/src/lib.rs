@@ -6071,7 +6071,8 @@ pub struct ToolUpgradeArgs {
         long,
         short = 'C',
         alias = "config-settings",
-        help_heading = "Build options"
+        help_heading = "Build options",
+        value_hint = ValueHint::Other,
     )]
     pub config_setting: Option<Vec<ConfigSettingEntry>>,
 
@@ -6079,7 +6080,8 @@ pub struct ToolUpgradeArgs {
     #[arg(
         long,
         alias = "config-settings-package",
-        help_heading = "Build options"
+        help_heading = "Build options",
+        value_hint = ValueHint::Other,
     )]
     pub config_setting_package: Option<Vec<ConfigSettingPackageEntry>>,
 
@@ -7414,7 +7416,8 @@ pub struct InstallerArgs {
         long,
         short = 'C',
         alias = "config-settings",
-        help_heading = "Build options"
+        help_heading = "Build options",
+        value_hint = ValueHint::Other,
     )]
     config_setting: Option<Vec<ConfigSettingEntry>>,
 
@@ -7422,7 +7425,8 @@ pub struct InstallerArgs {
     #[arg(
         long,
         alias = "config-settings-package",
-        help_heading = "Build options"
+        help_heading = "Build options",
+        value_hint = ValueHint::Other,
     )]
     config_settings_package: Option<Vec<ConfigSettingPackageEntry>>,
 
@@ -7482,7 +7486,7 @@ pub struct ResolverArgs {
 
     /// Allow upgrades for a specific package, ignoring pinned versions in any existing output
     /// file. Implies `--refresh-package`.
-    #[arg(long, short = 'P', help_heading = "Resolver options")]
+    #[arg(long, short = 'P', help_heading = "Resolver options", value_hint = ValueHint::Other)]
     upgrade_package: Vec<Requirement<VerbatimParsedUrl>>,
 
     /// Allow upgrades for all packages in a dependency group, ignoring pinned versions in any
@@ -7501,7 +7505,8 @@ pub struct ResolverArgs {
         long,
         short = 'C',
         alias = "config-settings",
-        help_heading = "Build options"
+        help_heading = "Build options",
+        value_hint = ValueHint::Other,
     )]
     config_setting: Option<Vec<ConfigSettingEntry>>,
 
@@ -7509,7 +7514,8 @@ pub struct ResolverArgs {
     #[arg(
         long,
         alias = "config-settings-package",
-        help_heading = "Build options"
+        help_heading = "Build options",
+        value_hint = ValueHint::Other,
     )]
     config_settings_package: Option<Vec<ConfigSettingPackageEntry>>,
 
