@@ -7,9 +7,10 @@ Classification: enhancement
 ## Summary
 
 The reporter sets both `UV_NATIVE_TLS` and `UV_SYSTEM_CERTS` so the same environment works with
-multiple uv versions. uv 0.12.15 emits the `UV_NATIVE_TLS` deprecation warning on every invocation,
-even though the replacement variable is also present, and the reporter requests that this warning
-be suppressed for that compatibility setup.
+multiple uv versions, because they may not control which uv version is installed on user systems.
+uv 0.12.15 emits the `UV_NATIVE_TLS` deprecation warning on every invocation, even though the
+replacement variable is also present, and the reporter requests that this warning be suppressed
+for that compatibility setup.
 
 No duplicate was found. astral-sh/uv#18550 introduced `UV_SYSTEM_CERTS` as the clearer replacement
 while retaining `UV_NATIVE_TLS` as a legacy alias. astral-sh/uv#18705 subsequently added the exact
@@ -18,16 +19,20 @@ which certificate setting is effective, with no check for `UV_SYSTEM_CERTS`.
 
 The latest maintainer feedback leans against suppressing the warning. The warning is considered
 meaningful because it tells users to remove `UV_NATIVE_TLS`, and the maintainer asked why the
-reporter cannot remove it once `UV_SYSTEM_CERTS` is configured. The report already gives a
-mixed-version uv deployment as the reason for retaining both variables, so the remaining decision
-is whether compatibility with older uv versions warrants an exception to the deprecation warning.
+reporter cannot remove it once `UV_SYSTEM_CERTS` is configured. The reporter clarified that the uv
+version installed on downstream user systems may be outside their control. They could conditionally
+set the variable after checking the uv version, but consider that substantially more complex than
+setting both aliases. The remaining decision is whether this deployment constraint warrants an
+exception to the deprecation warning.
 
 ## Maintainer position
 
 A repository maintainer expressed reluctance to remove the warning because it communicates the
 intended migration action: remove `UV_NATIVE_TLS`. No final decision or alternative workaround was
 provided. The open point is the reporter's stated need to share one environment configuration
-across uv versions that predate and postdate `UV_SYSTEM_CERTS`.
+across user systems running uv versions that predate and postdate `UV_SYSTEM_CERTS`. The reporter
+identified detecting the installed uv version and setting only the corresponding variable as a
+possible workaround, but considers that added conditional configuration undesirable.
 
 ## Classification
 
@@ -37,9 +42,9 @@ would refine that behavior for mixed-version environments by suppressing a warni
 replacement setting already makes the legacy alias redundant. No existing issue or pull request
 tracks this special case, so this is not a duplicate.
 
-Maintainer feedback reinforces that the current warning is intentional and indicates that the
-requested exception may not be accepted without a stronger reason to retain `UV_NATIVE_TLS` than
-the mixed-version constraint already reported.
+Maintainer feedback reinforces that the current warning is intentional. The reporter's follow-up
+clarifies that retaining `UV_NATIVE_TLS` is driven by lack of control over downstream uv versions,
+rather than an unwillingness to migrate systems whose versions are known.
 
 The distinction between variables merely being present and their Boolean values matters to a
 future implementation: suppression should not hide the warning in combinations where
