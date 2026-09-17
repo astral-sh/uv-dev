@@ -16,7 +16,7 @@ use uv_pep440::Version;
 use uv_platform_tags::Tags;
 use uv_types::InstalledPackagesProvider;
 
-use crate::preferences::{Entry, PreferenceSource, Preferences};
+use crate::preferences::{Entry, PreferenceSource};
 use crate::prerelease::{PrereleaseSelection, PrereleaseStrategy};
 use crate::pubgrub::Range;
 use crate::resolution_mode::ResolutionStrategy;
@@ -84,7 +84,7 @@ impl CandidateSelector {
         package_name: &'a PackageName,
         range: &Range<Version>,
         version_maps: &'a [VersionMap],
-        preferences: &'a Preferences,
+        preferences: &'a [Entry],
         installed_packages: &'a InstalledPackages,
         exclusions: &'a Exclusions,
         index: Option<&'a IndexUrl>,
@@ -187,7 +187,7 @@ impl CandidateSelector {
         package_name: &'a PackageName,
         range: &Range<Version>,
         version_maps: &'a [VersionMap],
-        preferences: &'a Preferences,
+        preferences: &'a [Entry],
         installed_packages: &'a InstalledPackages,
         reinstall: bool,
         index: Option<&'a IndexUrl>,
@@ -195,8 +195,6 @@ impl CandidateSelector {
         env: &ResolverEnvironment,
         tags: Option<&'a Tags>,
     ) -> Option<Candidate<'a>> {
-        let preferences = preferences.get(package_name);
-
         // If there are multiple preferences for the same package, we need to sort them by priority.
         let preferences = match preferences {
             [] => return None,
