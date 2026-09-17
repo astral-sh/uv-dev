@@ -2796,6 +2796,7 @@ async fn run_project(
                 args.format,
                 args.all_packages,
                 args.package,
+                args.resolution_root,
                 args.prune,
                 args.hashes,
                 args.install_options,

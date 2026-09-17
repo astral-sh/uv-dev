@@ -4761,6 +4761,13 @@ pub struct ExportArgs {
     #[arg(long, conflicts_with = "all_packages", value_hint = ValueHint::Other)]
     pub package: Vec<PackageName>,
 
+    /// Use the resolution of these explicit workspace roots when exporting a member's closure.
+    ///
+    /// May be provided more than once. A member reachable from one root, or with an identical
+    /// closure in every containing root, does not need an explicit selection.
+    #[arg(long, value_name = "PACKAGE", conflicts_with_all = ["all_packages", "script", "batch"])]
+    pub resolution_root: Vec<PackageName>,
+
     /// Prune the given package from the dependency tree.
     ///
     /// Pruned packages will be excluded from the exported requirements file, as will any

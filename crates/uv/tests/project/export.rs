@@ -10635,7 +10635,7 @@ fn export_batch_manifest_validation() -> Result<()> {
                |
              3 | extras = ["test"]
                | ^^^^^^
-             unknown field `extras`, expected one of `output-file`, `package`, `all-packages`, `extra`, `no-extra`, `all-extras`, `group`, `no-group`, `only-group`, `all-groups`, `no-default-groups`
+             unknown field `extras`, expected one of `output-file`, `package`, `resolution-root`, `all-packages`, `extra`, `no-extra`, `all-extras`, `group`, `no-group`, `only-group`, `all-groups`, `no-default-groups`
     "#);
 
     // These paths refer to the same output after normalization.

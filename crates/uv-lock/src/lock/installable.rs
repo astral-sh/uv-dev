@@ -103,6 +103,13 @@ pub trait Installable<'lock> {
     /// Return the [`PackageName`] of the root packages in the target.
     fn roots(&self) -> impl Iterator<Item = &PackageName>;
 
+    /// Return the workspace roots whose resolution is used when exporting a smaller closure.
+    ///
+    /// These roots activate conflict markers without adding their dependencies to the export.
+    fn export_context(&self) -> Option<&[PackageName]> {
+        None
+    }
+
     /// Return the package whose dependency groups, but not production dependencies, are included.
     fn group_root(&self, _groups: &DependencyGroupsWithDefaults) -> Option<&PackageName> {
         None

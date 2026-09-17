@@ -157,6 +157,62 @@ albatross
 Since `seeds` was excluded in the `pyproject.toml`, the workspace has two members total: `albatross`
 (the root) and `bird-feeder`.
 
+## Exporting from explicit resolution roots
+
+The experimental `tool.uv.workspace.roots` setting separates discovered workspace members from the
+projects that seed resolution. A virtual member can describe an environment by depending on its
+services and on other virtual members that constrain shared dependencies.
+
+For example, define virtual packages `python-312`, `python-313`, `sqlalchemy-1`, `sqlalchemy-2`,
+`lib-1`, `lib-2`, and `lib-3`. The Python packages declare the corresponding `requires-python`
+range; the library packages depend on the corresponding library version range. Use
+`tool.uv.package = false` for each virtual package and `workspace = true` sources for dependencies
+between workspace members.
+
+Then define a composite root for each required combination:
+
+| Root        | Python | SQLAlchemy | Library | Members     |
+| ----------- | ------ | ---------- | ------- | ----------- |
+| `context-a` | 3.13   | 2.x        | 3.x     | `service-a` |
+| `context-b` | 3.12   | 1.x        | 3.x     | `service-b` |
+
+```toml title="pyproject.toml"
+[tool.uv.workspace]
+members = ["axes/*", "services/*", "contexts/*"]
+roots = ["context-a", "context-b"]
+
+[tool.uv]
+conflicts = [[{ package = "context-a" }, { package = "context-b" }]]
+```
+
+For example, `context-a` declares `requires-python = ">=3.13,<3.14"` and depends on `python-313`,
+`sqlalchemy-2`, `lib-3`, and `service-a`. Services retain their own requirements, so assigning a
+service to an incompatible combination remains an error.
+
+After locking, export a service's dependency closure without including the other members of its
+environment:
+
+```console
+$ uv export --frozen --package service-a
+```
+
+uv infers the containing root when it is unique, or when every containing root produces the same
+locked closure. Otherwise, select the resolution context explicitly:
+
+```console
+$ uv export --frozen --resolution-root context-a --package service-shared
+```
+
+`--resolution-root` can be repeated for compatible roots. It activates their resolution context but
+does not emit their entire dependency closure or inherit their extras and dependency groups. The
+selected roots must contain every requested package. Automatic inference currently supports one
+non-root package at a time; multi-package projections require explicit roots. Batch export entries
+accept the equivalent `resolution-root` list.
+
+Ordinary dependency edges remain additive: a Python-axis root that depends on every service for that
+Python version requires all those services together. Composite roots express the desired
+combinations without changing dependency reachability into an intersection of axes.
+
 ## When (not) to use workspaces
 
 Workspaces are intended to facilitate the development of multiple interconnected packages within a
