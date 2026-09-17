@@ -4979,7 +4979,10 @@ fn require_hashes_empty_find_links() -> Result<()> {
     context
         .temp_dir
         .child("requirements.txt")
-        .write_str("hash-package==1.0.0 --hash=sha256:123")?;
+        .write_str(&format!(
+            "hash-package==1.0.0 --hash=sha256:{}",
+            "0".repeat(64)
+        ))?;
 
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
