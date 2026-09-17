@@ -180,11 +180,10 @@ pub async fn sync(
         SyncTarget::Manifest(SyncManifest::Project(project)) => {
             groups.with_defaults(match locked_default_groups {
                 Some(defaults) => defaults,
-                None
-                    if frozen.is_some()
-                        && package
-                            .iter()
-                            .any(|name| !project.workspace().packages().contains_key(name)) =>
+                None if frozen.is_some()
+                    && package
+                        .iter()
+                        .any(|name| !project.workspace().packages().contains_key(name)) =>
                 {
                     // Frozen sync can select locked members whose metadata is intentionally absent.
                     // Use the available project defaults and leave membership checks to the lockfile.
