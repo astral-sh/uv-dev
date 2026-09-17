@@ -1,0 +1,67 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 3096,
+        "title": "Add PEP 723 support to `uv run`",
+        "url": "https://github.com/astral-sh/uv/issues/3096",
+        "state": "closed",
+        "reason": "Canonical request for running scripts with inline dependency metadata; it establishes the execution model applicable to skill scripts."
+      },
+      {
+        "kind": "pull_request",
+        "number": 4656,
+        "title": "Add PEP 723 support to uv run",
+        "url": "https://github.com/astral-sh/uv/pull/4656",
+        "state": "merged",
+        "reason": "Implemented `uv run foo.py` for PEP 723 scripts, creating the environment needed for declared dependencies."
+      },
+      {
+        "kind": "issue",
+        "number": 4667,
+        "title": "Support PEP 723 scripts in `uv add`",
+        "url": "https://github.com/astral-sh/uv/issues/4667",
+        "state": "closed",
+        "reason": "Canonical request for managing dependencies directly in individual scripts with `uv add --script`."
+      },
+      {
+        "kind": "pull_request",
+        "number": 5995,
+        "title": "Support PEP 723 scripts in `uv add` and `uv remove`",
+        "url": "https://github.com/astral-sh/uv/pull/5995",
+        "state": "merged",
+        "reason": "Implemented dependency addition and removal for scripts, including creating inline metadata when absent."
+      },
+      {
+        "kind": "issue",
+        "number": 10445,
+        "title": "Automatic Inline Dependency Management with uv add and uv sync",
+        "url": "https://github.com/astral-sh/uv/issues/10445",
+        "state": "closed",
+        "reason": "A closely related support request was answered by pointing to `uv add --script`; its additional request to mirror project dependencies automatically was not adopted."
+      },
+      {
+        "kind": "issue",
+        "number": 6318,
+        "title": "Make it possible to lock dependencies in a script",
+        "url": "https://github.com/astral-sh/uv/issues/6318",
+        "state": "closed",
+        "reason": "Canonical discussion for reproducible per-script resolutions, relevant if the skill ships locked dependencies."
+      },
+      {
+        "kind": "pull_request",
+        "number": 10135,
+        "title": "Add support for locking PEP 723 scripts",
+        "url": "https://github.com/astral-sh/uv/pull/10135",
+        "state": "merged",
+        "reason": "Implemented `uv lock --script`, which produces an adjacent lockfile for a skill script."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal terms for ppt-master, Codex/Python skills, skill requirements.txt, dependency conflicts, and script dependency management. Conceptual and fix-oriented searches covered PEP 723, inline script metadata, isolated and cached environments, standalone scripts, uv run, uv add --script, and script locking. Inspected the chains from astral-sh/uv#3096 to astral-sh/uv#4656, astral-sh/uv#4667 to astral-sh/uv#5995, and astral-sh/uv#6318 to astral-sh/uv#10135, plus astral-sh/uv#10445. astral-sh/uv#11383 was ruled out as the canonical match because it requests mapping centrally declared pyproject.toml groups to scripts. astral-sh/uv#8856 was ruled out because it concerns an IDE-visible local environment rather than executing skill scripts in uv-managed isolation."
+  },
+  "type": "question",
+  "type_reason": "The report asks whether an existing workflow is possible and provides no failing uv command or evidence of incorrect behavior. Existing PEP 723 support lets uv declare, run, cache, isolate, and optionally lock script dependencies. No existing issue specifically tracks integration with the named skill, so this is not a duplicate.",
+  "summary": "uv already provides the relevant functionality: PEP 723 scripts can declare dependencies, `uv add --script` manages them, `uv run` executes them in a script-specific environment, and `uv lock --script` optionally locks them. No prior issue specifically concerns ppt-master or skill integration.",
+  "draft_response": "Yes, provided uv is available where the skill runs and the skill invokes its scripts through uv. For per-script isolation, add PEP 723 metadata with `uv add --script path/to/script.py <dependencies>` and run it with `uv run path/to/script.py`. uv will create and reuse the script’s own environment instead of installing those packages into a shared environment. For reproducible resolutions, ship the adjacent lockfile created by `uv lock --script path/to/script.py`.\n\nIf every script intentionally shares one dependency set, the skill directory can instead be a normal uv project with `pyproject.toml` and `uv.lock`, with scripts launched via `uv run`.\n\nThis requires changing the skill’s install or run instructions. Replacing `requirements.txt` alone will not affect a launcher that still calls pip or plain Python. If ppt-master cannot be changed that way, please provide its repository and exact install and run commands so we can identify the integration constraint."
+}
