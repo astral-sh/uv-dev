@@ -428,7 +428,7 @@ fn nested_workspaces_follow_canonical_parent() -> Result<()> {
     write_workspace(&nearer, "nearer", &["shared==2.0.0"], &["child"])?;
     write_workspace(&child, "child", &["shared>=1"], &[])?;
     fs_err::create_dir_all(parent.join("aliases"))?;
-    std::os::unix::fs::symlink(child.path(), alias.path())?;
+    fs_err::os::unix::fs::symlink(child.path(), alias.path())?;
     lock(&context, parent.path(), &server).assert().success();
     lock(&context, nearer.path(), &server).assert().success();
 
