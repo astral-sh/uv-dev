@@ -6,10 +6,27 @@ use either::Either;
 use uv_configuration::{Constraints, Excludes, Overrides};
 use uv_distribution_types::Requirement;
 use uv_normalize::PackageName;
+use uv_pypi_types::RequirementConflict;
 use uv_types::RequestedRequirements;
 
 use crate::preferences::Preferences;
 use crate::{DependencyMode, Exclusions, ResolverEnvironment};
+
+/// Version boundaries across which independently selectable workspace roots may conflict.
+#[derive(Clone, Debug, Default)]
+pub struct WorkspaceRootConflicts {
+    pub(crate) roots: BTreeSet<PackageName>,
+    pub(crate) requirements: Vec<Vec<RequirementConflict>>,
+}
+
+impl WorkspaceRootConflicts {
+    pub fn new(roots: BTreeSet<PackageName>, requirements: Vec<Vec<RequirementConflict>>) -> Self {
+        Self {
+            roots,
+            requirements,
+        }
+    }
+}
 
 /// A manifest of requirements, constraints, and preferences.
 #[derive(Clone, Debug)]
@@ -38,6 +55,9 @@ pub struct Manifest {
 
     /// Members of the project's workspace.
     pub(super) workspace_members: BTreeSet<PackageName>,
+
+    /// Permission to split explicit roots across third-party version boundaries.
+    pub(super) workspace_root_conflicts: WorkspaceRootConflicts,
 
     /// The installed packages to exclude from consideration during resolution.
     ///
@@ -73,6 +93,7 @@ impl Manifest {
             preferences,
             project,
             workspace_members,
+            workspace_root_conflicts: WorkspaceRootConflicts::default(),
             exclusions,
             lookaheads: Vec::new(),
         }
@@ -89,6 +110,7 @@ impl Manifest {
             project: None,
             exclusions: Exclusions::default(),
             workspace_members: BTreeSet::new(),
+            workspace_root_conflicts: WorkspaceRootConflicts::default(),
             lookaheads: Vec::new(),
         }
     }
@@ -96,6 +118,12 @@ impl Manifest {
     #[must_use]
     pub fn with_constraints(mut self, constraints: Constraints) -> Self {
         self.constraints = constraints;
+        self
+    }
+
+    #[must_use]
+    pub fn with_workspace_root_conflicts(mut self, conflicts: WorkspaceRootConflicts) -> Self {
+        self.workspace_root_conflicts = conflicts;
         self
     }
 

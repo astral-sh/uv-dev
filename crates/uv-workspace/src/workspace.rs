@@ -23,7 +23,10 @@ use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, GroupName, PackageName};
 use uv_once_map::OnceMap;
 use uv_pep440::VersionSpecifiers;
 use uv_pep508::{MarkerExpression, MarkerTree, MarkerValueVersion, VerbatimUrl};
-use uv_pypi_types::{ConflictError, Conflicts, SupportedEnvironments, VerbatimParsedUrl};
+use uv_pypi_types::{
+    ConflictError, Conflicts, RequirementConflict, SchemaConflicts, SupportedEnvironments,
+    VerbatimParsedUrl,
+};
 use uv_static::EnvVars;
 use uv_warnings::warn_user_once;
 
@@ -807,6 +810,17 @@ impl Workspace {
             conflicting.append(&mut member.pyproject_toml.conflicts()?);
         }
         Ok(conflicting)
+    }
+
+    /// Returns the dependency version boundaries across which workspace roots may be split.
+    pub fn requirement_conflicts(&self) -> Vec<Vec<RequirementConflict>> {
+        self.is_non_project()
+            .then_some(&self.pyproject_toml)
+            .into_iter()
+            .chain(self.packages.values().map(|member| &member.pyproject_toml))
+            .filter_map(|pyproject| pyproject.tool.as_ref()?.uv.as_ref()?.conflicts.as_ref())
+            .flat_map(SchemaConflicts::requirement_conflicts)
+            .collect()
     }
 
     /// Returns an iterator over the `requires-python` values for each member of the workspace.

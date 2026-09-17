@@ -7,8 +7,14 @@ use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 #[cfg(feature = "schemars")]
 use std::borrow::Cow;
 use std::fmt;
+use std::str::FromStr;
 use std::{collections::BTreeSet, hash::Hash, rc::Rc};
 use uv_normalize::{ExtraName, GroupName, PackageName};
+use uv_pep440::{
+    Operator, Version, VersionSpecifier, VersionSpecifiers, canonicalize_version_ranges,
+};
+use uv_pep508::{Requirement, VerbatimUrl, VersionOrUrl};
+use version_ranges::Ranges;
 
 use crate::dependency_groups::{DependencyGroupSpecifier, DependencyGroups};
 
@@ -521,6 +527,7 @@ pub struct ConflictEntry {
     package: Option<PackageName>,
     extra: Option<ExtraName>,
     group: Option<GroupName>,
+    requirement: Option<RequirementConflict>,
 }
 
 impl fmt::Display for ConflictEntry {
@@ -534,6 +541,9 @@ impl fmt::Display for ConflictEntry {
         }
         if let Some(group) = &self.group {
             parts.push(format!("group = \"{group}\""));
+        }
+        if let Some(requirement) = &self.requirement {
+            parts.push(format!("requirement = \"{requirement}\""));
         }
         if parts.is_empty() {
             write!(f, "{{}}")
@@ -567,6 +577,129 @@ pub enum ConflictError {
     FoundExtraAndGroup,
     #[error("Expected `ConflictSet` to contain `ConflictItem` to replace")]
     ReplaceMissingConflictItem,
+    #[error("A requirement conflict must be a versioned package without extras, markers, or URLs")]
+    InvalidRequirement,
+    #[error("A `requirement` conflict cannot also specify `package`, `extra`, or `group`")]
+    MixedRequirementEntry,
+    #[error("Requirement conflicts must be declared in a separate conflict set")]
+    MixedRequirementSet,
+    #[error("All requirements in a conflict set must refer to the same package")]
+    DifferentRequirementPackages,
+    #[error("Requirement conflict ranges must be disjoint: `{0}` and `{1}`")]
+    OverlappingRequirements(RequirementConflict, RequirementConflict),
+    #[error("Requirement conflict ranges must cover every version of `{0}`")]
+    NonExhaustiveRequirements(PackageName),
+    #[error("Requirement conflicts must be lowered before writing the lockfile")]
+    UnloweredRequirement,
+}
+
+/// A version constraint that may be resolved separately from another constraint on the same package.
+#[derive(
+    Debug, Clone, Eq, Hash, PartialEq, PartialOrd, Ord, serde::Deserialize, serde::Serialize,
+)]
+#[serde(try_from = "String", into = "String")]
+pub struct RequirementConflict {
+    package: PackageName,
+    specifiers: VersionSpecifiers,
+}
+
+impl RequirementConflict {
+    pub fn package(&self) -> &PackageName {
+        &self.package
+    }
+
+    /// The user's declaration, retained for display and serialization.
+    /// Use [`Self::version_range`] when resolving or comparing partitions.
+    pub fn specifiers(&self) -> &VersionSpecifiers {
+        &self.specifiers
+    }
+
+    /// Return this declaration's version partition.
+    ///
+    /// Ordered comparisons are complementary boundaries: `>=2` includes the prereleases
+    /// excluded by `<2`, and `>2` includes the post-releases excluded by `<=2`. These rules
+    /// apply only to conflict declarations, not to dependency requirements.
+    pub fn version_range(&self) -> Ranges<Version> {
+        Self::specifiers_range(&self.specifiers)
+    }
+
+    fn specifiers_range(specifiers: &VersionSpecifiers) -> Ranges<Version> {
+        let range = specifiers.iter().fold(Ranges::full(), |range, specifier| {
+            let version = specifier.version();
+            let partition = match specifier.operator() {
+                Operator::GreaterThanEqual => {
+                    Ranges::from(VersionSpecifier::less_than_version(version.clone())).complement()
+                }
+                Operator::GreaterThan => {
+                    Ranges::from(VersionSpecifier::less_than_equal_version(version.clone()))
+                        .complement()
+                }
+                Operator::TildeEqual => {
+                    // `~=V` has the same lower boundary as `>=V` and retains its PEP 440
+                    // compatible-release upper bound.
+                    let lower = Ranges::from(VersionSpecifier::less_than_version(version.clone()))
+                        .complement();
+                    Ranges::from(specifier.clone())
+                        .union(&lower.difference(&Ranges::higher_than(version.clone())))
+                }
+                Operator::Equal
+                | Operator::ExactEqual
+                | Operator::NotEqual
+                | Operator::LessThan
+                | Operator::LessThanEqual
+                | Operator::EqualStar
+                | Operator::NotEqualStar => Ranges::from(specifier.clone()),
+            };
+            range.intersection(&partition)
+        });
+        canonicalize_version_ranges(&range).unwrap_or(range)
+    }
+}
+
+impl TryFrom<String> for RequirementConflict {
+    type Error = ConflictError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        let requirement = Requirement::<VerbatimUrl>::from_str(&value)
+            .map_err(|_| ConflictError::InvalidRequirement)?;
+        let Some(VersionOrUrl::VersionSpecifier(specifiers)) = requirement.version_or_url else {
+            return Err(ConflictError::InvalidRequirement);
+        };
+        if !requirement.extras.is_empty()
+            || !requirement.marker.is_true()
+            || specifiers.is_empty()
+            || Self::specifiers_range(&specifiers).is_empty()
+        {
+            return Err(ConflictError::InvalidRequirement);
+        }
+        Ok(Self {
+            package: requirement.name,
+            specifiers,
+        })
+    }
+}
+
+impl fmt::Display for RequirementConflict {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}{}", self.package, self.specifiers)
+    }
+}
+
+impl From<RequirementConflict> for String {
+    fn from(value: RequirementConflict) -> Self {
+        value.to_string()
+    }
+}
+
+#[cfg(feature = "schemars")]
+impl schemars::JsonSchema for RequirementConflict {
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Borrowed("RequirementConflict")
+    }
+
+    fn json_schema(generator: &mut schemars::generate::SchemaGenerator) -> schemars::Schema {
+        String::json_schema(generator)
+    }
 }
 
 /// Like [`Conflicts`], but for deserialization in `pyproject.toml`.
@@ -591,21 +724,45 @@ impl SchemaConflicts {
         for tool_uv_set in &self.0 {
             let mut set = vec![];
             for item in &tool_uv_set.0 {
-                let package = item
-                    .package
+                let SchemaConflictItem::Package {
+                    package: name,
+                    kind,
+                } = item
+                else {
+                    continue;
+                };
+                let package = name
                     .as_ref()
                     .or(package)
                     .ok_or_else(|| ConflictError::MissingPackage(ConflictEntry::from(item)))?
                     .clone();
                 set.push(ConflictItem {
                     package,
-                    kind: item.kind.clone(),
+                    kind: kind.clone(),
                 });
+            }
+            if set.is_empty() {
+                continue;
             }
             let set = ConflictSet::try_from(set)?;
             conflicting.push(set);
         }
         Ok(conflicting)
+    }
+
+    /// Returns the declared exhaustive partitions of third-party package versions.
+    pub fn requirement_conflicts(&self) -> impl Iterator<Item = Vec<RequirementConflict>> + '_ {
+        self.0.iter().filter_map(|set| {
+            let requirements = set
+                .0
+                .iter()
+                .filter_map(|item| match item {
+                    SchemaConflictItem::Requirement(requirement) => Some(requirement.clone()),
+                    SchemaConflictItem::Package { .. } => None,
+                })
+                .collect::<Vec<_>>();
+            (!requirements.is_empty()).then_some(requirements)
+        })
     }
 
     /// Convert the public schema "conflicting" type to our internal fully
@@ -655,9 +812,12 @@ struct SchemaConflictSet(Vec<SchemaConflictItem>);
     try_from = "ConflictItemWire",
     into = "ConflictItemWire"
 )]
-struct SchemaConflictItem {
-    package: Option<PackageName>,
-    kind: ConflictKind,
+enum SchemaConflictItem {
+    Package {
+        package: Option<PackageName>,
+        kind: ConflictKind,
+    },
+    Requirement(RequirementConflict),
 }
 
 #[cfg(feature = "schemars")]
@@ -690,6 +850,39 @@ impl TryFrom<Vec<SchemaConflictItem>> for SchemaConflictSet {
             1 => return Err(ConflictError::OneItem),
             _ => {}
         }
+        let requirements = items
+            .iter()
+            .filter_map(|item| match item {
+                SchemaConflictItem::Requirement(requirement) => Some(requirement),
+                SchemaConflictItem::Package { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        if !requirements.is_empty() {
+            if requirements.len() != items.len() {
+                return Err(ConflictError::MixedRequirementSet);
+            }
+            for (index, left) in requirements.iter().enumerate() {
+                for right in &requirements[index + 1..] {
+                    if left.package != right.package {
+                        return Err(ConflictError::DifferentRequirementPackages);
+                    }
+                    if !left.version_range().is_disjoint(&right.version_range()) {
+                        return Err(ConflictError::OverlappingRequirements(
+                            (*left).clone(),
+                            (*right).clone(),
+                        ));
+                    }
+                }
+            }
+            let covered = requirements.iter().fold(Ranges::empty(), |covered, item| {
+                covered.union(&item.version_range())
+            });
+            if covered != Ranges::full() {
+                return Err(ConflictError::NonExhaustiveRequirements(
+                    requirements[0].package.clone(),
+                ));
+            }
+        }
         Ok(Self(items))
     }
 }
@@ -708,27 +901,13 @@ struct ConflictItemWire {
     extra: Option<ExtraName>,
     #[serde(default)]
     group: Option<GroupName>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    requirement: Option<RequirementConflict>,
 }
 
 impl From<&SchemaConflictItem> for ConflictEntry {
     fn from(item: &SchemaConflictItem) -> Self {
-        match &item.kind {
-            ConflictKind::Project => Self {
-                package: item.package.clone(),
-                extra: None,
-                group: None,
-            },
-            ConflictKind::Extra(extra) => Self {
-                package: item.package.clone(),
-                extra: Some(extra.clone()),
-                group: None,
-            },
-            ConflictKind::Group(group) => Self {
-                package: item.package.clone(),
-                extra: None,
-                group: Some(group.clone()),
-            },
-        }
+        Self::from(&ConflictItemWire::from(item.clone()))
     }
 }
 
@@ -738,6 +917,7 @@ impl From<&ConflictItemWire> for ConflictEntry {
             package: item.package.clone(),
             extra: item.extra.clone(),
             group: item.group.clone(),
+            requirement: item.requirement.clone(),
         }
     }
 }
@@ -746,6 +926,9 @@ impl TryFrom<ConflictItemWire> for ConflictItem {
     type Error = ConflictError;
 
     fn try_from(wire: ConflictItemWire) -> Result<Self, ConflictError> {
+        if wire.requirement.is_some() {
+            return Err(ConflictError::UnloweredRequirement);
+        }
         let Some(package) = wire.package else {
             return Err(ConflictError::MissingPackage(ConflictEntry::from(&wire)));
         };
@@ -765,16 +948,19 @@ impl From<ConflictItem> for ConflictItemWire {
                 package: Some(item.package),
                 extra: Some(extra),
                 group: None,
+                requirement: None,
             },
             ConflictKind::Group(group) => Self {
                 package: Some(item.package),
                 extra: None,
                 group: Some(group),
+                requirement: None,
             },
             ConflictKind::Project => Self {
                 package: Some(item.package),
                 extra: None,
                 group: None,
+                requirement: None,
             },
         }
     }
@@ -784,6 +970,12 @@ impl TryFrom<ConflictItemWire> for SchemaConflictItem {
     type Error = ConflictError;
 
     fn try_from(wire: ConflictItemWire) -> Result<Self, ConflictError> {
+        if let Some(requirement) = wire.requirement {
+            if wire.package.is_some() || wire.extra.is_some() || wire.group.is_some() {
+                return Err(ConflictError::MixedRequirementEntry);
+            }
+            return Ok(Self::Requirement(requirement));
+        }
         let package = wire.package;
         match (wire.extra, wire.group) {
             (Some(_), Some(_)) => Err(ConflictError::FoundExtraAndGroup),
@@ -791,16 +983,16 @@ impl TryFrom<ConflictItemWire> for SchemaConflictItem {
                 let Some(package) = package else {
                     return Err(ConflictError::MissingPackageAndExtraAndGroup);
                 };
-                Ok(Self {
+                Ok(Self::Package {
                     package: Some(package),
                     kind: ConflictKind::Project,
                 })
             }
-            (Some(extra), None) => Ok(Self {
+            (Some(extra), None) => Ok(Self::Package {
                 package,
                 kind: ConflictKind::Extra(extra),
             }),
-            (None, Some(group)) => Ok(Self {
+            (None, Some(group)) => Ok(Self::Package {
                 package,
                 kind: ConflictKind::Group(group),
             }),
@@ -810,21 +1002,35 @@ impl TryFrom<ConflictItemWire> for SchemaConflictItem {
 
 impl From<SchemaConflictItem> for ConflictItemWire {
     fn from(item: SchemaConflictItem) -> Self {
-        match item.kind {
+        let (package, kind) = match item {
+            SchemaConflictItem::Package { package, kind } => (package, kind),
+            SchemaConflictItem::Requirement(requirement) => {
+                return Self {
+                    package: None,
+                    extra: None,
+                    group: None,
+                    requirement: Some(requirement),
+                };
+            }
+        };
+        match kind {
             ConflictKind::Extra(extra) => Self {
-                package: item.package,
+                package,
                 extra: Some(extra),
                 group: None,
+                requirement: None,
             },
             ConflictKind::Group(group) => Self {
-                package: item.package,
+                package,
                 extra: None,
                 group: Some(group),
+                requirement: None,
             },
             ConflictKind::Project => Self {
-                package: item.package,
+                package,
                 extra: None,
                 group: None,
+                requirement: None,
             },
         }
     }
@@ -858,9 +1064,98 @@ mod tests {
     use anyhow::Result;
     use rustc_hash::FxHashSet;
     use uv_normalize::{GroupName, PackageName};
+    use uv_pep440::{Version, VersionSpecifiers};
+    use version_ranges::Ranges;
 
-    use super::{ConflictItem, ConflictSet, Conflicts};
+    use super::{ConflictItem, ConflictSet, Conflicts, RequirementConflict, SchemaConflicts};
     use crate::DependencyGroups;
+
+    #[test]
+    fn requirement_conflict_schema() -> Result<()> {
+        let conflicts: SchemaConflicts = serde_json::from_value(serde_json::json!([
+            [{"requirement": "shared-leaf<2"}, {"requirement": "shared-leaf>=2"}],
+            [{"package": "root-a"}, {"package": "root-b"}],
+        ]))?;
+        assert_eq!(conflicts.to_conflicts()?.iter().count(), 1);
+        let requirements = conflicts.requirement_conflicts().collect::<Vec<_>>();
+        assert_eq!(requirements.len(), 1);
+        assert_eq!(requirements[0][0].to_string(), "shared-leaf<2");
+        assert_eq!(requirements[0][1].to_string(), "shared-leaf>=2");
+
+        for partition in [
+            vec!["shared-leaf<=2", "shared-leaf>2"],
+            vec!["shared-leaf<2", "shared-leaf~=2.0", "shared-leaf>=3"],
+            vec!["shared-leaf<2rc1", "shared-leaf>=2rc1"],
+            vec!["shared-leaf<2.dev0", "shared-leaf>=2.dev0"],
+        ] {
+            let value = serde_json::json!([partition
+                .into_iter()
+                .map(|requirement| serde_json::json!({"requirement": requirement}))
+                .collect::<Vec<_>>()]);
+            let _: SchemaConflicts = serde_json::from_value(value)?;
+        }
+
+        let invalid = [
+            serde_json::json!([[{"requirement": "shared-leaf"}, {"requirement": "shared-leaf>=2"}]]),
+            serde_json::json!([[{"requirement": "shared-leaf[extra]<2"}, {"requirement": "shared-leaf>=2"}]]),
+            serde_json::json!([[{"requirement": "shared-leaf<2; python_version >= '3.12'"}, {"requirement": "shared-leaf>=2"}]]),
+            serde_json::json!([[{"requirement": "shared-leaf @ https://example.com/leaf.whl"}, {"requirement": "shared-leaf>=2"}]]),
+            serde_json::json!([[{"requirement": "shared-leaf<2,>=2"}, {"requirement": "shared-leaf>=2"}]]),
+            serde_json::json!([[{"requirement": "shared-leaf<2", "package": "root-a"}, {"requirement": "shared-leaf>=2"}]]),
+            serde_json::json!([[{"requirement": "shared-leaf<2"}, {"package": "root-b"}]]),
+            serde_json::json!([[{"requirement": "shared-leaf<2"}, {"requirement": "other-leaf>=2"}]]),
+            serde_json::json!([[{"requirement": "shared-leaf<3"}, {"requirement": "shared-leaf>=2"}]]),
+            serde_json::json!([[{"requirement": "shared-leaf<2"}, {"requirement": "shared-leaf>=3"}]]),
+        ];
+        let errors = invalid
+            .into_iter()
+            .map(|value| {
+                serde_json::from_value::<SchemaConflicts>(value)
+                    .expect_err("invalid conflict")
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        insta::assert_json_snapshot!(errors, @r#"
+        [
+          "A requirement conflict must be a versioned package without extras, markers, or URLs",
+          "A requirement conflict must be a versioned package without extras, markers, or URLs",
+          "A requirement conflict must be a versioned package without extras, markers, or URLs",
+          "A requirement conflict must be a versioned package without extras, markers, or URLs",
+          "A requirement conflict must be a versioned package without extras, markers, or URLs",
+          "A `requirement` conflict cannot also specify `package`, `extra`, or `group`",
+          "Requirement conflicts must be declared in a separate conflict set",
+          "All requirements in a conflict set must refer to the same package",
+          "Requirement conflict ranges must be disjoint: `shared-leaf<3` and `shared-leaf>=2`",
+          "Requirement conflict ranges must cover every version of `shared-leaf`"
+        ]
+        "#);
+        Ok(())
+    }
+
+    #[test]
+    fn requirement_conflict_boundaries_include_release_variants() -> Result<()> {
+        let lower = RequirementConflict::try_from("shared-leaf<2".to_owned())?.version_range();
+        let upper = RequirementConflict::try_from("shared-leaf>=2".to_owned())?.version_range();
+        let compatible =
+            RequirementConflict::try_from("shared-leaf~=2.0".to_owned())?.version_range();
+        for version in ["2.dev0", "2a1", "2rc1", "2", "2+local", "2.post1"] {
+            let version = Version::from_str(version)?;
+            assert!(!lower.contains(&version));
+            assert!(upper.contains(&version));
+            assert!(compatible.contains(&version));
+        }
+        assert!(!compatible.contains(&Version::from_str("3.dev0")?));
+        let greater = RequirementConflict::try_from("shared-leaf>2".to_owned())?.version_range();
+        assert!(greater.contains(&Version::from_str("2.post0.dev0")?));
+        assert!(!greater.contains(&Version::from_str("2+local")?));
+
+        // Normal dependency requirements still use PEP 440 comparison rules.
+        let requirement = Ranges::from(VersionSpecifiers::from_str(">=2")?);
+        assert!(!requirement.contains(&Version::from_str("2rc1")?));
+        let requirement = Ranges::from(VersionSpecifiers::from_str(">2")?);
+        assert!(!requirement.contains(&Version::from_str("2.post1")?));
+        Ok(())
+    }
 
     fn conflict_set(package: &PackageName, left: &str, right: &str) -> Result<ConflictSet> {
         Ok(ConflictSet::try_from(vec![

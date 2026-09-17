@@ -34,7 +34,9 @@ use uv_pep508::{
     MarkerEnvironment, MarkerExpression, MarkerOperator, MarkerTree, MarkerValueString,
 };
 use uv_platform_tags::{IncompatibleTag, Tags};
-use uv_pypi_types::{ConflictItem, ConflictItemRef, ConflictKindRef, Conflicts, VerbatimParsedUrl};
+use uv_pypi_types::{
+    ConflictItem, ConflictItemRef, ConflictKindRef, ConflictSet, Conflicts, VerbatimParsedUrl,
+};
 use uv_static::EnvVars;
 use uv_torch::TorchStrategy;
 use uv_types::{BuildContext, HashStrategy, InstalledPackagesProvider};
@@ -45,7 +47,7 @@ use crate::dependency_provider::UvDependencyProvider;
 use crate::error::{NoSolutionError, ResolveError, derivation_tree_packages};
 use crate::fork_indexes::ForkIndexes;
 use crate::fork_urls::ForkUrls;
-use crate::manifest::Manifest;
+use crate::manifest::{Manifest, WorkspaceRootConflicts};
 use crate::pins::FilePins;
 use crate::preferences::{PreferenceSource, Preferences};
 use crate::pubgrub::{
@@ -75,6 +77,7 @@ pub use crate::resolver::provider::{
 };
 pub use crate::resolver::reporter::Reporter;
 use crate::resolver::requests::MetadataRequests;
+use crate::resolver::requirement_conflicts::{RequirementFork, RequirementForks};
 use crate::resolver::requirements::{RequirementContext, RequirementExpander};
 use crate::resolver::system::SystemDependency;
 pub(crate) use crate::resolver::urls::Urls;
@@ -98,6 +101,7 @@ mod package_source;
 mod provider;
 mod reporter;
 mod requests;
+mod requirement_conflicts;
 mod requirements;
 mod resolution;
 mod system;
@@ -135,6 +139,7 @@ struct ResolverState<InstalledPackages: InstalledPackagesProvider> {
     python_requirement: PythonRequirement,
     conflicts: Conflicts,
     workspace_members: BTreeSet<PackageName>,
+    workspace_root_conflicts: WorkspaceRootConflicts,
     selector: CandidateSelector,
     index: InMemoryIndex,
     installed_packages: InstalledPackages,
@@ -147,6 +152,11 @@ struct ResolverState<InstalledPackages: InstalledPackagesProvider> {
     options: Options,
     /// The reporter to use for this resolver.
     reporter: Option<Arc<dyn Reporter>>,
+}
+
+enum SolveResult {
+    Complete(Box<ResolverOutput>),
+    Discovered(Vec<ConflictSet>),
 }
 
 impl<'a, Context: BuildContext, InstalledPackages: InstalledPackagesProvider>
@@ -248,6 +258,7 @@ impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
             indexes: Indexes::from_manifest(&manifest, &env, options.dependency_mode),
             project: manifest.project,
             workspace_members: manifest.workspace_members,
+            workspace_root_conflicts: manifest.workspace_root_conflicts,
             requirements: manifest.requirements,
             constraints: manifest.constraints,
             overrides: manifest.overrides,
@@ -324,6 +335,69 @@ impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
 impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackages> {
     #[instrument(skip_all)]
     fn solve(self: Arc<Self>, requests: &MetadataRequests) -> Result<ResolverOutput, ResolveError> {
+        let mut conflicts = self.conflicts.clone();
+        let env = self.env.clone().with_conflicts(&conflicts);
+        if let Some(forks) = self.requirement_forks(&conflicts, &env) {
+            let SolveResult::Discovered(discovered) =
+                self.solve_inner(requests, &conflicts, &env, Some(forks))?
+            else {
+                unreachable!("requirement classification produces selection conflicts");
+            };
+            for conflict in discovered {
+                debug!("Inferring selection conflict from version partitions: {conflict:?}");
+                conflicts.push(conflict);
+            }
+        }
+        let env = self.env.clone().with_conflicts(&conflicts);
+        let SolveResult::Complete(output) = self.solve_inner(requests, &conflicts, &env, None)?
+        else {
+            unreachable!("combined resolution produces a resolver output");
+        };
+        Ok(*output)
+    }
+
+    fn requirement_forks(
+        &self,
+        conflicts: &Conflicts,
+        env: &ResolverEnvironment,
+    ) -> Option<RequirementForks> {
+        if env.marker_environment().is_some()
+            || self.workspace_root_conflicts.roots.is_empty()
+            || self.workspace_root_conflicts.requirements.is_empty()
+        {
+            return None;
+        }
+        let root = PubGrubPackage::from(PubGrubPackageInner::Root(self.project.clone()));
+        let expander = RequirementExpander::new(
+            &self.constraints,
+            &self.overrides,
+            &self.excludes,
+            env,
+            &self.python_requirement,
+        );
+        let dependencies = PubGrubDependency::from_requirements(
+            conflicts,
+            expander.expand(&self.requirements, RequirementContext::Root),
+            None,
+            Some(&root),
+        )
+        .ok()?;
+        let selections = dependencies
+            .iter()
+            .filter_map(PubGrubDependency::conflicting_item)
+            .filter(|item| self.workspace_root_conflicts.roots.contains(item.package()))
+            .map(|item| item.to_owned())
+            .collect();
+        RequirementForks::new(selections, &self.workspace_root_conflicts)
+    }
+
+    fn solve_inner(
+        &self,
+        requests: &MetadataRequests,
+        conflicts: &Conflicts,
+        env: &ResolverEnvironment,
+        mut requirement_forks: Option<RequirementForks>,
+    ) -> Result<SolveResult, ResolveError> {
         debug!(
             "Solving with installed Python version: {}",
             self.python_requirement.exact()
@@ -343,12 +417,23 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         let prefetcher = BatchPrefetcher::new(self.capabilities.clone(), requests.clone());
         let state = ForkState::new(
             pubgrub,
-            self.env.clone(),
+            env.clone(),
             self.python_requirement.clone(),
             prefetcher,
         );
         let mut preferences = self.preferences.clone();
-        let mut forked_states = self.env.initial_forked_states(state)?;
+        let mut forked_states = env.initial_forked_states(state)?;
+        if let Some(requirement_forks) = &requirement_forks {
+            forked_states = forked_states
+                .into_iter()
+                .flat_map(|state| {
+                    requirement_forks.forks().filter_map(move |fork| {
+                        let env = state.env.filter_by_group([Ok(fork.selection.clone())])?;
+                        Some(state.clone().with_env(env).with_requirement_fork(fork))
+                    })
+                })
+                .collect();
+        }
 
         // Apply the same Python-bound scheduling used for dependency-created forks. Since states
         // are popped from the end of the stack, sort lower Python bounds last for `fewest` and
@@ -381,6 +466,10 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                         let result = state.pubgrub.unit_propagation(state.next);
                         match result {
                             Err(err) => {
+                                if state.requirement_fork.is_some() {
+                                    crate::error::drop_derivation_tree(err);
+                                    continue 'FORK;
+                                }
                                 // If unit propagation failed, there is no solution.
                                 return Err(self.convert_no_solution_err(
                                     err,
@@ -417,6 +506,38 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
                         state.reprioritize_conflicts();
 
+                        // Fork before popping a package from PubGrub's decision queue. If the
+                        // new range does not narrow its current term, propagation will not put a
+                        // popped package back in that queue.
+                        let requirement_split = state.requirement_fork.as_ref().and_then(|fork| {
+                            state
+                                .pubgrub
+                                .partial_solution
+                                .prioritized_packages()
+                                .find_map(|(id, _)| {
+                                    let name = state.pubgrub.package_store[id].name_no_root()?;
+                                    requirement_forks
+                                        .as_ref()
+                                        .expect("requirement fork has a classification")
+                                        .split(fork, name)
+                                        .map(|forks| (id, forks))
+                                })
+                        });
+                        if let Some((package, forks)) = requirement_split {
+                            debug!(
+                                "Splitting declared version ranges for {} into {} forks",
+                                state.pubgrub.package_store[package],
+                                forks.len()
+                            );
+                            state.next = package;
+                            forked_states.extend(
+                                forks
+                                    .into_iter()
+                                    .map(|fork| state.clone().with_requirement_fork(fork)),
+                            );
+                            continue 'FORK;
+                        }
+
                         trace!(
                             "Assigned packages: {}",
                             state
@@ -444,6 +565,29 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                 state.env,
                                 start.elapsed().as_secs_f32()
                             );
+
+                            if let Some(fork) = &state.requirement_fork {
+                                // A marker can omit the selected root entirely. Such an empty
+                                // solution is not evidence that the root supports this partition.
+                                if state.pubgrub.partial_solution.extract_solution().any(
+                                    |(id, _)| {
+                                        state.pubgrub.package_store[id].conflicting_item()
+                                            == Some(fork.selection.as_ref())
+                                    },
+                                ) {
+                                    requirement_forks
+                                        .as_mut()
+                                        .expect("requirement fork has a classification")
+                                        .record(
+                                            fork,
+                                            state
+                                                .env
+                                                .try_universal_markers()
+                                                .expect("requirement forks are universal"),
+                                        );
+                                }
+                                continue 'FORK;
+                            }
 
                             let resolution = state.into_resolution();
 
@@ -654,6 +798,8 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
                 // Retrieve that package dependencies.
                 let forked_deps = self.get_dependencies_forking(
+                    conflicts,
+                    state.requirement_fork.as_deref(),
                     next_id,
                     next_package,
                     &version,
@@ -826,6 +972,11 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 }
             }
         }
+        if let Some(requirement_forks) = requirement_forks {
+            return Ok(SolveResult::Discovered(
+                requirement_forks.conflicts(conflicts),
+            ));
+        }
         if resolutions.len() > 1 {
             info!(
                 "Solved your requirements for {} environments",
@@ -862,10 +1013,11 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             &self.index,
             &self.git,
             self.python_requirement.target().clone(),
-            &self.conflicts,
+            conflicts,
             self.selector.resolution_strategy(),
             self.options.clone(),
         )
+        .map(|output| SolveResult::Complete(Box::new(output)))
     }
 
     /// Convert the dependency [`Fork`]s into [`ForkState`]s.
@@ -1736,6 +1888,8 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
     /// Given a candidate package and version, return its dependencies.
     fn get_dependencies_forking(
         &self,
+        conflicts: &Conflicts,
+        requirement_fork: Option<&RequirementFork>,
         id: Id<PubGrubPackage>,
         package: &PubGrubPackage,
         version: &Version,
@@ -1747,6 +1901,8 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         requests: &MetadataRequests,
     ) -> Result<ForkedDependencies, ResolveError> {
         let dependencies = self.get_dependencies(
+            conflicts,
+            requirement_fork,
             id,
             package,
             version,
@@ -1766,7 +1922,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 dependencies,
                 env,
                 python_requirement,
-                &self.conflicts,
+                conflicts,
             ))
         }
     }
@@ -1775,6 +1931,8 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
     #[instrument(skip_all, fields(%package, %version))]
     fn get_dependencies(
         &self,
+        conflicts: &Conflicts,
+        requirement_fork: Option<&RequirementFork>,
         id: Id<PubGrubPackage>,
         package: &PubGrubPackage,
         version: &Version,
@@ -1796,12 +1954,18 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             PubGrubPackageInner::Root(_) => {
                 let requirements = expander.expand(&self.requirements, RequirementContext::Root);
 
-                PubGrubDependency::from_requirements(
-                    &self.conflicts,
-                    requirements,
-                    None,
-                    Some(package),
-                )
+                PubGrubDependency::from_requirements(conflicts, requirements, None, Some(package))
+                    .map(|mut dependencies| {
+                        if let Some(fork) = requirement_fork {
+                            dependencies.retain(|dependency| {
+                                dependency.conflicting_item().is_none_or(|item| {
+                                    !self.workspace_root_conflicts.roots.contains(item.package())
+                                        || item == fork.selection.as_ref()
+                                })
+                            });
+                        }
+                        dependencies
+                    })
             }
 
             PubGrubPackageInner::Package {
@@ -1934,7 +2098,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 let requirements = expander.expand(requirements, context);
 
                 PubGrubDependency::from_requirements(
-                    &self.conflicts,
+                    conflicts,
                     requirements,
                     group.as_ref(),
                     Some(package),
@@ -2630,6 +2794,8 @@ pub(crate) struct ForkState {
     /// in this state. We also ultimately retrieve the final set of version
     /// assignments (to packages) from this state's "partial solution."
     pubgrub: State<UvDependencyProvider>,
+    /// An eager version-partition classification, if this is not the combined solve.
+    requirement_fork: Option<Arc<RequirementFork>>,
     /// The operation to resume when this fork is next visited.
     continuation: ForkContinuation,
     /// The next package on which to run unit propagation.
@@ -2717,6 +2883,7 @@ impl ForkState {
             continuation: ForkContinuation::Propagate,
             next: pubgrub.root_package,
             pubgrub,
+            requirement_fork: None,
             pins: FilePins::default(),
             fork_urls: ForkUrls::default(),
             fork_indexes: ForkIndexes::default(),
@@ -3077,6 +3244,41 @@ impl ForkState {
 
     fn with_continuation(mut self, continuation: ForkContinuation) -> Self {
         self.continuation = continuation;
+        self
+    }
+
+    /// Constrain a declared package without making it a dependency of the synthetic root.
+    /// A selection that never requires the package is therefore compatible with every partition.
+    fn with_requirement_fork(mut self, fork: Arc<RequirementFork>) -> Self {
+        for requirement in fork.requirements.iter() {
+            if self
+                .requirement_fork
+                .as_ref()
+                .is_some_and(|previous| previous.requirements.contains(requirement))
+            {
+                continue;
+            }
+            let package = self
+                .pubgrub
+                .package_store
+                .alloc(PubGrubPackage::from_package(
+                    requirement.package().clone(),
+                    None,
+                    None,
+                    MarkerTree::TRUE,
+                ));
+            self.pubgrub
+                .add_incompatibility(Incompatibility::custom_term(
+                    package,
+                    Term::Positive(Range::from(requirement.version_range()).complement()),
+                    UnavailableReason::Version(UnavailableVersion::RequirementConflict(
+                        requirement.specifiers().clone(),
+                    )),
+                ));
+        }
+        self.continuation = ForkContinuation::Propagate;
+        self.selected_versions.clear();
+        self.requirement_fork = Some(fork);
         self
     }
 

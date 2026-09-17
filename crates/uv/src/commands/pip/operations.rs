@@ -46,7 +46,7 @@ use uv_requirements::{
 use uv_resolver::{
     DependencyMode, Exclusions, FlatIndex, InMemoryIndex, Manifest, NoSolutionError,
     NoSolutionHeader, Options, Preference, Preferences, PythonRequirement, ResolveError, Resolver,
-    ResolverEnvironment, ResolverOutput, UpgradePackages,
+    ResolverEnvironment, ResolverOutput, UpgradePackages, WorkspaceRootConflicts,
 };
 use uv_tool::InstalledTools;
 use uv_types::{BuildContext, HashStrategy, InFlight, InstalledPackagesProvider};
@@ -110,6 +110,7 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
     source_trees: Vec<SourceTree>,
     mut project: Option<PackageName>,
     workspace_members: BTreeSet<PackageName>,
+    workspace_root_conflicts: Option<WorkspaceRootConflicts>,
     extras: &ExtrasSpecification,
     groups: &BTreeMap<PathBuf, DependencyGroups>,
     preferences: Vec<Preference>,
@@ -352,7 +353,7 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
     let exclusions = Exclusions::new(reinstall.clone(), UpgradePackages::for_non_project(upgrade));
 
     // Create a manifest of the requirements.
-    let manifest = Manifest::new(
+    let mut manifest = Manifest::new(
         requirements,
         constraints,
         overrides,
@@ -363,6 +364,9 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
         exclusions,
         lookaheads,
     );
+    if let Some(conflicts) = workspace_root_conflicts {
+        manifest = manifest.with_workspace_root_conflicts(conflicts);
+    }
 
     // Resolve the dependencies.
     let resolution = {
