@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 18705,
+        "title": "Mark `--native-tls` and `UV_NATIVE_TLS` as deprecated",
+        "url": "https://github.com/astral-sh/uv/pull/18705",
+        "state": "merged",
+        "reason": "This introduced the exact warning. Its patch warns whenever UV_NATIVE_TLS is present without checking UV_SYSTEM_CERTS."
+      },
+      {
+        "kind": "issue",
+        "number": 18689,
+        "title": "Document UV_NATIVE_TLS as being deprecated",
+        "url": "https://github.com/astral-sh/uv/issues/18689",
+        "state": "closed",
+        "reason": "This requested the deprecation implemented by astral-sh/uv#18705, but did not discuss conditional warning suppression."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18550,
+        "title": "Upgrade reqwest to 0.13",
+        "url": "https://github.com/astral-sh/uv/pull/18550",
+        "state": "merged",
+        "reason": "This introduced UV_SYSTEM_CERTS while retaining UV_NATIVE_TLS as a legacy alias, explaining the reported mixed-version setup."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for the exact warning, UV_NATIVE_TLS, UV_SYSTEM_CERTS, both-variable configurations, repeated deprecation diagnostics, native/system certificate terminology, backward compatibility, warning suppression, and migration fixes. Inspected the chain astral-sh/uv#17427, astral-sh/uv#17543, astral-sh/uv#18550, astral-sh/uv#18689, and astral-sh/uv#18705. astral-sh/uv#12982 was ruled out because it concerns SSL_CERT_FILE precedence and TLS failures, not warning emission. No existing tracker covers the same suppression request."
+  },
+  "type": "enhancement",
+  "type_reason": "The warning is intentional deprecation behavior added by astral-sh/uv#18705, not a regression. The report requests a refinement for mixed-version environments, and no existing tracker covers that special case.",
+  "summary": "No duplicate was found. astral-sh/uv#18705 introduced the warning after astral-sh/uv#18550 added UV_SYSTEM_CERTS; current source warns whenever UV_NATIVE_TLS is present, even when UV_SYSTEM_CERTS is also present.",
+  "draft_response": "Thanks. astral-sh/uv#18705 intentionally added this warning after astral-sh/uv#18550 introduced UV_SYSTEM_CERTS as the clearer replacement. The current settings code warns whenever UV_NATIVE_TLS is present, before resolving whether UV_SYSTEM_CERTS already supplies the effective setting. Keeping both variables for compatibility with older uv versions is a valid migration case. We can use this issue to consider suppressing the warning when the replacement variable makes the legacy alias redundant, while retaining it where UV_NATIVE_TLS can still affect behavior."
+}
