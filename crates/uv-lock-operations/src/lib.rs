@@ -13,4 +13,5 @@ pub use error::{LockError, LockValidationError, MissingLockfileSource};
 pub use lock::{LockMode, LockOperation, LockResult};
 pub use lock_target::LockTarget;
 pub use lockfile::FrozenWorkspace;
+pub use parent_lock::warn_nested_workspaces;
 pub use validated_lock::ValidatedLock;

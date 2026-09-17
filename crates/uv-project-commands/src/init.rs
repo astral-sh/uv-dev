@@ -21,6 +21,7 @@ use uv_distribution_types::RequiresPython;
 use uv_fs::{CWD, Simplified};
 use uv_git::GIT;
 use uv_install_wheel::reserved_script_name;
+use uv_lock_operations::warn_nested_workspaces;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_project_edit::{DependencyTarget, PyProjectTomlMut};
@@ -308,6 +309,10 @@ async fn init_project(
 ) -> Result<()> {
     // Discover the current workspace, if it exists.
     let workspace_cache = WorkspaceCache::default();
+    let discovery_options = DiscoveryOptions {
+        members: MemberDiscovery::Ignore(std::iter::once(path.to_path_buf()).collect()),
+        ..DiscoveryOptions::default()
+    };
     let workspace = {
         let parent = match path.parent() {
             Some(parent) => parent,
@@ -321,17 +326,7 @@ async fn init_project(
                 }
             }
         };
-        match Workspace::discover(
-            parent,
-            &DiscoveryOptions {
-                members: MemberDiscovery::Ignore(std::iter::once(path.to_path_buf()).collect()),
-                ..DiscoveryOptions::default()
-            },
-            cache,
-            &workspace_cache,
-        )
-        .await
-        {
+        match Workspace::discover(parent, &discovery_options, cache, &workspace_cache).await {
             Ok(workspace) => {
                 // Ignore the current workspace if `--no-workspace` was provided.
                 if no_workspace {
@@ -368,6 +363,29 @@ async fn init_project(
         }
     };
 
+    let registered_parent = if no_workspace {
+        None
+    } else {
+        Workspace::prospective_parent_workspace_root(
+            path,
+            workspace.as_deref(),
+            &discovery_options,
+            cache,
+        )
+        .await
+        .context("Failed to discover parent workspace")?
+    };
+    let workspace_kind = if registered_parent.is_some() {
+        InitWorkspaceKind::Explicit
+    } else {
+        InitWorkspaceKind::Implicit
+    };
+    let workspace = if registered_parent.is_some() {
+        None
+    } else {
+        workspace
+    };
+
     let reporter = PythonDownloadReporter::single(printer);
 
     // First, determine if there is an request for Python
@@ -377,12 +395,14 @@ async fn init_project(
     } else if let Some(file) = PythonVersionFile::discover(
         path,
         &VersionFileDiscoveryOptions::default()
-            .with_stop_discovery_at(
+            .with_stop_discovery_at(if registered_parent.is_some() {
+                Some(path)
+            } else {
                 workspace
                     .as_deref()
                     .map(Workspace::install_path)
-                    .map(PathBuf::as_ref),
-            )
+                    .map(PathBuf::as_ref)
+            })
             .with_config_discovery(config_discovery),
     )
     .await?
@@ -412,6 +432,7 @@ async fn init_project(
         project_kind,
         name,
         path,
+        workspace_kind,
         &requires_python,
         description.as_deref(),
         no_description,
@@ -421,6 +442,9 @@ async fn init_project(
         author_from,
         no_readme,
     )?;
+    if registered_parent.is_some() {
+        warn_nested_workspaces();
+    }
 
     if let Some(workspace) = workspace {
         if workspace.excludes(path)? {
@@ -729,11 +753,20 @@ fn initialized_project_error(path: &Path) -> anyhow::Error {
     )
 }
 
+#[derive(Debug, Copy, Clone)]
+enum InitWorkspaceKind {
+    /// The project can be a normal workspace member or an implicit standalone workspace.
+    Implicit,
+    /// The project is an explicitly registered, independently locked workspace root.
+    Explicit,
+}
+
 /// Initialize this project kind at the target path.
 fn init_project_kind(
     project_kind: InitProjectKind,
     name: &PackageName,
     path: &Path,
+    workspace_kind: InitWorkspaceKind,
     requires_python: &RequiresPython,
     description: Option<&str>,
     no_description: bool,
@@ -824,6 +857,10 @@ fn init_project_kind(
             // Generate `src` files
             generate_package_scripts(name, path, build_backend, true)?;
         }
+    }
+    match workspace_kind {
+        InitWorkspaceKind::Implicit => {}
+        InitWorkspaceKind::Explicit => pyproject.push_str("\n[tool.uv.workspace]\n"),
     }
     let mut file = match fs_err::OpenOptions::new()
         .write(true)

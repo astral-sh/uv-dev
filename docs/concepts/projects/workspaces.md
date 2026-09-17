@@ -187,6 +187,9 @@ The `workspaces` entries accept globs and explicit paths relative to the parent 
 directory must be a strict descendant of the parent and contain its own `tool.uv.workspace` table.
 Neither a child root nor its packages can also be ordinary members of the parent.
 
+Running `uv init` at a registered child path creates an independent workspace with an explicit
+`tool.uv.workspace` table. It does not add the child to the parent's `members`.
+
 A child is otherwise an ordinary workspace:
 
 ```toml title="services/legacy/pyproject.toml"
