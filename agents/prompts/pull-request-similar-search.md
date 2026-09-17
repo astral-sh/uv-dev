@@ -7,10 +7,10 @@ modify files, or make any changes on GitHub. Never print, inspect, encode, or ex
 For your final response, produce only a JSON object matching
 `agents/schemas/pull-request-similar-search.json`. Do not wrap it in Markdown or a code fence.
 
-Use the authenticated `gh` CLI to search this repository's open and closed issues and its open,
-closed, and merged pull requests. Follow relevant cross-repository references, including
-`astral-sh/uv-dev`, when they identify an earlier implementation or canonical discussion. Exclude
-the pull request being analyzed from the results.
+Use the authenticated `gh` CLI to search open and closed issues and open, closed, and merged pull
+requests in both `astral-sh/uv` and `astral-sh/uv-dev`. Follow relevant cross-repository references
+when they identify an earlier implementation or canonical discussion. Exclude the pull request being
+analyzed from the results.
 
 Before searching, decompose the change into distinct problems, requested capabilities, affected
 commands or subsystems, triggering conditions, and exact identifiers or error fragments. Search each

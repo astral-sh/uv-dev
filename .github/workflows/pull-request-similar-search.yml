@@ -24,7 +24,9 @@ env:
 
 jobs:
   search:
-    if: github.repository == 'astral-sh/uv' && github.ref == 'refs/heads/main'
+    if: >-
+      (github.repository == 'astral-sh/uv' || github.repository == 'astral-sh/uv-dev') &&
+      github.ref == 'refs/heads/main'
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
     environment: automations
     timeout-minutes: 15

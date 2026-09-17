@@ -80,6 +80,17 @@
     {
       "repository": "uv-dev",
       "on": {
+        "pull_request": ["opened"]
+      },
+      "conditions": {
+        "/pull_request/head/repo/full_name": "astral-sh/uv-dev"
+      },
+      "allow_draft": true,
+      "workflow": "pull-request-similar-search.yml"
+    },
+    {
+      "repository": "uv-dev",
+      "on": {
         "pull_request": ["labeled"]
       },
       "conditions": {
