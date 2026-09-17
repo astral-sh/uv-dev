@@ -530,8 +530,22 @@ impl InternerGuard<'_> {
         i: NodeId,
         f: &impl Fn(&Variable) -> Option<bool>,
     ) -> NodeId {
+        let mut cache = FxHashMap::default();
+        self.restrict_by_cached(i, f, &mut cache)
+    }
+
+    fn restrict_by_cached(
+        &mut self,
+        i: NodeId,
+        f: &impl Fn(&Variable) -> Option<bool>,
+        cache: &mut FxHashMap<NodeId, NodeId>,
+    ) -> NodeId {
         if matches!(i, NodeId::TRUE | NodeId::FALSE) {
             return i;
+        }
+
+        if let Some(&cached) = cache.get(&i) {
+            return cached;
         }
 
         let node = self.shared.node(i);
@@ -540,13 +554,59 @@ impl InternerGuard<'_> {
                 // Restrict this variable to the given output by merging it
                 // with the relevant child.
                 let node = if value { high } else { low };
-                return self.restrict_by(node.negate(i), f);
+                let result = self.restrict_by_cached(node.negate(i), f, cache);
+                cache.insert(i, result);
+                return result;
             }
         }
 
         // Restrict all nodes recursively.
-        let children = node.children.map(i, |node| self.restrict_by(node, f));
-        self.create_node(node.var.clone(), children)
+        let children = node
+            .children
+            .map(i, |node| self.restrict_by_cached(node, f, cache));
+        let result = self.create_node(node.var.clone(), children);
+        cache.insert(i, result);
+        result
+    }
+
+    /// Existentially quantify the variables selected by `remove`.
+    pub(crate) fn quantify_by(&mut self, i: NodeId, remove: &impl Fn(&Variable) -> bool) -> NodeId {
+        let mut cache = FxHashMap::default();
+        self.quantify_by_cached(i, remove, &mut cache)
+    }
+
+    fn quantify_by_cached(
+        &mut self,
+        i: NodeId,
+        remove: &impl Fn(&Variable) -> bool,
+        cache: &mut FxHashMap<NodeId, NodeId>,
+    ) -> NodeId {
+        if matches!(i, NodeId::TRUE | NodeId::FALSE) {
+            return i;
+        }
+        if let Some(&cached) = cache.get(&i) {
+            return cached;
+        }
+
+        let node = self.shared.node(i);
+        let result = if remove(&node.var) {
+            let mut result = NodeId::FALSE;
+            for child in node.children.nodes() {
+                let child = self.quantify_by_cached(child.negate(i), remove, cache);
+                result = self.or(result, child);
+                if result.is_true() {
+                    break;
+                }
+            }
+            result
+        } else {
+            let children = node
+                .children
+                .map(i, |child| self.quantify_by_cached(child, remove, cache));
+            self.create_node(node.var.clone(), children)
+        };
+        cache.insert(i, result);
+        result
     }
 
     /// Restrict a marker by assuming that another marker is true.
@@ -702,27 +762,8 @@ impl InternerGuard<'_> {
     /// true.
     ///
     /// This works by assuming all non-`extra` nodes are always true.
-    pub(crate) fn only_extras(&mut self, mut i: NodeId) -> NodeId {
-        if matches!(i, NodeId::TRUE | NodeId::FALSE) {
-            return i;
-        }
-
-        let parent = i;
-        let node = self.shared.node(i);
-        if !matches!(node.var, Variable::Extra(_)) {
-            i = NodeId::FALSE;
-            for child in node.children.nodes() {
-                i = self.or(i, child.negate(parent));
-            }
-            if i.is_true() {
-                return NodeId::TRUE;
-            }
-            self.only_extras(i)
-        } else {
-            // Restrict all nodes recursively.
-            let children = node.children.map(i, |node| self.only_extras(node));
-            self.create_node(node.var.clone(), children)
-        }
+    pub(crate) fn only_extras(&mut self, i: NodeId) -> NodeId {
+        self.quantify_by(i, &|var| !matches!(var, Variable::Extra(_)))
     }
 
     /// Simplify this tree by *assuming* that the Python version range provided

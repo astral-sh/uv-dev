@@ -1,11 +1,14 @@
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::iter;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use reqwest::StatusCode;
 
-use uv_distribution_types::{IncompatibleDist, Requirement, RequirementSource};
+use uv_distribution_types::{Dist, IncompatibleDist, Requirement, RequirementSource, SourceDist};
+use uv_fs::normalize_path;
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_platform_tags::{AbiTag, Tags};
@@ -95,6 +98,8 @@ impl Display for UnsatisfiableRequirement {
 /// the source and we want to merge unavailable messages across versions.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum UnavailableVersion {
+    /// The version comes from a workspace directory that is unavailable in this context.
+    WorkspaceMember,
     /// The version has a dependency whose version specifiers resolve to an empty range.
     UnsatisfiableDependency(UnsatisfiableRequirement),
     /// Version is incompatible because it has no usable distributions
@@ -115,8 +120,28 @@ pub enum UnavailableVersion {
 }
 
 impl UnavailableVersion {
+    /// Reject only the configured local directory identity, not another source with the same name.
+    pub(super) fn from_workspace_member(
+        dist: &Dist,
+        unavailable: &BTreeMap<PackageName, PathBuf>,
+    ) -> Option<Self> {
+        let Dist::Source(SourceDist::Directory(dist)) = dist else {
+            return None;
+        };
+        unavailable
+            .get(&dist.name)
+            .filter(|path| {
+                normalize_path(path.as_path()).as_ref()
+                    == normalize_path(dist.install_path.as_ref()).as_ref()
+            })
+            .map(|_| Self::WorkspaceMember)
+    }
+
     fn message(&self) -> Cow<'static, str> {
         match self {
+            Self::WorkspaceMember => {
+                Cow::Borrowed("not available in the selected workspace resolution context")
+            }
             Self::UnsatisfiableDependency(requirement) => Cow::Owned(requirement.to_string()),
             Self::IncompatibleDist(invalid_dist) => Cow::Owned(format!("{invalid_dist}")),
             Self::InvalidMetadata => Cow::Borrowed("invalid metadata"),
@@ -132,6 +157,7 @@ impl UnavailableVersion {
 
     pub(crate) fn singular_message(&self) -> String {
         match self {
+            Self::WorkspaceMember => format!("is {self}"),
             Self::UnsatisfiableDependency(requirement) => {
                 format!("depends on {requirement}")
             }
@@ -147,6 +173,7 @@ impl UnavailableVersion {
 
     pub(crate) fn plural_message(&self) -> String {
         match self {
+            Self::WorkspaceMember => format!("are {self}"),
             Self::UnsatisfiableDependency(requirement) => format!("depend on {requirement}"),
             Self::IncompatibleDist(invalid_dist) => invalid_dist.plural_message(),
             Self::InvalidMetadata => format!("have {self}"),
@@ -164,6 +191,7 @@ impl UnavailableVersion {
         requires_python: Option<AbiTag>,
     ) -> Option<String> {
         match self {
+            Self::WorkspaceMember => None,
             Self::UnsatisfiableDependency(_) => None,
             Self::IncompatibleDist(invalid_dist) => {
                 invalid_dist.context_message(tags, requires_python)
@@ -298,4 +326,95 @@ pub(crate) enum ResolverVersion {
     Unforked(Version),
     /// A set of forks, optionally with resolved versions
     Forked(Vec<VersionFork>),
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use uv_distribution_filename::DistExtension;
+    use uv_distribution_types::{DirectorySourceDist, FirstParty};
+    use uv_pep508::VerbatimUrl;
+    use uv_resolver_types::OptionsBuilder;
+
+    use super::*;
+
+    fn directory(name: &str, path: PathBuf) -> Result<Dist, Box<dyn Error>> {
+        Ok(Dist::Source(SourceDist::Directory(DirectorySourceDist {
+            name: name.parse()?,
+            url: VerbatimUrl::from_absolute_path(&path)?,
+            install_path: path.into_boxed_path(),
+            editable: Some(true),
+            r#virtual: Some(true),
+            first_party: FirstParty::Yes,
+        })))
+    }
+
+    #[test]
+    fn unavailable_workspace_member_matches_exact_source() -> Result<(), Box<dyn Error>> {
+        assert!(
+            OptionsBuilder::new()
+                .build()
+                .unavailable_workspace_members
+                .is_empty()
+        );
+
+        let root = std::env::current_dir()?;
+        let path = root.join("members/legacy");
+        let name: PackageName = "legacy".parse()?;
+        let options = OptionsBuilder::new()
+            .unavailable_workspace_members(BTreeMap::from([(name.clone(), path.clone())]))
+            .build();
+        assert_eq!(
+            UnavailableVersion::from_workspace_member(
+                &directory("Legacy", path.clone())?,
+                &options.unavailable_workspace_members,
+            ),
+            Some(UnavailableVersion::WorkspaceMember)
+        );
+        let equivalent_path = root.join("members/legacy/../legacy");
+        assert_eq!(
+            UnavailableVersion::from_workspace_member(
+                &directory("legacy", equivalent_path.clone())?,
+                &options.unavailable_workspace_members,
+            ),
+            Some(UnavailableVersion::WorkspaceMember)
+        );
+        let equivalent_options = OptionsBuilder::new()
+            .unavailable_workspace_members(BTreeMap::from([(name.clone(), equivalent_path)]))
+            .build();
+        assert_eq!(
+            UnavailableVersion::from_workspace_member(
+                &directory("legacy", path.clone())?,
+                &equivalent_options.unavailable_workspace_members,
+            ),
+            Some(UnavailableVersion::WorkspaceMember)
+        );
+        assert_eq!(
+            UnavailableVersion::from_workspace_member(
+                &directory("other", path)?,
+                &options.unavailable_workspace_members,
+            ),
+            None
+        );
+        assert_eq!(
+            UnavailableVersion::from_workspace_member(
+                &directory("legacy", root.join("other/legacy"))?,
+                &options.unavailable_workspace_members,
+            ),
+            None
+        );
+
+        let url: VerbatimUrl = "https://example.com/legacy-0.1.0-py3-none-any.whl".parse()?;
+        let wheel =
+            Dist::from_http_url(name, url.clone(), url.to_url(), None, DistExtension::Wheel)?;
+        assert_eq!(
+            UnavailableVersion::from_workspace_member(
+                &wheel,
+                &options.unavailable_workspace_members,
+            ),
+            None
+        );
+        Ok(())
+    }
 }

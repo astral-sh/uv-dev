@@ -1207,6 +1207,16 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             return Ok(None);
         }
 
+        // A workspace source can be unavailable in this resolution context even when a registry
+        // distribution with the same name is allowed. Reject its URL version through PubGrub so
+        // the package that introduced the dependency can backtrack to another candidate.
+        if let Some(reason) = UnavailableVersion::from_workspace_member(
+            &dist,
+            &self.options.unavailable_workspace_members,
+        ) {
+            return Ok(Some(ResolverVersion::Unavailable(version.clone(), reason)));
+        }
+
         // If the URL points to a pre-built wheel, and the wheel's supported Python versions don't
         // match our `Requires-Python`, mark it as incompatible.
         if let Dist::Built(dist) = &dist {

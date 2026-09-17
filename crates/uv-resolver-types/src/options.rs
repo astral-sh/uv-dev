@@ -1,4 +1,8 @@
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
 use uv_configuration::{BuildOptions, IndexStrategy};
+use uv_normalize::PackageName;
 use uv_pypi_types::SupportedEnvironments;
 use uv_torch::TorchStrategy;
 
@@ -18,6 +22,8 @@ pub struct Options {
     pub flexibility: Flexibility,
     pub build_options: BuildOptions,
     pub torch_backend: Option<TorchStrategy>,
+    /// Workspace source directories that cannot be selected in this resolution context.
+    pub unavailable_workspace_members: BTreeMap<PackageName, PathBuf>,
 }
 
 /// Builder for [`Options`].
@@ -33,6 +39,7 @@ pub struct OptionsBuilder {
     flexibility: Flexibility,
     build_options: BuildOptions,
     torch_backend: Option<TorchStrategy>,
+    unavailable_workspace_members: BTreeMap<PackageName, PathBuf>,
 }
 
 impl OptionsBuilder {
@@ -111,6 +118,16 @@ impl OptionsBuilder {
         self
     }
 
+    /// Exclude these exact workspace source directories from the resolution.
+    #[must_use]
+    pub fn unavailable_workspace_members(
+        mut self,
+        unavailable_workspace_members: BTreeMap<PackageName, PathBuf>,
+    ) -> Self {
+        self.unavailable_workspace_members = unavailable_workspace_members;
+        self
+    }
+
     /// Builds the options.
     pub fn build(self) -> Options {
         Options {
@@ -124,6 +141,7 @@ impl OptionsBuilder {
             flexibility: self.flexibility,
             build_options: self.build_options,
             torch_backend: self.torch_backend,
+            unavailable_workspace_members: self.unavailable_workspace_members,
         }
     }
 }

@@ -130,6 +130,17 @@ impl VersionMap {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn from_test_distributions(
+        distributions: impl IntoIterator<Item = (Version, PrioritizedDist)>,
+    ) -> Self {
+        let map = distributions.into_iter().collect::<BTreeMap<_, _>>();
+        let local = map.keys().any(Version::is_local);
+        Self {
+            inner: VersionMapInner::Eager(VersionMapEager { map, local }),
+        }
+    }
+
     /// Return the [`ResolutionMetadata`] for the given version, if any.
     pub(crate) fn get_metadata(&self, version: &Version) -> Option<ResolutionMetadata> {
         match self.inner {

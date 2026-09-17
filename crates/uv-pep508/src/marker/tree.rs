@@ -6,6 +6,7 @@ use std::str::FromStr;
 
 use arcstr::ArcStr;
 use itertools::Itertools;
+use rustc_hash::FxHashSet;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use version_ranges::Ranges;
 
@@ -1367,6 +1368,18 @@ impl MarkerTree {
         Self(INTERNER.lock().without_extras(self.0))
     }
 
+    /// Existentially remove only the `extra` expressions selected by `remove`.
+    ///
+    /// All other marker variables retain their original meaning. This is useful for projecting a
+    /// private family of Boolean selectors without activating or removing ordinary extras.
+    #[must_use]
+    pub fn without_extras_with(self, remove: impl Fn(&ExtraName) -> bool) -> Self {
+        Self(INTERNER.lock().quantify_by(self.0, &|var| match var {
+            Variable::Extra(name) => remove(name.extra()),
+            _ => false,
+        }))
+    }
+
     /// Returns a new `MarkerTree` where only `extra` expressions are removed.
     ///
     /// If the marker did not contain any `extra` expressions, then a marker
@@ -1381,47 +1394,64 @@ impl MarkerTree {
     /// The operator provided to the function is guaranteed to be
     /// `MarkerOperator::Equal` or `MarkerOperator::NotEqual`.
     pub fn visit_extras(self, mut f: impl FnMut(MarkerOperator, &ExtraName)) {
-        fn imp(tree: MarkerTree, f: &mut impl FnMut(MarkerOperator, &ExtraName)) {
-            match tree.kind() {
-                MarkerTreeKind::True | MarkerTreeKind::False => {}
-                MarkerTreeKind::Version(kind) => {
-                    for (tree, _) in simplify::collect_edges(kind.edges()) {
-                        imp(tree, f);
-                    }
+        self.visit_extras_impl(&mut |_| true, &mut f);
+    }
+
+    /// Visit extra expressions without revisiting an identical decision-diagram subtree.
+    ///
+    /// This is useful when collecting marker variables: a compact Boolean product can have an
+    /// exponentially larger number of paths than distinct nodes.
+    pub fn visit_extras_once(self, mut f: impl FnMut(MarkerOperator, &ExtraName)) {
+        let mut visited = FxHashSet::default();
+        self.visit_extras_impl(&mut |tree| visited.insert(tree), &mut f);
+    }
+
+    fn visit_extras_impl(
+        self,
+        visit: &mut impl FnMut(Self) -> bool,
+        f: &mut impl FnMut(MarkerOperator, &ExtraName),
+    ) {
+        if !visit(self) {
+            return;
+        }
+        match self.kind() {
+            MarkerTreeKind::True | MarkerTreeKind::False => {}
+            MarkerTreeKind::Version(kind) => {
+                for (tree, _) in simplify::collect_edges(kind.edges()) {
+                    tree.visit_extras_impl(visit, f);
                 }
-                MarkerTreeKind::String(kind) => {
-                    for (tree, _) in simplify::collect_edges(kind.children()) {
-                        imp(tree, f);
-                    }
+            }
+            MarkerTreeKind::String(kind) => {
+                for (tree, _) in simplify::collect_edges(kind.children()) {
+                    tree.visit_extras_impl(visit, f);
                 }
-                MarkerTreeKind::In(kind) => {
-                    for (_, tree) in kind.children() {
-                        imp(tree, f);
-                    }
+            }
+            MarkerTreeKind::In(kind) => {
+                for (_, tree) in kind.children() {
+                    tree.visit_extras_impl(visit, f);
                 }
-                MarkerTreeKind::Contains(kind) => {
-                    for (_, tree) in kind.children() {
-                        imp(tree, f);
-                    }
+            }
+            MarkerTreeKind::Contains(kind) => {
+                for (_, tree) in kind.children() {
+                    tree.visit_extras_impl(visit, f);
                 }
-                MarkerTreeKind::List(kind) => {
-                    for (_, tree) in kind.children() {
-                        imp(tree, f);
-                    }
+            }
+            MarkerTreeKind::List(kind) => {
+                for (_, tree) in kind.children() {
+                    tree.visit_extras_impl(visit, f);
                 }
-                MarkerTreeKind::Extra(kind) => {
-                    if kind.low.is_false() {
-                        f(MarkerOperator::Equal, kind.name().extra());
-                    } else {
-                        f(MarkerOperator::NotEqual, kind.name().extra());
-                    }
-                    for (_, tree) in kind.children() {
-                        imp(tree, f);
-                    }
+            }
+            MarkerTreeKind::Extra(kind) => {
+                if kind.low.is_false() {
+                    f(MarkerOperator::Equal, kind.name().extra());
+                } else {
+                    f(MarkerOperator::NotEqual, kind.name().extra());
+                }
+                for (_, tree) in kind.children() {
+                    tree.visit_extras_impl(visit, f);
                 }
             }
         }
-        imp(self, &mut f);
     }
 
     fn simplify_extras_with_impl(self, is_extra: &impl Fn(&ExtraName) -> bool) -> Self {
@@ -1832,6 +1862,7 @@ impl schemars::JsonSchema for MarkerTree {
 
 #[cfg(test)]
 mod test {
+    use std::collections::BTreeSet;
     use std::ops::Bound;
     use std::str::FromStr;
 
@@ -3575,6 +3606,38 @@ mod test {
     }
 
     #[test]
+    fn selective_extra_projection_matches_cofactors() {
+        let markers = [
+            "extra == 'axis-sql-v1'",
+            "extra != 'axis-sql-v1'",
+            "(python_full_version >= '3.12' and extra == 'axis-sql-v1') \
+                or (sys_platform == 'linux' and extra != 'axis-sql-v1')",
+            "(extra == 'axis-sql-v1' and extra == 'extra-3-foo-test') \
+                or (extra != 'axis-sql-v1' and extra != 'extra-3-foo-test')",
+            "(python_full_version < '3.13' and extra == 'axis-sql-v1' \
+                and extra != 'extra-3-foo-test') \
+                or (python_full_version >= '3.13' and extra != 'axis-sql-v1' \
+                and extra == 'axis-lib-v3')",
+        ];
+        for input in markers {
+            let marker = m(input);
+            let selected = |extra: &ExtraName| extra.as_str() == "axis-sql-v1";
+            let cofactors = marker
+                .simplify_extras_with(selected)
+                .or(marker.simplify_not_extras_with(selected));
+            let projected = marker.without_extras_with(selected);
+            assert!(projected.and(cofactors.negate()).is_false(), "{input}");
+            assert!(cofactors.and(projected.negate()).is_false(), "{input}");
+
+            let all = marker.without_extras_with(|_| true);
+            let ordinary = marker.without_extras();
+            assert!(all.and(ordinary.negate()).is_false(), "{input}");
+            assert!(ordinary.and(all.negate()).is_false(), "{input}");
+            assert_eq!(marker.without_extras_with(|_| false), marker);
+        }
+    }
+
+    #[test]
     fn only_extras() {
         assert!(m("os_name == 'Linux'").only_extras().is_true());
         assert_eq!(m("extra == 'foo'").only_extras(), m("extra == 'foo'"));
@@ -3650,6 +3713,67 @@ mod test {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn visit_extras_once_preserves_a_compact_product() -> Result<(), Box<dyn std::error::Error>> {
+        let mut marker = MarkerTree::TRUE;
+        for index in 0..24 {
+            let left: MarkerTree = format!("extra == 'axis-{index:02}-left'").parse()?;
+            let right: MarkerTree = format!("extra == 'axis-{index:02}-right'").parse()?;
+            marker = marker
+                .and(left.or(right))
+                .and(left.negate().or(right.negate()));
+        }
+        let mut names = BTreeSet::new();
+        let mut visited = 0;
+        marker.visit_extras_once(|_, extra| {
+            names.insert(extra.clone());
+            visited += 1;
+        });
+        assert_eq!(names.len(), 48);
+        assert!(
+            visited <= 96,
+            "shared Boolean subtrees must be visited once"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn extra_operations_preserve_a_compact_product() -> Result<(), Box<dyn std::error::Error>> {
+        let mut product = MarkerTree::TRUE;
+        for index in 0..24 {
+            let left: MarkerTree = format!("extra == 'axis-{index:02}-left'").parse()?;
+            let right: MarkerTree = format!("extra == 'axis-{index:02}-right'").parse()?;
+            product = product
+                .and(left.or(right))
+                .and(left.negate().or(right.negate()));
+        }
+
+        let physical = m("python_full_version >= '3.12' and sys_platform == 'linux'");
+        let conflict = m("extra != 'extra-3-foo-test'");
+        let marker = product.and(physical).and(conflict);
+        let projected = marker.without_extras_with(|extra| extra.as_str().starts_with("axis-"));
+        let expected = physical.and(conflict);
+        assert!(projected.and(expected.negate()).is_false());
+        assert!(expected.and(projected.negate()).is_false());
+
+        let selectors = marker.only_extras();
+        let expected = product.and(conflict);
+        assert!(selectors.and(expected.negate()).is_false());
+        assert!(expected.and(selectors.negate()).is_false());
+
+        let first = m("extra == 'axis-00-left'");
+        let positive = marker
+            .simplify_extras_with(|extra| extra.as_str() == "axis-00-left")
+            .and(first);
+        let negative = marker
+            .simplify_not_extras_with(|extra| extra.as_str() == "axis-00-left")
+            .and(first.negate());
+        let recombined = positive.or(negative);
+        assert!(recombined.and(marker.negate()).is_false());
+        assert!(marker.and(recombined.negate()).is_false());
+        Ok(())
     }
 
     /// Case a: There is no version `3` (no trailing zero) in the interner yet.

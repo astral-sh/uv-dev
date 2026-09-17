@@ -95,6 +95,24 @@ impl Preference {
         }
     }
 
+    /// Create a preference for a version selected by another resolution in the current operation.
+    pub fn from_resolved(
+        name: PackageName,
+        version: Version,
+        index: Option<IndexUrl>,
+        fork_markers: Vec<UniversalMarker>,
+    ) -> Self {
+        Self {
+            name,
+            version,
+            marker: MarkerTree::TRUE,
+            index: PreferenceIndex::from(index),
+            fork_markers,
+            hashes: HashDigests::empty(),
+            source: PreferenceSource::Resolver,
+        }
+    }
+
     /// Create a [`Preference`] from an installed distribution.
     pub fn from_installed(dist: &InstalledDist) -> Option<Self> {
         let InstalledDistKind::Registry(dist) = &dist.kind else {
@@ -155,7 +173,7 @@ impl From<Option<IndexUrl>> for PreferenceIndex {
 pub(crate) enum PreferenceSource {
     /// The preference is from an installed package in the environment.
     Environment,
-    /// The preference is from a `uv.ock` file.
+    /// The preference is from a `uv.lock` file.
     Lock,
     /// The preference is from a `requirements.txt` file.
     RequirementsTxt,
@@ -197,8 +215,8 @@ impl Entry {
 ///
 /// The marker is the marker of the fork that resolved to the pin, if any.
 ///
-/// Preferences should be prioritized first by whether their marker matches and then by the order
-/// they are stored, so that a lockfile has higher precedence than sibling forks.
+/// Preferences are prioritized by whether their complete marker matches the current fork, then by
+/// whether they came from existing input or the current solve, and finally by the resolution mode.
 #[derive(Debug, Clone, Default)]
 pub struct Preferences(FxHashMap<PackageName, Vec<Entry>>);
 
