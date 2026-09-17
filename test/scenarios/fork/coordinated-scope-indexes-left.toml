@@ -1,0 +1,17 @@
+name = "coordinated-scope-indexes-left"
+description = "Shared distributions whose dependency metadata belongs to the earlier explicit index."
+
+[testgen]
+disable = true
+
+[expected]
+satisfiable = true
+
+[root]
+requires = ["shared"]
+
+[packages.shared.versions."1.0.0"]
+requires = ["left-old-only"]
+
+[packages.shared.versions."2.0.0"]
+requires = ["left-only"]

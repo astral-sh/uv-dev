@@ -1,0 +1,48 @@
+name = "coordinated-prerelease-stable-isolation"
+description = '''
+The earlier fork requires `shared==2.0rc1` and finishes before a delayed
+sibling reaches its broader `shared` requirement. The sibling has stable
+`shared==3` available, so the resolver-sourced prerelease preference must not
+override its preference for stable versions.
+'''
+
+[testgen]
+kind = "lock"
+
+[environment]
+python = "3.12"
+
+[resolver_options]
+universal = true
+fork_strategy = "fewest"
+environments = ["python_version == '3.12'", "python_version == '3.13'"]
+
+[expected]
+satisfiable = true
+explanation = "The earlier fork uses `shared==2.0rc1`; the broad sibling keeps stable `shared==3`."
+
+[root]
+requires_python = ">=3.12,<3.14"
+requires = [
+  "prerelease-parent; python_version < '3.13'",
+  "later-entry; python_version >= '3.13'",
+]
+
+[packages.prerelease-parent.versions."1.0.0"]
+requires = ["shared==2.0.0rc1"]
+
+[packages.later-entry.versions."1.0.0"]
+requires = ["delay-one"]
+
+[packages.delay-one.versions."1.0.0"]
+requires = ["delay-two"]
+
+[packages.delay-two.versions."1.0.0"]
+requires = ["broad-parent"]
+
+[packages.broad-parent.versions."1.0.0"]
+requires = ["shared>=1.0.0,<=3.0.0"]
+
+[packages.shared.versions."1.0.0"]
+[packages.shared.versions."2.0.0rc1"]
+[packages.shared.versions."3.0.0"]
