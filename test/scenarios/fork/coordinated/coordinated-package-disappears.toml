@@ -1,0 +1,57 @@
+name = "coordinated-package-disappears"
+description = '''
+An earlier fork initially selects `switchable==2`, whose dependencies include
+`shared==2` and an otherwise-unused `orphan`. A delayed sibling requires
+`shared==1`. Backtracking the earlier parent to `switchable==1` removes `shared`
+and `orphan` from that environment entirely, replacing them with `survivor`.
+The coordinated version restriction is conditional on a package remaining
+necessary; it must not introduce a synthetic root dependency on `shared==1`
+or retain abandoned dependencies in the lockfile.
+'''
+
+[testgen]
+kind = "lock"
+
+[environment]
+python = "3.12"
+
+[resolver_options]
+universal = true
+fork_strategy = "fewest"
+environments = ["python_version == '3.12'", "python_version == '3.13'"]
+
+[expected]
+satisfiable = true
+
+[root]
+requires_python = ">=3.12,<3.14"
+requires = [
+  "switchable; python_version < '3.13'",
+  "later-entry; python_version >= '3.13'",
+]
+
+[packages.switchable.versions."1.0.0"]
+requires = ["survivor==1.0.0"]
+
+[packages.switchable.versions."2.0.0"]
+requires = ["shared==2.0.0", "orphan==1.0.0"]
+
+[packages.later-entry.versions."1.0.0"]
+requires = ["delay-one"]
+
+[packages.delay-one.versions."1.0.0"]
+requires = ["delay-two"]
+
+[packages.delay-two.versions."1.0.0"]
+requires = ["delay-three"]
+
+[packages.delay-three.versions."1.0.0"]
+requires = ["delay-four"]
+
+[packages.delay-four.versions."1.0.0"]
+requires = ["shared==1.0.0"]
+
+[packages.shared.versions."1.0.0"]
+[packages.shared.versions."2.0.0"]
+[packages.orphan.versions."1.0.0"]
+[packages.survivor.versions."1.0.0"]

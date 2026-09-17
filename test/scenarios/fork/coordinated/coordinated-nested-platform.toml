@@ -1,0 +1,109 @@
+name = "coordinated-nested-platform"
+description = '''
+A completed Python fork must change its `parent` version to reuse the `shared`
+and `aux` versions required by a delayed sibling. The replacement introduces
+two platform-specific versions of `branch`. Both new platform forks must resolve
+before their combined result can replace the completed Python region.
+'''
+
+[testgen]
+kind = "lock"
+
+[environment]
+python = "3.12"
+
+[resolver_options]
+universal = true
+fork_strategy = "fewest"
+environments = ["python_version < '3.13'", "python_version >= '3.13'"]
+
+[expected]
+satisfiable = true
+explanation = '''
+The final lock has `parent==1`, `shared==1`, and `aux==1`. `branch==1` is needed
+on Windows below Python 3.13, and `branch==2` is needed on other platforms below
+Python 3.13. Removing two duplicate versions outweighs the new `branch` duplicate.
+'''
+
+[expected.packages]
+parent = "1.0.0"
+shared = "1.0.0"
+aux = "1.0.0"
+
+[root]
+requires_python = ">=3.12,<3.14"
+requires = [
+  "parent; python_version < '3.13'",
+  "delayed; python_version >= '3.13'",
+]
+
+[packages.parent.versions."1.0.0"]
+sdist = false
+requires = [
+  "shared==1.0.0",
+  "aux==1.0.0",
+  "branch==1.0.0; sys_platform == 'win32'",
+  "branch==2.0.0; sys_platform != 'win32'",
+]
+
+[packages.parent.versions."2.0.0"]
+sdist = false
+requires = ["shared==2.0.0", "aux==2.0.0"]
+
+[packages.shared.versions."1.0.0"]
+sdist = false
+
+[packages.shared.versions."2.0.0"]
+sdist = false
+
+[packages.aux.versions."1.0.0"]
+sdist = false
+
+[packages.aux.versions."2.0.0"]
+sdist = false
+
+[packages.branch.versions."1.0.0"]
+sdist = false
+
+[packages.branch.versions."2.0.0"]
+sdist = false
+
+[packages.delayed.versions."1.0.0"]
+sdist = false
+requires = ["delay-one"]
+
+[packages.delay-one.versions."1.0.0"]
+sdist = false
+requires = ["delay-two"]
+
+[packages.delay-two.versions."1.0.0"]
+sdist = false
+requires = ["delay-three"]
+
+[packages.delay-three.versions."1.0.0"]
+sdist = false
+requires = ["delay-four"]
+
+[packages.delay-four.versions."1.0.0"]
+sdist = false
+requires = ["delay-five"]
+
+[packages.delay-five.versions."1.0.0"]
+sdist = false
+requires = ["delay-six"]
+
+[packages.delay-six.versions."1.0.0"]
+sdist = false
+requires = ["delay-seven"]
+
+[packages.delay-seven.versions."1.0.0"]
+sdist = false
+requires = ["delay-eight"]
+
+[packages.delay-eight.versions."1.0.0"]
+sdist = false
+requires = ["constrained"]
+
+[packages.constrained.versions."1.0.0"]
+sdist = false
+requires = ["shared==1.0.0", "aux==1.0.0"]
