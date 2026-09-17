@@ -35,7 +35,7 @@ fn write_workspace_member(context: &uv_test::TestContext, name: &str, source: &s
 
 #[test]
 fn check_project() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -66,7 +66,7 @@ fn check_project() -> Result<()> {
 /// Forward explicit Python requests to ty without overriding its inference by default.
 #[test]
 fn check_python_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     context
         .temp_dir
         .child("pyproject.toml")
@@ -167,7 +167,9 @@ fn check_python_version() -> Result<()> {
 /// Forward uv's terminal settings to the ty subprocess, including quiet-mode progress suppression.
 #[test]
 fn check_propagates_terminal_settings() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]).with_filter((r"\x1b\[[0-9;]*m", ""));
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_local_index()
+        .with_filter((r"\x1b\[[0-9;]*m", ""));
     context.temp_dir.child("main.py").write_str("value = 1\n")?;
 
     let check = || {
@@ -261,7 +263,7 @@ fn check_propagates_terminal_settings() -> Result<()> {
 /// Display shell-safe arguments when the selected script path contains spaces.
 #[test]
 fn check_show_command_quotes_script_path() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     context
         .temp_dir
         .child("script with spaces.py")
@@ -302,8 +304,9 @@ fn check_show_command_quotes_script_path() -> Result<()> {
 /// Check PEP 723 scripts only when explicitly selected, not as part of a workspace member.
 #[test]
 fn check_workspace_excludes_pep723_scripts() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
     context
         .temp_dir
         .child("pyproject.toml")
@@ -402,7 +405,7 @@ fn check_workspace_excludes_pep723_scripts() -> Result<()> {
 /// Invalid inline metadata should not prevent checking the surrounding project.
 #[test]
 fn check_project_ignores_invalid_pep723_scripts() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     context
         .temp_dir
         .child("pyproject.toml")
@@ -449,8 +452,9 @@ fn check_project_ignores_invalid_pep723_scripts() -> Result<()> {
 /// Apply a safe fix and verify that the corrected source is written to disk.
 #[test]
 fn check_fix() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
 
     context
         .temp_dir
@@ -486,8 +490,9 @@ fn check_fix() -> Result<()> {
 /// Apply available fixes while preserving unfixable diagnostics and their failure exit status.
 #[test]
 fn check_fix_unfixable() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
 
     context
         .temp_dir
@@ -525,8 +530,9 @@ fn check_fix_unfixable() -> Result<()> {
 /// Leave a clean project unchanged and report success when there are no fixes to apply.
 #[test]
 fn check_fix_clean_project() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
 
     context
         .temp_dir
@@ -562,8 +568,9 @@ fn check_fix_clean_project() -> Result<()> {
 /// Fix only the selected workspace member and leave other members and scripts untouched.
 #[test]
 fn check_fix_workspace_member_selection() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
 
     context
         .temp_dir
@@ -624,8 +631,9 @@ fn check_fix_workspace_member_selection() -> Result<()> {
 /// Fix all explicitly selected workspace members without modifying standalone scripts.
 #[test]
 fn check_fix_all_packages() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
 
     context
         .temp_dir
@@ -686,8 +694,9 @@ fn check_fix_all_packages() -> Result<()> {
 /// Fix a selected PEP 723 script without checking or changing another Python file.
 #[test]
 fn check_fix_script() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
 
     let selected = context.temp_dir.child("selected.py");
     selected.write_str(indoc! {r#"
@@ -730,8 +739,9 @@ fn check_fix_script() -> Result<()> {
 /// Leave a fixable script unchanged when a different, clean script is selected.
 #[test]
 fn check_fix_script_does_not_fix_unselected_script() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
 
     let selected = context.temp_dir.child("selected.py");
     selected.write_str(indoc! {r#"
@@ -785,8 +795,9 @@ fn check_fix_script_does_not_fix_unselected_script() -> Result<()> {
 /// Respect workspace exclusions unless packages are selected explicitly.
 #[test]
 fn check_workspace_member_selection() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
     context
         .temp_dir
         .child("pyproject.toml")
@@ -840,8 +851,9 @@ fn check_workspace_member_selection() -> Result<()> {
 /// Respect ty exclusions when automatically selecting members of a virtual workspace.
 #[test]
 fn check_virtual_workspace_respects_exclusions() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
     context
         .temp_dir
         .child("pyproject.toml")
@@ -884,8 +896,9 @@ fn check_virtual_workspace_respects_exclusions() -> Result<()> {
 /// Ignore Python files at a virtual workspace root that do not belong to a member.
 #[test]
 fn check_virtual_workspace_only_checks_declared_members() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
     context
         .temp_dir
         .child("pyproject.toml")
@@ -925,8 +938,9 @@ fn check_virtual_workspace_only_checks_declared_members() -> Result<()> {
 /// Include workspace members located outside the workspace root with `--all-packages`.
 #[test]
 fn check_workspace_all_packages_includes_external_members() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
     let workspace = context.temp_dir.child("workspace");
     workspace.create_dir_all()?;
     workspace.child("pyproject.toml").write_str(indoc! {r#"
@@ -971,8 +985,9 @@ fn check_workspace_all_packages_includes_external_members() -> Result<()> {
 /// Apply workspace configuration when checking an externally located member.
 #[test]
 fn check_external_workspace_member_inherits_workspace_configuration() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
     let workspace = context.temp_dir.child("workspace");
     workspace.create_dir_all()?;
     workspace.child("pyproject.toml").write_str(indoc! {r#"
@@ -1024,8 +1039,9 @@ fn check_external_workspace_member_inherits_workspace_configuration() -> Result<
 /// Exclude nested workspace members unless all packages are explicitly selected.
 #[test]
 fn check_virtual_workspace_member_excludes_nested_members() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
     context
         .temp_dir
         .child("pyproject.toml")
@@ -1073,8 +1089,9 @@ fn check_virtual_workspace_member_excludes_nested_members() -> Result<()> {
 /// Resolve an excluded nested member as a dependency without checking its files.
 #[test]
 fn check_virtual_workspace_member_resolves_excluded_nested_dependency() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
     context
         .temp_dir
         .child("pyproject.toml")
@@ -1138,8 +1155,9 @@ fn check_virtual_workspace_member_resolves_excluded_nested_dependency() -> Resul
 /// Apply workspace configuration when checking an explicitly selected member.
 #[test]
 fn check_workspace_member_inherits_workspace_configuration() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
     context
         .temp_dir
         .child("pyproject.toml")
@@ -1177,7 +1195,7 @@ fn check_workspace_member_inherits_workspace_configuration() -> Result<()> {
 /// Reject package selections that do not match any workspace member.
 #[test]
 fn check_workspace_missing_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     context
         .temp_dir
         .child("pyproject.toml")
@@ -1200,8 +1218,9 @@ fn check_workspace_missing_package() -> Result<()> {
 /// Exclude nested members when checking only a non-virtual workspace's root package.
 #[test]
 fn check_workspace_root_excludes_nested_members() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
     context
         .temp_dir
         .child("pyproject.toml")
@@ -1248,8 +1267,9 @@ fn check_workspace_root_excludes_nested_members() -> Result<()> {
 /// Check only explicitly selected packages and include every member with `--all-packages`.
 #[test]
 fn check_workspace_multiple_packages() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
     context
         .temp_dir
         .child("pyproject.toml")
@@ -1298,7 +1318,7 @@ fn check_workspace_multiple_packages() -> Result<()> {
 #[test]
 fn check_no_sync_creates_lock_without_sync() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context
         .temp_dir
@@ -1372,7 +1392,7 @@ fn check_no_sync_creates_lock_without_sync() -> Result<()> {
 
 #[test]
 fn check_no_sync_uses_compatible_lock_interpreter() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]).with_local_index();
 
     context
         .temp_dir
@@ -1461,7 +1481,9 @@ fn check_no_sync_uses_compatible_lock_interpreter() -> Result<()> {
 #[test]
 fn check_no_sync_updates_stale_lock_without_sync() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2026-02-15T00:00:00Z");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_exclude_newer("2026-02-15T00:00:00Z");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
 
     pyproject_toml.write_str(indoc! {r#"
@@ -1558,7 +1580,9 @@ fn check_no_sync_updates_stale_lock_without_sync() -> Result<()> {
 #[test]
 fn check_no_sync_locked_rejects_stale_lock_without_update() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2026-02-15T00:00:00Z");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_exclude_newer("2026-02-15T00:00:00Z");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
 
     pyproject_toml.write_str(indoc! {r#"
@@ -1610,7 +1634,7 @@ fn check_no_sync_locked_rejects_stale_lock_without_update() -> Result<()> {
 
 #[test]
 fn check_no_sync_locked_requires_existing_lock() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context
         .temp_dir
@@ -1642,7 +1666,9 @@ fn check_no_sync_locked_requires_existing_lock() -> Result<()> {
 #[test]
 fn check_no_sync_frozen_uses_existing_lock_without_update() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2026-02-15T00:00:00Z");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_exclude_newer("2026-02-15T00:00:00Z");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
 
     pyproject_toml.write_str(indoc! {r#"
@@ -1699,7 +1725,7 @@ fn check_no_sync_frozen_uses_existing_lock_without_update() -> Result<()> {
 
 #[test]
 fn check_no_sync_frozen_requires_existing_lock() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context
         .temp_dir
@@ -1731,7 +1757,7 @@ fn check_no_sync_frozen_requires_existing_lock() -> Result<()> {
 #[test]
 fn check_no_sync_isolated_does_not_write_lock_or_sync() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context
         .temp_dir
@@ -1774,10 +1800,12 @@ fn check_no_sync_isolated_does_not_write_lock_or_sync() -> Result<()> {
 }
 
 #[tokio::test]
-#[cfg(feature = "test-pypi")]
 async fn check_uses_exact_ty_version_from_selected_included_group() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"ty 0\.0\.17(?: \([^)]*\))?", "ty 0.0.17"));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_packse_index("packages/tool-selection.toml")
+        .with_exclude_newer("2026-02-15T00:00:00Z")
+        .with_filter((r"ty 0\.0\.17(?: \([^)]*\))?", "ty 0.0.17"));
 
     context
         .temp_dir
@@ -1824,6 +1852,10 @@ async fn check_uses_exact_ty_version_from_selected_included_group() -> Result<()
     assert!(context.temp_dir.child("uv.lock").exists());
     assert!(context.site_packages().join("ty").exists());
 
+    // OSV identifies packages by their registry, while the artifact URLs stay local.
+    context.rewrite_lock_registry_sources("https://pypi.org/simple")?;
+    let context = context.with_default_index("https://pypi.org/simple");
+
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/querybatch"))
@@ -1868,10 +1900,12 @@ async fn check_uses_exact_ty_version_from_selected_included_group() -> Result<()
 
 /// Ensure that the cached environment for a locked tool rejects invalid lockfile hashes.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_locked_tool_rejects_invalid_hash() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"sha256:[0-9a-f]{64}", "sha256:[HASH]"));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_packse_index("packages/tool-selection.toml")
+        .with_exclude_newer("2026-02-15T00:00:00Z")
+        .with_filter((r"sha256:[0-9a-f]{64}", "sha256:[HASH]"));
 
     context
         .temp_dir
@@ -1934,9 +1968,11 @@ fn check_locked_tool_rejects_invalid_hash() -> Result<()> {
 
 /// Ensure that a cached environment for a locked tool is checked for malware before reuse.
 #[tokio::test]
-#[cfg(feature = "test-pypi")]
 async fn check_locked_tool_rejects_malware_from_warm_cache() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_packse_index("packages/tool-selection.toml")
+        .with_exclude_newer("2026-02-15T00:00:00Z");
 
     context
         .temp_dir
@@ -1959,6 +1995,9 @@ async fn check_locked_tool_rejects_malware_from_warm_cache() -> Result<()> {
         .arg("2026-02-15T00:00:00Z")
         .assert()
         .success();
+
+    context.rewrite_lock_registry_sources("https://pypi.org/simple")?;
+    let context = context.with_default_index("https://pypi.org/simple");
 
     // Populate the locked tool environment without a malware check.
     context
@@ -2004,10 +2043,12 @@ async fn check_locked_tool_rejects_malware_from_warm_cache() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_uses_ty_version_from_production_dependency() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"ty 0\.0\.16(?: \([^)]*\))?", "ty 0.0.16"));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_packse_index("packages/tool-selection.toml")
+        .with_exclude_newer("2026-02-15T00:00:00Z")
+        .with_filter((r"ty 0\.0\.16(?: \([^)]*\))?", "ty 0.0.16"));
 
     context
         .temp_dir
@@ -2047,10 +2088,12 @@ fn check_uses_ty_version_from_production_dependency() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_uses_ty_version_from_forked_lock() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"ty 0\.0\.17(?: \([^)]*\))?", "ty 0.0.17"));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_packse_index("packages/tool-selection.toml")
+        .with_exclude_newer("2026-02-15T00:00:00Z")
+        .with_filter((r"ty 0\.0\.17(?: \([^)]*\))?", "ty 0.0.17"));
 
     context
         .temp_dir
@@ -2093,9 +2136,8 @@ fn check_uses_ty_version_from_forked_lock() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_uses_workspace_ty_subgraph_from_lock() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context
         .temp_dir
@@ -2166,10 +2208,12 @@ fn check_uses_workspace_ty_subgraph_from_lock() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_virtual_root_uses_own_ty() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"ty 0\.0\.17(?: \([^)]*\))?", "ty 0.0.17"));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_packse_index("packages/tool-selection.toml")
+        .with_exclude_newer("2026-02-15T00:00:00Z")
+        .with_filter((r"ty 0\.0\.17(?: \([^)]*\))?", "ty 0.0.17"));
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
         [dependency-groups]
@@ -2220,10 +2264,12 @@ fn check_virtual_root_uses_own_ty() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_uses_ty_from_environment() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"ty 0\.0\.17(?: \([^)]*\))?", "ty 0.0.17"));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_packse_index("packages/tool-selection.toml")
+        .with_exclude_newer("2026-02-15T00:00:00Z")
+        .with_filter((r"ty 0\.0\.17(?: \([^)]*\))?", "ty 0.0.17"));
     let tool_dir = context.root.child("tools");
     let bin_dir = context.root.child("tool-bin");
 
@@ -2277,10 +2323,12 @@ fn check_uses_ty_from_environment() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_script() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_packse_index("packages/tool-selection.toml")
+        .with_exclude_newer("2026-02-15T00:00:00Z")
+        .with_filter((r"WARN Failed to fetch `ty`[^\n]*\n", ""));
 
     // If `ty` accidentally uses the workspace environment, it will see this incompatible stub
     // instead of the script dependency and report that `IniConfig` is not callable.
@@ -2323,9 +2371,8 @@ fn check_script() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_script_respects_exclude_newer_package_for_ty_selection() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! {r#"
@@ -2395,9 +2442,8 @@ fn check_script_respects_exclude_newer_package_for_ty_selection() -> Result<()> 
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_respects_exclude_newer_package_for_ty_selection() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -2479,10 +2525,12 @@ fn check_respects_exclude_newer_package_for_ty_selection() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_script_uses_ty_version_from_forked_lock() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((r"ty 0\.0\.17(?: \([^)]*\))?", "ty 0.0.17"));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_packse_index("packages/tool-selection.toml")
+        .with_exclude_newer("2026-02-15T00:00:00Z")
+        .with_filter((r"ty 0\.0\.17(?: \([^)]*\))?", "ty 0.0.17"));
 
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! {r#"
@@ -2522,9 +2570,8 @@ fn check_script_uses_ty_version_from_forked_lock() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_script_uses_ty_from_path_with_transitive_dependency() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let ty = context.temp_dir.child("ty");
     ty.create_dir_all()?;
@@ -2593,9 +2640,11 @@ fn check_script_uses_ty_from_path_with_transitive_dependency() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_script_ty_override_precedence() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_packse_index("packages/tool-selection.toml")
+        .with_exclude_newer("2026-02-15T00:00:00Z")
         .with_filter((r"ty 0\.0\.17(?: \([^)]*\))?", "ty 0.0.17"))
         .with_filter((
             r"(?m)^WARN Failed to fetch `ty` from .+; falling back to .+\n",
@@ -2670,9 +2719,11 @@ fn check_script_ty_override_precedence() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_script_ignores_transitive_ty_for_tool_selection() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_packse_index("packages/tool-selection.toml")
+        .with_exclude_newer("2026-02-15T00:00:00Z")
         .with_filter((r"ty 0\.0\.17(?: \([^)]*\))?", "ty 0.0.17"))
         .with_filter((
             r"(?m)^WARN Failed to fetch `ty` from .+; falling back to .+\n",
@@ -2735,7 +2786,7 @@ fn check_script_ignores_transitive_ty_for_tool_selection() -> Result<()> {
 
 #[test]
 fn check_no_sync_errors_on_invalid_lockfile() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // An explicit version bypasses implicit `ty` selection, but not project locking.
     context
@@ -2779,7 +2830,7 @@ fn check_no_sync_errors_on_invalid_lockfile() -> Result<()> {
 
 #[test]
 fn check_script_no_sync_errors_on_invalid_lockfile() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! {r#"
@@ -2823,7 +2874,7 @@ fn check_script_no_sync_errors_on_invalid_lockfile() -> Result<()> {
 
 #[test]
 fn check_rejects_tool_arguments() {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
 
     uv_snapshot!(context.filters(), context.check().arg("--").arg("main.py"), @"
     exit_code: 2 (failure)
@@ -2838,10 +2889,12 @@ fn check_rejects_tool_arguments() {
 
 #[test]
 fn check_ty_version_no_match() {
-    let context = uv_test::test_context_with_versions!(&[]).with_filter((
-        r"\b[a-z0-9_]+-(?:apple|pc|unknown)-[a-z0-9_]+(?:-[a-z0-9_]+)?\b",
-        "[PLATFORM]",
-    ));
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_local_index()
+        .with_filter((
+            r"\b[a-z0-9_]+-(?:apple|pc|unknown)-[a-z0-9_]+(?:-[a-z0-9_]+)?\b",
+            "[PLATFORM]",
+        ));
 
     uv_snapshot!(
         context.filters(),
@@ -2858,10 +2911,12 @@ fn check_ty_version_no_match() {
 
 #[test]
 fn check_ty_version_show_version() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]).with_filter((
-        r"(?m)^WARN Failed to fetch `ty` from .+; falling back to .+\n",
-        "",
-    ));
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_local_index()
+        .with_filter((
+            r"(?m)^WARN Failed to fetch `ty` from .+; falling back to .+\n",
+            "",
+        ));
 
     let main_py = context.temp_dir.child("main.py");
     main_py.write_str(indoc! {r"
@@ -2892,7 +2947,7 @@ fn check_ty_version_show_version() -> Result<()> {
 
 #[test]
 fn check_missing_pyproject_toml() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
 
     let main_py = context.temp_dir.child("main.py");
     main_py.write_str(indoc! {r"
@@ -2929,7 +2984,7 @@ fn check_missing_pyproject_toml() -> Result<()> {
 /// See <https://github.com/astral-sh/ty-pre-commit/issues/30>.
 #[test]
 fn check_unmanaged_project() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -2959,7 +3014,9 @@ fn check_unmanaged_project() -> Result<()> {
 
 #[test]
 fn check_no_project() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]).with_filtered_python_sources();
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_local_index()
+        .with_filtered_python_sources();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -3024,7 +3081,7 @@ fn check_no_project() -> Result<()> {
 
 #[test]
 fn check_isolated_no_project() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -3104,7 +3161,7 @@ fn check_isolated_no_project() -> Result<()> {
 
 #[test]
 fn check_type_error() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
 
     let main_py = context.temp_dir.child("main.py");
     main_py.write_str(indoc! {r#"
@@ -3138,7 +3195,7 @@ fn check_type_error() -> Result<()> {
 #[test]
 fn check_with_declared_dependency() -> Result<()> {
     let server = PackseServer::new("extras/extra-does-not-exist-backtrack.toml");
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -3189,7 +3246,7 @@ fn check_with_declared_dependency() -> Result<()> {
 #[test]
 fn check_no_install_project() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context
         .temp_dir
@@ -3283,7 +3340,7 @@ fn check_no_install_project() -> Result<()> {
 /// Reject project installation filters when no project synchronization will occur.
 #[test]
 fn check_no_install_project_env_var_conflicts() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! {r#"
@@ -3338,7 +3395,9 @@ fn check_no_install_project_env_var_conflicts() -> Result<()> {
 #[test]
 fn check_isolated() -> Result<()> {
     let server = PackseServer::new("extras/extra-does-not-exist-backtrack.toml");
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2026-02-15T00:00:00Z");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_exclude_newer("2026-02-15T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -3416,7 +3475,7 @@ fn check_isolated() -> Result<()> {
 
 #[test]
 fn check_with_undeclared_dependency() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"

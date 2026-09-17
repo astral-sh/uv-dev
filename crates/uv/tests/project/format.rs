@@ -10,7 +10,7 @@ use uv_test::uv_snapshot;
 /// The workspace discovered while resolving settings is reused by `uv format`.
 #[test]
 fn format_reuses_settings_workspace_discovery() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
     context
         .temp_dir
         .child("pyproject.toml")
@@ -52,7 +52,7 @@ fn format_reuses_settings_workspace_discovery() -> Result<()> {
 
 #[test]
 fn format_project() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -86,9 +86,10 @@ fn format_project() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn format_uses_ruff_from_environment() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_packse_index("packages/tool-selection.toml");
     let tool_dir = context.root.child("tools");
     let bin_dir = context.root.child("tool-bin");
 
@@ -130,7 +131,7 @@ fn format_uses_ruff_from_environment() -> Result<()> {
 
 #[test]
 fn format_missing_pyproject_toml() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
 
     // Create an unformatted Python file
     let main_py = context.temp_dir.child("main.py");
@@ -156,7 +157,7 @@ fn format_missing_pyproject_toml() -> Result<()> {
 
 #[test]
 fn format_missing_project_in_pyproject_toml() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
 
     // Create an empty pyproject.toml with no [project] section
     context.temp_dir.child("pyproject.toml");
@@ -185,7 +186,7 @@ fn format_missing_project_in_pyproject_toml() -> Result<()> {
 
 #[test]
 fn format_unmanaged_project() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -223,7 +224,7 @@ fn format_unmanaged_project() -> Result<()> {
 
 #[test]
 fn format_from_project_root() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -262,7 +263,7 @@ fn format_from_project_root() -> Result<()> {
 
 #[test]
 fn format_no_project() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
 
     let main_py = context.temp_dir.child("main.py");
     main_py.write_str(indoc! {r"
@@ -287,7 +288,7 @@ fn format_no_project() -> Result<()> {
 
 #[test]
 fn format_relative_project() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
 
     let pyproject_toml = context.temp_dir.child("project").child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -332,7 +333,7 @@ fn format_relative_project() -> Result<()> {
 
 #[test]
 fn format_fails_malformed_pyproject() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str("malformed pyproject.toml")?;
@@ -371,7 +372,7 @@ fn format_fails_malformed_pyproject() -> Result<()> {
 
 #[test]
 fn format_check() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -407,7 +408,7 @@ fn format_check() -> Result<()> {
 
 #[test]
 fn format_diff() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -448,7 +449,7 @@ fn format_diff() -> Result<()> {
 
 #[test]
 fn format_with_ruff_args() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -488,7 +489,7 @@ fn format_with_ruff_args() -> Result<()> {
 
 #[test]
 fn format_specific_files() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -531,7 +532,7 @@ fn format_specific_files() -> Result<()> {
 
 #[test]
 fn format_version_option() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -565,7 +566,7 @@ fn format_version_option() -> Result<()> {
 
 #[test]
 fn format_version_constraints() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -597,7 +598,7 @@ fn format_version_constraints() -> Result<()> {
 
 #[test]
 fn format_version_latest() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -629,7 +630,7 @@ fn format_version_latest() -> Result<()> {
 
 #[test]
 fn format_exclude_newer() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -662,10 +663,12 @@ fn format_exclude_newer() -> Result<()> {
 
 #[test]
 fn format_no_matching_version() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]).with_filter((
-        r"\b[a-z0-9_]+-(?:apple|pc|unknown)-[a-z0-9_]+(?:-[a-z0-9_]+)?\b",
-        "[PLATFORM]",
-    ));
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_local_index()
+        .with_filter((
+            r"\b[a-z0-9_]+-(?:apple|pc|unknown)-[a-z0-9_]+(?:-[a-z0-9_]+)?\b",
+            "[PLATFORM]",
+        ));
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
