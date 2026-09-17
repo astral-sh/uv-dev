@@ -11,28 +11,28 @@ use crate::candidate_selector::Candidate;
 use crate::resolver::RegisteredMetadata;
 
 #[derive(Clone, Debug)]
-enum FilePin<'index> {
+enum FilePin {
     Registry {
         /// The concrete distribution chosen for installation and locking.
         dist: ResolvedDist,
         /// The concrete distribution whose metadata is used during resolution.
-        metadata: PinMetadata<'index>,
+        metadata: PinMetadata,
     },
-    Url(RegisteredMetadata<'index>),
+    Url(RegisteredMetadata),
 }
 
 #[derive(Clone, Debug)]
-enum PinMetadata<'index> {
+enum PinMetadata {
     /// Proxy selection and direct-only resolution do not require a metadata request.
     Unrequested(DistributionId),
-    Registered(RegisteredMetadata<'index>),
+    Registered(RegisteredMetadata),
 }
 
 /// The artifacts and metadata selected for package versions within a fork.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct FilePins<'index>(FxHashMap<(PackageName, Version), FilePin<'index>>);
+pub(crate) struct FilePins(FxHashMap<(PackageName, Version), FilePin>);
 
-impl<'index> FilePins<'index> {
+impl FilePins {
     // Inserts are common (every time we select a version) while reads are rare (converting the
     // final resolution).
     /// Return the names of packages with any pinned version, including versions no longer selected.
@@ -48,7 +48,7 @@ impl<'index> FilePins<'index> {
         &mut self,
         candidate: &Candidate,
         dist: &CompatibleDist,
-        request: Option<impl FnOnce() -> Result<RegisteredMetadata<'index>, ResolveError>>,
+        request: Option<impl FnOnce() -> Result<RegisteredMetadata, ResolveError>>,
     ) -> Result<(), ResolveError> {
         match self
             .0
@@ -84,7 +84,7 @@ impl<'index> FilePins<'index> {
         &mut self,
         name: &PackageName,
         version: &Version,
-        metadata: RegisteredMetadata<'index>,
+        metadata: RegisteredMetadata,
     ) {
         self.0
             .entry((name.clone(), version.clone()))
@@ -104,7 +104,7 @@ impl<'index> FilePins<'index> {
         &self,
         name: &PackageName,
         version: &Version,
-    ) -> Option<&RegisteredMetadata<'index>> {
+    ) -> Option<&RegisteredMetadata> {
         match self.0.get(&(name.clone(), version.clone()))? {
             FilePin::Registry {
                 metadata: PinMetadata::Registered(metadata),

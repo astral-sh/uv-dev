@@ -80,6 +80,7 @@ pub use crate::resolver::reporter::Reporter;
 pub(crate) use crate::resolver::requests::RegisteredMetadata;
 use crate::resolver::requests::{MetadataRequest, MetadataRequests, RequestTask};
 use crate::resolver::requirements::{RequirementContext, RequirementExpander};
+use crate::resolver::selected_versions::{SelectedVersionContext, SelectedVersions};
 use crate::resolver::system::SystemDependency;
 pub(crate) use crate::resolver::urls::Urls;
 use crate::universal_marker::UniversalMarker;
@@ -108,6 +109,7 @@ mod reporter;
 mod requests;
 mod requirements;
 mod resolution;
+mod selected_versions;
 mod system;
 mod urls;
 
@@ -635,43 +637,90 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     .expect("a package was chosen but we don't have a term");
                 let range = term_intersection.unwrap_positive();
 
-                // Within a fixed resolver environment, an implicit registry candidate is
-                // stable for a given range and pre-release policy. Avoid repeating candidate
-                // selection when PubGrub revisits an identical decision after backtracking.
+                // Within one resume, an implicit registry candidate is stable for a given range
+                // and pre-release policy. A later resume also checks the sibling preferences and
+                // available index metadata before reusing an earlier decision.
                 let cache_selected_version = match source {
                     PackageSource::Registry(None) => true,
                     PackageSource::Url(_) | PackageSource::Registry(Some(_)) => false,
                 };
                 let decision = if cache_selected_version
-                    && let Some((selected_range, version)) = state.selected_versions.get(&next_id)
-                    && selected_range == range
+                    && let Some(version) = state.selected_versions.get_same_resume(next_id, range)
                 {
-                    Some(ResolverVersion::Unforked(version.clone()))
+                    Some(ResolverVersion::Unforked(version))
                 } else {
-                    let preferences = preferences.for_package(self, &state, next_package.name());
-                    let decision = self.choose_version(
-                        next_package,
-                        next_id,
-                        source,
-                        range,
-                        &mut state.pins,
-                        &preferences,
-                        &state.env,
-                        &state.python_requirement,
-                        &state.pubgrub,
-                        visited,
-                        requests,
-                    )?;
-
-                    if cache_selected_version
-                        && let Some(ResolverVersion::Unforked(version)) = &decision
+                    // Required artifact coverage can depend on newly learned dependency edges.
+                    // Its eligibility is not captured by the range or sibling preferences.
+                    let versions_response = if cache_selected_version
+                        && preferences.is_shared()
+                        && !requests.is_speculative()
+                        && self.options.artifact_environments.is_empty()
                     {
-                        state
-                            .selected_versions
-                            .insert(next_id, (range.clone(), version.clone()));
-                    }
+                        next_package
+                            .name_no_root()
+                            .and_then(|name| self.index.implicit().get(name))
+                    } else {
+                        None
+                    };
+                    let package_preferences = preferences.for_package(
+                        self,
+                        &state,
+                        next_package.name(),
+                        versions_response.is_some(),
+                    );
 
-                    decision
+                    if let Some(version) = versions_response
+                        .as_ref()
+                        .zip(package_preferences.siblings())
+                        .and_then(|(versions, siblings)| {
+                            state
+                                .selected_versions
+                                .get_across_resumes(next_id, range, siblings, versions)
+                        })
+                    {
+                        Some(ResolverVersion::Unforked(version))
+                    } else {
+                        let (package_preferences, siblings) = package_preferences.into_parts();
+                        let selection_context =
+                            versions_response.zip(siblings).map(|(versions, siblings)| {
+                                SelectedVersionContext::new(siblings, versions)
+                            });
+                        let decision = self.choose_version(
+                            next_package,
+                            next_id,
+                            source,
+                            range,
+                            &mut state.pins,
+                            &package_preferences,
+                            &state.env,
+                            &state.python_requirement,
+                            &state.pubgrub,
+                            visited,
+                            requests,
+                        )?;
+
+                        if cache_selected_version
+                            && let Some(ResolverVersion::Unforked(version)) = &decision
+                        {
+                            // Waiting for metadata can make additional sibling preferences
+                            // eligible. Keep the overlay captured before selection, and only
+                            // retain it if the same ready response is still published.
+                            let selection_context = selection_context.and_then(|context| {
+                                let current = next_package
+                                    .name_no_root()
+                                    .and_then(|name| self.index.implicit().get(name));
+                                context.confirm(current.as_ref())
+                            });
+                            state.selected_versions.insert(
+                                next_id,
+                                range.clone(),
+                                version.clone(),
+                                selection_context,
+                            );
+                        }
+
+                        decision
+                    }
                 };
 
                 // Pick the next compatible version.
@@ -771,7 +820,6 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 next_package,
                 &version,
                 &state.pins,
-                &state.fork_urls,
                 &state.env,
                 &state.python_requirement,
                 &state.pubgrub,
@@ -932,14 +980,14 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
     }
 
     /// Convert the dependency [`Fork`]s into [`ForkState`]s.
-    fn forks_to_fork_states<'a, 'index: 'a>(
+    fn forks_to_fork_states<'a>(
         &'a self,
-        current_state: ForkState<'index>,
+        mut current_state: ForkState,
         version: &'a Version,
         forks: Vec<Fork>,
         requests: &'a MetadataRequests,
         diverging_packages: &'a BTreeSet<PackageName>,
-    ) -> impl Iterator<Item = Result<ForkState<'index>, ResolveError>> + 'a {
+    ) -> impl Iterator<Item = Result<ForkState, ResolveError>> + 'a {
         debug!(
             "Splitting resolution on {}=={} over {} into {} resolution{} with separate markers",
             current_state.pubgrub.package_store[current_state.next],
@@ -952,6 +1000,8 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             if forks.len() == 1 { "" } else { "s" }
         );
         assert!(forks.len() >= 2);
+        // Every child changes its environment and discards the parent's candidate cache.
+        current_state.selected_versions.clear();
         // This is a somewhat tortured technique to ensure
         // that our resolver state is only cloned as much
         // as it needs to be. We basically move the state
@@ -1011,11 +1061,13 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
     /// Convert the dependency [`Fork`]s into [`ForkState`]s.
     #[expect(clippy::unused_self)]
-    fn version_forks_to_fork_states<'index>(
+    fn version_forks_to_fork_states(
         &self,
-        current_state: ForkState<'index>,
+        mut current_state: ForkState,
         forks: Vec<VersionFork>,
-    ) -> impl Iterator<Item = ForkState<'index>> {
+    ) -> impl Iterator<Item = ForkState> {
+        // Every child changes its environment and discards the parent's candidate cache.
+        current_state.selected_versions.clear();
         // This is a somewhat tortured technique to ensure
         // that our resolver state is only cloned as much
         // as it needs to be. We basically move the state
@@ -1153,19 +1205,19 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
     // tracing-durations-export diagrams, but it took ~5% resolver thread runtime for apache-airflow
     // when I last measured.
     #[cfg_attr(feature = "tracing-durations-export", instrument(skip_all, fields(%package)))]
-    fn choose_version<'index>(
+    fn choose_version(
         &self,
         package: &PubGrubPackage,
         id: Id<PubGrubPackage>,
         source: PackageSource<'_>,
         range: &Range<Version>,
-        pins: &mut FilePins<'index>,
+        pins: &mut FilePins,
         preferences: &[PreferenceEntry],
         env: &ResolverEnvironment,
         python_requirement: &PythonRequirement,
         pubgrub: &State<UvDependencyProvider>,
         visited: &mut FxHashSet<PackageName>,
-        requests: &'index MetadataRequests,
+        requests: &MetadataRequests,
     ) -> Result<Option<ResolverVersion>, ResolveError> {
         match &**package {
             PubGrubPackageInner::Root(_) => {
@@ -1222,7 +1274,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
     /// Select a version for a URL requirement. Since there is only one version per URL, we return
     /// that version if it is in range and `None` otherwise.
-    fn choose_version_url<'index>(
+    fn choose_version_url(
         &self,
         id: Id<PubGrubPackage>,
         name: &PackageName,
@@ -1231,8 +1283,8 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         env: &ResolverEnvironment,
         python_requirement: &PythonRequirement,
         pubgrub: &State<UvDependencyProvider>,
-        pins: &mut FilePins<'index>,
-        requests: &'index MetadataRequests,
+        pins: &mut FilePins,
+        requests: &MetadataRequests,
     ) -> Result<Option<ResolverVersion>, ResolveError> {
         debug!(
             "Searching for a compatible version of {name} @ {} ({range})",
@@ -1343,7 +1395,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
     /// Given a candidate registry requirement, choose the next version in range to try, or `None`
     /// if there is no version in this range.
-    fn choose_version_registry<'index>(
+    fn choose_version_registry(
         &self,
         package: &PubGrubPackage,
         id: Id<PubGrubPackage>,
@@ -1354,9 +1406,9 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         env: &ResolverEnvironment,
         python_requirement: &PythonRequirement,
         pubgrub: &State<UvDependencyProvider>,
-        pins: &mut FilePins<'index>,
+        pins: &mut FilePins,
         visited: &mut FxHashSet<PackageName>,
-        requests: &'index MetadataRequests,
+        requests: &MetadataRequests,
     ) -> Result<Option<ResolverVersion>, ResolveError> {
         // Wait for the metadata to be available.
         let versions_response = requests.request_package(name, index)?.wait();
@@ -1540,7 +1592,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
     /// 2. Platforms that the user explicitly marks as "required" (opt-in). For example, the user
     ///    might require that the generated resolution always includes wheels for x86 macOS, and
     ///    fails entirely if the platform is unsupported.
-    fn fork_version_registry<'index>(
+    fn fork_version_registry(
         &self,
         candidate: &Candidate,
         dist: &CompatibleDist,
@@ -1553,8 +1605,8 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         preferences: &[PreferenceEntry],
         env: &ResolverEnvironment,
         pubgrub: &State<UvDependencyProvider>,
-        pins: &mut FilePins<'index>,
-        requests: &'index MetadataRequests,
+        pins: &mut FilePins,
+        requests: &MetadataRequests,
     ) -> Result<Option<ResolverVersion>, ResolveError> {
         // This only applies to universal resolutions.
         let Some(fork_markers) = env.fork_markers() else {
@@ -1752,14 +1804,14 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
     }
 
     /// Visit a selected candidate.
-    fn visit_candidate<'index>(
+    fn visit_candidate(
         &self,
         candidate: &Candidate,
         dist: &CompatibleDist,
         package: &PubGrubPackage,
         name: &PackageName,
-        pins: &mut FilePins<'index>,
-        requests: &'index MetadataRequests,
+        pins: &mut FilePins,
+        requests: &MetadataRequests,
     ) -> Result<(), ResolveError> {
         let request = if matches!(&**package, PubGrubPackageInner::Package { .. })
             && self.dependency_mode.is_transitive()
@@ -1835,9 +1887,18 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         env: &ResolverEnvironment,
         python_requirement: &PythonRequirement,
         pubgrub: &State<UvDependencyProvider>,
+        requests: &MetadataRequests,
     ) -> Result<ForkedDependencies, ResolveError> {
-        let dependencies =
-            self.get_dependencies(id, package, version, pins, env, python_requirement, pubgrub)?;
+        let dependencies = self.get_dependencies(
+            id,
+            package,
+            version,
+            pins,
+            env,
+            python_requirement,
+            pubgrub,
+            requests,
+        )?;
         if env.marker_environment().is_some() {
             Ok(ForkedDependencies::from_dependencies_platform_specific(
                 dependencies,
@@ -1863,6 +1924,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         env: &ResolverEnvironment,
         python_requirement: &PythonRequirement,
         pubgrub: &State<UvDependencyProvider>,
+        requests: &MetadataRequests,
     ) -> Result<Dependencies, ResolveError> {
         let expander = RequirementExpander::new(
             &self.constraints,
@@ -2662,7 +2724,7 @@ enum ForkContinuation {
 
 /// State that is used during unit propagation in the resolver, one instance per fork.
 #[derive(Clone)]
-pub(crate) struct ForkState<'index> {
+pub(crate) struct ForkState {
     /// The internal state used by the resolver.
     ///
     /// Note that not all parts of this state are strictly internal. For
@@ -2690,7 +2752,7 @@ pub(crate) struct ForkState<'index> {
     /// concrete distribution whose metadata was used during resolution.
     /// After resolution is finished, this map is consulted to recover both the
     /// locked artifact and the metadata backing the resolved dependency edges.
-    pins: FilePins<'index>,
+    pins: FilePins,
     /// Ensure we don't have duplicate URLs in any branch.
     ///
     /// Unlike [`Urls`], we add only the URLs we have seen in this branch, and there can be only
@@ -2714,7 +2776,7 @@ pub(crate) struct ForkState<'index> {
     /// The last range scheduled for prefetch for each undecided package.
     pre_visited: FxHashMap<Id<PubGrubPackage>, Range<Version>>,
     /// The last version selected for each package and range in a specific environment.
-    selected_versions: FxHashMap<Id<PubGrubPackage>, (Range<Version>, Version)>,
+    selected_versions: SelectedVersions,
     /// A cache for parsed version maps.
     ///
     /// Per fork, since the index for a package can differ between forks.
@@ -2754,7 +2816,7 @@ pub(crate) struct ForkState<'index> {
     prefetcher: BatchPrefetcher,
 }
 
-impl<'index> ForkState<'index> {
+impl ForkState {
     fn new(
         pubgrub: State<UvDependencyProvider>,
         env: ResolverEnvironment,
@@ -2773,7 +2835,7 @@ impl<'index> ForkState<'index> {
             priorities: PubGrubPriorities::default(),
             added_dependencies: FxHashMap::default(),
             pre_visited: FxHashMap::default(),
-            selected_versions: FxHashMap::default(),
+            selected_versions: SelectedVersions::default(),
             known_versions: KnownVersions::default(),
             env,
             python_requirement,
@@ -3178,7 +3240,7 @@ impl<'index> ForkState<'index> {
         (url, index)
     }
 
-    fn into_resolution(self) -> Resolution<'index> {
+    fn into_resolution(self) -> Resolution {
         let solution: FxHashMap<_, _> = self.pubgrub.partial_solution.extract_solution().collect();
         let edge_count: usize = solution
             .keys()
@@ -3469,11 +3531,10 @@ impl Response {
                     if publish_shared {
                         if index.explicit().register(key.clone()) {
                             index.explicit().done(key, version_map);
+                        } else if let Some(entry) = index.explicit().get_registered(key.clone()) {
+                            entry.wait_blocking();
                         } else {
-                            index
-                                .explicit()
-                                .wait_blocking(&key)
-                                .map_err(|_| ResolveError::UnregisteredTask(key.0.to_string()))?;
+                            return Err(ResolveError::UnregisteredTask(key.0.to_string()));
                         }
                     } else {
                         trial.explicit().done(key, version_map);
@@ -3481,11 +3542,10 @@ impl Response {
                 } else if publish_shared {
                     if index.implicit().register(name.clone()) {
                         index.implicit().done(name, version_map);
+                    } else if let Some(entry) = index.implicit().get_registered(name.clone()) {
+                        entry.wait_blocking();
                     } else {
-                        index
-                            .implicit()
-                            .wait_blocking(&name)
-                            .map_err(|_| ResolveError::UnregisteredTask(name.to_string()))?;
+                        return Err(ResolveError::UnregisteredTask(name.to_string()));
                     }
                 } else {
                     trial.implicit().done(name, version_map);
@@ -3513,11 +3573,10 @@ impl Response {
         if publish_shared {
             if index.distributions().register(id.clone()) {
                 index.distributions().done(id, metadata);
+            } else if let Some(entry) = index.distributions().get_registered(id.clone()) {
+                entry.wait_blocking();
             } else {
-                index
-                    .distributions()
-                    .wait_blocking(&id)
-                    .map_err(|_| ResolveError::UnregisteredTask(description))?;
+                return Err(ResolveError::UnregisteredTask(description));
             }
         } else {
             trial.distributions().done(id, metadata);

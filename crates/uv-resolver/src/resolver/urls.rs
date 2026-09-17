@@ -176,6 +176,9 @@ impl Urls {
         env: &ResolverEnvironment,
         url: &VerbatimParsedUrl,
     ) -> bool {
+        if let Some(recorder) = &self.recorder {
+            recorder.source_policy(name);
+        }
         self.overrides.is_fixed(name, env, url)
     }
 
