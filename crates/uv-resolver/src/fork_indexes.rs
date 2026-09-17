@@ -10,6 +10,11 @@ use crate::resolver::ResolverEnvironment;
 pub(crate) struct ForkIndexes(FxHashMap<PackageName, IndexMetadata>);
 
 impl ForkIndexes {
+    /// Return the number of explicit index sources recorded in this fork.
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+
     /// Iterate over every index recorded for this fork, including packages no longer selected.
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&PackageName, &IndexMetadata)> {
         self.0.iter()
