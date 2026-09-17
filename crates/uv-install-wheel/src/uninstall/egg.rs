@@ -231,8 +231,8 @@ impl EggUninstallAuthority {
     }
 
     /// Check every existing entry that a recursive directory removal could delete. A directory
-    /// symlink is an unlink candidate, not a traversal root. `None` selects the adjacent-module
-    /// fallback; a path that disappears after its initial observation does not select new paths.
+    /// symlink is an unlink candidate, not a traversal root. `None` means the original path was
+    /// absent; a path that disappears after its initial observation does not authorize new paths.
     pub(super) fn check_directory_tree(
         &self,
         path: &Path,
@@ -583,6 +583,157 @@ mod tests {
 
         assert!(payload.exists());
         assert!(egg_info.exists());
+    }
+
+    #[test]
+    fn metadata_tree_cannot_contain_the_selected_interpreter() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let target = temp.join("target");
+        let selected = layout(&target.join("owned-0.1.0.egg-info"));
+        initialize(&selected);
+        let targeted = target_layout(&selected, &target);
+        initialize(&targeted);
+        let payload = target.join("payload.py");
+        write(&payload, "recorded payload");
+        let launcher =
+            targeted
+                .scheme
+                .scripts
+                .join(if cfg!(windows) { "tool.exe" } else { "tool" });
+        write(&launcher, "owned launcher");
+        let egg_info = recorded_egg(&targeted, "../payload.py\n");
+        write(
+            egg_info.join("entry_points.txt"),
+            "[console_scripts]\ntool = missing:main\n",
+        );
+
+        assert!(matches!(
+            uninstall_egg(&egg_info, "owned 0.1.0", &targeted),
+            Err(Error::BrokenVenv(message)) if message.contains("core Python environment file")
+        ));
+
+        assert_eq!(
+            fs_err::read_to_string(&selected.sys_executable).unwrap(),
+            "selected interpreter"
+        );
+        assert_eq!(
+            fs_err::read_to_string(selected.sys_prefix.join("pyvenv.cfg")).unwrap(),
+            "selected configuration"
+        );
+        assert_eq!(
+            fs_err::read_to_string(&payload).unwrap(),
+            "recorded payload"
+        );
+        assert_eq!(fs_err::read_to_string(&launcher).unwrap(), "owned launcher");
+        assert!(egg_info.exists());
+    }
+
+    #[test]
+    fn metadata_tree_cannot_contain_a_selected_installation_root() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let selected = layout(&temp.join("selected"));
+        initialize(&selected);
+        let mut targeted = target_layout(&selected, &temp.join("target"));
+        targeted.scheme.include = targeted.scheme.purelib.join("owned-0.1.0.egg-info/include");
+        initialize(&targeted);
+        let payload = targeted.scheme.purelib.join("payload.py");
+        write(&payload, "recorded payload");
+        write(targeted.scheme.include.join("sentinel"), "selected root");
+        let egg_info = recorded_egg(&targeted, "../payload.py\n");
+
+        assert!(matches!(
+            uninstall_egg(&egg_info, "owned 0.1.0", &targeted),
+            Err(Error::BrokenVenv(message)) if message.contains("installation root")
+        ));
+
+        assert_eq!(
+            fs_err::read_to_string(&payload).unwrap(),
+            "recorded payload"
+        );
+        assert_eq!(
+            fs_err::read_to_string(targeted.scheme.include.join("sentinel")).unwrap(),
+            "selected root"
+        );
+        assert!(selected.sys_executable.exists());
+        assert!(egg_info.exists());
+    }
+
+    #[test]
+    fn metadata_core_alias_stops_before_fallback_payload_removal() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let selected = layout(&temp.join("selected"));
+        initialize(&selected);
+        let targeted = target_layout(&selected, &temp.join("target"));
+        initialize(&targeted);
+        let payload = targeted.scheme.purelib.join("owned.py");
+        write(&payload, "fallback payload");
+        let egg_info = targeted.scheme.purelib.join("owned-0.1.0.egg-info");
+        write(egg_info.join("top_level.txt"), "owned\n");
+        let alias = egg_info.join("interpreter-alias");
+        fs_err::hard_link(&selected.sys_executable, &alias).unwrap();
+
+        assert!(matches!(
+            uninstall_egg(&egg_info, "owned 0.1.0", &targeted),
+            Err(Error::BrokenVenv(message)) if message.contains("core Python environment file")
+        ));
+
+        assert_eq!(
+            fs_err::read_to_string(&payload).unwrap(),
+            "fallback payload"
+        );
+        assert!(same_file::is_same_file(&selected.sys_executable, &alias).unwrap());
+        assert!(egg_info.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metadata_tree_io_error_precedes_payload_removal() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let selected = layout(&temp.join("selected"));
+        initialize(&selected);
+        let payload = selected.scheme.purelib.join("payload.py");
+        write(&payload, "recorded payload");
+        let egg_info = recorded_egg(&selected, "../payload.py\n");
+        let invalid = egg_info.join("loop");
+        fs_err::os::unix::fs::symlink("loop", &invalid).unwrap();
+
+        let Err(Error::Io(error)) = uninstall_egg(&egg_info, "owned 0.1.0", &selected) else {
+            panic!("expected the metadata symlink-loop I/O error");
+        };
+
+        assert_ne!(error.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(
+            fs_err::read_to_string(&payload).unwrap(),
+            "recorded payload"
+        );
+        assert!(
+            fs_err::symlink_metadata(&invalid)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(egg_info.exists());
+    }
+
+    #[test]
+    fn absent_metadata_keeps_the_earlier_missing_top_level_error() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let selected = layout(&temp.join("selected"));
+        initialize(&selected);
+        let egg_info = selected.scheme.purelib.join("absent-0.1.0.egg-info");
+        let authority = EggUninstallAuthority::new(&selected).unwrap();
+
+        assert!(
+            authority
+                .check_directory_tree(&egg_info, PathScope::Library)
+                .unwrap()
+                .is_none()
+        );
+        assert!(matches!(
+            uninstall_egg(&egg_info, "absent 0.1.0", &selected),
+            Err(Error::MissingTopLevel(path)) if path == egg_info.join("top_level.txt")
+        ));
+        assert!(selected.sys_executable.exists());
     }
 
     #[test]

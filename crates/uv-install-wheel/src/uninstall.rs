@@ -356,13 +356,20 @@ pub fn uninstall_egg(
     }
 
     let authority = EggUninstallAuthority::new(layout)?;
-    let egg_info = match authority.check(egg_info, PathScope::Library)? {
-        PathDecision::Allowed(path) => path,
-        PathDecision::Missing => return Ok(Uninstall::default()),
-        PathDecision::Escapes | PathDecision::Protected => {
+    // The known metadata directory is removed recursively, so every existing entry must be
+    // authorized before any recorded payload, fallback package, or launcher is removed.
+    let egg_info = match authority.check_directory_tree(egg_info, PathScope::Library)? {
+        Some(PathDecision::Allowed(path)) => path,
+        None | Some(PathDecision::Missing) => return Ok(Uninstall::default()),
+        Some(PathDecision::Escapes) => {
             return Err(Error::BrokenVenv(
-                "egg-info directory is not within the selected site-packages directories"
+                "egg-info directory would remove an installation root or a path outside the selected site-packages directories"
                     .to_string(),
+            ));
+        }
+        Some(PathDecision::Protected) => {
+            return Err(Error::BrokenVenv(
+                "egg-info directory would remove a core Python environment file".to_string(),
             ));
         }
     };
