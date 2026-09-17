@@ -1,9 +1,10 @@
 //! Bounded coordination between independently valid resolver forks.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use pubgrub::{Incompatibility, Term};
-use rustc_hash::FxHashSet;
+use pubgrub::{Id, Incompatibility, Term};
+use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::debug;
 
 use uv_distribution_types::{Identifier, IndexMetadata, IndexUrl, ResourceId};
@@ -18,7 +19,7 @@ use crate::ResolutionMode;
 use crate::error::ResolveError;
 use crate::fork_indexes::ForkIndexes;
 use crate::fork_urls::ForkUrls;
-use crate::preferences::{PreferenceIndex, PreferenceSource, Preferences};
+use crate::preferences::{Entry, PreferenceIndex, PreferenceSource, Preferences};
 use crate::pubgrub::{PubGrubPackage, PubGrubPackageInner, Range};
 use crate::universal_marker::{ConflictMarker, UniversalMarker};
 
@@ -64,14 +65,345 @@ struct Proposal {
     version: Version,
 }
 
+/// The ordered union of every live and completed fork's observations. Equal observations retain
+/// independent owners, so withdrawing one fork cannot remove another fork's preference.
+struct ObservationLedger {
+    observations: BTreeMap<PackageName, BTreeMap<Observation, usize>>,
+    registry_versions: BTreeMap<RegistryPackage, BTreeMap<Version, usize>>,
+    multiple_versions: usize,
+    workspace_members: BTreeSet<PackageName>,
+}
+
+impl ObservationLedger {
+    fn new(workspace_members: &BTreeSet<PackageName>) -> Self {
+        Self {
+            observations: BTreeMap::new(),
+            registry_versions: BTreeMap::new(),
+            multiple_versions: 0,
+            workspace_members: workspace_members.clone(),
+        }
+    }
+
+    fn insert(&mut self, observation: &Observation) {
+        *self
+            .observations
+            .entry(observation.name.clone())
+            .or_default()
+            .entry(observation.clone())
+            .or_default() += 1;
+
+        if let Source::Registry(index) = &observation.source
+            && observation.version.is_stable()
+            && !self.workspace_members.contains(&observation.name)
+        {
+            let versions = self
+                .registry_versions
+                .entry(RegistryPackage {
+                    name: observation.name.clone(),
+                    index: index.clone(),
+                })
+                .or_default();
+            let previous = versions.len();
+            *versions.entry(observation.version.clone()).or_default() += 1;
+            if previous == 1 && versions.len() == 2 {
+                self.multiple_versions += 1;
+            }
+        }
+    }
+
+    fn remove(&mut self, observation: &Observation) {
+        let observations = self
+            .observations
+            .get_mut(&observation.name)
+            .expect("a withdrawn observation must have an owner");
+        let count = observations
+            .get_mut(observation)
+            .expect("a withdrawn observation must have an owner");
+        *count -= 1;
+        if *count == 0 {
+            observations.remove(observation);
+        }
+        if observations.is_empty() {
+            self.observations.remove(&observation.name);
+        }
+
+        if let Source::Registry(index) = &observation.source
+            && observation.version.is_stable()
+            && !self.workspace_members.contains(&observation.name)
+        {
+            let package = RegistryPackage {
+                name: observation.name.clone(),
+                index: index.clone(),
+            };
+            let versions = self
+                .registry_versions
+                .get_mut(&package)
+                .expect("a withdrawn registry observation must have a version");
+            let previous = versions.len();
+            let count = versions
+                .get_mut(&observation.version)
+                .expect("a withdrawn registry observation must have a version");
+            *count -= 1;
+            if *count == 0 {
+                versions.remove(&observation.version);
+            }
+            if previous == 2 && versions.len() == 1 {
+                self.multiple_versions -= 1;
+            }
+            if versions.is_empty() {
+                self.registry_versions.remove(&package);
+            }
+        }
+    }
+
+    fn replace(&mut self, previous: &Observations, replacement: &Observations) {
+        for observation in previous.difference(replacement) {
+            self.remove(observation);
+        }
+        for observation in replacement.difference(previous) {
+            self.insert(observation);
+        }
+    }
+
+    fn excluding<'a>(
+        &'a self,
+        excluded: &'a Observations,
+    ) -> impl Iterator<Item = &'a Observation> {
+        self.observations.values().flat_map(|observations| {
+            observations.iter().filter_map(|(observation, count)| {
+                (*count > usize::from(excluded.contains(observation))).then_some(observation)
+            })
+        })
+    }
+
+    fn for_package<'a>(
+        &'a self,
+        name: &PackageName,
+        excluded: &'a Observations,
+    ) -> impl Iterator<Item = &'a Observation> {
+        self.observations
+            .get(name)
+            .into_iter()
+            .flat_map(|observations| observations.iter())
+            .filter_map(|(observation, count)| {
+                (*count > usize::from(excluded.contains(observation))).then_some(observation)
+            })
+    }
+
+    fn has_candidates(&self) -> bool {
+        self.multiple_versions > 0
+    }
+}
+
+/// Normalize a registry identity once, rather than allocating a new URL for every decision.
+#[derive(Default)]
+struct SourceIdentities(FxHashMap<IndexUrl, IndexUrl>);
+
+impl SourceIdentities {
+    fn index(&mut self, index: &IndexUrl) -> IndexUrl {
+        self.0
+            .entry(index.clone())
+            .or_insert_with(|| credential_free_index(index))
+            .clone()
+    }
+}
+
+struct ObservedDecision {
+    package: Id<PubGrubPackage>,
+    version: Version,
+    observation: Option<Observation>,
+}
+
+/// The observed decision prefix for one live state. PubGrub can backjump while propagating or
+/// reprioritizing, so neither a decision count nor the last attempted package identifies a delta.
+struct ForkObservations {
+    decisions: Vec<ObservedDecision>,
+    observations: Observations,
+    marker: UniversalMarker,
+    source_sizes: (usize, usize),
+}
+
+impl ForkObservations {
+    fn new(
+        state: &ForkState,
+        ledger: &mut ObservationLedger,
+        identities: &mut SourceIdentities,
+    ) -> Self {
+        let mut observations = Self {
+            decisions: Vec::new(),
+            observations: Observations::new(),
+            marker: UniversalMarker::TRUE,
+            source_sizes: (0, 0),
+        };
+        observations.refresh(state, ledger, identities);
+        observations
+    }
+
+    fn refresh(
+        &mut self,
+        state: &ForkState,
+        ledger: &mut ObservationLedger,
+        identities: &mut SourceIdentities,
+    ) {
+        let marker = state
+            .env
+            .try_universal_markers()
+            .unwrap_or(UniversalMarker::TRUE);
+        let source_sizes = (state.fork_urls.len(), state.fork_indexes.len());
+        // File pins and successful source mappings are immutable within a fork. A newly recorded
+        // source can change an earlier decision's identity, even when that decision is retained.
+        let sources_changed = self.source_sizes != source_sizes || self.marker != marker;
+        let mut retained = 0;
+        for (package, version) in state.pubgrub.partial_solution.extract_solution() {
+            if self
+                .decisions
+                .get(retained)
+                .is_some_and(|previous| previous.package == package && previous.version == version)
+            {
+                // A missing pin can become available later. Proxy decisions remain cheap to skip.
+                if sources_changed || self.decisions[retained].observation.is_none() {
+                    let observation =
+                        observe_decision(state, package, &version, marker, identities);
+                    self.replace_observation(retained, observation, ledger);
+                }
+            } else {
+                self.truncate(retained, ledger);
+                let observation = observe_decision(state, package, &version, marker, identities);
+                if let Some(observation) = &observation
+                    && self.observations.insert(observation.clone())
+                {
+                    ledger.insert(observation);
+                }
+                self.decisions.push(ObservedDecision {
+                    package,
+                    version,
+                    observation,
+                });
+            }
+            retained += 1;
+        }
+        self.truncate(retained, ledger);
+        self.marker = marker;
+        self.source_sizes = source_sizes;
+    }
+
+    fn replace_observation(
+        &mut self,
+        decision: usize,
+        replacement: Option<Observation>,
+        ledger: &mut ObservationLedger,
+    ) {
+        if self.decisions[decision].observation == replacement {
+            return;
+        }
+        if let Some(previous) = self.decisions[decision].observation.take()
+            && self.observations.remove(&previous)
+        {
+            ledger.remove(&previous);
+        }
+        if let Some(replacement) = &replacement
+            && self.observations.insert(replacement.clone())
+        {
+            ledger.insert(replacement);
+        }
+        self.decisions[decision].observation = replacement;
+    }
+
+    fn truncate(&mut self, retained: usize, ledger: &mut ObservationLedger) {
+        for decision in self.decisions.drain(retained..) {
+            if let Some(observation) = decision.observation
+                && self.observations.remove(&observation)
+            {
+                ledger.remove(&observation);
+            }
+        }
+    }
+}
+
+/// Candidate selection only needs the current package's preferences. The ordered ledger is
+/// borrowed while a fork runs; accepted lockfile preferences remain ahead of sibling choices.
+#[derive(Clone, Copy)]
+pub(super) struct ForkPreferences<'a> {
+    base: &'a Preferences,
+    shared: Option<(&'a ObservationLedger, &'a Observations)>,
+}
+
+impl<'a> ForkPreferences<'a> {
+    pub(super) fn fixed(base: &'a Preferences) -> Self {
+        Self { base, shared: None }
+    }
+
+    fn shared(
+        base: &'a Preferences,
+        ledger: &'a ObservationLedger,
+        excluded: &'a Observations,
+    ) -> Self {
+        Self {
+            base,
+            shared: Some((ledger, excluded)),
+        }
+    }
+
+    pub(super) fn for_package<InstalledPackages: InstalledPackagesProvider>(
+        &self,
+        resolver: &ResolverState<InstalledPackages>,
+        state: &ForkState,
+        name: Option<&PackageName>,
+    ) -> Cow<'a, [Entry]> {
+        let Some(name) = name else {
+            return Cow::Borrowed(&[]);
+        };
+        let base = self.base.get(name);
+        let Some((ledger, excluded)) = self.shared else {
+            return Cow::Borrowed(base);
+        };
+        if resolver.workspace_members.contains(name) {
+            return Cow::Borrowed(base);
+        }
+
+        let mut entries = None;
+        let mut previous_index = None;
+        for observation in ledger.for_package(name, excluded) {
+            let Source::Registry(index) = &observation.source else {
+                continue;
+            };
+            let matches = match previous_index {
+                Some((previous, matches)) if previous == index => matches,
+                Some(_) | None => {
+                    let matches = same_registry_source(resolver, state, name, index);
+                    previous_index = Some((index, matches));
+                    matches
+                }
+            };
+            if matches {
+                entries
+                    .get_or_insert_with(|| base.to_vec())
+                    .push(Entry::from_resolver(
+                        index.clone(),
+                        observation.marker,
+                        observation.version.clone(),
+                    ));
+            }
+        }
+        match entries {
+            Some(entries) => Cow::Owned(entries),
+            None => Cow::Borrowed(base),
+        }
+    }
+}
+
 struct LiveFork {
     state: ForkState,
-    observations: Observations,
+    observations: ForkObservations,
 }
 
 impl LiveFork {
-    fn new(state: ForkState) -> Self {
-        let observations = observe(&state);
+    fn new(
+        state: ForkState,
+        ledger: &mut ObservationLedger,
+        identities: &mut SourceIdentities,
+    ) -> Self {
+        let observations = ForkObservations::new(&state, ledger, identities);
         Self {
             state,
             observations,
@@ -90,8 +422,7 @@ struct CompletedFork {
 }
 
 impl CompletedFork {
-    fn new(state: ForkState) -> Self {
-        let observations = observe(&state);
+    fn new(state: ForkState, observations: Observations) -> Self {
         Self {
             checkpoint: state.clone(),
             states: vec![state],
@@ -137,36 +468,56 @@ pub(super) fn solve<InstalledPackages: InstalledPackagesProvider>(
 ) -> Result<Vec<Resolution>, ResolveError> {
     // Fork construction orders states for a stack. Reversing them preserves that priority while
     // giving every live sibling a turn after each resolver decision.
-    let mut live: VecDeque<_> = initial.into_iter().rev().map(LiveFork::new).collect();
+    let mut ledger = ObservationLedger::new(&resolver.workspace_members);
+    let mut identities = SourceIdentities::default();
+    let mut live: VecDeque<_> = initial
+        .into_iter()
+        .rev()
+        .map(|state| LiveFork::new(state, &mut ledger, &mut identities))
+        .collect();
     let mut completed = Vec::new();
     let mut budget = AttemptBudget::new(MAX_COORDINATION_ATTEMPTS);
 
-    while let Some(mut fork) = live.pop_front() {
-        let external = collect_observations(&completed, &live, None);
-        let preferences = preferences_for(resolver, &fork.state, &external);
+    while let Some(fork) = live.pop_front() {
+        let LiveFork {
+            mut state,
+            mut observations,
+        } = fork;
+        let preferences =
+            ForkPreferences::shared(&resolver.preferences, &ledger, &observations.observations);
         // Both sibling decisions and newly fetched index metadata can change which live
         // preferences apply. The normal candidate cache does not include either in its key.
-        fork.state.selected_versions.clear();
+        state.selected_versions.clear();
         let yield_decisions = !live.is_empty() || !completed.is_empty();
-        match resolver.solve_fork(
-            fork.state,
-            &preferences,
-            visited,
-            requests,
-            yield_decisions,
-            None,
-        )? {
-            ForkOutcome::Pending(state) => live.push_back(LiveFork::new(state)),
-            ForkOutcome::Split(states) => {
-                live.extend(states.into_iter().rev().map(LiveFork::new));
+        match resolver.solve_fork(state, preferences, visited, requests, yield_decisions, None)? {
+            ForkOutcome::Pending(state) => {
+                observations.refresh(&state, &mut ledger, &mut identities);
+                live.push_back(LiveFork {
+                    state,
+                    observations,
+                });
             }
-            ForkOutcome::Complete(state) => completed.push(CompletedFork::new(state)),
+            ForkOutcome::Split(states) => {
+                for observation in &observations.observations {
+                    ledger.remove(observation);
+                }
+                live.extend(
+                    states
+                        .into_iter()
+                        .rev()
+                        .map(|state| LiveFork::new(state, &mut ledger, &mut identities)),
+                );
+            }
+            ForkOutcome::Complete(state) => {
+                observations.refresh(&state, &mut ledger, &mut identities);
+                completed.push(CompletedFork::new(state, observations.observations));
+            }
         }
 
         coordinate_once(
             resolver,
             &mut completed,
-            &live,
+            &mut ledger,
             &mut budget,
             visited,
             requests,
@@ -179,7 +530,7 @@ pub(super) fn solve<InstalledPackages: InstalledPackagesProvider>(
         match coordinate_once(
             resolver,
             &mut completed,
-            &live,
+            &mut ledger,
             &mut budget,
             visited,
             requests,
@@ -208,55 +559,51 @@ fn observe(state: &ForkState) -> Observations {
         .env
         .try_universal_markers()
         .unwrap_or(UniversalMarker::TRUE);
+    let mut identities = SourceIdentities::default();
     state
         .pubgrub
         .partial_solution
         .extract_solution()
         .filter_map(|(package, version)| {
-            let PubGrubPackageInner::Package {
-                name,
-                extra: None,
-                group: None,
-                marker: MarkerTree::TRUE,
-            } = &*state.pubgrub.package_store[package]
-            else {
-                return None;
-            };
-            let source = if let Some(url) = state.fork_urls.get(name) {
-                let mut url = url.verbatim.to_url();
-                url.remove_credentials();
-                Source::Url(url)
-            } else {
-                let dist = state.pins.get(name, &version)?;
-                if let Some(index) = dist.index() {
-                    Source::Registry(credential_free_index(index))
-                } else {
-                    Source::Other(dist.resource_id())
-                }
-            };
-            Some(Observation {
-                name: name.clone(),
-                source,
-                version,
-                marker,
-            })
+            observe_decision(state, package, &version, marker, &mut identities)
         })
         .collect()
 }
 
-fn collect_observations(
-    completed: &[CompletedFork],
-    live: &VecDeque<LiveFork>,
-    skip_completed: Option<usize>,
-) -> Observations {
-    completed
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| Some(*index) != skip_completed)
-        .flat_map(|(_, fork)| fork.observations.iter())
-        .chain(live.iter().flat_map(|fork| fork.observations.iter()))
-        .cloned()
-        .collect()
+fn observe_decision(
+    state: &ForkState,
+    package: Id<PubGrubPackage>,
+    version: &Version,
+    marker: UniversalMarker,
+    identities: &mut SourceIdentities,
+) -> Option<Observation> {
+    let PubGrubPackageInner::Package {
+        name,
+        extra: None,
+        group: None,
+        marker: MarkerTree::TRUE,
+    } = &*state.pubgrub.package_store[package]
+    else {
+        return None;
+    };
+    let source = if let Some(url) = state.fork_urls.get(name) {
+        let mut url = url.verbatim.to_url();
+        url.remove_credentials();
+        Source::Url(url)
+    } else {
+        let dist = state.pins.get(name, version)?;
+        if let Some(index) = dist.index() {
+            Source::Registry(identities.index(index))
+        } else {
+            Source::Other(dist.resource_id())
+        }
+    };
+    Some(Observation {
+        name: name.clone(),
+        source,
+        version: version.clone(),
+        marker,
+    })
 }
 
 fn preferences_for<InstalledPackages: InstalledPackagesProvider>(
@@ -298,7 +645,7 @@ fn same_registry_source<InstalledPackages: InstalledPackagesProvider>(
         return false;
     }
     if let Some(index) = state.fork_indexes.get(name) {
-        return credential_free_index(index.url()) == *expected;
+        return *index.url().without_credentials() == *expected.url();
     }
     if resolver.urls.any_url(name) {
         return false;
@@ -313,7 +660,7 @@ fn same_registry_source<InstalledPackages: InstalledPackagesProvider>(
         && version_maps.iter().all(|versions| {
             versions
                 .index()
-                .is_some_and(|index| credential_free_index(index) == *expected)
+                .is_some_and(|index| *index.without_credentials() == *expected.url())
         })
 }
 
@@ -333,8 +680,8 @@ fn duplicate_count<'a>(observations: impl IntoIterator<Item = &'a Observation>) 
         .sum()
 }
 
-fn registry_versions(
-    observations: &Observations,
+fn registry_versions<'a>(
+    observations: impl IntoIterator<Item = &'a Observation>,
     workspace_members: &BTreeSet<PackageName>,
 ) -> BTreeMap<RegistryPackage, BTreeSet<Version>> {
     let mut versions = BTreeMap::<_, BTreeSet<_>>::new();
@@ -367,7 +714,9 @@ fn preference_index_matches(
         Source::Registry(index) => match preference {
             PreferenceIndex::Any => true,
             PreferenceIndex::Implicit => !has_explicit_index,
-            PreferenceIndex::Explicit(preferred) => credential_free_index(preferred) == *index,
+            PreferenceIndex::Explicit(preferred) => {
+                *preferred.without_credentials() == *index.url()
+            }
         },
         Source::Other(_) => match preference {
             PreferenceIndex::Any => true,
@@ -443,17 +792,17 @@ fn preferences_preserved(protected: &Observations, observations: &Observations) 
 fn next_proposal<InstalledPackages: InstalledPackagesProvider>(
     resolver: &ResolverState<InstalledPackages>,
     completed: &[CompletedFork],
-    live: &VecDeque<LiveFork>,
+    ledger: &ObservationLedger,
     budget: &AttemptBudget,
 ) -> Option<Proposal> {
-    if budget.remaining == 0 {
+    if budget.remaining == 0 || !ledger.has_candidates() {
         return None;
     }
     for (target, fork) in completed.iter().enumerate() {
         let current = registry_versions(&fork.observations, &resolver.workspace_members);
         let protected = selected_preferences(&resolver.preferences, &fork.states);
         let external = registry_versions(
-            &collect_observations(completed, live, Some(target)),
+            ledger.excluding(&fork.observations),
             &resolver.workspace_members,
         );
         for (package, current_versions) in current {
@@ -497,20 +846,20 @@ fn with_agreement(agreements: &Agreements, proposal: &Proposal) -> Agreements {
 fn coordinate_once<InstalledPackages: InstalledPackagesProvider>(
     resolver: &ResolverState<InstalledPackages>,
     completed: &mut [CompletedFork],
-    live: &VecDeque<LiveFork>,
+    ledger: &mut ObservationLedger,
     budget: &mut AttemptBudget,
     visited: &mut FxHashSet<PackageName>,
     requests: &MetadataRequests,
 ) -> CoordinationOutcome {
-    let Some(proposal) = next_proposal(resolver, completed, live, budget) else {
+    let Some(proposal) = next_proposal(resolver, completed, ledger, budget) else {
         return CoordinationOutcome::NoProposal;
     };
     if !budget.claim(proposal.clone()) {
         return CoordinationOutcome::NoProposal;
     }
 
-    let external = collect_observations(completed, live, Some(proposal.target));
     let target = &completed[proposal.target];
+    let external: Observations = ledger.excluding(&target.observations).cloned().collect();
     let before = duplicate_count(external.iter().chain(target.observations.iter()));
     let protected = selected_preferences(&resolver.preferences, &target.states);
     let agreements = with_agreement(&target.agreements, &proposal);
@@ -549,6 +898,7 @@ fn coordinate_once<InstalledPackages: InstalledPackagesProvider>(
 
     debug!("Accepted coordinated backtracking: duplicate count {before} -> {after}");
     let target = &mut completed[proposal.target];
+    ledger.replace(&target.observations, &observations);
     target.states = states;
     target.observations = observations;
     target.agreements = agreements;
@@ -800,7 +1150,7 @@ fn solve_trial<InstalledPackages: InstalledPackagesProvider>(
         state.selected_versions.clear();
         match resolver.solve_fork(
             state,
-            &preferences,
+            ForkPreferences::fixed(&preferences),
             visited,
             &trial_requests,
             false,
@@ -862,10 +1212,10 @@ mod tests {
     use crate::universal_marker::{ConflictMarker, UniversalMarker};
 
     use super::{
-        Agreements, AttemptBudget, Observation, Observations, Proposal, RegistryPackage, Source,
-        cached_sources_match, credential_free_index, duplicate_count, has_selected_preference,
-        preference_index_matches, preferences_preserved, proposal_changes_preference,
-        sources_fixed_by_policy, with_agreement,
+        Agreements, AttemptBudget, Observation, ObservationLedger, Observations, Proposal,
+        RegistryPackage, Source, cached_sources_match, credential_free_index, duplicate_count,
+        has_selected_preference, preference_index_matches, preferences_preserved,
+        proposal_changes_preference, sources_fixed_by_policy, with_agreement,
     };
 
     fn observation(name: &str, index: &str, version: u64) -> Result<Observation, Box<dyn Error>> {
@@ -910,6 +1260,99 @@ mod tests {
             1
         );
         assert_eq!(duplicate_count([&first, &other_index]), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn observation_ledger_retains_independent_owners() -> Result<(), Box<dyn Error>> {
+        let first = observation("example", "https://pypi.org/simple", 1)?;
+        let second = observation("example", "https://pypi.org/simple", 2)?;
+        let excluded = Observations::from([first.clone()]);
+        let mut ledger = ObservationLedger::new(&BTreeSet::new());
+        ledger.insert(&first);
+        ledger.insert(&first);
+        ledger.insert(&second);
+
+        assert_eq!(
+            ledger.excluding(&excluded).collect::<Vec<_>>(),
+            [&first, &second],
+        );
+        assert_eq!(
+            ledger
+                .for_package(&first.name, &excluded)
+                .collect::<Vec<_>>(),
+            [&first, &second],
+        );
+        assert!(ledger.has_candidates());
+
+        ledger.remove(&first);
+        assert_eq!(ledger.excluding(&excluded).collect::<Vec<_>>(), [&second]);
+        assert!(ledger.has_candidates());
+        ledger.remove(&first);
+        assert!(!ledger.has_candidates());
+        ledger.remove(&second);
+        assert!(ledger.observations.is_empty());
+        assert!(ledger.registry_versions.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn observation_ledger_replaces_only_one_fork() -> Result<(), Box<dyn Error>> {
+        let first = observation("example", "https://pypi.org/simple", 1)?;
+        let second = observation("example", "https://pypi.org/simple", 2)?;
+        let previous = Observations::from([first.clone()]);
+        let replacement = Observations::from([second.clone()]);
+        let mut ledger = ObservationLedger::new(&BTreeSet::new());
+        ledger.insert(&first);
+        ledger.insert(&first);
+        ledger.replace(&previous, &replacement);
+
+        assert_eq!(ledger.excluding(&replacement).collect::<Vec<_>>(), [&first]);
+        assert_eq!(ledger.excluding(&previous).collect::<Vec<_>>(), [&second]);
+        assert!(ledger.has_candidates());
+        ledger.replace(&replacement, &previous);
+        assert!(!ledger.has_candidates());
+        assert_eq!(ledger.excluding(&previous).collect::<Vec<_>>(), [&first]);
+        Ok(())
+    }
+
+    #[test]
+    fn observation_ledger_candidates_require_matching_stable_sources() -> Result<(), Box<dyn Error>>
+    {
+        let first = observation("example", "https://pypi.org/simple", 1)?;
+        let other_index = observation("example", "https://example.org/simple", 2)?;
+        let mut prerelease = first.clone();
+        prerelease.version = "2.0a1".parse()?;
+        let member_first = observation("member", "https://pypi.org/simple", 1)?;
+        let member_second = observation("member", "https://pypi.org/simple", 2)?;
+        let mut ledger = ObservationLedger::new(&BTreeSet::from([member_first.name.clone()]));
+        for observation in [
+            &first,
+            &other_index,
+            &prerelease,
+            &member_first,
+            &member_second,
+        ] {
+            ledger.insert(observation);
+        }
+        assert!(!ledger.has_candidates());
+
+        let second = observation("example", "https://pypi.org/simple", 2)?;
+        ledger.insert(&second);
+        assert!(ledger.has_candidates());
+        ledger.remove(&second);
+        assert!(!ledger.has_candidates());
+        for observation in [
+            &first,
+            &other_index,
+            &prerelease,
+            &member_first,
+            &member_second,
+        ] {
+            ledger.remove(observation);
+        }
+        assert!(ledger.observations.is_empty());
+        assert!(ledger.registry_versions.is_empty());
         Ok(())
     }
 

@@ -14,6 +14,13 @@ use uv_test::pypi_proxy;
 ))]
 mod coordinated_budget;
 
+#[cfg(all(
+    feature = "test-python",
+    feature = "test-pypi",
+    feature = "test-universal"
+))]
+mod coordinated_observations;
+
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod coordinated_scopes;
 

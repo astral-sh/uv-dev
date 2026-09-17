@@ -102,20 +102,19 @@ A fork would be created for `sys_platform == 'darwin'`, for `sys_platform == 'wi
 Forks can be nested, e.g., each fork is dependent on any previous forks that occurred. Forks with
 identical packages are merged to keep the number of forks low.
 
-With `--fork-strategy fewest`, universal resolutions also share provisional, source-specific
-version preferences between live forks. If a later fork selects a different stable version from
-the same registry, uv can resume an earlier completed fork with a temporary version restriction.
-Applicable existing lockfile preferences take precedence unless an upgrade was requested. The
-earlier fork's original state is retained: if the attempt fails, its learned incompatibilities and
-unsuccessful metadata lookups are discarded with the temporary state. A retry can reuse cached
-dependencies only while their source mappings remain unchanged and any URL or explicit-index
-mapping is fixed by the manifest. Parent-introduced source transitions are not supported. An
-attempt can reuse cached source-distribution metadata, but does not start new source builds.
-It can create further forks, and is accepted only when all of them resolve and the observed
-duplicate-version count decreases. Both the number of attempts and the solver iterations performed
-by each attempt are bounded, so this is a consistency heuristic rather than a proof that the
-lockfile contains the minimum possible number of versions. `lowest-direct` resolution does not
-use coordinated backtracking.
+With `--fork-strategy fewest`, universal resolutions also share provisional, source-specific version
+preferences between live forks. If a later fork selects a different stable version from the same
+registry, uv can resume an earlier completed fork with a temporary version restriction. Applicable
+existing lockfile preferences take precedence unless an upgrade was requested. The earlier fork's
+original state is retained: if the attempt fails, its learned incompatibilities and unsuccessful
+metadata lookups are discarded with the temporary state. A retry can reuse cached dependencies only
+while their source mappings remain unchanged and any URL or explicit-index mapping is fixed by the
+manifest. Parent-introduced source transitions are not supported. An attempt can reuse cached
+source-distribution metadata, but does not start new source builds. It can create further forks, and
+is accepted only when all of them resolve and the observed duplicate-version count decreases. Both
+the number of attempts and the solver iterations performed by each attempt are bounded, so this is a
+consistency heuristic rather than a proof that the lockfile contains the minimum possible number of
+versions. `lowest-direct` resolution does not use coordinated backtracking.
 
 !!! tip
 
