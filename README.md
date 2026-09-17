@@ -6,95 +6,119 @@ Classification: bug
 
 ## Summary
 
-The reporter configures a package to use an explicit named Azure private index and supplies Basic
-authentication through `UV_EXTRA_INDEX_URL`. On uv 0.12.11, `uv sync --upgrade` and
-`uv lock --upgrade` resolve successfully, but project `uv upgrade` queries the configured index
-without the supplied credentials and reports a 401 followed by an unsatisfiable resolution.
+The reported command-specific authentication failure is reproducible. With a dependency pinned to
+an explicit named index and Basic-auth credentials supplied by a matching `UV_EXTRA_INDEX_URL`,
+`uv sync --upgrade` and `uv lock --upgrade` authenticate successfully, while project `uv upgrade`
+queries the named index without authentication and fails with 401 followed by an unsatisfiable
+resolution.
 
-No existing issue or pull request tracks this same project-command split. Current source supports
-the report: project `uv upgrade` performs resolution but its CLI and settings path omits the shared
-resolver/index arguments that parse `UV_EXTRA_INDEX_URL` and related index and authentication
-options.
+The reproduction used installed uv 0.12.13, so the behavior reported for uv 0.12.11 remains present
+in a newer release. The report used macOS arm64 and Python 3.14.3; the reproduction used Linux
+x86_64 and Python 3.12.3, showing that the failure is not limited to the reported platform or Python
+version.
 
-## Report details
+## Reproduction
 
-- Symptom: only project `uv upgrade` fails authentication and reports the private package absent.
-- Expected parity: `uv upgrade`, `uv sync --upgrade`, and `uv lock --upgrade` should use the same
-  private-index configuration during resolution.
-- Trigger: an explicit named index selected through `[tool.uv.sources]`, with credentials embedded
-  in the otherwise matching `UV_EXTRA_INDEX_URL`.
-- Exact diagnostic: the configured index cannot be queried because of invalid authentication
-  credentials and returns `401 Unauthorized`.
-- Additional concern: project `uv upgrade` exposes no index or registry-client flags. The reporter
-  has not tested named-index username/password environment variables.
+Outcome: **reproducible**.
 
-## Draft response
+An isolated fixture under `/tmp` used a local HTTP Simple API server that required Basic
+authentication. The server logged only the request path and whether an `Authorization` header was
+present; it did not log header values. The index exposed a minimal
+`my-private-pkg==1.0.0` wheel. All uv state, virtual environments, and command-specific caches were
+kept inside the fixture directory.
 
-Thanks for the clear reproduction. I confirmed this is a bug in the current command wiring:
-`uv upgrade` resolves packages but does not include the shared resolver/index argument group, so
-`UV_EXTRA_INDEX_URL` and the corresponding CLI index and authentication options are not read on
-this path. `uv sync` and `uv lock` do include that configuration.
+The project configuration was:
 
-Named-index credentials are looked up directly from the configured index, so
-`UV_INDEX_PRIVATE_USERNAME` and `UV_INDEX_PRIVATE_PASSWORD` should be a temporary workaround. If
-those also fail, please share redacted `-vv` output. The code needs to align `uv upgrade` with the
-other project resolver commands and add authenticated explicit-index integration coverage.
+```toml
+[project]
+name = "repro"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["my-private-pkg"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+my-private-pkg = { index = "private" }
+
+[[tool.uv.index]]
+name = "private"
+url = "http://127.0.0.1:<port>/simple/"
+explicit = true
+```
+
+Each command used a separate cache and the same credential-bearing URL, with credential values
+represented here by placeholders:
+
+```console
+$ UV_EXTRA_INDEX_URL='http://<username>:<password>@127.0.0.1:<port>/simple/' uv sync --upgrade
+Resolved 2 packages
+Prepared 1 package
+Installed 1 package
+ + my-private-pkg==1.0.0
+
+$ UV_EXTRA_INDEX_URL='http://<username>:<password>@127.0.0.1:<port>/simple/' uv lock --upgrade
+Resolved 2 packages
+
+$ UV_EXTRA_INDEX_URL='http://<username>:<password>@127.0.0.1:<port>/simple/' uv upgrade
+  × No solution found when resolving dependencies:
+  ╰─▶ Because my-private-pkg was not found in the package registry and your
+      project depends on my-private-pkg, we can conclude that your project's
+      requirements are unsatisfiable.
+
+hint: An index URL (http://127.0.0.1:<port>/simple/) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
+```
+
+The first two commands exited 0 and the server observed authenticated index requests. `uv upgrade`
+exited 1, and its Simple API request was observed without authentication. In particular,
+`uv upgrade` used a fresh cache, ruling out metadata cached by either successful control command.
+
+Environment:
+
+- uv 0.12.13 (`x86_64-unknown-linux-gnu`), installed executable on `PATH`
+- Linux 6.17.0-1022-azure x86_64
+- CPython 3.12.3 from `/usr/bin/python3`
+- Python downloads disabled and home, XDG, Python-install, virtual-environment, and cache paths
+  isolated to the temporary fixture
+
+Existing coverage does not exercise this failing combination. The integration test
+`crates/uv/tests/it/upgrade.rs::upgrade_allows_registry_source` verifies that project `uv upgrade`
+can resolve from an explicit public registry source, but it does not require authentication or
+supply credentials through `UV_EXTRA_INDEX_URL`. Authenticated-index tests exist for other command
+paths, including `crates/uv/tests/lock/lock.rs::lock_index_workspace_member`, but they do not cover
+project `uv upgrade`.
 
 ## Classification
 
-This is a bug because the current implementation creates a command-specific configuration gap for
-a resolver-backed operation:
+This is a bug because otherwise equivalent project-resolution commands behave differently with the
+same project configuration and authentication input. The control commands authenticated and
+resolved successfully, while `uv upgrade` omitted authentication and failed before it could update
+the dependency declaration.
 
-- `UpgradeArgs` contains package selection and exclusion only.
-- `UV_EXTRA_INDEX_URL` and the index and registry-client flags are declared in the shared resolver
-  argument group used by other resolving commands.
-- `UpgradeSettings` starts from default resolver options and combines them with filesystem
-  configuration. The named explicit index is therefore retained, but the URL carrying credentials
-  is never parsed for this command.
-- Named-index credentials follow a separate path: configured indexes retrieve
-  `UV_INDEX_{name}_USERNAME` and `UV_INDEX_{name}_PASSWORD` directly. That makes the reporter's
-  suggested named-index variables a source-supported workaround, not evidence that they fail too.
-- Existing `uv upgrade` integration coverage includes an explicit registry source backed by a
-  public index, but has no authenticated-index case.
+Current command wiring is consistent with the observation: `UpgradeArgs` has only package and
+exclusion fields, `uv upgrade --help` exposes no index or registry-client options, and
+`UpgradeSettings` begins with default resolver CLI options before combining filesystem and global
+environment settings. In contrast, resolving commands such as `uv lock` include the shared
+resolver arguments that parse `UV_EXTRA_INDEX_URL`. This is supporting implementation evidence;
+the reproduction itself confirms the command-specific request behavior without relying on a
+source-only root-cause inference.
 
-No open issue or pull request already centralizes this exact project `uv upgrade` regression, so it
-should not be classified as a duplicate.
+Named-index credential variables (`UV_INDEX_PRIVATE_USERNAME` and
+`UV_INDEX_PRIVATE_PASSWORD`) were not part of the reported failing input and were not evaluated in
+this reproduction, so no workaround is claimed from that separate credential path.
 
 ## Related
 
 - astral-sh/uv#19678 (merged pull request), “Add initial hidden `uv upgrade` command” — introduced
-  the exact project-upgrade resolver path and touched its CLI, settings, implementation, and
-  integration tests. Current code still reflects its dedicated minimal argument wiring. It is
-  relevant implementation history, but it did not discuss authentication and is not itself a fix
-  for this newly reported behavior.
+  the project-upgrade resolver path and its dedicated CLI, settings, implementation, and integration
+  tests. It is relevant implementation history but did not discuss authentication.
 - astral-sh/uv#14806 (closed issue), “uv tool upgrade does not authenticate against GitLab private
-  pypi package registry” — the closest earlier observable symptom: an upgrade command lost
-  private-index authentication while other usage worked. It applies to `uv tool upgrade`, whose
-  persisted receipt and index-merging path is separate from project `uv upgrade`.
+  pypi package registry” — reports a similar symptom for `uv tool upgrade`, whose persisted receipt
+  and index-merging path is separate from project `uv upgrade`.
 - astral-sh/uv#14858 (merged pull request), “Respect credentials from all defined indexes” — fixed
-  astral-sh/uv#14806 by considering credential-bearing configured indexes alongside the tool
-  receipt. That mechanism explains why the prior report is adjacent rather than a duplicate and
-  does not address the missing project-upgrade resolver arguments.
+  astral-sh/uv#14806 for the tool-upgrade path and does not cover the project-upgrade command used
+  here.
 
-## Search and supporting evidence
-
-Literal searches covered `uv upgrade`, `UV_EXTRA_INDEX_URL`, `extra-index-url`, the exact lack-of-
-credentials hint, `401 Unauthorized`, private indexes, explicit indexes, and Azure authentication.
-Conceptual searches covered upgrade/authentication parity, credentials ignored by one command,
-named-index credentials, registry-client and index options, and historical authentication fixes.
-The search included open and closed issues and open, closed, and merged pull requests. The strongest
-candidates, maintainer comments, referenced fixes, and the project-upgrade implementation history
-were inspected.
-
-Several plausible candidates were ruled out:
-
-- astral-sh/uv#16478 concerns the inability to attach `authenticate = "always"` to an index supplied
-  through CLI or pip-style URL options. Here, the index is already a named filesystem-configured
-  index and project `uv upgrade` does not parse `UV_EXTRA_INDEX_URL` at all.
-- astral-sh/uv#12611 and its merged fix astral-sh/uv#12631 concern explicit indexes being omitted
-  from authentication-policy construction, a later stage than the configuration omission here.
-- astral-sh/uv#13216 concerns uv 0.7 index-security behavior rather than a project-upgrade-only path.
-- astral-sh/uv#19817 concerns named credential environment variables with `uv sync`, the command
-  that succeeds in this report.
-- astral-sh/uv#21216 concerns username persistence in `uv tool` receipts, not project resolution.
-
+No related issue or pull request listed above already fixes or tests the reproduced project
+`uv upgrade` behavior.
