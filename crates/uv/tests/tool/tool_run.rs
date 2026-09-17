@@ -14,7 +14,6 @@ use uv_test::{uv_snapshot, venv_bin_path};
 #[test]
 fn tool_run_args() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_packse_index("packages/tool-run.toml")
         .with_filtered_counts()
         .with_tool_dirs();
@@ -72,9 +71,7 @@ fn tool_run_args() {
 #[test]
 fn tool_run_at_version() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_exe_suffix().with_tool_dirs();
     uv_snapshot!(
         context.filters(),
@@ -149,7 +146,6 @@ fn tool_run_at_version() {
 #[test]
 fn tool_run_no_binary_package_env_var() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -184,7 +180,6 @@ fn tool_run_no_binary_package_env_var() {
 fn tool_run_from_version() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_tool_dirs();
 
@@ -210,7 +205,6 @@ fn tool_run_from_version() {
 fn tool_run_constraints() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_tool_dirs();
 
@@ -239,7 +233,6 @@ fn tool_run_constraints() {
 fn tool_run_overrides() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_tool_dirs();
 
@@ -267,9 +260,7 @@ fn tool_run_overrides() {
 #[test]
 fn tool_run_suggest_valid_commands() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     // Executable suffixes change the ordering of these names on Windows.
     let context = context
         .with_filtered_exe_suffix()
@@ -318,9 +309,7 @@ fn tool_run_suggest_valid_commands() {
 #[test]
 fn tool_run_warn_executable_not_in_from() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_exe_suffix().with_tool_dirs();
     uv_snapshot!(
         context.filters(),
@@ -345,9 +334,7 @@ fn tool_run_warn_executable_not_in_from() {
 #[test]
 fn tool_run_from_install() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_counts().with_tool_dirs(); // Install `format-tool` at a specific version.
     context
         .tool_install()
@@ -452,9 +439,7 @@ fn tool_run_from_install() {
 #[test]
 fn tool_run_from_install_constraints() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_counts().with_tool_dirs(); // Install `web-tool` at a specific version.
     context
         .tool_install()
@@ -585,7 +570,6 @@ fn tool_run_from_install_constraints() {
 fn tool_run_cache() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
-        .with_local_index()
         .with_default_index(&_server.index_url());
     let context = context.with_filtered_counts().with_tool_dirs(); // Verify that `tool run format-tool` installs the latest version.
     uv_snapshot!(
@@ -730,7 +714,6 @@ fn tool_run_cache() {
 fn tool_run_url() {
     let registry_artifacts = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&registry_artifacts.index_url())
         .with_filtered_counts()
         .with_tool_dirs();
@@ -793,7 +776,6 @@ fn tool_run_url() {
 #[cfg(feature = "test-git")]
 fn tool_run_git() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_packse_index("packages/tool-run.toml")
         .with_filter((r"@[0-9a-f]{40}", "@[COMMIT]"))
         .with_filtered_counts()
@@ -868,7 +850,6 @@ fn tool_run_git() -> Result<()> {
 #[cfg(feature = "test-git")]
 fn tool_run_git_infers_static_requires_python() {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
-        .with_local_index()
         .with_filtered_counts()
         .with_tool_dirs();
 
@@ -900,7 +881,6 @@ fn tool_run_git_infers_static_requires_python() {
 #[cfg(feature = "test-git")]
 fn tool_run_git_does_not_infer_dynamic_requires_python() {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
-        .with_local_index()
         .with_filtered_counts()
         .with_tool_dirs();
 
@@ -928,7 +908,6 @@ fn tool_run_git_does_not_infer_dynamic_requires_python() {
 #[cfg(feature = "test-git-lfs")]
 fn tool_run_git_lfs() {
     let context = uv_test::test_context!("3.13")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_git_lfs_config()
@@ -1071,9 +1050,7 @@ fn tool_run_git_lfs() {
 #[test]
 fn tool_run_requirements_txt() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_counts().with_tool_dirs();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("extra-requirement").unwrap();
@@ -1108,9 +1085,7 @@ fn tool_run_requirements_txt() {
 #[test]
 fn tool_run_requirements_txt_arguments() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_counts().with_tool_dirs();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
@@ -1148,9 +1123,7 @@ fn tool_run_requirements_txt_arguments() {
 #[test]
 fn tool_run_list_installed() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_exe_suffix().with_tool_dirs(); // No tools installed.
     uv_snapshot!(context.filters(), context.tool_run(), @"
     exit_code: 2 (failure)
@@ -1181,9 +1154,7 @@ fn tool_run_list_installed() {
 #[test]
 fn tool_run_without_output() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_counts().with_tool_dirs(); // On the first run, only show the summary line.
     uv_snapshot!(
         context.filters(),
@@ -1222,9 +1193,7 @@ fn tool_run_without_output() {
 #[cfg(not(windows))]
 fn tool_run_csv_with_shorthand() -> anyhow::Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_counts().with_tool_dirs();
     let anyio_local = context.temp_dir.child("src").child("anyio_local");
     copy_dir_all(
@@ -1278,9 +1247,7 @@ fn tool_run_csv_with_shorthand() -> anyhow::Result<()> {
 #[cfg(not(windows))]
 fn tool_run_csv_with() -> anyhow::Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_counts().with_tool_dirs();
     let anyio_local = context.temp_dir.child("src").child("anyio_local");
     copy_dir_all(
@@ -1334,9 +1301,7 @@ fn tool_run_csv_with() -> anyhow::Result<()> {
 #[cfg(windows)]
 fn tool_run_csv_with() -> anyhow::Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_counts().with_tool_dirs();
     let anyio_local = context.temp_dir.child("src").child("anyio_local");
     copy_dir_all(
@@ -1390,9 +1355,7 @@ fn tool_run_csv_with() -> anyhow::Result<()> {
 #[cfg(not(windows))]
 fn tool_run_repeated_with() -> anyhow::Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_counts().with_tool_dirs();
     let anyio_local = context.temp_dir.child("src").child("anyio_local");
     copy_dir_all(
@@ -1448,9 +1411,7 @@ fn tool_run_repeated_with() -> anyhow::Result<()> {
 #[cfg(windows)]
 fn tool_run_repeated_with() -> anyhow::Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_counts().with_tool_dirs();
     let anyio_local = context.temp_dir.child("src").child("anyio_local");
     copy_dir_all(
@@ -1505,7 +1466,6 @@ fn tool_run_repeated_with() -> anyhow::Result<()> {
 #[test]
 fn tool_run_with_editable() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_packse_index("packages/tool-run.toml")
         .with_filtered_counts()
         .with_tool_dirs();
@@ -1598,9 +1558,7 @@ fn tool_run_with_editable() -> anyhow::Result<()> {
 /// Invalid `--with` requirements should use the standard user-error renderer.
 #[test]
 fn tool_run_invalid_with() {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_tool_dirs();
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
 
     uv_snapshot!(context.filters(), context
         .tool_run()
@@ -1619,9 +1577,7 @@ fn tool_run_invalid_with() {
 #[test]
 fn warn_no_executables_found() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_exe_suffix().with_tool_dirs();
     uv_snapshot!(
         context.filters(),
@@ -1643,9 +1599,7 @@ fn warn_no_executables_found() {
 #[test]
 fn tool_run_upgrade_warn() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_counts().with_tool_dirs();
     uv_snapshot!(
         context.filters(),
@@ -1698,9 +1652,7 @@ fn tool_run_upgrade_warn() {
 #[test]
 fn tool_run_resolution_error() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_counts().with_tool_dirs();
     uv_snapshot!(
         context.filters(),
@@ -1717,9 +1669,7 @@ fn tool_run_resolution_error() {
 #[test]
 fn tool_run_latest() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_exe_suffix().with_tool_dirs(); // Install `run-tool` at a specific version.
     context
         .tool_install()
@@ -1765,9 +1715,7 @@ fn tool_run_latest() {
 #[test]
 fn tool_run_latest_extra() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_exe_suffix().with_tool_dirs();
     uv_snapshot!(
         context.filters(),
@@ -1814,9 +1762,7 @@ fn tool_run_latest_extra() {
 #[test]
 fn tool_run_extra() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_exe_suffix().with_tool_dirs();
     uv_snapshot!(
         context.filters(),
@@ -1840,9 +1786,7 @@ fn tool_run_extra() {
 #[test]
 fn tool_run_specifier() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_exe_suffix().with_tool_dirs();
     uv_snapshot!(
         context.filters(),
@@ -1865,9 +1809,7 @@ fn tool_run_specifier() {
 #[test]
 fn tool_run_python() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_counts();
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("python")
@@ -1898,7 +1840,6 @@ fn tool_run_python() {
 fn tool_run_python_at_version() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
-        .with_local_index()
         .with_default_index(&_server.index_url());
     let context = context
         .with_filtered_counts()
@@ -2076,9 +2017,8 @@ fn tool_run_python_at_version() {
 #[test]
 fn tool_run_hint_version_not_available() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context_with_versions!(&[])
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context =
+        uv_test::test_context_with_versions!(&[]).with_default_index(&_server.index_url());
     let context = context
         .with_filtered_counts()
         .with_filtered_python_sources();
@@ -2133,7 +2073,6 @@ fn tool_run_hint_version_not_available() {
 fn tool_run_python_from_global_version_file() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
-        .with_local_index()
         .with_default_index(&_server.index_url());
     let context = context
         .with_filtered_counts()
@@ -2163,7 +2102,6 @@ fn tool_run_python_from_global_version_file() {
 fn tool_run_python_version_overrides_global_pin() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
-        .with_local_index()
         .with_default_index(&_server.index_url());
     let context = context
         .with_filtered_counts()
@@ -2195,7 +2133,6 @@ fn tool_run_python_version_overrides_global_pin() {
 fn tool_run_python_with_explicit_default_bypasses_global_pin() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
-        .with_local_index()
         .with_default_index(&_server.index_url());
     let context = context
         .with_filtered_counts()
@@ -2229,7 +2166,6 @@ fn tool_run_python_with_explicit_default_bypasses_global_pin() {
 fn tool_run_python_from() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
-        .with_local_index()
         .with_default_index(&_server.index_url());
     let context = context
         .with_filtered_counts()
@@ -2308,7 +2244,6 @@ fn tool_run_python_from() {
 #[test]
 fn tool_run_from_directory_uses_global_pin_when_within_requires_python_range() {
     let context = uv_test::test_context_with_versions!(&["3.13", "3.12", "3.11"])
-        .with_local_index()
         .with_filtered_counts()
         .with_tool_dirs();
 
@@ -2376,7 +2311,6 @@ fn tool_run_from_directory_uses_global_pin_when_within_requires_python_range() {
 #[test]
 fn tool_run_from_directory_ignores_global_pin_outside_requires_python_range() {
     let context = uv_test::test_context_with_versions!(&["3.13", "3.12", "3.11"])
-        .with_local_index()
         .with_filtered_counts()
         .with_tool_dirs();
 
@@ -2444,9 +2378,7 @@ fn tool_run_from_directory_ignores_global_pin_outside_requires_python_range() {
 #[test]
 fn run_with_env_file() -> anyhow::Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_counts().with_tool_dirs(); // Create a project with a custom script.
     let foo_dir = context.temp_dir.child("foo");
     let foo_pyproject_toml = foo_dir.child("pyproject.toml");
@@ -2580,7 +2512,6 @@ fn run_with_env_file() -> anyhow::Result<()> {
 #[test]
 fn tool_run_from_at() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_exclude_newer("2025-01-18T00:00:00Z")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -2621,9 +2552,7 @@ fn tool_run_from_at() {
 #[test]
 fn tool_run_verbatim_name() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -2674,9 +2603,7 @@ fn tool_run_verbatim_name() {
 #[test]
 fn tool_run_with_existing_py_script() -> anyhow::Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_counts();
     context.temp_dir.child("script.py").touch()?;
 
@@ -2702,9 +2629,7 @@ fn tool_run_with_existing_py_script() -> anyhow::Result<()> {
 #[test]
 fn tool_run_with_existing_pyw_script() -> anyhow::Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_counts();
     context.temp_dir.child("script.pyw").touch()?;
 
@@ -2723,9 +2648,7 @@ fn tool_run_with_existing_pyw_script() -> anyhow::Result<()> {
 #[test]
 fn tool_run_with_nonexistent_py_script() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_counts();
 
     // We treat arguments before the command as uv arguments
@@ -2742,9 +2665,7 @@ fn tool_run_with_nonexistent_py_script() {
 #[test]
 fn tool_run_with_nonexistent_pyw_script() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_counts();
 
     // We treat arguments before the command as uv arguments
@@ -2761,9 +2682,7 @@ fn tool_run_with_nonexistent_pyw_script() {
 #[test]
 fn tool_run_with_from_script() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_counts();
 
     // We treat arguments before the command as uv arguments
@@ -2782,9 +2701,7 @@ fn tool_run_with_from_script() {
 #[test]
 fn tool_run_with_script_and_from_script() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_counts();
 
     // We treat arguments before the command as uv arguments
@@ -2804,9 +2721,7 @@ fn tool_run_with_script_and_from_script() {
 #[test]
 #[cfg(feature = "test-git")]
 fn tool_run_with_url_ending_in_py() {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_filtered_counts();
+    let context = uv_test::test_context!("3.12").with_filtered_counts();
 
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--offline")
@@ -2836,9 +2751,7 @@ fn tool_run_with_url_ending_in_py() {
 #[test]
 #[cfg(feature = "test-git")]
 fn tool_run_with_from_url_ending_in_py() {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_filtered_counts();
+    let context = uv_test::test_context!("3.12").with_filtered_counts();
 
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--offline")
@@ -2873,9 +2786,7 @@ fn tool_run_with_from_url_ending_in_py() {
 #[test]
 fn tool_run_verbose_hint() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_counts().with_tool_dirs(); // Test with --verbose flag
     uv_snapshot!(
         context.filters(),
@@ -2937,7 +2848,6 @@ fn tool_run_verbose_hint() {
 #[test]
 fn tool_run_with_compatible_build_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.9")
-        .with_local_index()
         .with_packse_index("packages/tool-build-constraints.toml")
         .with_exclude_newer("2024-05-04T00:00:00Z")
         .with_filtered_counts()
@@ -2970,7 +2880,6 @@ fn tool_run_with_compatible_build_constraints() -> Result<()> {
 #[test]
 fn tool_run_with_incompatible_build_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.9")
-        .with_local_index()
         .with_packse_index("packages/tool-build-constraints.toml")
         .with_exclude_newer("2024-05-04T00:00:00Z")
         .with_filtered_counts()
@@ -3003,9 +2912,7 @@ fn tool_run_with_incompatible_build_constraints() -> Result<()> {
 #[test]
 fn tool_run_with_dependencies_from_script() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context
         .with_filtered_counts()
         .with_filtered_missing_file_error();
@@ -3097,9 +3004,7 @@ fn tool_run_with_dependencies_from_script() -> Result<()> {
 #[test]
 fn tool_run_windows_runnable_types() -> anyhow::Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_counts().with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
     let foo_dir = context.temp_dir.child("foo");
@@ -3387,7 +3292,6 @@ fn tool_run_windows_runnable_types() -> anyhow::Result<()> {
 fn tool_run_reresolve_python() -> anyhow::Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
-        .with_local_index()
         .with_default_index(&_server.index_url());
     let context = context.with_filtered_counts().with_tool_dirs();
     let foo_dir = context.temp_dir.child("foo");
@@ -3472,9 +3376,7 @@ fn tool_run_reresolve_python() -> anyhow::Result<()> {
 #[test]
 fn tool_run_windows_dotted_package_name() -> anyhow::Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_counts().with_tool_dirs(); // Copy the test package to a temporary location
     let workspace_packages = context.workspace_root.join("test").join("packages");
     let test_package_source = workspace_packages.join("package.name.with.dots");
@@ -3505,7 +3407,7 @@ fn tool_run_windows_dotted_package_name() -> anyhow::Result<()> {
 /// Regression test for <https://github.com/astral-sh/uv/issues/17436>
 #[tokio::test]
 async fn tool_run_latest_keyring_auth() {
-    let keyring_context = uv_test::test_context!("3.12").with_local_index();
+    let keyring_context = uv_test::test_context!("3.12");
 
     // Install our keyring plugin
     keyring_context
@@ -3525,10 +3427,9 @@ async fn tool_run_latest_keyring_auth() {
         .assert()
         .success();
 
-    let proxy = crate::pypi_proxy::start_local().await;
+    let proxy = crate::pypi_proxy::start().await;
 
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_exclude_newer("2025-01-18T00:00:00Z")
         .with_filtered_counts()
         .with_tool_dirs();

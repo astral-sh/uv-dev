@@ -67,9 +67,7 @@ fn git_package_url(context: &TestContext) -> Result<Url> {
 #[test]
 fn branching_urls_disjoint() -> Result<()> {
     let server = uv_test::packse::PackseServer::new("packages/branching-urls.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
 
     let deps = formatdoc! {r#"
         dependencies = [
@@ -103,9 +101,7 @@ fn branching_urls_disjoint() -> Result<()> {
 #[test]
 fn branching_urls_overlapping() -> Result<()> {
     let server = uv_test::packse::PackseServer::new("packages/branching-urls.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
 
     let deps = formatdoc! {r#"
         dependencies = [
@@ -143,9 +139,7 @@ fn branching_urls_overlapping() -> Result<()> {
 #[test]
 fn root_package_splits_but_transitive_conflict() -> Result<()> {
     let server = uv_test::packse::PackseServer::new("packages/branching-urls.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
 
     let deps = indoc! {r#"
         dependencies = [
@@ -218,9 +212,7 @@ fn root_package_splits_but_transitive_conflict() -> Result<()> {
 #[test]
 fn root_package_splits_transitive_too() -> Result<()> {
     let server = uv_test::packse::PackseServer::new("packages/branching-urls.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
 
     let deps = indoc! {r#"
         dependencies = [
@@ -401,9 +393,7 @@ fn root_package_splits_transitive_too() -> Result<()> {
 #[test]
 fn root_package_splits_other_dependencies_too() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/branching-urls.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let deps = indoc! {r#"
         dependencies = [
@@ -558,9 +548,7 @@ fn root_package_splits_other_dependencies_too() -> Result<()> {
 #[test]
 fn branching_between_registry_and_direct_url() -> Result<()> {
     let server = uv_test::packse::PackseServer::new("packages/branching-urls.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
 
     let deps = formatdoc! {r#"
         dependencies = [
@@ -646,9 +634,7 @@ fn branching_between_registry_and_direct_url() -> Result<()> {
 #[cfg(feature = "test-git")]
 fn branching_urls_of_different_sources_disjoint() -> Result<()> {
     let server = uv_test::packse::PackseServer::new("packages/branching-urls.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
     let git_url = git_package_url(&context)?;
 
     let deps = formatdoc! {r#"
@@ -735,9 +721,7 @@ fn branching_urls_of_different_sources_disjoint() -> Result<()> {
 #[cfg(feature = "test-git")]
 fn branching_urls_of_different_sources_conflict() -> Result<()> {
     let server = uv_test::packse::PackseServer::new("packages/branching-urls.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
     let git_url = git_package_url(&context)?;
 
     let deps = formatdoc! {r#"
@@ -767,7 +751,7 @@ fn branching_urls_of_different_sources_conflict() -> Result<()> {
 /// Ensure that we don't pre-visit package with URLs.
 #[test]
 fn dont_pre_visit_url_packages() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let deps = indoc! {r#"
         dependencies = [

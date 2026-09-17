@@ -57,7 +57,6 @@ fn tool_install_git_path(bin_dir: &ChildPath) -> OsString {
 fn tool_install() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter((r#"index-url = ".*"\n"#, ""));
     let context = context
@@ -201,7 +200,6 @@ fn tool_install() {
 fn tool_install_relative_exclude_newer_receipt_preserves_span() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter((r#"index-url = ".*"\n"#, ""));
     let context = context.with_filtered_exe_suffix().with_tool_dirs();
@@ -239,7 +237,6 @@ fn tool_install_relative_exclude_newer_receipt_preserves_span() {
 #[test]
 fn tool_install_prerelease_package_receipt_preserves_policy() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -301,7 +298,6 @@ fn tool_install_prerelease_package_receipt_preserves_policy() {
 #[test]
 fn tool_install_from_directory_ignores_global_pin_outside_requires_python_range() {
     let context = uv_test::test_context_with_versions!(&["3.13", "3.12", "3.11"])
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -375,7 +371,6 @@ fn tool_install_from_directory_ignores_global_pin_outside_requires_python_range(
 #[test]
 fn tool_install_from_directory_uses_global_pin_within_requires_python_range() {
     let context = uv_test::test_context_with_versions!(&["3.13", "3.12", "3.11"])
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -449,7 +444,6 @@ fn tool_install_from_directory_uses_global_pin_within_requires_python_range() {
 #[test]
 fn tool_install_python_from_global_version_file() {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12", "3.13"])
-        .with_local_index()
         .with_packse_index("packages/tool-run.toml")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -596,7 +590,6 @@ fn tool_install_python_from_global_version_file() {
 #[test]
 fn tool_install_force_respects_global_python_change() {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12", "3.13"])
-        .with_local_index()
         .with_packse_index("packages/tool-run.toml")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -657,7 +650,6 @@ fn tool_install_force_respects_global_python_change() {
 #[test]
 fn tool_install_with_editable() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_exclude_newer("2025-01-18T00:00:00Z")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -692,9 +684,7 @@ fn tool_install_with_editable() -> Result<()> {
 
 #[test]
 fn tool_install_workspace_members_do_not_override_explicit_with_requirements() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_filtered_exe_suffix();
+    let context = uv_test::test_context!("3.12").with_filtered_exe_suffix();
     let with_editable_tool_dir = context.temp_dir.child("tools-with-editable");
     let with_editable_bin_dir = context.temp_dir.child("bin-with-editable");
     let with_tool_dir = context.temp_dir.child("tools-with");
@@ -816,7 +806,6 @@ fn tool_install_workspace_members_do_not_override_explicit_with_requirements() -
 #[test]
 fn tool_install_preserves_mixed_workspace_member_editability() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -923,7 +912,6 @@ fn tool_install_preserves_mixed_workspace_member_editability() -> Result<()> {
 #[test]
 fn tool_install_preserves_mixed_workspace_member_non_editability() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -1031,7 +1019,6 @@ fn tool_install_preserves_mixed_workspace_member_non_editability() -> Result<()>
 #[test]
 fn tool_install_reinstall_converts_workspace_members_to_non_editable() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -1134,7 +1121,6 @@ fn tool_install_reinstall_converts_workspace_members_to_non_editable() -> Result
 #[test]
 fn tool_install_workspace_members_are_non_editable_by_default() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -1227,7 +1213,6 @@ fn tool_install_workspace_members_are_non_editable_by_default() -> Result<()> {
 #[test]
 fn tool_install_workspace_members_honor_editable_flag() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -1321,7 +1306,6 @@ fn tool_install_workspace_members_honor_editable_flag() -> Result<()> {
 #[test]
 fn tool_install_workspace_members_honor_source_editable_flag() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -1432,7 +1416,6 @@ fn tool_install_workspace_members_honor_source_editable_flag() -> Result<()> {
 #[test]
 fn tool_install_with_compatible_build_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.9")
-        .with_local_index()
         .with_packse_index("packages/tool-build-constraints.toml")
         .with_exclude_newer("2024-05-04T00:00:00Z")
         .with_filtered_counts()
@@ -1492,7 +1475,6 @@ fn tool_install_with_compatible_build_constraints() -> Result<()> {
 #[test]
 fn tool_install_with_incompatible_build_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.9")
-        .with_local_index()
         .with_packse_index("packages/tool-build-constraints.toml")
         .with_exclude_newer("2024-05-04T00:00:00Z")
         .with_filtered_counts()
@@ -1531,7 +1513,6 @@ fn tool_install_with_incompatible_build_constraints() -> Result<()> {
 fn tool_install_suggest_other_packages_with_executable() {
     // FastAPI 0.111 is only available from this date onwards.
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_exclude_newer("2024-05-04T00:00:00Z")
         .with_filtered_exe_suffix()
         .with_filter(("\\+ uvloop(.+)\n ", ""))
@@ -1560,7 +1541,6 @@ fn tool_install_suggest_other_packages_with_executable() {
 #[test]
 fn tool_install_version() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -1642,7 +1622,6 @@ fn tool_install_version() {
 #[test]
 fn tool_install_editable() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -1786,7 +1765,6 @@ fn tool_install_editable() {
 #[test]
 fn tool_install_editable_rebuilds_explicit_local_directory() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -1914,7 +1892,6 @@ fn tool_install_editable_rebuilds_explicit_local_directory() -> Result<()> {
 #[test]
 fn tool_install_explicit_local_directory_respects_global_python_change() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.13"])
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -1996,7 +1973,6 @@ fn tool_install_explicit_local_directory_respects_global_python_change() -> Resu
 #[test]
 fn tool_install_rebuilds_explicit_local_with_requirement() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -2115,7 +2091,6 @@ fn tool_install_rebuilds_explicit_local_with_requirement() -> Result<()> {
 #[test]
 fn tool_install_remove_on_empty() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -2246,7 +2221,6 @@ fn tool_install_remove_on_empty() -> Result<()> {
 #[test]
 fn tool_install_editable_from() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -2325,7 +2299,6 @@ fn tool_install_editable_from() {
 #[test]
 fn tool_install_from() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -2377,7 +2350,6 @@ fn tool_install_from() {
 #[test]
 fn tool_install_already_installed() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -2539,7 +2511,6 @@ fn tool_install_already_installed() {
 #[test]
 fn tool_install_force() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -2782,9 +2753,7 @@ fn tool_install_force() {
 #[cfg(unix)]
 #[test]
 fn tool_install_home() {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_filtered_exe_suffix();
+    let context = uv_test::test_context!("3.12").with_filtered_exe_suffix();
     let tool_dir = context.temp_dir.child("tools");
 
     // Install `black`
@@ -2823,9 +2792,7 @@ fn tool_install_home() {
 /// Test `uv tool install` when the bin directory is inferred from `$XDG_DATA_HOME`
 #[test]
 fn tool_install_xdg_data_home() {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_filtered_exe_suffix();
+    let context = uv_test::test_context!("3.12").with_filtered_exe_suffix();
     let tool_dir = context.temp_dir.child("tools");
     let data_home = context.temp_dir.child("data/home");
     let bin_dir = context.temp_dir.child("data/bin");
@@ -2860,7 +2827,6 @@ fn tool_install_xdg_data_home() {
 #[test]
 fn tool_install_xdg_bin_home() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -2892,7 +2858,6 @@ fn tool_install_xdg_bin_home() {
 #[test]
 fn tool_install_tool_bin_dir() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -2925,7 +2890,6 @@ fn tool_install_tool_bin_dir() {
 #[test]
 fn tool_install_no_entrypoints() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -2959,7 +2923,6 @@ fn tool_install_no_entrypoints() {
 #[test]
 fn tool_install_failure_removes_additional_entrypoints() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -3011,7 +2974,6 @@ fn tool_install_failure_removes_additional_entrypoints() -> Result<()> {
 #[test]
 fn tool_install_no_binary_package_env_var() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -3047,7 +3009,6 @@ fn tool_install_no_binary_package_env_var() {
 #[test]
 fn tool_install_uninstallable() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -3104,7 +3065,6 @@ fn tool_install_uninstallable() -> Result<()> {
 fn tool_install_unnamed_package() {
     let registry_artifacts = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&registry_artifacts.index_url())
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -3186,7 +3146,6 @@ fn tool_install_unnamed_package() {
 #[cfg(feature = "test-git")]
 fn tool_install_git() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_packse_index("packages/tool-run.toml")
         .with_filter((r"@[0-9a-f]{40}", "@[COMMIT]"))
         .with_filtered_exe_suffix()
@@ -3253,7 +3212,6 @@ fn tool_install_git() -> Result<()> {
 #[cfg(feature = "test-git")]
 fn tool_install_git_infers_static_requires_python() {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -3292,7 +3250,6 @@ fn tool_install_git_infers_static_requires_python() {
 #[cfg(feature = "test-git")]
 fn tool_install_git_does_not_infer_dynamic_requires_python() {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -3322,7 +3279,6 @@ fn tool_install_git_does_not_infer_dynamic_requires_python() {
 #[cfg(feature = "test-git-lfs")]
 fn tool_install_git_lfs() {
     let context = uv_test::test_context!("3.13")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_git_lfs_config()
         .with_tool_dirs();
@@ -3494,7 +3450,6 @@ fn tool_install_git_lfs() {
 fn tool_install_unnamed_conflict() {
     let registry_artifacts = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&registry_artifacts.index_url())
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -3517,7 +3472,6 @@ fn tool_install_unnamed_conflict() {
 fn tool_install_unnamed_from() {
     let registry_artifacts = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&registry_artifacts.index_url())
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -3601,7 +3555,6 @@ fn tool_install_unnamed_from() {
 fn tool_install_unnamed_with() {
     let registry_artifacts = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&registry_artifacts.index_url())
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -3687,7 +3640,6 @@ fn tool_install_unnamed_with() {
 #[test]
 fn tool_install_with_dependencies_from_script() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -3805,7 +3757,6 @@ fn tool_install_with_dependencies_from_script() -> Result<()> {
 #[test]
 fn tool_install_requirements_txt() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -3904,7 +3855,6 @@ fn tool_install_requirements_txt_arguments() {
     let alternate_index =
         uv_test::packse::PackseServer::new("packages/tool-requirements-index.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&default_index.index_url())
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -4015,7 +3965,6 @@ extra-requirement
 fn tool_install_upgrade() {
     let registry_artifacts = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&registry_artifacts.index_url())
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -4158,7 +4107,6 @@ fn tool_install_upgrade() {
 #[test]
 fn tool_install_python_requests() {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -4222,7 +4170,6 @@ fn tool_install_python_requests() {
 #[test]
 fn tool_install_python_preference() {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -4335,7 +4282,6 @@ fn tool_install_python_preference() {
 #[test]
 fn tool_install_preserve_environment() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -4387,7 +4333,6 @@ fn tool_install_preserve_environment() {
 #[cfg(unix)]
 fn tool_install_warn_path() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -4416,7 +4361,6 @@ fn tool_install_warn_path() {
 #[test]
 fn tool_install_bad_receipt() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -4478,7 +4422,6 @@ fn tool_install_bad_receipt() -> Result<()> {
 #[test]
 fn tool_install_malformed_dist_info() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_exclude_newer("2025-01-18T00:00:00Z")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -4552,7 +4495,6 @@ fn tool_install_malformed_dist_info() {
 #[test]
 fn tool_install_settings() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -4693,7 +4635,6 @@ fn tool_install_settings() {
 #[test]
 fn tool_install_at_version() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -4751,7 +4692,6 @@ fn tool_install_at_version() {
 #[test]
 fn tool_install_at_latest() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -4797,7 +4737,6 @@ fn tool_install_at_latest() {
 #[test]
 fn tool_install_from_at_latest() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_exclude_newer("2025-01-18T00:00:00Z")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -4839,7 +4778,6 @@ fn tool_install_from_at_latest() {
 #[test]
 fn tool_install_from_at_version() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_exclude_newer("2025-01-18T00:00:00Z")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -4881,7 +4819,6 @@ fn tool_install_from_at_version() {
 #[test]
 fn tool_install_at_latest_upgrade() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -4989,7 +4926,6 @@ fn tool_install_at_latest_upgrade() {
 #[test]
 fn tool_install_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -5083,7 +5019,6 @@ fn tool_install_constraints() -> Result<()> {
 #[test]
 fn tool_install_overrides() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -5144,7 +5079,6 @@ fn tool_install_overrides() -> Result<()> {
 #[test]
 fn tool_install_python() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -5173,7 +5107,6 @@ fn tool_install_python() {
 fn tool_install_mismatched_name() {
     let registry_artifacts = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&registry_artifacts.index_url())
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -5214,9 +5147,8 @@ fn tool_install_mismatched_name() {
 /// When installing from an authenticated index, the credentials should be omitted from the receipt.
 #[tokio::test]
 async fn tool_install_credentials() {
-    let proxy = crate::pypi_proxy::start_local().await;
+    let proxy = crate::pypi_proxy::start().await;
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_exclude_newer("2025-01-18T00:00:00Z")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -5292,9 +5224,8 @@ async fn tool_install_credentials() {
 /// When installing from an authenticated index, the credentials should be omitted from the receipt.
 #[tokio::test]
 async fn tool_install_default_credentials() -> Result<()> {
-    let proxy = crate::pypi_proxy::start_local().await;
+    let proxy = crate::pypi_proxy::start().await;
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_exclude_newer("2025-01-18T00:00:00Z")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -5431,7 +5362,6 @@ fn tool_install_with_executables_from() -> Result<()> {
     "#})?;
     let index = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -5513,9 +5443,7 @@ fn tool_install_sdist_entry_point() -> Result<()> {
         entry_points = ["scenario.tool"]
     "#})?;
     let index = PackseServer::from_scenario(&scenario);
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_tool_dirs();
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
 
     context
@@ -5540,7 +5468,6 @@ fn tool_install_sdist_entry_point() -> Result<()> {
 #[test]
 fn tool_install_with_executables_from_no_entrypoints() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -5581,7 +5508,6 @@ fn tool_install_with_executables_from_no_entrypoints() {
 #[test]
 fn tool_install_find_links() {
     let context = uv_test::test_context!("3.13")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -5675,7 +5601,6 @@ fn tool_install_find_links() {
 #[test]
 fn tool_install_python_platform() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -5719,7 +5644,6 @@ fn tool_install_python_platform() {
 #[test]
 fn tool_install_removed_python() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -5799,9 +5723,7 @@ fn tool_install_removed_python() {
 
 #[test]
 fn tool_install_locks_are_preview() {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_tool_dirs();
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
     let links = context.workspace_root.join("test/links");
@@ -5855,9 +5777,7 @@ fn tool_install_locks_are_preview() {
 
 #[test]
 fn tool_install_lock_supports_local_wheel() {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_tool_dirs();
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
     let wheel = context
         .workspace_root
@@ -5898,9 +5818,7 @@ fn tool_install_lock_supports_local_wheel() {
 
 #[test]
 fn tool_install_lock_verifies_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_tool_dirs();
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
     let wheel = context
@@ -5945,7 +5863,6 @@ fn tool_install_lock_verifies_hashes() -> Result<()> {
 #[test]
 fn tool_install_lock_refreshes_local_directory_constraint() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -6064,7 +5981,6 @@ fn tool_install_lock_refreshes_local_directory_constraint() -> Result<()> {
 #[test]
 fn tool_install_lock_revalidates_changed_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -6107,7 +6023,6 @@ fn tool_install_lock_revalidates_changed_constraints() -> Result<()> {
 fn tool_install_with_build_hashes() -> Result<()> {
     for preview in ["--no-preview", "--preview-features=tool-install-locks"] {
         let context = uv_test::test_context!("3.12")
-            .with_local_index()
             .with_filtered_exe_suffix()
             .with_tool_dirs();
         let bin_dir = context.temp_dir.child("bin");

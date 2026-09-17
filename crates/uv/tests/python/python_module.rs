@@ -34,7 +34,6 @@ print(uv.find_uv_bin())
 #[test]
 fn find_uv_bin_target() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -73,7 +72,6 @@ fn find_uv_bin_target() {
 #[test]
 fn find_uv_bin_prefix() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -117,7 +115,6 @@ fn find_uv_bin_prefix() {
 #[test]
 fn find_uv_bin_base_prefix() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -163,7 +160,6 @@ fn find_uv_bin_base_prefix() {
 #[test]
 fn find_uv_bin_in_ephemeral_environment() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -211,7 +207,6 @@ fn find_uv_bin_in_ephemeral_environment() -> anyhow::Result<()> {
 fn find_uv_bin_in_parent_of_ephemeral_environment() -> anyhow::Result<()> {
     let server = PackseServer::new("packages/pip-commands.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&server.index_url())
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
@@ -267,7 +262,6 @@ fn find_uv_bin_in_parent_of_ephemeral_environment() -> anyhow::Result<()> {
 #[test]
 fn find_uv_bin_user_bin() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -335,7 +329,6 @@ fn find_uv_bin_user_bin() {
 #[test]
 fn find_uv_bin_error_message() {
     let mut context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -409,7 +402,6 @@ fn find_uv_bin_error_message() {
 #[test]
 fn find_uv_bin_py38() {
     let context = uv_test::test_context!("3.8")
-        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -444,7 +436,6 @@ fn find_uv_bin_py38() {
 #[test]
 fn find_uv_bin_py39() {
     let context = uv_test::test_context!("3.9")
-        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -479,7 +470,6 @@ fn find_uv_bin_py39() {
 #[test]
 fn find_uv_bin_py310() {
     let context = uv_test::test_context!("3.10")
-        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -514,7 +504,6 @@ fn find_uv_bin_py310() {
 #[test]
 fn find_uv_bin_py311() {
     let context = uv_test::test_context!("3.11")
-        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -549,7 +538,6 @@ fn find_uv_bin_py311() {
 #[test]
 fn find_uv_bin_py312() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -584,7 +572,6 @@ fn find_uv_bin_py312() {
 #[test]
 fn find_uv_bin_py313() {
     let context = uv_test::test_context!("3.13")
-        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -619,7 +606,6 @@ fn find_uv_bin_py313() {
 #[test]
 fn find_uv_bin_py314() {
     let context = uv_test::test_context!("3.14")
-        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()

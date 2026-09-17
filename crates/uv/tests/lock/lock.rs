@@ -37,13 +37,13 @@ use uv_test::packse::{PackseServer, scenario::Scenario};
 use uv_test::{READ_ONLY_GITHUB_TOKEN, decode_token};
 use uv_test::{diff_snapshot, uv_snapshot};
 #[cfg(feature = "test-universal")]
-use uv_test::{download_local_to_disk, venv_bin_path};
+use uv_test::{download_to_disk, venv_bin_path};
 
 /// Lock validation warnings should explain why a local dependency's metadata could not be read.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_validation_warning_chain() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     context
         .temp_dir
         .child("pyproject.toml")
@@ -132,7 +132,7 @@ fn lock_without_package_metadata(lock: &str) -> Result<toml_edit::DocumentMut> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_preserves_noncanonical_lock() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context.temp_dir.child("pyproject.toml").write_str(indoc! {
         r#"
@@ -179,7 +179,7 @@ fn lock_preserves_noncanonical_lock() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_wheel_registry() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -297,9 +297,7 @@ fn lock_wheel_registry() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_sdist_registry() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-29T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-29T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -382,7 +380,7 @@ fn lock_sdist_registry() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_rejects_mismatched_exact_git_revision() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context
         .temp_dir
@@ -425,7 +423,7 @@ fn lock_rejects_mismatched_exact_git_revision() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_sdist_git() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -674,7 +672,7 @@ fn lock_sdist_git() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_sdist_git_subdirectory() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -756,7 +754,7 @@ fn lock_sdist_git_subdirectory() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_sdist_git_pep508() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -976,7 +974,7 @@ fn lock_sdist_git_pep508() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_sdist_git_short_rev() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1069,7 +1067,7 @@ fn lock_sdist_git_short_rev() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_sdist_git_archive() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1174,7 +1172,7 @@ fn lock_sdist_git_archive() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_sdist_git_archive_missing_lfs() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1211,7 +1209,7 @@ fn lock_sdist_git_archive_missing_lfs() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_wheel_git_archive() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1317,7 +1315,7 @@ fn lock_wheel_git_archive() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_wheel_git_archive_missing_lfs() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1355,7 +1353,7 @@ fn lock_wheel_git_archive_missing_lfs() -> Result<()> {
 #[test]
 fn lock_wheel_url() -> Result<()> {
     let direct_artifacts = PackseServer::new("packages/lock-direct-artifacts.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -1497,7 +1495,7 @@ fn lock_wheel_url() -> Result<()> {
 #[test]
 fn lock_sdist_url() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc! {
@@ -1659,7 +1657,6 @@ async fn locked_build_dependency_wheel(module: &str) -> Result<Vec<u8>> {
 #[tokio::test]
 async fn lock_sdist_url_locked_build_dependency_hash_mismatch() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix();
@@ -2091,7 +2088,7 @@ async fn lock_sdist_url_locked_build_dependency_hash_mismatch() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_sdist_url_locked_hash_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = MockServer::start().await;
     let archive_path = "/files/demo_pkg-1.0.0.tar.gz";
     let archive_url = format!("{}{archive_path}", server.uri());
@@ -2304,7 +2301,7 @@ async fn lock_sdist_url_locked_hash_mismatch() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_sdist_registry_changed_index_locked_hash_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = MockServer::start().await;
     let archive_path = "/files/demo_pkg-1.0.0.tar.gz";
     let archive_url = format!("{}{archive_path}", server.uri());
@@ -2408,7 +2405,7 @@ async fn lock_sdist_registry_changed_index_locked_hash_mismatch() -> Result<()> 
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_sdist_registry_missing_index_locked_hash_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = MockServer::start().await;
     let archive_path = "/files/demo_pkg-1.0.0.tar.gz";
     let archive_url = format!("{}{archive_path}", server.uri());
@@ -2511,7 +2508,7 @@ async fn lock_sdist_registry_missing_index_locked_hash_mismatch() -> Result<()> 
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_sdist_url_root_subdirectory_locked_hash_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = MockServer::start().await;
     let archive_path = "/files/demo_pkg-1.0.0.tar.gz";
     let archive_url = format!("{}{archive_path}", server.uri());
@@ -2579,7 +2576,7 @@ async fn lock_sdist_url_root_subdirectory_locked_hash_mismatch() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_sdist_url_rejected_archive_not_cached() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = MockServer::start().await;
     let archive_path = "/files/demo_pkg-1.0.0.tar.gz";
     let archive_url = format!("{}{archive_path}", server.uri());
@@ -2700,7 +2697,7 @@ async fn lock_sdist_url_rejected_archive_not_cached() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_sdist_url_equivalent_subdirectory_locked_hash_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = MockServer::start().await;
     let archive_path = "/files/demo_pkg-1.0.0.tar.gz";
     let archive_url = format!("{}{archive_path}", server.uri());
@@ -2775,7 +2772,7 @@ async fn lock_sdist_url_equivalent_subdirectory_locked_hash_mismatch() -> Result
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_sdist_path_locked_hash_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let archive = context.temp_dir.child("demo_pkg-1.0.0.tar.gz");
     let sentinel = context.temp_dir.child("backend-executed");
     let trusted = locked_source_archive("pass", "")?;
@@ -2854,7 +2851,7 @@ fn lock_sdist_path_locked_hash_mismatch() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_sdist_path_rejected_archive_not_cached() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let archive = context.temp_dir.child("demo_pkg-1.0.0.tar.gz");
     let sentinel = context.temp_dir.child("backend-executed");
     let trusted = locked_source_archive("pass", "")?;
@@ -2920,7 +2917,6 @@ fn lock_sdist_path_rejected_archive_not_cached() -> Result<()> {
 #[tokio::test]
 async fn lock_sdist_url_cache_heal_hash_mismatch() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_file_counts()
         .with_filtered_sizes_and_units();
     let server = MockServer::start().await;
@@ -3003,7 +2999,7 @@ async fn lock_sdist_url_cache_heal_hash_mismatch() -> Result<()> {
 fn lock_sdist_url_subdirectory() -> Result<()> {
     let direct_artifacts = PackseServer::new("packages/lock-direct-artifacts.toml");
     let root_url = direct_artifacts.file_url("root-0.0.1.tar.gz");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3132,7 +3128,7 @@ fn lock_sdist_url_subdirectory() -> Result<()> {
 fn lock_sdist_url_subdirectory_pep508() -> Result<()> {
     let direct_artifacts = PackseServer::new("packages/lock-direct-artifacts.toml");
     let root_url = direct_artifacts.file_url("root-0.0.1.tar.gz");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3256,7 +3252,7 @@ fn lock_sdist_url_subdirectory_pep508() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_project_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3389,7 +3385,7 @@ fn lock_project_extra() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_project_with_overrides() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3440,7 +3436,7 @@ fn lock_project_with_overrides() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_project_with_scoped_overrides() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3610,7 +3606,7 @@ fn lock_project_with_scoped_overrides() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_project_with_conflicting_scoped_overrides() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3645,7 +3641,7 @@ fn lock_project_with_conflicting_scoped_overrides() -> Result<()> {
 #[test]
 fn lock_project_with_override_sources() -> Result<()> {
     let artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc!(
@@ -3716,7 +3712,7 @@ fn lock_project_with_override_sources() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_project_with_scoped_override_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3747,9 +3743,7 @@ fn lock_project_with_scoped_override_url() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_project_with_scoped_override_prerelease() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2026-01-01T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2026-01-01T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3785,9 +3779,7 @@ fn lock_project_with_scoped_override_prerelease() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_project_with_excluded_scoped_override_prerelease() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2026-01-01T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2026-01-01T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3826,7 +3818,7 @@ fn lock_project_with_excluded_scoped_override_prerelease() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_project_with_scoped_override_yank() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3859,7 +3851,7 @@ fn lock_project_with_scoped_override_yank() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_project_with_scoped_override_index() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3898,7 +3890,7 @@ fn lock_project_with_scoped_override_index() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_project_with_excludes() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -4077,7 +4069,7 @@ fn lock_project_with_excludes() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_project_with_constraints() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -4125,7 +4117,7 @@ fn lock_project_with_constraints() -> Result<()> {
 #[test]
 fn lock_project_with_constraint_sources() -> Result<()> {
     let artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc!(
@@ -4176,7 +4168,7 @@ fn lock_project_with_constraint_sources() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_project_with_build_constraints() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -4251,7 +4243,7 @@ fn lock_project_with_build_constraints() -> Result<()> {
 #[test]
 fn lock_project_with_build_constraint_sources() -> Result<()> {
     let artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.9").with_local_index();
+    let context = uv_test::test_context!("3.9");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc! {r#"
@@ -4299,7 +4291,7 @@ fn lock_project_with_build_constraint_sources() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_dependency_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -4478,7 +4470,7 @@ fn lock_dependency_extra() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-python-eol"))]
 #[test]
 fn lock_conditional_dependency_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -4647,7 +4639,7 @@ fn lock_conditional_dependency_extra() -> Result<()> {
     ");
 
     // Validate that the extra is included on relevant Python versions.
-    let context_38 = uv_test::test_context!("3.8").with_local_index();
+    let context_38 = uv_test::test_context!("3.8");
 
     fs_err::copy(pyproject_toml, context_38.temp_dir.join("pyproject.toml"))?;
     fs_err::copy(lockfile, context_38.temp_dir.join("uv.lock"))?;
@@ -4680,7 +4672,7 @@ fn lock_conditional_dependency_extra() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_dependency_non_existent_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -4846,7 +4838,7 @@ fn lock_dependency_non_existent_extra() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_conflicting_project_basic1() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // First we test that resolving a group with a dependency that conflicts
     // with the project fails.
@@ -5060,7 +5052,7 @@ fn lock_conflicting_project_basic1() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_conflicting_workspace_members() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -5230,7 +5222,7 @@ fn lock_conflicting_workspace_members() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_conflicting_workspace_members_depends_direct() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -5301,7 +5293,7 @@ fn lock_conflicting_workspace_members_depends_direct() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_conflicting_workspace_members_depends_direct_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -5504,7 +5496,7 @@ fn lock_conflicting_workspace_members_depends_direct_extra() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_conflicting_workspace_members_depends_transitive() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -5599,7 +5591,7 @@ fn lock_conflicting_workspace_members_depends_transitive() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_conflicting_workspace_members_depends_transitive_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -5821,7 +5813,7 @@ fn lock_conflicting_workspace_members_depends_transitive_extra() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_conflicting_project_basic2() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -6000,7 +5992,7 @@ fn lock_conflicting_project_basic2() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_conflicting_mixed() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // First we test that resolving with a conflicting extra
     // and group fails.
@@ -6202,7 +6194,7 @@ fn lock_conflicting_mixed() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_upgrade_log() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -6355,7 +6347,7 @@ fn lock_upgrade_log() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_upgrade_log_multi_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -6504,7 +6496,7 @@ fn lock_upgrade_log_multi_version() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_upgrade_dry_run_multi_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -6543,7 +6535,7 @@ fn lock_upgrade_dry_run_multi_version() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_check_refresh_workspace_conflicts() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -6726,7 +6718,7 @@ fn lock_check_refresh_workspace_conflicts() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_preference() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -6890,7 +6882,7 @@ fn lock_preference() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_git_plus_prefix() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -6967,7 +6959,7 @@ fn lock_git_plus_prefix() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_partial_git() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -7119,9 +7111,7 @@ fn lock_unsupported_tag() -> Result<()> {
     let server = PackseServer::new("packages/pip-install.toml");
     let index_url = server.index_url();
     let files_url = server.file_url("").trim_end_matches('/').to_string();
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&index_url);
+    let context = uv_test::test_context!("3.12").with_default_index(&index_url);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -7203,7 +7193,7 @@ fn lock_unsupported_tag() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_git_sha() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Lock against `main`.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -7314,7 +7304,7 @@ fn lock_git_sha() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_requires_python() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let lockfile = context.temp_dir.join("uv.lock");
 
@@ -7951,9 +7941,7 @@ fn lock_requires_python() -> Result<()> {
     });
 
     // Validate that attempting to install with an unsupported Python version raises an error.
-    let context_unsupported = uv_test::test_context!("3.9")
-        .with_local_index()
-        .with_filtered_python_sources();
+    let context_unsupported = uv_test::test_context!("3.9").with_filtered_python_sources();
 
     fs_err::copy(
         pyproject_toml,
@@ -7986,9 +7974,7 @@ fn lock_requires_python() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_requires_python_upper() -> Result<()> {
-    let context = uv_test::test_context!("3.11")
-        .with_local_index()
-        .with_exclude_newer("2024-08-29T00:00:00Z");
+    let context = uv_test::test_context!("3.11").with_exclude_newer("2024-08-29T00:00:00Z");
 
     let lockfile = context.temp_dir.join("uv.lock");
 
@@ -8096,7 +8082,7 @@ fn lock_requires_python_upper() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-python-patch"))]
 #[test]
 fn lock_requires_python_exact() -> Result<()> {
-    let context = uv_test::test_context!("3.13.0").with_local_index();
+    let context = uv_test::test_context!("3.13.0");
 
     let lockfile = context.temp_dir.join("uv.lock");
 
@@ -8170,7 +8156,7 @@ fn lock_requires_python_exact() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-python-patch"))]
 #[test]
 fn lock_requires_python_compatible_specifier() -> Result<()> {
-    let context = uv_test::test_context!("3.13.0").with_local_index();
+    let context = uv_test::test_context!("3.13.0");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -8225,9 +8211,7 @@ fn lock_requires_python_compatible_specifier() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_requires_python_fork() -> Result<()> {
-    let context = uv_test::test_context!("3.11")
-        .with_local_index()
-        .with_exclude_newer("2024-08-29T00:00:00Z");
+    let context = uv_test::test_context!("3.11").with_exclude_newer("2024-08-29T00:00:00Z");
 
     let lockfile = context.temp_dir.join("uv.lock");
 
@@ -8299,7 +8283,7 @@ fn lock_requires_python_fork() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_requires_python_wheels() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
 
     let lockfile = context.temp_dir.join("uv.lock");
 
@@ -8441,7 +8425,7 @@ fn lock_requires_python_wheels() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_requires_python_star() -> Result<()> {
-    let context = uv_test::test_context!("3.11").with_local_index();
+    let context = uv_test::test_context!("3.11");
 
     let lockfile = context.temp_dir.join("uv.lock");
 
@@ -8558,7 +8542,7 @@ fn lock_requires_python_star() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_requires_python_not_equal() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let lockfile = context.temp_dir.join("uv.lock");
 
@@ -8630,7 +8614,7 @@ fn lock_requires_python_not_equal() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_requires_python_not_equal_consecutive_wildcards() -> Result<()> {
-    let context = uv_test::test_context!("3.13").with_local_index();
+    let context = uv_test::test_context!("3.13");
 
     let lockfile = context.temp_dir.join("uv.lock");
 
@@ -8704,7 +8688,7 @@ fn lock_requires_python_not_equal_consecutive_wildcards() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_requires_python_pre() -> Result<()> {
-    let context = uv_test::test_context!("3.11").with_local_index();
+    let context = uv_test::test_context!("3.11");
 
     let lockfile = context.temp_dir.join("uv.lock");
 
@@ -8820,7 +8804,7 @@ fn lock_requires_python_pre() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_requires_python_unbounded() -> Result<()> {
-    let context = uv_test::test_context!("3.11").with_local_index();
+    let context = uv_test::test_context!("3.11");
 
     let lockfile = context.temp_dir.join("uv.lock");
 
@@ -8914,7 +8898,7 @@ fn lock_requires_python_unbounded() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_requires_python_disjoint() -> Result<()> {
-    let context = uv_test::test_context!("3.11").with_local_index();
+    let context = uv_test::test_context!("3.11");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -8955,7 +8939,7 @@ fn lock_requires_python_disjoint() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_requires_python_maximum_version() -> Result<()> {
-    let context = uv_test::test_context!("3.11").with_local_index();
+    let context = uv_test::test_context!("3.11");
 
     let lockfile = context.temp_dir.join("uv.lock");
 
@@ -9053,7 +9037,7 @@ fn lock_requires_python_maximum_version() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_requires_python_fewest_versions() -> Result<()> {
-    let context = uv_test::test_context!("3.11").with_local_index();
+    let context = uv_test::test_context!("3.11");
 
     let lockfile = context.temp_dir.join("uv.lock");
 
@@ -9135,7 +9119,7 @@ fn lock_requires_python_fewest_versions() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_python_version_marker_complement() -> Result<()> {
-    let context = uv_test::test_context!("3.11").with_local_index();
+    let context = uv_test::test_context!("3.11");
 
     let lockfile = context.temp_dir.join("uv.lock");
 
@@ -9248,7 +9232,7 @@ fn lock_python_version_marker_complement() -> Result<()> {
 #[test]
 fn lock_dev() -> Result<()> {
     let artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc!(
@@ -9359,7 +9343,7 @@ fn lock_dev() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_conditional_unconditional() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -9432,7 +9416,7 @@ fn lock_conditional_unconditional() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_multiple_markers() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -9504,7 +9488,7 @@ fn lock_multiple_markers() -> Result<()> {
 /// Check relative and absolute path handling in lockfiles.
 #[test]
 fn lock_relative_and_absolute_paths() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc! {r#"
@@ -9616,7 +9600,7 @@ fn lock_relative_and_absolute_paths() -> Result<()> {
 /// Check path spelling for editable and non-editable sources in separate marker branches.
 #[test]
 fn lock_relative_and_absolute_paths_disjoint_markers() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let child = context.temp_dir.child("child");
     child.child("src/child/__init__.py").touch()?;
@@ -9683,9 +9667,7 @@ fn lock_relative_and_absolute_paths_disjoint_markers() -> Result<()> {
 /// See: <https://github.com/astral-sh/uv/issues/20477>
 #[test]
 fn lock_relative_transitive_poetry_paths() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2026-07-10T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2026-07-10T00:00:00Z");
 
     let absolute_child = context.temp_dir.child("absolute-child");
     let editable_child = context.temp_dir.child("editable-child");
@@ -9887,9 +9869,7 @@ fn lock_relative_transitive_poetry_paths() -> Result<()> {
 /// See: <https://github.com/astral-sh/uv/issues/20477>
 #[test]
 fn lock_relative_transitive_workspace_paths() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2026-07-10T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2026-07-10T00:00:00Z");
 
     context
         .temp_dir
@@ -10014,9 +9994,7 @@ fn lock_relative_transitive_workspace_paths() -> Result<()> {
 /// See: <https://github.com/astral-sh/uv/issues/20477>
 #[test]
 fn lock_relative_transitive_archive_paths() -> Result<()> {
-    let context = uv_test::test_context!("3.13")
-        .with_local_index()
-        .with_exclude_newer("2026-07-10T00:00:00Z");
+    let context = uv_test::test_context!("3.13").with_exclude_newer("2026-07-10T00:00:00Z");
 
     let wheel = context.temp_dir.child("wheels/ok-1.0.0-py3-none-any.whl");
     context.temp_dir.child("wheels").create_dir_all()?;
@@ -10169,7 +10147,7 @@ fn lock_relative_transitive_archive_paths() -> Result<()> {
 /// Preserve local path intent across configured, workspace, and backend metadata.
 #[test]
 fn lock_relative_inactive_dependency_metadata_paths() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let child = context.temp_dir.child("child");
     child.child("pyproject.toml").write_str(indoc! {r#"
@@ -10442,7 +10420,7 @@ fn lock_relative_inactive_dependency_metadata_paths() -> Result<()> {
 /// Ignored metadata overrides must not make backend paths appear user-authored.
 #[test]
 fn lock_ignored_dependency_metadata_paths() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let active_child = context.temp_dir.child("active-child");
     active_child.child("src/active_child/__init__.py").touch()?;
@@ -10552,7 +10530,7 @@ fn lock_ignored_dependency_metadata_paths() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_pep508_urls_with_vars() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&indoc! {r#"
@@ -10664,7 +10642,7 @@ fn lock_pep508_urls_with_vars() -> Result<()> {
 /// See: <https://github.com/astral-sh/uv/issues/17307>
 #[test]
 fn lock_constraint_dependency_absolute_path() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Create a local sniffio package at an absolute path.
     // We use sniffio because anyio depends on it, so the constraint will
@@ -10802,7 +10780,7 @@ fn lock_constraint_dependency_absolute_path() -> Result<()> {
 /// See: <https://github.com/astral-sh/uv/issues/17307>
 #[test]
 fn lock_index_absolute_path_from_config() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Create a local flat index with a wheel.
     let index_dir = context.temp_dir.child("local_index");
@@ -10893,7 +10871,7 @@ fn lock_index_absolute_path_from_config() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_cycles() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -11088,7 +11066,7 @@ fn lock_cycles() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_new_extras() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -11389,7 +11367,7 @@ fn lock_new_extras() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_metadata_free_new_extra_marker() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("tag_and_markers/virtual-package-extra-priorities.toml");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     let pyproject = indoc! {r#"
@@ -11481,7 +11459,7 @@ fn lock_metadata_free_new_extra_marker() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_invalid_hash() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -11586,7 +11564,7 @@ fn lock_invalid_hash() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_mixed_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.13").with_local_index();
+    let context = uv_test::test_context!("3.13");
 
     let root = context.temp_dir.child("simple-html");
     fs_err::create_dir_all(&root)?;
@@ -11792,7 +11770,7 @@ fn lock_mixed_hashes() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_core_metadata_hash() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let index_server = MockServer::start().await;
     let artifact_server = MockServer::start().await;
 
@@ -11908,7 +11886,7 @@ async fn lock_core_metadata_hash() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_index_hash_algorithm() -> Result<()> {
-    let context = uv_test::test_context!("3.13").with_local_index();
+    let context = uv_test::test_context!("3.13");
     let server = MockServer::start().await;
 
     let simple_index = json!({
@@ -12060,7 +12038,7 @@ async fn lock_index_hash_algorithm() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_index_hash_algorithm_missing() -> Result<()> {
-    let context = uv_test::test_context!("3.13").with_local_index();
+    let context = uv_test::test_context!("3.13");
     let server = MockServer::start().await;
 
     let simple_index = json!({
@@ -12133,7 +12111,7 @@ async fn lock_index_hash_algorithm_missing() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_mode() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -12300,7 +12278,7 @@ fn lock_resolution_mode() -> Result<()> {
 /// Accept the `explicit` pre-release mode in lockfiles, configuration, and CLI arguments.
 #[test]
 fn lock_explicit_prerelease_mode() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context
         .temp_dir
@@ -12346,7 +12324,7 @@ fn lock_explicit_prerelease_mode() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_prerelease_package_configuration() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context
         .temp_dir
@@ -12430,7 +12408,7 @@ fn lock_prerelease_package_configuration() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_requires_python_no_wheels() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -12460,7 +12438,7 @@ fn lock_requires_python_no_wheels() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_same_version_multiple_urls() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let v1 = context.temp_dir.child("v1");
     fs_err::create_dir_all(&v1)?;
@@ -12639,7 +12617,7 @@ fn lock_same_version_multiple_urls() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_unsafe_lowest() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -12677,7 +12655,7 @@ fn lock_unsafe_lowest() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_exclusion() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -12769,7 +12747,7 @@ fn lock_exclusion() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_relative_lock_deserialization() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -12869,7 +12847,7 @@ fn lock_relative_lock_deserialization() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_non_workspace_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -12921,7 +12899,7 @@ fn lock_non_workspace_source() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_no_workspace_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -12973,7 +12951,7 @@ fn lock_no_workspace_source() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_workspace_member_with_standalone_path_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -13081,7 +13059,7 @@ fn lock_workspace_member_with_standalone_path_source() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_external_workspace_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let project = context.temp_dir.child("project");
     project.child("pyproject.toml").write_str(
@@ -13189,7 +13167,7 @@ fn lock_external_workspace_source() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_unused_external_workspace_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context.temp_dir.child("pyproject.toml").write_str(
         r#"
@@ -13217,7 +13195,7 @@ fn lock_unused_external_workspace_source() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_workspace_member_with_external_workspace_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -13263,7 +13241,7 @@ fn lock_workspace_member_with_external_workspace_source() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_peer_member() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context
         .temp_dir
@@ -13363,7 +13341,7 @@ fn lock_peer_member() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_workspace_member_with_fragment_delimiter() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context.temp_dir.child("pyproject.toml").write_str(
         r#"
@@ -13443,8 +13421,8 @@ fn lock_workspace_member_with_fragment_delimiter() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_index_workspace_member() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
-    let proxy = crate::pypi_proxy::start_local().await;
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -13579,7 +13557,7 @@ async fn lock_index_workspace_member() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_dev_transitive() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let foo = context.temp_dir.child("foo");
     fs_err::create_dir_all(&foo)?;
@@ -13763,10 +13741,8 @@ async fn lock_redact_http() -> Result<()> {
     // which in turns means we don't use the test context cache location.
     // We should probably add a way to configure the `--no-cache` temporary
     // directory location during testing.
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_filtered_link_mode_warning();
-    let proxy = crate::pypi_proxy::start_local().await;
+    let context = uv_test::test_context!("3.12").with_filtered_link_mode_warning();
+    let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -13928,7 +13904,7 @@ async fn lock_redact_http() -> Result<()> {
 fn lock_index_url_username_change_no_update() -> Result<()> {
     let index = PackseServer::new("packages/pip-install.toml");
     let index_url = index.index_url().replacen("http://", "http://fakeuser@", 1);
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Create initial lockfile with exact version constraint
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -13998,9 +13974,7 @@ fn lock_index_url_username_change_no_update() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_redact_git_pep508() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_filtered_link_mode_warning();
+    let context = uv_test::test_context!("3.12").with_filtered_link_mode_warning();
     let token = decode_token(READ_ONLY_GITHUB_TOKEN);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -14076,9 +14050,7 @@ fn lock_redact_git_pep508() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_redact_git_sources() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_filtered_link_mode_warning();
+    let context = uv_test::test_context!("3.12").with_filtered_link_mode_warning();
     let token = decode_token(READ_ONLY_GITHUB_TOKEN);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -14157,9 +14129,7 @@ fn lock_redact_git_sources() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_redact_git_pep508_non_project() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_filtered_link_mode_warning();
+    let context = uv_test::test_context!("3.12").with_filtered_link_mode_warning();
     let token = decode_token(READ_ONLY_GITHUB_TOKEN);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -14231,10 +14201,8 @@ fn lock_redact_git_pep508_non_project() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_redact_index_sources() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_filtered_link_mode_warning();
-    let proxy = crate::pypi_proxy::start_local().await;
+    let context = uv_test::test_context!("3.12").with_filtered_link_mode_warning();
+    let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -14320,10 +14288,8 @@ async fn lock_redact_index_sources() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_redact_url_sources() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_filtered_link_mode_warning();
-    let proxy = crate::pypi_proxy::start_local().await;
+    let context = uv_test::test_context!("3.12").with_filtered_link_mode_warning();
+    let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(r#"
@@ -14403,8 +14369,8 @@ async fn lock_redact_url_sources() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_env_credentials() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
-    let proxy = crate::pypi_proxy::start_local().await;
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -14489,8 +14455,8 @@ async fn lock_env_credentials() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_multiple_indexes_same_realm_different_credentials() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
-    let proxy = crate::pypi_proxy::start_local().await;
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -14535,8 +14501,8 @@ async fn lock_multiple_indexes_same_realm_different_credentials() -> Result<()> 
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_multiple_indexes_same_realm_different_credentials_trailing_slash() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
-    let proxy = crate::pypi_proxy::start_local().await;
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -14580,8 +14546,8 @@ async fn lock_multiple_indexes_same_realm_different_credentials_trailing_slash()
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_relative_index() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
-    let proxy = crate::pypi_proxy::start_local().await;
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -14664,7 +14630,7 @@ async fn lock_relative_index() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_no_sources() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -14885,7 +14851,7 @@ fn lock_no_sources() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_migrate() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -15026,7 +14992,7 @@ fn lock_migrate() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_upgrade_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Constrain `anyio` and `idna.`
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -15292,7 +15258,7 @@ fn lock_upgrade_package() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_upgrade_group() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Constrain `anyio` and `idna` in both the main dependencies and a dev group.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -15345,7 +15311,7 @@ fn lock_upgrade_group() -> Result<()> {
 /// Error if `--upgrade-group` refers to a dependency group that does not exist.
 #[test]
 fn lock_upgrade_group_missing() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -15391,7 +15357,7 @@ fn lock_upgrade_group_missing() -> Result<()> {
 /// `--frozen` ignores `--upgrade-group` and uses the existing lockfile.
 #[test]
 fn lock_upgrade_group_frozen() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -15443,7 +15409,7 @@ fn lock_upgrade_group_frozen() -> Result<()> {
 /// `--upgrade-group dev` recognizes the legacy `tool.uv.dev-dependencies` field.
 #[test]
 fn lock_upgrade_group_legacy_dev_dependencies() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -15494,7 +15460,7 @@ fn lock_upgrade_group_legacy_dev_dependencies() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_upgrade_group_transitive() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Pin `anyio` in the dev group. `anyio` depends on `idna` and `sniffio` transitively.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -15596,7 +15562,7 @@ fn lock_upgrade_group_transitive() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_upgrade_group_no_project_table() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -15645,9 +15611,7 @@ fn lock_upgrade_group_no_project_table() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_upgrade_drop_fork_markers() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_packse_index("fork/fork-upgrade.toml");
+    let context = uv_test::test_context!("3.12").with_packse_index("fork/fork-upgrade.toml");
 
     let requirements = r#"[project]
     name = "forking"
@@ -15687,7 +15651,7 @@ fn lock_upgrade_drop_fork_markers() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_warn_missing_transitive_lower_bounds() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -15722,7 +15686,7 @@ fn lock_warn_missing_transitive_lower_bounds() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_find_links_local_wheel() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Populate the `--find-links` entries.
     fs_err::create_dir_all(context.temp_dir.join("links"))?;
@@ -15829,7 +15793,7 @@ fn lock_find_links_local_wheel() -> Result<()> {
 #[test]
 fn lock_find_links_ignore_explicit_index() -> Result<()> {
     let explicit_index = PackseServer::new("packages/lock-find-links-registry.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Populate the `--find-links` entries.
     fs_err::create_dir_all(context.temp_dir.join("links"))?;
@@ -15946,7 +15910,7 @@ fn lock_find_links_ignore_explicit_index() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_find_links_relative_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let workspace = context.temp_dir.child("workspace");
     let links = workspace.join("links");
 
@@ -16044,7 +16008,7 @@ fn lock_find_links_relative_url() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_find_links_local_sdist() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Populate the `--find-links` entries.
     fs_err::create_dir_all(context.temp_dir.join("links"))?;
@@ -16150,7 +16114,7 @@ fn lock_find_links_local_sdist() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_find_links_http_wheel() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let vendor = uv_test::find_links::FindLinksServer::vendor();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -16236,7 +16200,7 @@ fn lock_find_links_http_wheel() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_find_links_http_sdist() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let vendor = uv_test::find_links::FindLinksServer::vendor();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -16320,7 +16284,7 @@ fn lock_find_links_http_sdist() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_find_links_explicit_index() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Populate the `--find-links` entries.
     fs_err::create_dir_all(context.temp_dir.join("links"))?;
@@ -16421,7 +16385,7 @@ fn lock_find_links_explicit_index() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_find_links_higher_priority_index() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Populate the `--find-links` entries.
     fs_err::create_dir_all(context.temp_dir.join("links"))?;
@@ -16511,7 +16475,7 @@ fn lock_find_links_higher_priority_index() -> Result<()> {
 #[test]
 fn lock_find_links_lower_priority_index() -> Result<()> {
     let registry = PackseServer::new("packages/lock-find-links-registry.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Populate the `--find-links` entries.
     fs_err::create_dir_all(context.temp_dir.join("links"))?;
@@ -16618,7 +16582,7 @@ fn lock_find_links_lower_priority_index() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_local_index() -> Result<()> {
-    let context = uv_test::test_context!("3.13").with_local_index();
+    let context = uv_test::test_context!("3.13");
 
     let root = context.temp_dir.child("simple-html");
     fs_err::create_dir_all(&root)?;
@@ -16757,7 +16721,7 @@ fn lock_local_index() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_sources_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -16873,7 +16837,7 @@ fn lock_sources_url() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_sources_url_offline_validates_transitive_source_tree() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // The remote `workspace` archive depends on `anyio`. Override that transitive dependency to
     // a local source tree so it remains refreshable while the direct URL parent is skipped
@@ -16943,11 +16907,11 @@ fn lock_sources_url_offline_validates_transitive_source_tree() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_sources_archive() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Download the source.
     let workspace_archive = context.temp_dir.child("workspace.zip");
-    download_local_to_disk(
+    download_to_disk(
         "https://github.com/user-attachments/files/16592193/workspace.zip",
         &workspace_archive,
     );
@@ -17071,11 +17035,11 @@ fn lock_sources_archive() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_sources_source_tree() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Download the source.
     let workspace_archive = context.temp_dir.child("workspace.zip");
-    download_local_to_disk(
+    download_to_disk(
         "https://github.com/user-attachments/files/16592193/workspace.zip",
         &workspace_archive,
     );
@@ -17182,7 +17146,7 @@ fn lock_sources_source_tree() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_editable() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Create the workspace root.
     context
@@ -17330,7 +17294,7 @@ fn lock_editable() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_mixed_extras() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Create a workspace (`workspace1`) with a dependency on another workspace (`workspace2`).
     let workspace1 = context.temp_dir.child("workspace1");
@@ -17554,7 +17518,7 @@ fn lock_mixed_extras() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_transitive_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Create a workspace (`workspace1`) with a dependency on another workspace (`workspace2`).
     let workspace = context.temp_dir.child("workspace");
@@ -17718,7 +17682,7 @@ fn lock_transitive_extra() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_mismatched_sources() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -17826,7 +17790,7 @@ fn lock_mismatched_sources() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_mismatched_versions() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -17904,7 +17868,7 @@ fn lock_mismatched_versions() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_no_sources_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -18006,7 +17970,7 @@ fn lock_no_sources_package() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_no_sources_package_multiple() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -18121,7 +18085,7 @@ fn lock_no_sources_package_multiple() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_no_sources_with_no_sources_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -18228,7 +18192,7 @@ fn lock_no_sources_with_no_sources_package() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_no_sources_package_env_var() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -18335,7 +18299,7 @@ fn lock_no_sources_package_env_var() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn unconditional_overlapping_marker_disjoint_version_constraints() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -18365,7 +18329,7 @@ fn unconditional_overlapping_marker_disjoint_version_constraints() -> Result<()>
 #[cfg(feature = "test-universal")]
 #[test]
 fn check_no_lock() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -18391,7 +18355,7 @@ fn check_no_lock() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn check_outdated_lock() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -18458,7 +18422,7 @@ fn check_outdated_lock() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn check_unformatted_lock() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context.temp_dir.child("pyproject.toml").write_str(
         r#"
@@ -18514,9 +18478,7 @@ fn check_unformatted_lock() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_reuses_newer_exclude_newer_timestamp() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2024-03-25T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2024-03-25T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -18596,9 +18558,7 @@ fn lock_reuses_newer_exclude_newer_timestamp() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_check_allows_relaxed_exclude_newer_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2024-03-25T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2024-03-25T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -18675,7 +18635,7 @@ fn lock_check_allows_relaxed_exclude_newer_package() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_upgrade_with_relaxed_exclude_newer_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -18717,7 +18677,7 @@ fn lock_upgrade_with_relaxed_exclude_newer_package() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn normalize_false_marker_dependency_groups() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let local = context.temp_dir.child("local");
     local.create_dir_all()?;
@@ -18788,7 +18748,7 @@ fn normalize_false_marker_dependency_groups() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn normalize_false_marker_requires_dist() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -18848,7 +18808,7 @@ fn normalize_false_marker_requires_dist() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_impossible_platform_markers() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -18907,8 +18867,8 @@ fn lock_impossible_platform_markers() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_change_index() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
-    let proxy = crate::pypi_proxy::start_local().await;
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -19023,7 +18983,7 @@ async fn lock_change_index() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_remove_member() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Create a workspace member.
     let leaf = context.temp_dir.child("leaf");
@@ -19312,7 +19272,7 @@ fn lock_remove_member() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_add_member_with_build_system() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Create a workspace, but don't add the member.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -19509,7 +19469,7 @@ fn lock_add_member_with_build_system() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_add_member_without_build_system() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Create a workspace, but don't add the member.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -19823,7 +19783,7 @@ fn lock_add_member_without_build_system() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_redundant_add_member() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Lock `anyio`.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -20015,7 +19975,7 @@ fn lock_redundant_add_member() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_new_constraints() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -20204,7 +20164,7 @@ fn lock_new_constraints() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_remove_member_non_project() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Create a virtual workspace root.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -20364,7 +20324,7 @@ fn lock_remove_member_non_project() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_rename_project() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Create a workspace, but don't add the member.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -20502,7 +20462,7 @@ fn lock_rename_project() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_writes_without_package_metadata() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     context
         .temp_dir
         .child("pyproject.toml")
@@ -20656,7 +20616,7 @@ fn lock_writes_without_package_metadata() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_metadata_free_many_conflicts() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let extra_declarations = (1..=24)
         .map(|conflict_number| format!("a{conflict_number} = []\nb{conflict_number} = []"))
         .collect::<Vec<_>>()
@@ -20782,7 +20742,7 @@ fn lock_metadata_free_many_conflicts() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_metadata_free_frozen_empty_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     context
         .temp_dir
         .child("pyproject.toml")
@@ -20889,7 +20849,7 @@ fn lock_metadata_free_frozen_empty_extra() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_removed_empty_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
         [project]
@@ -20966,7 +20926,7 @@ fn lock_removed_empty_extra() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/lock-without-metadata.toml");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     let original_pyproject = indoc! {r#"
@@ -21131,7 +21091,7 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_metadata_free_root_extra_project_conflicting_workspace_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     context
         .temp_dir
         .child("pyproject.toml")
@@ -21208,7 +21168,7 @@ fn lock_metadata_free_root_extra_project_conflicting_workspace_extra() -> Result
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_metadata_free_nested_group_conditional_registry_constraint() -> Result<()> {
-    let context = uv_test::test_context!("3.13").with_local_index();
+    let context = uv_test::test_context!("3.13");
     let scenario = toml::from_str::<Scenario>(indoc! {r#"
         name = "nested-group-conditional-registry-constraint"
 
@@ -21433,7 +21393,7 @@ fn lock_metadata_free_nested_group_conditional_registry_constraint() -> Result<(
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_regenerates_conflicting_python_forked_dependency_extras() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/lock-without-metadata.toml");
     context
         .temp_dir
@@ -21498,7 +21458,7 @@ fn lock_regenerates_conflicting_python_forked_dependency_extras() -> Result<()> 
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_regenerates_dynamic_version_scoped_override() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/lock-without-metadata.toml");
     context
         .temp_dir
@@ -21604,7 +21564,7 @@ fn lock_regenerates_dynamic_version_scoped_override() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_regenerates_incompatible_self_requirement() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     let original_pyproject = indoc! {r#"
         [project]
@@ -21726,7 +21686,7 @@ fn lock_regenerates_incompatible_self_requirement() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_regenerates_activated_empty_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
         [project]
@@ -21831,7 +21791,7 @@ fn lock_regenerates_activated_empty_extra() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_metadata_free_frozen_filtered_dependency_selections() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     context
         .temp_dir
         .child("pyproject.toml")
@@ -21900,7 +21860,7 @@ fn lock_metadata_free_frozen_filtered_dependency_selections() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_metadata_free_frozen_preserves_recorded_selections() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     let original_pyproject = indoc! {r#"
         [project]
@@ -22023,7 +21983,7 @@ fn lock_metadata_free_frozen_preserves_recorded_selections() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_regenerates_marker_specific_local_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     context
         .temp_dir
         .child("pyproject.toml")
@@ -22095,7 +22055,7 @@ fn lock_regenerates_marker_specific_local_extra() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_regenerates_scoped_workspace_overrides() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/lock-without-metadata.toml");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -22172,7 +22132,7 @@ fn lock_regenerates_scoped_workspace_overrides() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_metadata_free_direct_url_constraint() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/lock-without-metadata.toml");
 
     context
@@ -22237,7 +22197,7 @@ fn lock_metadata_free_direct_url_constraint() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_metadata_free_disjoint_marker_direct_url_constraint() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/lock-without-metadata.toml");
 
     context
@@ -22302,7 +22262,7 @@ fn lock_metadata_free_disjoint_marker_direct_url_constraint() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_metadata_free_shared_direct_sources() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/lock-without-metadata.toml");
 
     context
@@ -22368,7 +22328,7 @@ fn lock_metadata_free_shared_direct_sources() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_metadata_free_shared_disjoint_marker_direct_sources() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/lock-without-metadata.toml");
 
     context
@@ -22433,7 +22393,7 @@ fn lock_metadata_free_shared_disjoint_marker_direct_sources() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_metadata_free_shared_conditional_provider_sources() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     context
         .temp_dir
         .child("pyproject.toml")
@@ -22615,7 +22575,7 @@ fn lock_metadata_free_shared_conditional_provider_sources() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_metadata_free_shared_git_direct_source() -> Result<()> {
-    let context = uv_test::test_context!("3.13").with_local_index();
+    let context = uv_test::test_context!("3.13");
 
     let repository = context.temp_dir.child("repository");
     repository.child("archives").create_dir_all()?;
@@ -22708,7 +22668,7 @@ fn lock_metadata_free_shared_git_direct_source() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_metadata_free_shared_transitive_direct_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/lock-without-metadata.toml");
 
     context
@@ -22767,7 +22727,7 @@ fn lock_metadata_free_shared_transitive_direct_source() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_metadata_free_shared_dynamic_direct_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/lock-without-metadata.toml");
 
     context
@@ -22852,7 +22812,7 @@ fn lock_metadata_free_shared_dynamic_direct_source() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_metadata_free_dynamic_version_excluded_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     let original_pyproject = indoc! {r#"
         [project]
@@ -22962,7 +22922,7 @@ fn lock_metadata_free_dynamic_version_excluded_source() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_metadata_free_overridden_recursive_extra_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/lock-without-metadata.toml");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     let child_url = Url::from_file_path(context.temp_dir.child("child").path())
@@ -23069,7 +23029,7 @@ fn lock_metadata_free_overridden_recursive_extra_source() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_metadata_free_shared_backend_direct_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/lock-without-metadata.toml");
 
     context
@@ -23181,7 +23141,7 @@ fn lock_metadata_free_shared_backend_direct_source() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_metadata_free_shared_dynamic_group_direct_sources() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/lock-without-metadata.toml");
 
     context
@@ -23272,7 +23232,7 @@ fn lock_metadata_free_shared_dynamic_group_direct_sources() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_metadata_free_shared_static_metadata_direct_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/lock-without-metadata.toml");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -23364,7 +23324,7 @@ fn lock_metadata_free_shared_static_metadata_direct_source() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_metadata_free_shared_root_group_direct_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/lock-without-metadata.toml");
 
     context
@@ -23420,7 +23380,7 @@ fn lock_metadata_free_shared_root_group_direct_source() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_metadata_free_shared_script_direct_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/lock-without-metadata.toml");
 
     context
@@ -23485,7 +23445,7 @@ fn lock_metadata_free_shared_script_direct_source() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_regenerates_marker_specific_requested_extras() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/lock-without-metadata.toml");
     context
         .temp_dir
@@ -23596,7 +23556,7 @@ fn lock_regenerates_marker_specific_requested_extras() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_missing_metadata() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -23736,7 +23696,7 @@ fn lock_missing_metadata() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_dev_dependencies_alias() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -23878,7 +23838,7 @@ fn lock_dev_dependencies_alias() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_reorder() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -24001,7 +23961,7 @@ fn lock_reorder() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_narrowed_python_version_upper() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let dependency = context.temp_dir.child("dependency");
     dependency.child("pyproject.toml").write_str(
@@ -24106,7 +24066,7 @@ fn lock_narrowed_python_version_upper() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_narrowed_python_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let dependency = context.temp_dir.child("dependency");
     dependency.child("pyproject.toml").write_str(
@@ -24218,7 +24178,7 @@ fn lock_narrowed_python_version() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_exclude_unnecessary_python_forks() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -24320,7 +24280,7 @@ fn lock_exclude_unnecessary_python_forks() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_constrained_environment() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -24612,7 +24572,7 @@ fn lock_constrained_environment() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_constrained_environment_non_project() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -24764,7 +24724,7 @@ fn lock_constrained_environment_non_project() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_overlapping_environment() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -24795,7 +24755,7 @@ fn lock_overlapping_environment() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_non_project_fork() -> Result<()> {
-    let context = uv_test::test_context!("3.10").with_local_index();
+    let context = uv_test::test_context!("3.10");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -24977,7 +24937,7 @@ fn lock_non_project_fork() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_non_project_conditional() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -25074,7 +25034,7 @@ fn lock_non_project_conditional() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_non_project_group() -> Result<()> {
-    let context = uv_test::test_context!("3.10").with_local_index();
+    let context = uv_test::test_context!("3.10");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -25212,7 +25172,7 @@ fn lock_non_project_group() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_non_project_group_standard() -> Result<()> {
-    let context = uv_test::test_context!("3.10").with_local_index();
+    let context = uv_test::test_context!("3.10");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -25296,7 +25256,7 @@ fn lock_non_project_group_standard() -> Result<()> {
 #[test]
 fn lock_non_project_sources() -> Result<()> {
     let artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc!(
@@ -25374,7 +25334,7 @@ fn lock_non_project_sources() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_non_project_member_conflicts() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -25534,7 +25494,7 @@ fn lock_non_project_member_conflicts() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_non_project_member_conflicts_missing_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -25581,7 +25541,7 @@ fn lock_non_project_member_conflicts_missing_package() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_dropped_dev_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -25679,7 +25639,7 @@ fn lock_dropped_dev_extra() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_empty_dev_dependencies() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -25776,7 +25736,7 @@ fn lock_empty_dev_dependencies() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_empty_dependency_group() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -25869,7 +25829,7 @@ fn lock_empty_dependency_group() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_add_empty_dependency_group() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -26089,7 +26049,7 @@ fn lock_add_empty_dependency_group() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_trailing_slash_index_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let index = PackseServer::new("packages/pip-install.toml");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -26204,7 +26164,7 @@ fn lock_trailing_slash_index_url() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_invalid_index() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -26249,7 +26209,7 @@ fn lock_invalid_index() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_explicit_index() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let explicit_index = PackseServer::new("packages/audit.toml");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -26356,7 +26316,7 @@ fn lock_explicit_index() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_explicit_default_index() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let explicit_index = PackseServer::new("packages/audit.toml");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -26529,7 +26489,7 @@ fn lock_explicit_default_index() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_unnamed_explicit_index() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -26571,7 +26531,7 @@ fn lock_unnamed_explicit_index() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_invalid_index_cache_control() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -26615,10 +26575,10 @@ fn lock_invalid_index_cache_control() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_named_index() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let pytorch_index = PackseServer::new("packages/lock-index-preferences-cu118.toml");
     let test_index = PackseServer::new("packages/lock-index-preferences-cu118.toml");
-    let proxy = crate::pypi_proxy::start_local().await;
+    let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc!(
@@ -26696,7 +26656,7 @@ async fn lock_named_index() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_default_index() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let pytorch_index = PackseServer::new("packages/lock-index-preferences-cu118.toml");
 
     // If an index is included, the configured default index is still used.
@@ -26826,9 +26786,7 @@ fn lock_default_index() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_named_index_cli() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-30T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
     let named_index = PackseServer::new("packages/pip-install.toml");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -26917,7 +26875,7 @@ fn lock_named_index_cli() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_named_index_config_file_hint() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -26967,7 +26925,7 @@ fn lock_named_index_config_file_hint() -> Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn lock_named_index_user_config_file_hint() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -27015,7 +26973,7 @@ fn lock_named_index_user_config_file_hint() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_repeat_named_index() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -27054,7 +27012,7 @@ fn lock_repeat_named_index() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_multiple_default_indexes() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -27095,9 +27053,7 @@ fn lock_multiple_default_indexes() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_repeat_named_index_member() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-30T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
     let workspace_index = PackseServer::new("packages/pip-install.toml");
     let member_index = PackseServer::new("packages/pip-install.toml");
 
@@ -27214,7 +27170,7 @@ fn lock_repeat_named_index_member() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_unique_named_index() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let first_index = PackseServer::empty();
     let second_index = PackseServer::empty();
 
@@ -27291,9 +27247,7 @@ fn lock_unique_named_index() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_repeat_named_index_cli() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-30T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
     let named_index = PackseServer::new("packages/pip-install.toml");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -27445,7 +27399,7 @@ fn lock_repeat_named_index_cli() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_named_index_overlap() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let named_index = PackseServer::new("packages/pip-install.toml");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -27524,7 +27478,7 @@ fn lock_named_index_overlap() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_explicit_virtual_project() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -27735,7 +27689,7 @@ fn lock_explicit_virtual_project() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_implicit_virtual_project() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -27942,7 +27896,7 @@ fn lock_implicit_virtual_project() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_implicit_package_path() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -28092,7 +28046,7 @@ fn lock_implicit_package_path() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_conflicting_environment() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -28120,7 +28074,7 @@ fn lock_conflicting_environment() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_split_python_environment() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -28214,7 +28168,7 @@ fn lock_split_python_environment() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_fork_strategy_with_python_environments() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("fork/fork-strategy-environments.toml");
 
     // The `requires-python` strategy solves the `3.12` fork first, so each fork gets its own
@@ -28466,7 +28420,7 @@ fn lock_fork_strategy_with_python_environments() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_python_upper_bound() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -28571,7 +28525,7 @@ fn lock_python_upper_bound() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_simplified_environments() -> Result<()> {
-    let context = uv_test::test_context!("3.11").with_local_index();
+    let context = uv_test::test_context!("3.11");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -28671,7 +28625,7 @@ fn lock_simplified_environments() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_dependency_metadata() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -28886,7 +28840,7 @@ fn lock_dependency_metadata() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_dependency_metadata_git() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -28997,7 +28951,7 @@ fn lock_dependency_metadata_git() -> Result<()> {
 #[test]
 fn lock_strip_fragment() -> Result<()> {
     let direct_artifacts = PackseServer::new("packages/lock-direct-artifacts.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc!(
@@ -29079,7 +29033,7 @@ fn lock_strip_fragment() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_invalid_environment() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     context.temp_dir.child("pyproject.toml").write_str(
         r#"
@@ -29109,7 +29063,7 @@ fn lock_invalid_environment() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_request_requires_python() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -29148,7 +29102,7 @@ fn lock_request_requires_python() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_duplicate_sources() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -29213,7 +29167,7 @@ fn lock_duplicate_sources() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_invalid_project_table() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("a/pyproject.toml");
     pyproject_toml.write_str(
@@ -29256,7 +29210,7 @@ fn lock_invalid_project_table() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_missing_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc::indoc! {
@@ -29285,7 +29239,7 @@ fn lock_missing_name() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_missing_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc::indoc! {
@@ -29314,7 +29268,7 @@ fn lock_missing_version() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_unsupported_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -29400,7 +29354,7 @@ fn lock_unsupported_version() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_change_requires_python() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -29623,7 +29577,7 @@ fn lock_change_requires_python() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_keyring_credentials() -> Result<()> {
-    let keyring_context = uv_test::test_context!("3.12").with_local_index();
+    let keyring_context = uv_test::test_context!("3.12");
 
     // Install our keyring plugin
     keyring_context
@@ -29645,8 +29599,8 @@ async fn lock_keyring_credentials() -> Result<()> {
         .assert()
         .success();
 
-    let context = uv_test::test_context!("3.12").with_local_index();
-    let proxy = crate::pypi_proxy::start_local().await;
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -29725,8 +29679,8 @@ async fn lock_keyring_credentials() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_keyring_explicit_always() -> Result<()> {
-    let keyring_context = uv_test::test_context!("3.12").with_local_index();
-    let proxy = crate::pypi_proxy::start_local().await;
+    let keyring_context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
 
     // Install our keyring plugin
     keyring_context
@@ -29748,7 +29702,7 @@ async fn lock_keyring_explicit_always() -> Result<()> {
         .assert()
         .success();
 
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -29807,8 +29761,8 @@ async fn lock_keyring_explicit_always() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_keyring_credentials_always_authenticate_fetches_username() -> Result<()> {
-    let keyring_context = uv_test::test_context!("3.12").with_local_index();
-    let proxy = crate::pypi_proxy::start_local().await;
+    let keyring_context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
 
     // Install our keyring plugin
     keyring_context
@@ -29830,7 +29784,7 @@ async fn lock_keyring_credentials_always_authenticate_fetches_username() -> Resu
         .assert()
         .success();
 
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -29909,7 +29863,7 @@ async fn lock_keyring_credentials_always_authenticate_fetches_username() -> Resu
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_keyring_credentials_always_authenticate_unsupported_mode() -> Result<()> {
-    let keyring_context = uv_test::test_context!("3.12").with_local_index();
+    let keyring_context = uv_test::test_context!("3.12");
 
     // Install our keyring plugin
     keyring_context
@@ -29931,8 +29885,8 @@ async fn lock_keyring_credentials_always_authenticate_unsupported_mode() -> Resu
         .assert()
         .success();
 
-    let context = uv_test::test_context!("3.12").with_local_index();
-    let proxy = crate::pypi_proxy::start_local().await;
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -29973,7 +29927,7 @@ async fn lock_keyring_credentials_always_authenticate_unsupported_mode() -> Resu
 #[test]
 fn lock_multiple_sources() -> Result<()> {
     let direct_artifacts = PackseServer::new("packages/lock-direct-artifacts.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -30070,7 +30024,7 @@ fn lock_multiple_sources() -> Result<()> {
 #[test]
 fn lock_multiple_sources_conflict() -> Result<()> {
     let direct_artifacts = PackseServer::new("packages/lock-direct-artifacts.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -30108,7 +30062,7 @@ fn lock_multiple_sources_conflict() -> Result<()> {
 #[test]
 fn lock_multiple_sources_no_marker() -> Result<()> {
     let direct_artifacts = PackseServer::new("packages/lock-direct-artifacts.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -30152,9 +30106,7 @@ fn lock_multiple_sources_index_disjoint_markers() -> Result<()> {
     let [cu118_index, cu124_index] = indexes;
     let cu118_index_url = cu118_index.index_url();
     let cu124_index_url = cu124_index.index_url();
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-30T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc! {r#"
@@ -30291,9 +30243,7 @@ fn lock_multiple_sources_index_mixed() -> Result<()> {
     let artifacts = PackseServer::new("packages/lock-direct-artifacts.toml");
     let cu118_index = PackseServer::new("packages/pip-install.toml");
     let cu118_index_url = cu118_index.index_url();
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-30T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc! {r#"
@@ -30428,9 +30378,7 @@ fn lock_multiple_sources_index_mixed() -> Result<()> {
 fn lock_multiple_sources_index_non_total() -> Result<()> {
     let cu118_index = PackseServer::new("packages/pip-install.toml");
     let cu118_index_url = cu118_index.index_url();
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-30T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc! {r#"
@@ -30538,7 +30486,6 @@ fn lock_multiple_sources_index_explicit() -> Result<()> {
     let [default_index, explicit_index] = indexes;
     let explicit_index_url = explicit_index.index_url();
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&default_index.index_url())
         .with_exclude_newer("2025-01-30T00:00:00Z");
 
@@ -30663,7 +30610,7 @@ fn lock_multiple_sources_index_explicit() -> Result<()> {
 #[test]
 fn lock_multiple_sources_non_total() -> Result<()> {
     let direct_artifacts = PackseServer::new("packages/lock-direct-artifacts.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -30761,7 +30708,7 @@ fn lock_multiple_sources_non_total() -> Result<()> {
 #[test]
 fn lock_multiple_sources_respect_marker() -> Result<()> {
     let direct_artifacts = PackseServer::new("packages/lock-direct-artifacts.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -30845,7 +30792,7 @@ fn lock_multiple_sources_respect_marker() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_extra_marker_preserves_production_platform() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context.temp_dir.child("pyproject.toml").write_str(
         r#"
@@ -30959,7 +30906,7 @@ fn lock_extra_marker_preserves_production_platform() -> Result<()> {
 #[test]
 fn lock_multiple_sources_extra() -> Result<()> {
     let direct_artifacts = PackseServer::new("packages/lock-direct-artifacts.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -31045,9 +30992,7 @@ fn lock_multiple_sources_extra() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_multiple_sources_index_overlapping_extras() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-30T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -31099,9 +31044,7 @@ fn lock_multiple_sources_index_overlapping_extras() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_multiple_index_with_missing_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-30T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -31139,9 +31082,7 @@ fn lock_multiple_index_with_missing_extra() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_multiple_index_with_absent_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-30T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -31181,9 +31122,7 @@ fn lock_multiple_index_with_absent_extra() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_multiple_index_with_missing_group() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-30T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -31221,9 +31160,7 @@ fn lock_multiple_index_with_missing_group() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_multiple_index_with_absent_group() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-30T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -31262,7 +31199,7 @@ fn lock_multiple_index_with_absent_group() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_dry_run() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -31317,7 +31254,7 @@ fn lock_dry_run() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_dry_run_noop() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -31369,7 +31306,7 @@ fn lock_dry_run_noop() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_group_include() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -31566,7 +31503,7 @@ fn lock_group_include() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_group_requires_python() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -31698,7 +31635,7 @@ fn lock_group_requires_python() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_group_includes_requires_python() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -31863,7 +31800,7 @@ fn lock_group_includes_requires_python() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_group_requires_undefined_group() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -31895,7 +31832,7 @@ fn lock_group_requires_undefined_group() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_group_requires_dev_dep() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -31927,7 +31864,7 @@ fn lock_group_requires_dev_dep() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_group_includes_requires_python_contradiction() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -32048,7 +31985,7 @@ fn lock_group_includes_requires_python_contradiction() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_group_include_cycle() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -32079,7 +32016,7 @@ fn lock_group_include_cycle() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_group_include_dev() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -32112,7 +32049,7 @@ fn lock_group_include_dev() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_group_include_missing() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -32141,7 +32078,7 @@ fn lock_group_include_missing() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_group_invalid_entry_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -32183,7 +32120,7 @@ fn lock_group_invalid_entry_package() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_group_invalid_entry_group_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -32216,7 +32153,7 @@ fn lock_group_invalid_entry_group_name() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_group_invalid_duplicate_group_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -32250,7 +32187,7 @@ fn lock_group_invalid_duplicate_group_name() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_group_invalid_entry_table() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -32279,7 +32216,7 @@ fn lock_group_invalid_entry_table() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_group_include_with_extra_key() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -32309,7 +32246,7 @@ fn lock_group_include_with_extra_key() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_group_invalid_entry_type() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -32342,7 +32279,7 @@ fn lock_group_invalid_entry_type() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_group_empty_entry_table() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -32375,7 +32312,7 @@ fn lock_group_empty_entry_table() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_group_workspace() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -32590,7 +32527,7 @@ fn lock_group_workspace() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_transitive_git() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -32722,7 +32659,7 @@ fn lock_transitive_git() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_dynamic_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -32828,7 +32765,7 @@ fn lock_dynamic_version() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_dynamic_version_dependencies() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -32934,7 +32871,7 @@ fn lock_dynamic_version_dependencies() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_dynamic_version_no_build() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -33032,7 +32969,7 @@ fn lock_dynamic_version_no_build() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_dynamic_version_workspace_member() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -33218,7 +33155,7 @@ fn lock_dynamic_version_workspace_member() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_dynamic_version_path_dependency() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -33390,9 +33327,7 @@ fn lock_dynamic_version_path_dependency() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_dynamic_version_self_extra_hatchling() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-01T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-01T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -33544,9 +33479,7 @@ fn lock_dynamic_version_self_extra_hatchling() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_dynamic_version_self_extra_setuptools() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-01T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-01T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -33702,7 +33635,7 @@ fn lock_dynamic_version_self_extra_setuptools() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_dynamic_built_cache() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -33815,9 +33748,7 @@ fn lock_dynamic_built_cache() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_shared_build_dependency() -> Result<()> {
-    let context = uv_test::test_context!("3.13")
-        .with_local_index()
-        .with_exclude_newer("2025-01-28T00:00:00Z");
+    let context = uv_test::test_context!("3.13").with_exclude_newer("2025-01-28T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -33980,7 +33911,7 @@ fn lock_shared_build_dependency() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_dynamic_to_static() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -34104,7 +34035,7 @@ fn lock_dynamic_to_static() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_static_to_dynamic() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -34227,7 +34158,7 @@ fn lock_static_to_dynamic() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_bump_static_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -34324,9 +34255,7 @@ fn lock_bump_static_version() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_derivation_chain_prod() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_filter((r"[/\\].*[/\\]src", "/[TMP]/src"));
+    let context = uv_test::test_context!("3.12").with_filter((r"[/\\].*[/\\]src", "/[TMP]/src"));
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -34375,9 +34304,7 @@ fn lock_derivation_chain_prod() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_derivation_chain_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_filter((r"[/\\].*[/\\]src", "/[TMP]/src"));
+    let context = uv_test::test_context!("3.12").with_filter((r"[/\\].*[/\\]src", "/[TMP]/src"));
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -34427,9 +34354,7 @@ fn lock_derivation_chain_extra() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_derivation_chain_group() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_filter((r"[/\\].*[/\\]src", "/[TMP]/src"));
+    let context = uv_test::test_context!("3.12").with_filter((r"[/\\].*[/\\]src", "/[TMP]/src"));
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -34481,9 +34406,7 @@ fn lock_derivation_chain_group() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_derivation_chain_extended() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_filter((r"[/\\].*[/\\]src", "/[TMP]/src"));
+    let context = uv_test::test_context!("3.12").with_filter((r"[/\\].*[/\\]src", "/[TMP]/src"));
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -34546,7 +34469,7 @@ fn lock_derivation_chain_extended() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_relative_project() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context
         .temp_dir
@@ -34640,7 +34563,7 @@ fn lock_relative_project() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_recursive_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -34761,7 +34684,7 @@ fn lock_recursive_extra() -> Result<()> {
 #[test]
 fn no_lowest_warning_with_name_and_url() -> Result<()> {
     let direct_artifacts = PackseServer::new("packages/lock-direct-artifacts.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -34797,7 +34720,7 @@ fn no_lowest_warning_with_name_and_url() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_no_build_invalid_dependency_virtual_project() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -34828,7 +34751,7 @@ fn lock_no_build_invalid_dependency_virtual_project() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_no_build_static_metadata() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -34914,7 +34837,7 @@ fn lock_no_build_static_metadata() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_no_build_dynamic_metadata() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -34940,7 +34863,7 @@ fn lock_no_build_dynamic_metadata() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_self_compatible() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -35029,7 +34952,7 @@ fn lock_self_compatible() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_self_exact() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -35118,7 +35041,7 @@ fn lock_self_exact() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_self_incompatible() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -35146,7 +35069,7 @@ fn lock_self_incompatible() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_self_extra_to_extra_compatible() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -35239,7 +35162,7 @@ fn lock_self_extra_to_extra_compatible() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_self_extra_to_same_extra_incompatible() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -35270,7 +35193,7 @@ fn lock_self_extra_to_same_extra_incompatible() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_self_extra_to_other_extra_incompatible() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -35302,7 +35225,7 @@ fn lock_self_extra_to_other_extra_incompatible() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_self_extra_compatible() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -35395,7 +35318,7 @@ fn lock_self_extra_compatible() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_self_extra_incompatible() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -35426,7 +35349,7 @@ fn lock_self_extra_incompatible() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_self_marker_compatible() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -35515,7 +35438,7 @@ fn lock_self_marker_compatible() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_self_marker_incompatible() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -35545,9 +35468,7 @@ fn lock_self_marker_incompatible() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_split_on_windows() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2024-12-18T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2024-12-18T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -35636,7 +35557,7 @@ fn lock_split_on_windows() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_missing_git_prefix() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -35666,7 +35587,7 @@ fn lock_missing_git_prefix() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_arm() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -35739,7 +35660,7 @@ fn lock_arm() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_x86_64() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -35813,7 +35734,7 @@ fn lock_x86_64() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_x86() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -35884,7 +35805,7 @@ fn lock_x86() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_script() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! { r#"
@@ -35993,7 +35914,7 @@ fn lock_script() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_script_path() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! { r#"
@@ -36127,7 +36048,7 @@ fn lock_script_path() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_script_editable_path_dependency_change() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! { r#"
@@ -36301,9 +36222,7 @@ fn lock_script_editable_path_dependency_change() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_script_initialize() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_filtered_missing_file_error();
+    let context = uv_test::test_context!("3.12").with_filtered_missing_file_error();
 
     uv_snapshot!(context.filters(), context.lock().arg("--script").arg("script.py"), @"
     exit_code: 2 (failure)
@@ -36348,9 +36267,8 @@ fn lock_script_initialize() -> Result<()> {
 fn lock_pytorch_cpu() -> Result<()> {
     let cpu = uv_test::packse::PackseServer::new("packages/local-platform-cpu.toml");
     let cuda = uv_test::packse::PackseServer::new("packages/local-platform-cuda.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_packse_index("packages/local-platform-registry.toml");
+    let context =
+        uv_test::test_context!("3.12").with_packse_index("packages/local-platform-registry.toml");
 
     context.temp_dir.child("pyproject.toml").write_str(
         &r#"
@@ -36587,7 +36505,7 @@ fn lock_pytorch_cpu() -> Result<()> {
 fn lock_index_preferences() -> Result<()> {
     let cpu_index = PackseServer::new("packages/lock-index-preferences-cpu.toml");
     let cu118_index = PackseServer::new("packages/lock-index-preferences-cu118.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc! {r#"
@@ -36733,9 +36651,8 @@ fn lock_index_preferences() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_intel_mac() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_packse_index("packages/local-platform-registry.toml");
+    let context =
+        uv_test::test_context!("3.12").with_packse_index("packages/local-platform-registry.toml");
 
     context.temp_dir.child("pyproject.toml").write_str(
         r#"
@@ -36854,7 +36771,7 @@ fn lock_intel_mac() -> Result<()> {
 #[test]
 fn lock_index_local_version_preference() -> Result<()> {
     let index = PackseServer::new("packages/export-conflict-markers.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc! {r#"
@@ -36971,9 +36888,7 @@ fn lock_index_local_version_preference() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn windows_arm() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-30T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -37048,9 +36963,7 @@ fn windows_arm() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn windows_amd64_required() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-30T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -37123,9 +37036,7 @@ fn windows_amd64_required() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn windows_arm64_required() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-30T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -37196,7 +37107,7 @@ fn windows_arm64_required() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_empty_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -37377,7 +37288,7 @@ fn lock_empty_extra() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_invalid_fork_markers() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context.temp_dir.child("pyproject.toml").write_str(
         r#"
@@ -37451,9 +37362,7 @@ fn lock_invalid_fork_markers() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_omit_wheels_exclude_newer() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2024-08-01T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2024-08-01T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -37555,7 +37464,6 @@ fn lock_omit_attached_artifacts_exclude_newer() -> Result<()> {
     "#})?;
     let server = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_exclude_newer("2024-03-26T00:00:00Z")
         .with_filters(
             server
@@ -37642,7 +37550,7 @@ fn lock_omit_attached_artifacts_exclude_newer() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_conflict_for_disjoint_python_version() -> Result<()> {
-    let context = uv_test::test_context!("3.9").with_local_index();
+    let context = uv_test::test_context!("3.9");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -37699,7 +37607,6 @@ fn lock_requires_python_empty_lock_file() -> Result<()> {
     // in `.python-versions` at the time of writing (2025-06-16).
     let (v1, v2) = ("3.13.0", "3.13.2");
     let context = uv_test::test_context_with_versions!(&[v1, v2])
-        .with_local_index()
         .with_packse_index("packages/lock-python-patch.toml");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -37845,7 +37752,7 @@ fn lock_requires_python_empty_lock_file() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_conflict_for_disjoint_platform() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -37903,7 +37810,7 @@ fn lock_conflict_for_disjoint_platform() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_trailing_slash_index_url_in_pyproject_not_index_argument() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let index = PackseServer::new("packages/pip-install.toml");
     let index_url = index.index_url();
 
@@ -38032,8 +37939,8 @@ async fn lock_trailing_slash_index_url_in_pyproject_not_index_argument() -> Resu
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_trailing_slash_index_url_in_lockfile_not_pyproject() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
-    let proxy = crate::pypi_proxy::start_local().await;
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -38125,8 +38032,8 @@ async fn lock_trailing_slash_index_url_in_lockfile_not_pyproject() -> Result<()>
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_trailing_slash_index_url_in_pyproject_and_not_lockfile() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
-    let proxy = crate::pypi_proxy::start_local().await;
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -38218,8 +38125,8 @@ async fn lock_trailing_slash_index_url_in_pyproject_and_not_lockfile() -> Result
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_trailing_slash_index_url_in_lockfile_and_pyproject_toml() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
-    let proxy = crate::pypi_proxy::start_local().await;
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -38306,7 +38213,7 @@ async fn lock_trailing_slash_index_url_in_lockfile_and_pyproject_toml() -> Resul
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_trailing_slash_find_links() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let vendor = uv_test::find_links::FindLinksServer::new_at_path(
         &context.workspace_root.join("test/vendor"),
         "/simple/packaging",
@@ -38449,7 +38356,7 @@ fn lock_trailing_slash_find_links() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_prefix_match() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -38476,7 +38383,7 @@ fn lock_prefix_match() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn test_tilde_equals_python_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -38505,7 +38412,7 @@ fn test_tilde_equals_python_version() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_exclude_newer_disable_cli() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -38553,7 +38460,7 @@ fn lock_exclude_newer_disable_cli() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_exclude_newer_disable_environment() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -38599,7 +38506,7 @@ fn lock_exclude_newer_disable_environment() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_exclude_newer_disable_config() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -38645,7 +38552,7 @@ fn lock_exclude_newer_disable_config() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_exclude_newer_package_disable() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -38731,7 +38638,7 @@ fn lock_exclude_newer_package_disable() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_exclude_newer_package_order() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -38784,7 +38691,7 @@ fn lock_exclude_newer_package_order() -> Result<()> {
 /// Test that exclude-newer-package settings for packages outside the resolution are ignored.
 #[test]
 fn lock_exclude_newer_package_absent() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -38889,7 +38796,7 @@ fn lock_exclude_newer_package_absent() -> Result<()> {
 /// preview.
 #[test]
 fn lock_exclude_newer_package_absent_preview() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -38947,7 +38854,7 @@ fn lock_exclude_newer_package_absent_preview() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_exclude_newer_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -39089,7 +38996,7 @@ fn lock_exclude_newer_package() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_exclude_newer_hint() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -39126,8 +39033,8 @@ fn lock_exclude_newer_hint() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_exclude_newer_index_disable() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
-    let proxy = crate::pypi_proxy::start_local().await;
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -39206,8 +39113,8 @@ async fn lock_exclude_newer_index_disable() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_exclude_newer_index_value() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
-    let proxy = crate::pypi_proxy::start_local().await;
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -39295,7 +39202,7 @@ async fn lock_exclude_newer_index_value() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_exclude_newer_hint_pinned_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -39332,7 +39239,7 @@ fn lock_exclude_newer_hint_pinned_version() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_exclude_newer_hint_compatible_release() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -39367,8 +39274,8 @@ fn lock_exclude_newer_hint_compatible_release() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_path_dependency_explicit_index() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
-    let proxy = crate::pypi_proxy::start_local().await;
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
 
     // Create the path dependency with explicit index
     let pkg_a = context.temp_dir.child("pkg_a");
@@ -39458,8 +39365,8 @@ async fn lock_path_dependency_explicit_index() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_path_dependency_explicit_index_workspace_member() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
-    let proxy = crate::pypi_proxy::start_local().await;
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
 
     // Create the path dependency with explicit index
     let pkg_a = context.temp_dir.child("pkg_a");
@@ -39553,8 +39460,8 @@ async fn lock_path_dependency_explicit_index_workspace_member() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_path_dependency_mixed_indexes() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
-    let proxy = crate::pypi_proxy::start_local().await;
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
 
     // Create the path dependency with both explicit and non-explicit indexes.
     let pkg_a = context.temp_dir.child("pkg_a");
@@ -39630,7 +39537,7 @@ async fn lock_path_dependency_mixed_indexes() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_path_dependency_no_index() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Create the path dependency without explicit indexes.
     let pkg_a = context.temp_dir.child("pkg_a");
@@ -39692,7 +39599,7 @@ fn lock_path_dependency_marker_gated_requires_python() -> Result<()> {
     // Use Python 3.9 as the interpreter to reproduce the issue: the installed Python (3.9)
     // does not satisfy the child's `requires-python = ">=3.12"`, but the child is gated
     // behind `python_version >= '3.12'`, so it should still resolve.
-    let context = uv_test::test_context!("3.9").with_local_index();
+    let context = uv_test::test_context!("3.9");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -39741,8 +39648,8 @@ fn lock_path_dependency_marker_gated_requires_python() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_nested_path_dependency_explicit_index() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
-    let proxy = crate::pypi_proxy::start_local().await;
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
 
     // Create the inner dependency with explicit index.
     let pkg_a = context.temp_dir.child("pkg_a");
@@ -39831,8 +39738,8 @@ async fn lock_nested_path_dependency_explicit_index() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_circular_path_dependency_explicit_index() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
-    let proxy = crate::pypi_proxy::start_local().await;
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
 
     // Create pkg_a (with explicit index) that depends on pkg_b.
     let pkg_a = context.temp_dir.child("pkg_a");
@@ -39907,9 +39814,7 @@ async fn lock_circular_path_dependency_explicit_index() -> Result<()> {
 #[test]
 fn lock_android() -> Result<()> {
     let server = PackseServer::new("wheels/android.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-06-01T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-06-01T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -39998,7 +39903,7 @@ fn lock_android() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_required_intersection() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -40093,7 +39998,7 @@ fn lock_required_intersection() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_refresh() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -40308,7 +40213,7 @@ fn lock_refresh() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_refresh_deindents_lockfile() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context.temp_dir.child("pyproject.toml").write_str(
         r#"
@@ -40426,7 +40331,7 @@ fn lock_refresh_deindents_lockfile() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn collapsed_error_with_marker_packages() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = indoc! {r#"
         [project]
@@ -40459,7 +40364,7 @@ fn collapsed_error_with_marker_packages() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn no_warning_without_and_with_lower_bound() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -40488,7 +40393,7 @@ fn no_warning_without_and_with_lower_bound() -> Result<()> {
 #[test]
 fn lock_unsupported_wheel_url_requires_python() -> Result<()> {
     let artifacts = PackseServer::new("packages/lock-direct-artifacts.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc! {r#"
@@ -40517,7 +40422,7 @@ fn lock_unsupported_wheel_url_requires_python() -> Result<()> {
 #[test]
 fn lock_unsupported_wheel_url_supported_platform() -> Result<()> {
     let artifacts = PackseServer::new("packages/lock-direct-artifacts.toml");
-    let context = uv_test::test_context!("3.11").with_local_index();
+    let context = uv_test::test_context!("3.11");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc! {r#"
@@ -40559,7 +40464,7 @@ fn lock_unsupported_wheel_url_supported_platform() -> Result<()> {
 #[test]
 fn lock_unsupported_wheel_url_required_platform() -> Result<()> {
     let artifacts = PackseServer::new("packages/lock-direct-artifacts.toml");
-    let context = uv_test::test_context!("3.11").with_local_index();
+    let context = uv_test::test_context!("3.11");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc! {r#"
@@ -40608,13 +40513,11 @@ fn lock_required_environment_python_fork() -> Result<()> {
         wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64", "cp313-cp313-win_amd64"]
     "#})?;
     let server = PackseServer::from_scenario(&scenario);
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_filters(
-            server
-                .files()
-                .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
-        );
+    let context = uv_test::test_context!("3.12").with_filters(
+        server
+            .files()
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
     context
         .temp_dir
         .child("pyproject.toml")
@@ -40719,13 +40622,11 @@ fn lock_required_environment_macos_release() -> Result<()> {
         wheel_tags = ["py3-none-macosx_26_0_arm64"]
     "#})?;
     let server = PackseServer::from_scenario(&scenario);
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_filters(
-            server
-                .files()
-                .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
-        );
+    let context = uv_test::test_context!("3.12").with_filters(
+        server
+            .files()
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
     let pyproject = indoc! {r#"
         [project]
         name = "project"
@@ -40856,7 +40757,7 @@ fn lock_required_environment_wheel_url_fork() -> Result<()> {
         wheel_tags = ["py3-none-manylinux_2_17_aarch64.macosx_11_0_x86_64"]
     "#})?;
     let server = PackseServer::from_scenario(&scenario);
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     context
         .temp_dir
         .child("pyproject.toml")
@@ -40897,9 +40798,7 @@ fn lock_required_environment_wheel_url_fork() -> Result<()> {
 #[test]
 fn lock_required_environment_cycle_reports_resolution_error() -> Result<()> {
     let server = PackseServer::new("wheels/no-sdist-no-wheels-with-matching-platform.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
 
     context
         .temp_dir
@@ -40984,9 +40883,7 @@ fn lock_required_environment_cycle_reports_resolution_error() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_supported_environment_wheel_only_package_requires_compatible_wheels() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-30T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -41035,7 +40932,7 @@ fn lock_supported_environment_wheel_only_package_requires_compatible_wheels() ->
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_supported_environment_abi3_wheel() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Create a local flat index with the abi3 test wheel.
     let index_dir = context.temp_dir.child("local_index");
@@ -41146,10 +41043,8 @@ fn lock_supported_environment_abi3_wheel() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_check_multiple_default_indexes_explicit_assignment_dependency_group() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-30T00:00:00Z");
-    let proxy = crate::pypi_proxy::start_local().await;
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
+    let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -41196,7 +41091,7 @@ async fn lock_check_multiple_default_indexes_explicit_assignment_dependency_grou
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_tilde_equal_version_u64_max_rejected() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -41224,7 +41119,7 @@ fn lock_tilde_equal_version_u64_max_rejected() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_no_locked() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
         [project]
@@ -41289,7 +41184,7 @@ fn lock_no_locked() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_no_frozen() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
         [project]
@@ -41351,7 +41246,7 @@ fn lock_no_frozen() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_check_overrides_frozen_environment() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
         [project]
@@ -41389,7 +41284,7 @@ fn lock_check_overrides_frozen_environment() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_frozen_overrides_locked_environment() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
         [project]
@@ -41434,7 +41329,7 @@ fn lock_frozen_overrides_locked_environment() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_frozen_errors_report_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
         [project]
@@ -41506,7 +41401,7 @@ fn lock_frozen_errors_report_source() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_frozen_warning() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(

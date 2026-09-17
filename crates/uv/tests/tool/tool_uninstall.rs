@@ -8,7 +8,6 @@ use uv_test::uv_snapshot;
 #[test]
 fn tool_uninstall() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_packse_index("packages/tool-list.toml")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -50,7 +49,6 @@ fn tool_uninstall() {
 #[test]
 fn tool_uninstall_multiple_names() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_packse_index("packages/tool-list.toml")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -85,7 +83,6 @@ fn tool_uninstall_multiple_names() {
 #[test]
 fn tool_uninstall_not_installed() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_packse_index("packages/tool-list.toml")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -100,7 +97,6 @@ fn tool_uninstall_not_installed() {
 #[test]
 fn tool_uninstall_missing_receipt() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_packse_index("packages/tool-list.toml")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -125,7 +121,6 @@ fn tool_uninstall_missing_receipt() {
 #[test]
 fn tool_uninstall_multiple_names_with_missing_receipt() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_packse_index("packages/tool-list.toml")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -164,7 +159,6 @@ fn tool_uninstall_multiple_names_with_missing_receipt() {
 #[test]
 fn tool_uninstall_all_missing_receipt() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_packse_index("packages/tool-list.toml")
         .with_filtered_exe_suffix()
         .with_tool_dirs();

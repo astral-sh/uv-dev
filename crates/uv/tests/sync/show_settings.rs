@@ -33,7 +33,7 @@ fn add_shared_args(mut command: Command) -> Command {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn pip_compile_baseline() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     capture_uv_snapshot!(context.filters(), add_shared_args(context.pip_compile())
         .arg("--show-settings")
@@ -224,7 +224,7 @@ fn pip_compile_baseline() {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn publish_resolved_settings() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context
         .temp_dir
@@ -406,7 +406,7 @@ fn publish_resolved_settings() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn pip_install_baseline() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     capture_uv_snapshot!(context.filters(), add_shared_args(context.pip_install())
         .arg("--show-settings")
@@ -596,7 +596,7 @@ fn pip_install_baseline() {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn lock_baseline() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     capture_uv_snapshot!(context.filters(), add_shared_args(context.lock())
         .arg("--show-settings"), @r#"
@@ -723,7 +723,7 @@ fn lock_baseline() {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn version_baseline() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     capture_uv_snapshot!(context.filters(), add_shared_args(context.version())
         .arg("--show-settings"), @r#"
@@ -864,7 +864,7 @@ fn version_baseline() {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn tool_install_baseline() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     capture_uv_snapshot!(context.filters(), add_shared_args(context.tool_install())
         .arg("--show-settings")
@@ -1043,7 +1043,7 @@ fn tool_install_baseline() {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn resolve_uv_toml() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let baseline = capture_uv_snapshot!(
         context.filters(),
@@ -1190,7 +1190,7 @@ fn resolve_uv_toml() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn resolve_pyproject_toml() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let baseline = capture_uv_snapshot!(
         context.filters(),
@@ -1356,7 +1356,7 @@ fn resolve_pyproject_toml() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn resolve_index_url() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let baseline = capture_uv_snapshot!(
         context.filters(),
@@ -1539,7 +1539,7 @@ fn resolve_index_url() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn resolve_find_links() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let baseline = capture_uv_snapshot!(
         context.filters(),
@@ -1629,7 +1629,7 @@ fn resolve_find_links() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn resolve_top_level() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let baseline = capture_uv_snapshot!(
         context.filters(),
@@ -1810,7 +1810,7 @@ fn resolve_user_configuration() -> anyhow::Result<()> {
     let xdg = assert_fs::TempDir::new().expect("Failed to create temp dir");
     let uv = xdg.child("uv");
     let config = uv.child("uv.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let baseline = capture_uv_snapshot!(
         context.filters(),
@@ -1916,7 +1916,7 @@ fn resolve_system_configuration_can_be_disabled() -> anyhow::Result<()> {
     let xdg = assert_fs::TempDir::new().expect("Failed to create temp dir");
     let uv = xdg.child("uv");
     let config = uv.child("uv.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let baseline = capture_uv_snapshot!(
         context.filters(),
@@ -1976,7 +1976,7 @@ fn resolve_tool() -> anyhow::Result<()> {
     let xdg = assert_fs::TempDir::new().expect("Failed to create temp dir");
     let uv = xdg.child("uv");
     let config = uv.child("uv.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let baseline = capture_uv_snapshot!(
         context.filters(),
@@ -2037,7 +2037,7 @@ fn resolve_tool() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn resolve_poetry_toml() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let baseline = capture_uv_snapshot!(
         context.filters(),
@@ -2097,7 +2097,7 @@ fn resolve_poetry_toml() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn resolve_both() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let baseline = capture_uv_snapshot!(
         context.filters(),
@@ -2231,7 +2231,7 @@ fn resolve_both() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn resolve_both_special_fields() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let baseline = capture_uv_snapshot!(
         context.filters(),
@@ -2361,7 +2361,7 @@ fn resolve_both_special_fields() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn resolve_both_preview() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let uv_config = context.temp_dir.child("uv.toml");
     let pyproject = context.temp_dir.child("pyproject.toml");
@@ -2448,7 +2448,7 @@ fn resolve_both_preview() -> anyhow::Result<()> {
 /// Tests that errors when parsing `conflicts` are reported.
 #[test]
 fn invalid_conflicts() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let pyproject = context.temp_dir.child("pyproject.toml");
 
     // Write in `pyproject.toml` schema and test the singleton case.
@@ -2554,7 +2554,7 @@ fn invalid_conflicts() -> anyhow::Result<()> {
 /// Tests that valid `conflicts` are parsed okay.
 #[test]
 fn valid_conflicts() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let xdg = assert_fs::TempDir::new().expect("Failed to create temp dir");
     let pyproject = context.temp_dir.child("pyproject.toml");
 
@@ -2588,7 +2588,7 @@ fn valid_conflicts() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn resolve_config_file() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Write a `uv.toml` to a temporary location. (Use the cache directory for convenience, since
     // it's already obfuscated in the fixtures.)
@@ -2760,7 +2760,7 @@ fn resolve_config_file() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn resolve_skip_empty() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let child = context.temp_dir.child("child");
     fs_err::create_dir(&child)?;
@@ -2835,7 +2835,7 @@ fn resolve_skip_empty() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn allow_insecure_host() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let baseline = capture_uv_snapshot!(
         context.filters(),
@@ -2889,7 +2889,7 @@ fn allow_insecure_host() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn resolve_relative_indexes_with_directory() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     context.temp_dir.child("project").create_dir_all()?;
 
     // Add a configured index to ensure `--directory` does not rebase it.
@@ -3043,7 +3043,7 @@ fn resolve_relative_indexes_with_directory() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn index_priority() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let baseline = capture_uv_snapshot!(
         context.filters(),
@@ -3257,7 +3257,7 @@ fn index_priority() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn index_by_name() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     // `explicit` and `default` are supported together; use both to test overriding behaviour.
     context
         .temp_dir
@@ -3374,7 +3374,7 @@ fn index_by_name() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn index_by_name_with_matching_path() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     context
         .temp_dir
         .child("uv.toml")
@@ -3449,7 +3449,7 @@ fn index_by_name_with_matching_path() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn index_by_name_from_user_configuration() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let user_configuration = context.user_config_dir.child("uv");
     user_configuration.create_dir_all()?;
     user_configuration
@@ -3504,7 +3504,7 @@ fn index_by_name_from_user_configuration() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn tool_index_by_name() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let configuration = context.temp_dir.child("uv.toml");
     // `explicit` and `default` are supported together; use both to test overriding behaviour.
     configuration.write_str(indoc::indoc! {r#"
@@ -3563,12 +3563,10 @@ fn tool_index_by_name() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn index_by_name_with_directory() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_filter((
-            r#"given: Some\(\s+"file://[^"]+/configuration/configured-index",\s+\)"#,
-            "given: None",
-        ));
+    let context = uv_test::test_context!("3.12").with_filter((
+        r#"given: Some\(\s+"file://[^"]+/configuration/configured-index",\s+\)"#,
+        "given: None",
+    ));
     let configuration_directory = context.temp_dir.child("configuration");
     configuration_directory.create_dir_all()?;
     let configuration_file = configuration_directory.child("uv.toml");
@@ -3625,7 +3623,7 @@ fn index_by_name_with_directory() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn verify_hashes() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let baseline = capture_uv_snapshot!(
         context.filters(),
@@ -3748,7 +3746,7 @@ fn verify_hashes() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn preview_features() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let baseline = capture_uv_snapshot!(
         context.filters(),
@@ -3957,7 +3955,7 @@ fn preview_features() {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn preview_precedence() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let show_settings = || {
         let mut cmd = context.version();
@@ -4223,7 +4221,7 @@ fn preview_precedence() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn preview_features_uv_toml() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let config = context.temp_dir.child("uv.toml");
 
@@ -4367,7 +4365,7 @@ fn preview_features_uv_toml() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn preview_features_pyproject_toml() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject = context.temp_dir.child("pyproject.toml");
 
@@ -4472,7 +4470,7 @@ fn preview_features_pyproject_toml() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn run_pep723_script_preview_features() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let show_settings = || {
         let mut cmd = context.run();
@@ -4672,7 +4670,7 @@ fn run_pep723_script_preview_features() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn system_certs_cli_aliases_override_env() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let baseline = capture_uv_snapshot!(
         context.filters(),
@@ -4716,7 +4714,7 @@ fn system_certs_cli_aliases_override_env() {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn system_certs_config_aliases() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let baseline = capture_uv_snapshot!(
         context.filters(),
@@ -4770,7 +4768,7 @@ fn system_certs_config_aliases() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn upgrade_pip_cli_config_interaction() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let baseline = capture_uv_snapshot!(
         context.filters(),
@@ -4960,7 +4958,7 @@ fn upgrade_pip_cli_config_interaction() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn upgrade_project_cli_config_interaction() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let baseline = capture_uv_snapshot!(
         context.filters(),
@@ -5159,7 +5157,7 @@ fn upgrade_project_cli_config_interaction() -> anyhow::Result<()> {
     ignore = "Configuration tests are not yet supported on Windows"
 )]
 fn build_isolation_override() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let baseline = capture_uv_snapshot!(
         context.filters(),

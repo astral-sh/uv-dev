@@ -238,12 +238,6 @@ impl TestContext {
         self.with_env(EnvVars::UV_INTERNAL__TEST_DEFAULT_INDEX, index)
     }
 
-    /// Use the representative local package index.
-    #[must_use]
-    pub fn with_local_index(self) -> Self {
-        self.with_default_index(&default_packse_index_url())
-    }
-
     /// Opt into the public PyPI service for tests of its real behavior.
     #[must_use]
     pub fn with_pypi_access(self) -> Self {
@@ -2820,9 +2814,6 @@ mod process_status_tests {
         insta::assert_snapshot!(snapshot, @"exit_code: 7 (failure)");
     }
 }
-
-/// Download a local fixture artifact.
-pub use download_to_disk as download_local_to_disk;
 
 #[cfg(test)]
 mod cache_directory_tests {

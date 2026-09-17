@@ -27,9 +27,7 @@ use uv_test::{TestContext, get_bin, uv_snapshot};
 /// A custom cache directory must configure commands and snapshot filters together.
 #[test]
 fn cache_dir_uses_configured_test_context_path() {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cache_dir("project/cache");
+    let context = uv_test::test_context!("3.12").with_cache_dir("project/cache");
 
     assert_eq!(
         context.cache_dir.path(),
@@ -47,9 +45,7 @@ fn cache_dir_uses_configured_test_context_path() {
 /// the build.
 #[test]
 fn build_warns_cache_inside_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cache_dir("project/.uv-cache");
+    let context = uv_test::test_context!("3.12").with_cache_dir("project/.uv-cache");
     let project = context.temp_dir.child("project");
 
     project.child("pyproject.toml").write_str(
@@ -86,7 +82,7 @@ fn build_warns_cache_inside_source() -> Result<()> {
 #[test]
 #[cfg(unix)]
 fn build_warns_symlinked_cache_inside_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let project = context.temp_dir.child("project");
 
     project.child("pyproject.toml").write_str(
@@ -136,9 +132,7 @@ fn build_warns_symlinked_cache_inside_source() -> Result<()> {
 /// A cache in the workspace root is allowed when building a member that does not contain it.
 #[test]
 fn build_allows_cache_outside_selected_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cache_dir("workspace/.uv-cache");
+    let context = uv_test::test_context!("3.12").with_cache_dir("workspace/.uv-cache");
     let workspace = context.temp_dir.child("workspace");
     let member = workspace.child("member");
 
@@ -184,7 +178,7 @@ fn build_allows_cache_outside_selected_source() -> Result<()> {
 /// error before using the cache.
 #[test]
 fn cache_current_dir_inside_cache() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     uv_snapshot!(context.filters(), context.command()
         .arg("cache")
@@ -215,7 +209,7 @@ fn cache_current_dir_inside_cache() -> Result<()> {
 #[test]
 #[cfg(unix)]
 fn cache_current_dir_inside_symlinked_cache() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let cache_link = context.temp_dir.child("cache-link");
     create_symlink(context.cache_dir.path(), cache_link.path())?;
@@ -244,7 +238,7 @@ fn cache_current_dir_inside_symlinked_cache() -> Result<()> {
 /// When a workspace is inside the cache directory, we should error before locking the workspace.
 #[test]
 fn cache_workspace_inside_cache() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let workspace = context.cache_dir.child("workspace");
     workspace.child("pyproject.toml").write_str(
@@ -280,7 +274,7 @@ fn cache_workspace_inside_cache() -> Result<()> {
 /// detect that the project is inside the cache.
 #[test]
 fn cache_project_inside_relative_parent_cache() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let project = context.temp_dir.child("project");
     project.child("pyproject.toml").write_str(
@@ -310,7 +304,7 @@ fn cache_project_inside_relative_parent_cache() -> Result<()> {
 /// should not trip the persistent cache guard.
 #[test]
 fn cache_project_inside_cache_no_cache() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let project = context.cache_dir.child("project");
     project.child("pyproject.toml").write_str(
@@ -340,7 +334,6 @@ fn cache_init_failure() -> Result<()> {
     use uv_test::ReadOnlyDirectoryGuard;
 
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_packse_index("packages/pip-commands.toml")
         .with_cache_dir("cache_parent/cache");
 
@@ -375,7 +368,7 @@ fn cache_init_failure() -> Result<()> {
 /// Index hashes must be checked before building an sdist or reading its metadata.
 #[tokio::test]
 async fn index_source_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = MockServer::start().await;
     let index_url = format!("{}/simple/", server.uri());
     let marker = context.temp_dir.child("backend-marker");
@@ -506,7 +499,6 @@ async fn binary_payloads_stay_in_archive_without_preview() -> Result<()> {
     let server = MockServer::start().await;
     for streaming in [false, true] {
         let context = uv_test::test_context!("3.12")
-            .with_local_index()
             .with_filter((r" \(from (?:file|http)://.*\)", " (from [WHEEL_URL])"));
         let wheel = binary_payload_wheel(&context)?;
         let mut command = context.pip_install();
@@ -555,7 +547,6 @@ async fn all_files_except_record_use_archive_file_store() -> Result<()> {
     let server = MockServer::start().await;
     for (streaming, concurrent_installs) in [(false, "1"), (false, "4"), (true, "1"), (true, "4")] {
         let context = uv_test::test_context!("3.12")
-            .with_local_index()
             .with_concurrent_installs(concurrent_installs)
             .with_filter((r" \(from (?:file|http)://.*\)", " (from [WHEEL_URL])"));
         let wheel = binary_payload_wheel(&context)?;
@@ -628,7 +619,6 @@ async fn all_files_except_record_use_archive_file_store() -> Result<()> {
 #[test]
 fn binary_payloads_use_archive_file_store() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_file_counts()
         .with_filtered_sizes_and_units()
         .with_filtered_python_names()
@@ -718,7 +708,6 @@ fn binary_payloads_use_archive_file_store() -> Result<()> {
 #[test]
 fn binary_payload_copy_fallback_uses_archive_file_store() -> Result<()> {
     let Some(context) = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_cache_on_alt_fs()?

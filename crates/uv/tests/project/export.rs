@@ -22,7 +22,7 @@ use uv_test::{apply_filters, uv_snapshot};
 /// The workspace discovered while resolving settings is reused by a normal `uv export`.
 #[test]
 fn export_reuses_settings_workspace_discovery() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     context
         .temp_dir
         .child("pyproject.toml")
@@ -67,7 +67,7 @@ fn export_reuses_settings_workspace_discovery() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_dependency() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -115,7 +115,7 @@ fn requirements_txt_dependency() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_export_no_header() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -161,7 +161,7 @@ fn requirements_txt_export_no_header() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_dependency_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -239,9 +239,7 @@ fn requirements_txt_dependency_extra() -> Result<()> {
 #[test]
 fn requirements_txt_conditional_transitive_extra() -> Result<()> {
     let server = PackseServer::new("packages/export-markers.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -279,7 +277,7 @@ fn requirements_txt_conditional_transitive_extra() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_project_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -427,7 +425,7 @@ fn requirements_txt_project_extra() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_simplifies_selected_root_extra_markers_from_lock() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -500,7 +498,7 @@ fn requirements_txt_simplifies_selected_root_extra_markers_from_lock() -> Result
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_prune() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -565,7 +563,7 @@ fn requirements_txt_prune() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_dependency_marker() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -617,7 +615,7 @@ fn requirements_txt_dependency_marker() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_dependency_multiple_markers() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -691,7 +689,7 @@ fn requirements_txt_dependency_multiple_markers() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_dependency_conflicting_markers() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -934,7 +932,7 @@ fn requirements_txt_dependency_conflicting_markers() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_non_root() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -997,7 +995,7 @@ fn requirements_txt_non_root() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_workspace_member_ignores_root_default_group() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context
         .temp_dir
@@ -1073,7 +1071,7 @@ fn requirements_txt_workspace_member_ignores_root_default_group() -> Result<()> 
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_frozen_workspace_member_group_precedence() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context
         .temp_dir
@@ -1154,7 +1152,7 @@ fn requirements_txt_frozen_workspace_member_group_precedence() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn allrequirements_txt_() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1229,7 +1227,7 @@ fn allrequirements_txt_() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_frozen() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1312,7 +1310,7 @@ fn requirements_txt_frozen() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_frozen_invalid_git_scheme() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context
         .temp_dir
@@ -1359,7 +1357,7 @@ fn requirements_txt_frozen_invalid_git_scheme() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_create_missing_dir() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1437,7 +1435,7 @@ fn requirements_txt_create_missing_dir() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_non_project() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1492,7 +1490,7 @@ fn requirements_txt_non_project() -> Result<()> {
 #[test]
 fn virtual_empty() -> Result<()> {
     // testing how `uv export` reacts to a pyproject with no `[project]` and nothing useful to it
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -1519,7 +1517,7 @@ fn virtual_empty() -> Result<()> {
 fn virtual_dependency_group() -> Result<()> {
     // testing basic `uv export --group` functionality
     // when the pyproject.toml is fully virtual (no `[project]`)
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -1585,7 +1583,7 @@ fn virtual_dependency_group() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn requirements_txt_https_git_credentials() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let token = decode_token(READ_ONLY_GITHUB_TOKEN);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -1649,7 +1647,7 @@ fn reduce_ssh_key_file_permissions(key_file: &Path) -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn requirements_txt_ssh_git_username() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1734,8 +1732,8 @@ fn requirements_txt_ssh_git_username() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn requirements_txt_https_credentials() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
-    let proxy = crate::pypi_proxy::start_local().await;
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
 
     let file_url = proxy.authenticated_url("public", "heron", "/basic-auth/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -1769,7 +1767,7 @@ async fn requirements_txt_https_credentials() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_non_project_marker() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1823,7 +1821,7 @@ fn requirements_txt_non_project_marker() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_non_project_workspace() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1900,7 +1898,7 @@ fn requirements_txt_non_project_workspace() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_non_project_fork() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2122,7 +2120,7 @@ fn requirements_txt_non_project_fork() -> Result<()> {
 
 #[test]
 fn requirements_txt_relative_path() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let dependency = context.temp_dir.child("dependency");
     dependency.child("pyproject.toml").write_str(
@@ -2215,7 +2213,7 @@ fn requirements_txt_relative_path() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn devrequirements_txt_() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2308,7 +2306,7 @@ fn devrequirements_txt_() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_no_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2350,7 +2348,7 @@ fn requirements_txt_no_hashes() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_output_file() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2417,7 +2415,7 @@ fn requirements_txt_output_file() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_no_emit() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2625,7 +2623,7 @@ fn requirements_txt_no_emit() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_no_emit_workspace_all_packages() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2671,7 +2669,7 @@ fn requirements_txt_no_emit_workspace_all_packages() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_only_emit() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2755,7 +2753,7 @@ fn requirements_txt_only_emit() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_no_editable() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2859,7 +2857,7 @@ fn requirements_txt_no_editable() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_export_group() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3028,7 +3026,7 @@ fn requirements_txt_export_group() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_script_no_config() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context
         .temp_dir
@@ -3059,7 +3057,7 @@ fn requirements_txt_script_no_config() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_script() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! {r#"
@@ -3318,7 +3316,7 @@ fn requirements_txt_script() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_conflicts() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3415,7 +3413,7 @@ fn requirements_txt_conflicts() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_simple_conflict_markers() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3500,7 +3498,7 @@ fn requirements_txt_simple_conflict_markers() -> Result<()> {
 fn requirements_txt_complex_conflict_markers() -> Result<()> {
     let cpu_index = uv_test::packse::PackseServer::new("packages/export-conflict-markers.toml");
     let cu124_index = uv_test::packse::PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc! {r#"
@@ -3596,7 +3594,7 @@ fn requirements_txt_complex_conflict_markers() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_cyclic_dependencies() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3682,9 +3680,7 @@ fn requirements_txt_cyclic_dependencies() -> Result<()> {
 #[test]
 fn pylock_workspace_member_conflict_markers() -> Result<()> {
     let server = PackseServer::new("packages/export-markers.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3776,7 +3772,7 @@ fn pylock_workspace_member_conflict_markers() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_cyclic_dependencies_conflict() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3875,7 +3871,7 @@ fn requirements_txt_cyclic_dependencies_conflict() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn pep_751_dependency() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3939,7 +3935,7 @@ fn pep_751_dependency() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn pep_751_no_packages() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3974,7 +3970,7 @@ fn pep_751_no_packages() -> Result<()> {
 /// least one hash per package file, so uv downloads the files and computes the hashes.
 #[test]
 fn pep_751_missing_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let scenario = toml::from_str::<Scenario>(indoc! {r#"
         name = "pylock-missing-hashes"
@@ -4035,7 +4031,7 @@ fn pep_751_missing_hashes() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn pep_751_missing_hashes_find_links() -> Result<()> {
-    let context = uv_test::test_context!("3.13").with_local_index();
+    let context = uv_test::test_context!("3.13");
 
     let links = context.temp_dir.child("links");
     links.create_dir_all()?;
@@ -4093,7 +4089,7 @@ fn pep_751_missing_hashes_find_links() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn pep_751_export_no_header() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -4154,7 +4150,7 @@ fn pep_751_export_no_header() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn pep_751_export_no_editable() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -4217,7 +4213,7 @@ fn pep_751_export_no_editable() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn pep_751_dependency_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -4323,7 +4319,7 @@ fn pep_751_dependency_extra() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn pep_751_project_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -4549,7 +4545,7 @@ fn pep_751_project_extra() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn pep_751_git_dependency() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -4593,7 +4589,7 @@ fn pep_751_git_dependency() -> Result<()> {
 fn pep_751_wheel_url() -> Result<()> {
     let direct_artifacts =
         uv_test::packse::PackseServer::new("packages/lock-direct-artifacts.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -4649,7 +4645,7 @@ fn pep_751_wheel_url() -> Result<()> {
 fn pep_751_sdist_url() -> Result<()> {
     let direct_artifacts =
         uv_test::packse::PackseServer::new("packages/lock-direct-artifacts.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -4706,7 +4702,7 @@ fn pep_751_sdist_url_subdirectory() -> Result<()> {
     let direct_artifacts =
         uv_test::packse::PackseServer::new("packages/lock-direct-artifacts.toml");
     let root_url = direct_artifacts.file_url("root-0.0.1.tar.gz");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject = r#"
         [project]
@@ -4769,7 +4765,7 @@ fn pep_751_sdist_url_subdirectory() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn pep_751_infer_output_format() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -4900,7 +4896,7 @@ fn pep_751_infer_output_format() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn pep_751_filename() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     fs_err::copy(
         context
             .workspace_root
@@ -4955,7 +4951,7 @@ fn pep_751_filename() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn pep_751_https_git_credentials() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let token = decode_token(READ_ONLY_GITHUB_TOKEN);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -4994,8 +4990,8 @@ fn pep_751_https_git_credentials() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn pep_751_https_credentials() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
-    let proxy = crate::pypi_proxy::start_local().await;
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
 
     let file_url = proxy.authenticated_url("public", "heron", "/basic-auth/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -5037,7 +5033,7 @@ async fn pep_751_https_credentials() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn pep_751_relative_and_absolute_paths() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc! {r#"
@@ -5127,7 +5123,7 @@ fn pep_751_relative_and_absolute_paths() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn no_editable_env_var() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context
         .init()
@@ -5166,7 +5162,7 @@ fn no_editable_env_var() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn export_only_group_and_extra_conflict() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -5214,7 +5210,7 @@ fn export_only_group_and_extra_conflict() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn export_lock_workspace_mismatch_with_frozen() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -5256,7 +5252,7 @@ fn export_lock_workspace_mismatch_with_frozen() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn multiple_packages() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -5398,9 +5394,7 @@ fn multiple_packages() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_basic() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -5637,9 +5631,7 @@ fn cyclonedx_export_basic() -> Result<()> {
 #[test]
 fn cyclonedx_export_direct_url() -> Result<()> {
     let direct_artifacts = uv_test::packse::PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -5721,9 +5713,7 @@ fn cyclonedx_export_direct_url() -> Result<()> {
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn cyclonedx_export_git_dependency() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -5804,9 +5794,7 @@ fn cyclonedx_export_git_dependency() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_no_dependencies() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -5874,9 +5862,7 @@ fn cyclonedx_export_no_dependencies() -> Result<()> {
 #[test]
 fn cyclonedx_export_mixed_source_types() -> Result<()> {
     let direct_artifacts = uv_test::packse::PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -5984,9 +5970,7 @@ fn cyclonedx_export_mixed_source_types() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_project_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -6071,9 +6055,7 @@ fn cyclonedx_export_project_extra() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_project_extra_with_optional_flag() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -6180,9 +6162,7 @@ fn cyclonedx_export_project_extra_with_optional_flag() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_with_workspace_member() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -6345,9 +6325,7 @@ fn cyclonedx_export_with_workspace_member() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_workspace_non_root() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -6449,9 +6427,7 @@ fn cyclonedx_export_workspace_non_root() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_workspace_with_extras() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -6671,9 +6647,7 @@ fn cyclonedx_export_workspace_with_extras() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_workspace_frozen() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -6832,9 +6806,7 @@ fn cyclonedx_export_workspace_frozen() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_workspace_all_packages() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -7023,9 +6995,7 @@ fn cyclonedx_export_workspace_all_packages() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_all_packages_non_workspace_root_dependency() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -7146,9 +7116,7 @@ fn cyclonedx_export_all_packages_non_workspace_root_dependency() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_workspace_mixed_dependencies() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -7326,9 +7294,7 @@ fn cyclonedx_export_workspace_mixed_dependencies() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_dependency_marker() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -7429,9 +7395,7 @@ fn cyclonedx_export_dependency_marker() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_multiple_dependency_markers() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -7559,9 +7523,7 @@ fn cyclonedx_export_multiple_dependency_markers() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_dependency_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -7691,9 +7653,7 @@ fn cyclonedx_export_dependency_extra() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_prune() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -7878,9 +7838,7 @@ fn cyclonedx_export_prune() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_group() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -8110,9 +8068,7 @@ fn cyclonedx_export_group() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_non_project() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -8230,9 +8186,7 @@ fn cyclonedx_export_non_project() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_no_emit() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -8432,9 +8386,7 @@ fn cyclonedx_export_no_emit() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_relative_path() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let dependency = context.temp_dir.child("dependency");
     dependency.child("pyproject.toml").write_str(
@@ -8546,9 +8498,7 @@ fn cyclonedx_export_relative_path() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_cyclic_dependencies() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -8741,9 +8691,7 @@ fn cyclonedx_export_cyclic_dependencies() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_dev_dependencies() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -8950,9 +8898,7 @@ fn cyclonedx_export_dev_dependencies() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_all_packages_conflicting_workspace_members() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -9124,7 +9070,7 @@ fn cyclonedx_export_all_packages_conflicting_workspace_members() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn export_package_conflicting_workspace_members() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -9263,7 +9209,7 @@ fn export_package_conflicting_workspace_members() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_conflicting_workspace_member_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -9430,7 +9376,7 @@ fn requirements_txt_conflicting_workspace_member_package() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_conflicting_workspace_root_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -9524,7 +9470,6 @@ fn requirements_txt_conflicting_workspace_root_package() -> Result<()> {
 fn cyclonedx_export_alternative_registry() -> Result<()> {
     let index = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_cyclonedx_filters()
         .with_default_index(&index.index_url())
         .with_exclude_newer("2025-01-30T00:00:00Z");
@@ -9613,9 +9558,7 @@ fn cyclonedx_export_alternative_registry() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_virtual_workspace_fixture() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cyclonedx_filters();
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
 
     let workspace = context.temp_dir.child("workspace");
     copy_dir_ignore(
@@ -9784,7 +9727,7 @@ fn cyclonedx_export_virtual_workspace_fixture() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn pylock_toml_filter_by_requires_python() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -9842,7 +9785,7 @@ fn pylock_toml_filter_by_requires_python() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_emit_indexes() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -9927,7 +9870,7 @@ fn requirements_txt_emit_indexes() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn export_batch_selections() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context
         .temp_dir
@@ -10087,7 +10030,7 @@ fn export_batch_selections() -> Result<()> {
 /// Batch exports create or check the lock once, independently of per-entry Python requirements.
 #[test]
 fn export_batch_lock_modes() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // The groups have disjoint Python requirements, but share a universal lock.
     let pyproject = indoc! {r#"
@@ -10176,7 +10119,7 @@ fn export_batch_lock_modes() -> Result<()> {
 /// A later invalid selection must not replace outputs rendered earlier in the batch.
 #[test]
 fn export_batch_invalid_selection() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context
         .temp_dir
@@ -10220,7 +10163,7 @@ fn export_batch_invalid_selection() -> Result<()> {
 
 #[test]
 fn export_batch_missing_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context
         .temp_dir
@@ -10271,7 +10214,7 @@ fn export_batch_missing_package() -> Result<()> {
 
 #[test]
 fn export_batch_manifest_validation() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let manifest = context.temp_dir.child("batch.toml");
     manifest.write_str("export = []")?;

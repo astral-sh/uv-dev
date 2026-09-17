@@ -6,9 +6,7 @@ use uv_test::{TestContext, diff_snapshot, uv_snapshot};
 
 fn local_workflow_context() -> Result<(TestContext, PackseServer)> {
     let server = PackseServer::new("packages/workflow.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
     context.temp_dir.child("pyproject.toml").write_str(
         r#"
         [project]

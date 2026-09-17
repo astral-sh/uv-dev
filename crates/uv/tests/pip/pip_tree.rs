@@ -13,9 +13,7 @@ use uv_test::uv_snapshot;
 #[test]
 fn no_package() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     uv_snapshot!(context.filters(), context.pip_tree(), @"
     exit_code: 0 (success)
@@ -26,9 +24,7 @@ fn no_package() {
 #[test]
 fn prune_last_in_the_subgroup() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("tree-parent==2.31.0").unwrap();
@@ -66,9 +62,7 @@ fn prune_last_in_the_subgroup() {
 #[test]
 fn single_package() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("tree-parent==2.31.0").unwrap();
@@ -108,9 +102,7 @@ fn single_package() {
 #[test]
 fn nested_dependencies() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("tree-root").unwrap();
@@ -154,9 +146,7 @@ fn nested_dependencies() {
 #[test]
 fn reverse() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("tree-root").unwrap();
@@ -202,9 +192,7 @@ fn reverse() {
 #[test]
 fn invert() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("tree-root").unwrap();
@@ -250,9 +238,7 @@ fn invert() {
 #[test]
 fn depth() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("tree-root").unwrap();
@@ -319,9 +305,7 @@ fn depth() {
 #[test]
 fn prune() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("tree-root").unwrap();
@@ -393,9 +377,7 @@ fn prune() {
 #[test]
 fn removed_dependency() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("tree-parent==2.31.0").unwrap();
@@ -442,9 +424,7 @@ fn removed_dependency() {
 #[test]
 fn multiple_packages() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
@@ -493,9 +473,7 @@ fn multiple_packages() {
 #[test]
 fn cycle() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
@@ -552,9 +530,7 @@ fn cycle() {
 #[test]
 fn multiple_packages_shared_descendant() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
@@ -602,9 +578,7 @@ fn multiple_packages_shared_descendant() {
 #[test]
 fn no_dedupe_and_invert() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
@@ -651,9 +625,7 @@ fn no_dedupe_and_invert() {
 #[test]
 fn no_dedupe() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
@@ -702,9 +674,7 @@ fn no_dedupe() {
 #[cfg(feature = "test-git")]
 fn with_editable() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     // Install the editable package.
     uv_snapshot!(context.filters(), context
@@ -733,9 +703,7 @@ fn with_editable() {
 #[test]
 fn package_flag() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("tree-root").unwrap();
@@ -794,9 +762,7 @@ fn package_flag() {
 #[test]
 fn show_version_specifiers_simple() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("tree-parent==2.31.0").unwrap();
@@ -834,9 +800,7 @@ fn show_version_specifiers_simple() {
 #[test]
 fn show_version_specifiers_with_invert() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("tree-root").unwrap();
@@ -886,9 +850,7 @@ fn show_version_specifiers_with_invert() {
 #[test]
 fn show_version_specifiers_with_package() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("tree-root").unwrap();
@@ -930,9 +892,7 @@ fn show_version_specifiers_with_package() {
 #[test]
 fn print_output_even_with_quite_flag() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("tree-parent==2.31.0").unwrap();
@@ -965,9 +925,7 @@ fn print_output_even_with_quite_flag() {
 #[test]
 fn outdated() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("tree-root==2.0.0").unwrap();
@@ -1029,7 +987,6 @@ fn no_duplicate_dependencies_with_markers() {
 
     let server = PackseServer::new("packages/pip-commands.toml");
     let context = uv_test::test_context_with_versions!(&["3.12", "3.13"])
-        .with_local_index()
         .with_default_index(&server.index_url())
         .with_filtered_counts();
 

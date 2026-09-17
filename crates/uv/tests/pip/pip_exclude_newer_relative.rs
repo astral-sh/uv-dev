@@ -11,7 +11,7 @@ use uv_test::uv_snapshot;
 /// - 3.7: 2024-04-11
 #[test]
 fn pip_install_exclude_newer_relative() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let current_timestamp = "2024-05-01T00:00:00Z";
 
     // 3 weeks before 2024-05-01 is 2024-04-10, which is before idna 3.7.
@@ -55,7 +55,7 @@ fn pip_install_exclude_newer_relative() {
 /// - 3.7: 2024-04-11
 #[test]
 fn pip_install_exclude_newer_relative_config() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let current_timestamp = "2024-05-01T00:00:00Z";
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
 

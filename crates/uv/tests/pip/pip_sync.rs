@@ -23,7 +23,7 @@ use uv_pypi_types::{HashAlgorithm, HashDigest};
 use uv_static::EnvVars;
 use uv_test::find_links::FindLinksServer;
 use uv_test::packse::{PackseServer, generate_wheel};
-use uv_test::{download_local_to_disk, site_packages_path, uv_snapshot};
+use uv_test::{download_to_disk, site_packages_path, uv_snapshot};
 
 fn artifact_hash(
     server: &PackseServer,
@@ -37,7 +37,7 @@ fn artifact_hash(
 
 #[test]
 fn missing_requirements_txt() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
 
@@ -55,9 +55,7 @@ fn missing_requirements_txt() {
 /// `--cert` is forwarded to the HTTP client rather than silently ignored.
 #[test]
 fn cert() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_filtered_missing_file_error();
+    let context = uv_test::test_context!("3.12").with_filtered_missing_file_error();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("iniconfig==2.0.0")?;
 
@@ -77,7 +75,6 @@ fn cert() -> Result<()> {
 #[test]
 fn missing_venv() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_virtualenv_bin()
         .with_filtered_python_names();
 
@@ -108,7 +105,7 @@ fn missing_venv() -> Result<()> {
 
 #[test]
 fn missing_system() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&[]);
     let requirements = context.temp_dir.child("requirements.txt");
     requirements.write_str("anyio")?;
 
@@ -126,9 +123,7 @@ fn missing_system() -> Result<()> {
 #[test]
 fn install() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package==2.1.3")?;
@@ -171,9 +166,7 @@ fn install() -> Result<()> {
 #[test]
 fn install_copy() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package==2.1.3")?;
@@ -206,9 +199,7 @@ fn install_copy() -> Result<()> {
 #[test]
 fn install_hardlink() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package==2.1.3")?;
@@ -249,10 +240,7 @@ fn install_hardlink_after_emlink() -> anyhow::Result<()> {
     use walkdir::WalkDir;
 
     let server = PackseServer::new("packages/pip-commands.toml");
-    let Some(context) = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cache_on_lowlinks_fs()?
-    else {
+    let Some(context) = uv_test::test_context!("3.12").with_cache_on_lowlinks_fs()? else {
         return Ok(());
     };
     let context = context.with_default_index(&server.index_url());
@@ -339,9 +327,7 @@ fn install_hardlink_after_emlink() -> anyhow::Result<()> {
 #[cfg(unix)] // Windows does not allow symlinks by default
 fn install_symlink() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package==2.1.3")?;
@@ -376,9 +362,7 @@ fn install_symlink() -> Result<()> {
 #[test]
 fn install_symlink_no_cache() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package==2.1.3")?;
@@ -404,9 +388,7 @@ fn install_symlink_no_cache() -> Result<()> {
 #[test]
 fn install_many() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package==2.1.3\nother-package==2.0.1")?;
@@ -435,9 +417,7 @@ fn install_many() -> Result<()> {
 #[test]
 fn noop() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package==2.1.3")?;
@@ -468,9 +448,7 @@ fn noop() -> Result<()> {
 #[test]
 fn pip_sync_empty() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.touch()?;
@@ -524,9 +502,7 @@ fn pip_sync_empty() -> Result<()> {
 /// virtual environment.
 #[test]
 fn link() -> Result<()> {
-    let context1 = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_packse_index("packages/pip-commands.toml");
+    let context1 = uv_test::test_context!("3.12").with_packse_index("packages/pip-commands.toml");
 
     let requirements_txt = context1.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package==2.1.3")?;
@@ -539,7 +515,7 @@ fn link() -> Result<()> {
         .success();
 
     // Create a separate virtual environment, but reuse the same cache.
-    let context2 = uv_test::test_context!("3.12").with_local_index();
+    let context2 = uv_test::test_context!("3.12");
     let mut cmd = context1.pip_sync();
     cmd.env(EnvVars::VIRTUAL_ENV, context2.venv.as_os_str())
         .current_dir(&context2.temp_dir);
@@ -571,9 +547,7 @@ fn link() -> Result<()> {
 #[test]
 fn add_remove() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package==2.1.3")?;
@@ -613,9 +587,7 @@ fn add_remove() -> Result<()> {
 #[test]
 fn install_sequential() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package==2.1.3")?;
@@ -654,9 +626,7 @@ fn install_sequential() -> Result<()> {
 #[test]
 fn upgrade() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package==2.0.0")?;
@@ -694,7 +664,7 @@ fn upgrade() -> Result<()> {
 #[test]
 fn install_url() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -723,7 +693,7 @@ fn install_url() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn install_git_commit() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@b270df1a2fb5d012294e9aaf05e7e0bab1e6a389")?;
@@ -751,7 +721,7 @@ fn install_git_commit() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn install_git_tag() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(
@@ -781,7 +751,7 @@ fn install_git_tag() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn install_git_subdirectories() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("example-pkg-a @ git+https://github.com/pypa/sample-namespace-packages.git@df7530eeb8fa0cb7dbb8ecb28363e8e36bfa2f45#subdirectory=pkg_resources/pkg_a\nexample-pkg-b @ git+https://github.com/pypa/sample-namespace-packages.git@df7530eeb8fa0cb7dbb8ecb28363e8e36bfa2f45#subdirectory=pkg_resources/pkg_b")?;
@@ -809,9 +779,7 @@ fn install_git_subdirectories() -> Result<()> {
 /// Install a source distribution into a virtual environment.
 #[test]
 fn install_sdist() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-29T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-29T00:00:00Z");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("source-distribution==0.0.1")?;
@@ -839,7 +807,7 @@ fn install_sdist() -> Result<()> {
 #[test]
 fn install_sdist_url() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -870,7 +838,7 @@ fn install_sdist_url() -> Result<()> {
 /// archive format (e.g., `.tar.bz2`). This should hard-error.
 #[test]
 fn reject_sdist_archive_type_bz2() -> Result<()> {
-    let context = uv_test::test_context!("3.9").with_local_index();
+    let context = uv_test::test_context!("3.9");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -898,7 +866,7 @@ fn reject_sdist_archive_type_bz2() -> Result<()> {
 #[test]
 fn install_url_then_install_url() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -933,7 +901,7 @@ fn install_url_then_install_url() -> Result<()> {
 #[test]
 fn install_url_then_install_version() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -971,7 +939,7 @@ fn install_url_then_install_version() -> Result<()> {
 #[test]
 fn install_version_then_install_url() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("werkzeug==2.0.0")?;
@@ -1013,7 +981,7 @@ fn install_version_then_install_url() -> Result<()> {
 #[cfg(feature = "test-python-eol")]
 #[test]
 fn install_numpy_py38() -> Result<()> {
-    let context = uv_test::test_context!("3.8").with_local_index();
+    let context = uv_test::test_context!("3.8");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("numpy")?;
@@ -1038,7 +1006,7 @@ fn install_numpy_py38() -> Result<()> {
 /// Attempt to install a package without using a remote index.
 #[test]
 fn install_no_index() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("iniconfig==2.0.0")?;
@@ -1065,7 +1033,7 @@ fn install_no_index() -> Result<()> {
 /// after a previous successful installation.
 #[test]
 fn install_no_index_cached() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("iniconfig==2.0.0")?;
@@ -1106,7 +1074,7 @@ fn install_no_index_cached() -> Result<()> {
 
 #[test]
 fn warn_on_yanked() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // This version is yanked.
     let requirements_in = context.temp_dir.child("requirements.txt");
@@ -1130,7 +1098,7 @@ fn warn_on_yanked() -> Result<()> {
 
 #[test]
 fn warn_on_yanked_dry_run() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // This version is yanked.
     let requirements_in = context.temp_dir.child("requirements.txt");
@@ -1157,11 +1125,11 @@ fn warn_on_yanked_dry_run() -> Result<()> {
 #[test]
 fn install_local_wheel() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Download a wheel.
     let archive = context.temp_dir.child("tomli-2.0.1-py3-none-any.whl");
-    download_local_to_disk(
+    download_to_disk(
         &registry_artifacts.file_url("tomli-2.0.1-py3-none-any.whl"),
         &archive,
     );
@@ -1279,7 +1247,7 @@ fn install_local_wheel() -> Result<()> {
 /// Reject decoded path separators in an unnamed wheel URL before using the filename in cache paths.
 #[test]
 fn install_unnamed_wheel_url_rejects_path_traversal() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
@@ -1300,7 +1268,7 @@ fn install_unnamed_wheel_url_rejects_path_traversal() -> Result<()> {
 /// Reject decoded stream separators in an unnamed wheel URL before using the filename in cache paths.
 #[test]
 fn install_unnamed_wheel_url_rejects_stream_separator() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
@@ -1322,11 +1290,11 @@ fn install_unnamed_wheel_url_rejects_stream_separator() -> Result<()> {
 #[test]
 fn mismatched_version() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Download a wheel.
     let archive = context.temp_dir.child("tomli-3.7.2-py3-none-any.whl");
-    download_local_to_disk(
+    download_to_disk(
         &registry_artifacts.file_url("tomli-2.0.1-py3-none-any.whl"),
         &archive,
     );
@@ -1368,11 +1336,11 @@ fn mismatched_version() -> Result<()> {
 #[test]
 fn mismatched_name() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Download a wheel.
     let archive = context.temp_dir.child("foo-2.0.1-py3-none-any.whl");
-    download_local_to_disk(
+    download_to_disk(
         &registry_artifacts.file_url("tomli-2.0.1-py3-none-any.whl"),
         &archive,
     );
@@ -1403,11 +1371,11 @@ fn mismatched_name() -> Result<()> {
 #[test]
 fn install_local_source_distribution() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Download a source distribution.
     let archive = context.temp_dir.child("wheel-0.42.0.tar.gz");
-    download_local_to_disk(
+    download_to_disk(
         &registry_artifacts.file_url("wheel-0.42.0.tar.gz"),
         &archive,
     );
@@ -1441,9 +1409,7 @@ fn install_local_source_distribution() -> Result<()> {
 /// default build backend.
 #[test]
 fn install_build_system_no_backend() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_packse_index("packages/pip-sync-build.toml");
+    let context = uv_test::test_context!("3.12").with_packse_index("packages/pip-sync-build.toml");
     let links = context.temp_dir.child("links");
     links.create_dir_all()?;
     uv_test::archive::write_tar_gz(
@@ -1504,7 +1470,6 @@ fn install_build_system_no_backend() -> Result<()> {
 fn install_url_source_dist_cached() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_file_counts()
         .with_filtered_sizes_and_units();
 
@@ -1586,7 +1551,7 @@ fn install_url_source_dist_cached() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn install_git_source_dist_cached() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@b270df1a2fb5d012294e9aaf05e7e0bab1e6a389")?;
@@ -1668,7 +1633,6 @@ fn install_git_source_dist_cached() -> Result<()> {
 #[test]
 fn install_registry_source_dist_cached() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_exclude_newer("2025-01-29T00:00:00Z")
         .with_filtered_file_counts()
         .with_filtered_sizes_and_units();
@@ -1747,13 +1711,12 @@ fn install_registry_source_dist_cached() -> Result<()> {
 fn install_path_source_dist_cached() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_file_counts()
         .with_filtered_sizes_and_units();
 
     // Download a source distribution.
     let archive = context.temp_dir.child("source_distribution-0.0.1.tar.gz");
-    download_local_to_disk(
+    download_to_disk(
         &registry_artifacts.file_url("source_distribution-0.0.1.tar.gz"),
         &archive,
     );
@@ -1836,13 +1799,12 @@ fn install_path_source_dist_cached() -> Result<()> {
 fn install_path_built_dist_cached() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_file_counts()
         .with_filtered_sizes_and_units();
 
     // Download a wheel.
     let archive = context.temp_dir.child("tomli-2.0.1-py3-none-any.whl");
-    download_local_to_disk(
+    download_to_disk(
         &registry_artifacts.file_url("tomli-2.0.1-py3-none-any.whl"),
         &archive,
     );
@@ -1917,7 +1879,6 @@ fn install_path_built_dist_cached() -> Result<()> {
 fn install_url_built_dist_cached() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_file_counts()
         .with_filtered_sizes_and_units();
 
@@ -1999,7 +1960,7 @@ fn install_url_built_dist_cached() -> Result<()> {
 /// Verify that fail with an appropriate error when a package is repeated.
 #[test]
 fn duplicate_package_overlap() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("MarkupSafe==2.1.3\nMarkupSafe==2.1.2")?;
@@ -2020,7 +1981,7 @@ fn duplicate_package_overlap() -> Result<()> {
 /// Verify that allow duplicate packages when they are disjoint.
 #[test]
 fn duplicate_package_disjoint() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("MarkupSafe==2.1.3\nMarkupSafe==2.1.2 ; python_version < '3.6'")?;
@@ -2043,7 +2004,7 @@ fn duplicate_package_disjoint() -> Result<()> {
 /// Verify that we can force reinstall of packages.
 #[test]
 fn reinstall() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
@@ -2089,7 +2050,7 @@ fn reinstall() -> Result<()> {
 /// Verify that we can force reinstall of selective packages.
 #[test]
 fn reinstall_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
@@ -2136,7 +2097,7 @@ fn reinstall_package() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn reinstall_git() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@b270df1a2fb5d012294e9aaf05e7e0bab1e6a389")?;
@@ -2183,7 +2144,7 @@ fn reinstall_git() -> Result<()> {
 /// Verify that we can force refresh of cached data.
 #[test]
 fn refresh() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
@@ -2232,7 +2193,7 @@ fn refresh() -> Result<()> {
 /// Verify that we can force refresh of selective packages.
 #[test]
 fn refresh_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
@@ -2281,7 +2242,7 @@ fn refresh_package() -> Result<()> {
 
 #[test]
 fn sync_editable() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let poetry_editable = context.temp_dir.child("poetry_editable");
 
     // Copy into the temporary directory so we can mutate it.
@@ -2428,7 +2389,7 @@ fn sync_editable() -> Result<()> {
 
 #[test]
 fn sync_editable_and_registry() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Copy the black test editable into the "current" directory
     copy_dir_all(
@@ -2529,7 +2490,7 @@ fn sync_editable_and_registry() -> Result<()> {
 
 #[test]
 fn sync_editable_and_local() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Copy the black test editable into the "current" directory
     copy_dir_all(
@@ -2597,7 +2558,7 @@ fn sync_editable_and_local() -> Result<()> {
 
 #[test]
 fn incompatible_wheel() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let wheel = context.temp_dir.child("foo-1.2.3-py3-none-any.whl");
     wheel.touch()?;
 
@@ -2625,7 +2586,7 @@ fn incompatible_wheel() -> Result<()> {
 #[test]
 fn sync_legacy_sdist_pep_517() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str(&format!(
@@ -2651,7 +2612,7 @@ fn sync_legacy_sdist_pep_517() -> Result<()> {
 #[test]
 fn find_links() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&indoc::formatdoc! {r"
@@ -2683,7 +2644,7 @@ fn find_links() -> Result<()> {
 /// Sync using `--find-links` with `--no-index`, which should accept the local wheel.
 #[test]
 fn find_links_no_index_match() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc! {r"
@@ -2710,7 +2671,7 @@ fn find_links_no_index_match() -> Result<()> {
 /// Sync using `--find-links` with `--offline`, which should accept the local wheel.
 #[test]
 fn find_links_offline_match() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc! {r"
@@ -2737,7 +2698,7 @@ fn find_links_offline_match() -> Result<()> {
 /// Sync using `--find-links` with `--offline`, which should fail to find `numpy`.
 #[test]
 fn find_links_offline_no_match() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc! {r"
@@ -2765,7 +2726,7 @@ fn find_links_offline_no_match() -> Result<()> {
 /// Sync using `--find-links` with a local directory. Ensure that cached wheels are reused.
 #[test]
 fn find_links_wheel_cache() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc! {r"
@@ -2809,7 +2770,7 @@ fn find_links_wheel_cache() -> Result<()> {
 /// reused.
 #[test]
 fn find_links_source_cache() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc! {r"
@@ -2852,7 +2813,7 @@ fn find_links_source_cache() -> Result<()> {
 /// Install without network access via the `--offline` flag.
 #[test]
 fn offline() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str("black==23.10.1")?;
 
@@ -2902,7 +2863,7 @@ fn offline() -> Result<()> {
 /// Include a `constraints.txt` file with a compatible constraint.
 #[test]
 fn compatible_constraint() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("anyio==3.7.0")?;
 
@@ -2928,7 +2889,7 @@ fn compatible_constraint() -> Result<()> {
 /// Include a `constraints.txt` file with an incompatible constraint.
 #[test]
 fn incompatible_constraint() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("anyio==3.7.0")?;
 
@@ -2952,7 +2913,7 @@ fn incompatible_constraint() -> Result<()> {
 /// Include a `constraints.txt` file with an irrelevant constraint.
 #[test]
 fn irrelevant_constraint() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("anyio==3.7.0")?;
 
@@ -2978,7 +2939,7 @@ fn irrelevant_constraint() -> Result<()> {
 /// Sync with a repeated `anyio` requirement.
 #[test]
 fn repeat_requirement_identical() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str("anyio\nanyio")?;
 
@@ -2998,7 +2959,7 @@ fn repeat_requirement_identical() -> Result<()> {
 /// Sync with a repeated `anyio` requirement, with compatible versions.
 #[test]
 fn repeat_requirement_compatible() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str("anyio\nanyio==4.0.0")?;
 
@@ -3018,7 +2979,7 @@ fn repeat_requirement_compatible() -> Result<()> {
 /// Sync with a repeated, but conflicting `anyio` requirement.
 #[test]
 fn repeat_requirement_incompatible() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str("anyio<4.0.0\nanyio==4.0.0")?;
 
@@ -3039,7 +3000,7 @@ fn repeat_requirement_incompatible() -> Result<()> {
 #[test]
 fn tar_dont_preserve_mtime() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
         "tomli @ {artifact_url_0}",
@@ -3062,7 +3023,7 @@ fn tar_dont_preserve_mtime() -> Result<()> {
 /// Avoid creating a file with 000 permissions
 #[test]
 fn set_read_permissions() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let links = context.temp_dir.child("links");
     links.create_dir_all()?;
     let (filename, bytes) = generate_wheel(
@@ -3121,9 +3082,7 @@ fn set_read_permissions() -> Result<()> {
 /// <https://github.com/astral-sh/uv/issues/1593>
 #[test]
 fn pip_entrypoints() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2024-06-01T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2024-06-01T00:00:00Z");
 
     for pip_requirement in [
         // Test compatibility with launchers in 24.0
@@ -3167,7 +3126,7 @@ fn pip_entrypoints() -> Result<()> {
 
 #[test]
 fn invalidate_on_change() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Create an editable package.
     let editable_dir = context.temp_dir.child("editable");
@@ -3240,7 +3199,7 @@ requires-python = ">=3.8"
 /// Install with bytecode compilation.
 #[test]
 fn compile() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("MarkupSafe==2.1.3")?;
@@ -3276,7 +3235,7 @@ fn compile() -> Result<()> {
 /// Re-install with bytecode compilation.
 #[test]
 fn recompile() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("MarkupSafe==2.1.3")?;
@@ -3321,7 +3280,7 @@ fn recompile() -> Result<()> {
 /// Raise an error when an editable's `Requires-Python` constraint is not met.
 #[test]
 fn requires_python_editable() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Create an editable package with a `Requires-Python` constraint that is not met.
     let editable_dir = context.temp_dir.child("editable");
@@ -3358,7 +3317,7 @@ requires-python = ">=3.13"
 /// Raise an error when a direct URL dependency's `Requires-Python` constraint is not met.
 #[test]
 fn requires_python_direct_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Create an editable package with a `Requires-Python` constraint that is not met.
     let editable_dir = context.temp_dir.child("editable");
@@ -3396,7 +3355,7 @@ requires-python = ">=3.13"
 #[test]
 fn require_hashes_unknown_algorithm() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -3421,7 +3380,7 @@ fn require_hashes_unknown_algorithm() -> Result<()> {
 /// Omit the hash with `--require-hashes`.
 #[test]
 fn require_hashes_missing_hash() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("anyio==4.0.0")?;
@@ -3454,7 +3413,7 @@ fn require_hashes_missing_hash() -> Result<()> {
 /// Enable `--require-hashes` from the `requirements.txt`.
 #[test]
 fn require_hashes_in_requirements_txt() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc! {r"
@@ -3490,7 +3449,7 @@ fn require_hashes_in_requirements_txt() -> Result<()> {
 /// Omit the version with `--require-hashes`.
 #[test]
 fn require_hashes_missing_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(
@@ -3525,7 +3484,7 @@ fn require_hashes_missing_version() -> Result<()> {
 /// Use a non-`==` operator with `--require-hashes`.
 #[test]
 fn require_hashes_invalid_operator() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(
@@ -3561,7 +3520,7 @@ fn require_hashes_invalid_operator() -> Result<()> {
 #[test]
 fn require_hashes_wheel_no_binary() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -3597,7 +3556,7 @@ fn require_hashes_wheel_no_binary() -> Result<()> {
 #[test]
 fn require_hashes_wheel_only_binary() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -3628,7 +3587,7 @@ fn require_hashes_wheel_only_binary() -> Result<()> {
 #[test]
 fn require_hashes_source_no_binary() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(
@@ -3657,7 +3616,7 @@ fn require_hashes_source_no_binary() -> Result<()> {
 #[test]
 fn require_hashes_source_only_binary() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -3692,7 +3651,7 @@ fn require_hashes_source_only_binary() -> Result<()> {
 /// Include the correct hash algorithm, but the wrong digest.
 #[test]
 fn require_hashes_wrong_digest() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
@@ -3722,7 +3681,7 @@ fn require_hashes_wrong_digest() -> Result<()> {
 #[test]
 fn require_hashes_wrong_algorithm() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -3757,7 +3716,7 @@ fn require_hashes_wrong_algorithm() -> Result<()> {
 #[test]
 fn require_hashes_source_url() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -3824,7 +3783,7 @@ fn require_hashes_source_url() -> Result<()> {
 #[test]
 fn require_hashes_source_url_mismatch() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
@@ -3853,7 +3812,7 @@ fn require_hashes_source_url_mismatch() -> Result<()> {
 #[test]
 fn require_hashes_wheel_url() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -3940,7 +3899,7 @@ fn require_hashes_wheel_url() -> Result<()> {
 #[test]
 fn require_hashes_wheel_url_mismatch() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
@@ -3976,7 +3935,7 @@ fn require_hashes_wheel_url_mismatch() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn require_hashes_git() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
@@ -3998,7 +3957,7 @@ fn require_hashes_git() -> Result<()> {
 /// Reject local directory dependencies when `--require-hashes` is provided.
 #[test]
 fn require_hashes_source_tree() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -4026,7 +3985,7 @@ fn require_hashes_source_tree() -> Result<()> {
 #[test]
 fn require_hashes_re_download() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("anyio==4.0.0")?;
@@ -4095,7 +4054,7 @@ fn require_hashes_re_download() -> Result<()> {
 /// Include the hash for a built distribution specified as a local path dependency.
 #[test]
 fn require_hashes_wheel_path() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -4124,7 +4083,7 @@ fn require_hashes_wheel_path() -> Result<()> {
 /// Include a `BLAKE2b` hash for a built distribution specified as a local path dependency.
 #[test]
 fn require_hashes_wheel_path_blake2b() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -4153,7 +4112,7 @@ fn require_hashes_wheel_path_blake2b() -> Result<()> {
 /// Include the wrong `BLAKE2b` hash for a built distribution specified as a local path dependency.
 #[test]
 fn require_hashes_wheel_path_blake2b_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -4187,7 +4146,7 @@ fn require_hashes_wheel_path_blake2b_mismatch() -> Result<()> {
 /// Include the _wrong_ hash for a built distribution specified as a local path dependency.
 #[test]
 fn require_hashes_wheel_path_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -4227,7 +4186,7 @@ fn require_hashes_wheel_path_mismatch() -> Result<()> {
 /// Include the hash for a source distribution specified as a local path dependency.
 #[test]
 fn require_hashes_source_path() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -4256,7 +4215,7 @@ fn require_hashes_source_path() -> Result<()> {
 /// Include the _wrong_ hash for a source distribution specified as a local path dependency.
 #[test]
 fn require_hashes_source_path_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -4290,7 +4249,7 @@ fn require_hashes_source_path_mismatch() -> Result<()> {
 #[test]
 fn require_hashes_unnamed() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
@@ -4316,7 +4275,7 @@ fn require_hashes_unnamed() -> Result<()> {
 /// We disallow `--require-hashes` for editables.
 #[test]
 fn require_hashes_editable() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&indoc::formatdoc! {r"
@@ -4342,7 +4301,7 @@ fn require_hashes_editable() -> Result<()> {
 #[test]
 fn require_hashes_repeated_dependency() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -4386,7 +4345,7 @@ fn require_hashes_repeated_dependency() -> Result<()> {
 #[test]
 fn require_hashes_repeated_hash() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Use the same hash in both cases.
     let requirements_txt = context.temp_dir.child("requirements.txt");
@@ -4495,7 +4454,7 @@ fn require_hashes_repeated_hash() -> Result<()> {
 #[test]
 fn require_hashes_repeated_hash_multiple_files() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_a = context.temp_dir.child("requirements-a.txt");
     requirements_a.write_str(&indoc::formatdoc!{ r"
@@ -4532,7 +4491,7 @@ fn require_hashes_repeated_hash_multiple_files() -> Result<()> {
 #[test]
 fn require_hashes_at_least_one() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // An MD5 digest alone must not satisfy integrity-enforced installs.
     let md5_requirements_txt = context.temp_dir.child("requirements-md5.txt");
@@ -4664,7 +4623,7 @@ fn require_hashes_at_least_one() -> Result<()> {
 /// Using `--find-links`, but the registry doesn't provide us with a hash.
 #[test]
 fn require_hashes_find_links_no_hash() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = FindLinksServer::new(&context.workspace_root.join("test/links"));
     let index = PackseServer::empty();
 
@@ -4780,7 +4739,7 @@ fn require_hashes_find_links_no_hash() -> Result<()> {
 /// Using `--find-links`, and the registry serves us a correct hash.
 #[test]
 fn require_hashes_find_links_valid_hash() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
@@ -4806,7 +4765,7 @@ fn require_hashes_find_links_valid_hash() -> Result<()> {
 /// Using `--find-links`, and the registry serves us an incorrect hash.
 #[test]
 fn require_hashes_find_links_invalid_hash() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // First, request some other hash.
     let requirements_txt = context.temp_dir.child("requirements.txt");
@@ -4937,7 +4896,7 @@ fn require_hashes_find_links_invalid_hash() -> Result<()> {
 /// Using `--index-url`, but the registry doesn't provide us with a hash.
 #[test]
 fn require_hashes_registry_no_hash() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let scenario = uv_test::packse::scenario::Scenario::from_path(
         &context
@@ -4975,7 +4934,7 @@ fn require_hashes_registry_no_hash() -> Result<()> {
 /// Using `--index-url`, and the registry serves us a correct hash.
 #[test]
 fn require_hashes_registry_valid_hash() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let scenario = uv_test::packse::scenario::Scenario::from_path(
         &context
@@ -5013,7 +4972,7 @@ fn require_hashes_registry_valid_hash() -> Result<()> {
 /// A `--find-links` page without distribution links does not act as a package index.
 #[test]
 fn require_hashes_empty_find_links() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let links = context.temp_dir.child("links");
     links.create_dir_all()?;
     let server = FindLinksServer::new(links.path());
@@ -5042,7 +5001,7 @@ fn require_hashes_empty_find_links() -> Result<()> {
 /// Verify the index's wheel hash even when no explicit hash policy is requested.
 #[test]
 fn index_wheel_hash_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     context
         .temp_dir
         .child("requirements.txt")
@@ -5077,7 +5036,7 @@ fn index_wheel_hash_mismatch() -> Result<()> {
 /// Using `--index-url`, and the registry serves us an incorrect hash.
 #[test]
 fn require_hashes_registry_invalid_hash() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let scenario = uv_test::packse::scenario::Scenario::from_path(
         &context
@@ -5235,9 +5194,7 @@ fn require_hashes_registry_invalid_hash() -> Result<()> {
 #[test]
 fn require_hashes_url() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-29T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-29T00:00:00Z");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -5267,9 +5224,7 @@ fn require_hashes_url() -> Result<()> {
 #[test]
 fn require_hashes_url_other_fragment() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-29T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-29T00:00:00Z");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -5293,9 +5248,7 @@ fn require_hashes_url_other_fragment() -> Result<()> {
 #[test]
 fn require_hashes_url_invalid() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-29T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-29T00:00:00Z");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
@@ -5324,7 +5277,7 @@ fn require_hashes_url_invalid() -> Result<()> {
 /// Reject malformed URL hashes without downloading the distribution.
 #[test]
 fn require_hashes_url_malformed() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(
         "iniconfig @ https://files.pythonhosted.org/packages/iniconfig-2.0.0-py3-none-any.whl#subdirectory=src&sha256=123",
@@ -5345,9 +5298,7 @@ fn require_hashes_url_malformed() -> Result<()> {
 #[test]
 fn require_hashes_url_merge() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-29T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-29T00:00:00Z");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -5382,9 +5333,7 @@ fn require_hashes_url_merge() -> Result<()> {
 #[test]
 fn require_hashes_url_unnamed() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-29T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-29T00:00:00Z");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -5414,7 +5363,6 @@ fn require_hashes_url_unnamed() -> Result<()> {
 #[test]
 fn target_built_distribution() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix();
@@ -5505,7 +5453,6 @@ fn target_built_distribution() -> Result<()> {
 #[test]
 fn target_source_distribution() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix();
@@ -5555,7 +5502,6 @@ fn target_source_distribution() -> Result<()> {
 #[test]
 fn target_no_build_isolation() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix();
@@ -5618,7 +5564,7 @@ fn target_no_build_isolation() -> Result<()> {
 /// Sync to a `--target` directory without a virtual environment.
 #[test]
 fn target_system() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Install `iniconfig` to the target directory.
     let requirements_in = context.temp_dir.child("requirements.in");
@@ -5647,7 +5593,6 @@ fn target_system() -> Result<()> {
 #[test]
 fn prefix() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix();
@@ -5711,7 +5656,7 @@ fn prefix() -> Result<()> {
 /// Ensure that we install packages with markers on them.
 #[test]
 fn preserve_markers() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("anyio ; python_version > '3.7'")?;
@@ -5733,7 +5678,7 @@ fn preserve_markers() -> Result<()> {
 /// Include a `build_constraints.txt` file with an incompatible constraint.
 #[test]
 fn incompatible_build_constraint() -> Result<()> {
-    let context = uv_test::test_context!("3.9").with_local_index();
+    let context = uv_test::test_context!("3.9");
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("requests==1.2")?;
 
@@ -5760,7 +5705,7 @@ fn incompatible_build_constraint() -> Result<()> {
 /// Include a `build_constraints.txt` file with a compatible constraint.
 #[test]
 fn compatible_build_constraint() -> Result<()> {
-    let context = uv_test::test_context!("3.9").with_local_index();
+    let context = uv_test::test_context!("3.9");
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("requests==1.2")?;
 
@@ -5787,7 +5732,7 @@ fn compatible_build_constraint() -> Result<()> {
 
 #[test]
 fn sync_seed() -> Result<()> {
-    let context = uv_test::test_context!("3.9").with_local_index();
+    let context = uv_test::test_context!("3.9");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("requests==1.2")?;
@@ -5849,7 +5794,7 @@ fn sync_seed() -> Result<()> {
 /// Sanitize zip files during extraction.
 #[test]
 fn sanitize() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Install a zip file that includes a path that extends outside the parent.
     let requirements_txt = context.temp_dir.child("requirements.txt");
@@ -5878,7 +5823,7 @@ fn sanitize() -> Result<()> {
 #[test]
 fn semicolon_trailing_space() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements = context.temp_dir.child("requirements.txt");
     requirements.write_str(&format!(
@@ -5904,7 +5849,7 @@ fn semicolon_trailing_space() -> Result<()> {
 #[test]
 fn semicolon_no_space() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements = context.temp_dir.child("requirements.txt");
     requirements.write_str(&format!(
@@ -5928,7 +5873,7 @@ fn semicolon_no_space() -> Result<()> {
 
 #[test]
 fn pep_751() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -6008,7 +5953,7 @@ fn pep_751() -> Result<()> {
 
 #[test]
 fn pep_751_rejects_duplicate_active_packages() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context.temp_dir.child("pylock.toml").write_str(
         r#"
@@ -6040,7 +5985,7 @@ fn pep_751_rejects_duplicate_active_packages() -> Result<()> {
 
 #[test]
 fn pep_751_requires_packages() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context.temp_dir.child("pylock.toml").write_str(
         r#"
@@ -6067,7 +6012,7 @@ fn pep_751_requires_packages() -> Result<()> {
 
 #[test]
 fn pep_751_empty_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("simple/single-package.toml");
     context
         .temp_dir
@@ -6116,7 +6061,7 @@ fn pep_751_empty_hashes() -> Result<()> {
 
 #[test]
 fn pep_751_validates_archive_size() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     context
         .temp_dir
         .child("iniconfig-2.0.0-py3-none-any.whl")
@@ -6148,7 +6093,7 @@ fn pep_751_validates_archive_size() -> Result<()> {
 #[test]
 fn pep_751_validates_remote_archive_size() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     context.temp_dir.child("pylock.toml").write_str(&formatdoc! {
         r#"
         lock-version = "1.0"
@@ -6221,7 +6166,7 @@ fn pep_751_validates_remote_archive_size() -> Result<()> {
 #[test]
 fn pep_751_validates_cached_remote_archive_size() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let wheel_url = server.file_url("a-1.0.0-py3-none-any.whl");
 
     context
@@ -6278,7 +6223,7 @@ fn pep_751_validates_cached_remote_archive_size() -> Result<()> {
 #[test]
 fn pep_751_validates_cached_registry_wheel_size() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let pylock = formatdoc! {
         r#"
         lock-version = "1.0"
@@ -6339,7 +6284,7 @@ fn pep_751_validates_cached_registry_wheel_size() -> Result<()> {
 #[test]
 fn pep_751_validates_cached_registry_sdist_size() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let (_, hash) = server
         .files()
         .find(|(filename, _)| *filename == "a-1.0.0.tar.gz")
@@ -6404,7 +6349,7 @@ fn pep_751_validates_cached_registry_sdist_size() -> Result<()> {
 #[test]
 fn pep_751_validates_cached_url_sdist_size() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let (_, hash) = server
         .files()
         .find(|(filename, _)| *filename == "a-1.0.0.tar.gz")
@@ -6462,7 +6407,7 @@ fn pep_751_validates_cached_url_sdist_size() -> Result<()> {
 
 #[test]
 fn pep_751_require_hashes_directory() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("foo").child("pyproject.toml");
     pyproject_toml.write_str(
@@ -6513,7 +6458,7 @@ fn pep_751_require_hashes_directory() -> Result<()> {
 
 #[tokio::test]
 async fn pep_751_remote() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context
         .temp_dir
@@ -6563,9 +6508,8 @@ async fn pep_751_remote() -> Result<()> {
 /// See: <https://github.com/astral-sh/uv/issues/13127>
 #[test]
 fn pep_751_wheel_only() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_packse_index("packages/pip-sync-wheel-only.toml");
+    let context =
+        uv_test::test_context!("3.12").with_packse_index("packages/pip-sync-wheel-only.toml");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -6625,9 +6569,7 @@ fn pep_751_wheel_only() -> Result<()> {
 /// Respect `--no-binary` et al when installing from a `pylock.toml`.
 #[test]
 fn pep_751_build_options() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_exclude_newer("2025-01-29T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-29T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -6743,7 +6685,7 @@ fn pep_751_build_options() -> Result<()> {
 #[test]
 fn pep_751_direct_url_tags() -> Result<()> {
     let registry_artifacts = PackseServer::new("packages/pip-install.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -6797,7 +6739,7 @@ fn pep_751_direct_url_tags() -> Result<()> {
 #[test]
 fn incompatible_python_version_direct_url() -> Result<()> {
     let server = PackseServer::new("packages/pip-sync-wheel-only.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -6825,7 +6767,7 @@ fn incompatible_python_version_direct_url() -> Result<()> {
 #[test]
 fn incompatible_direct_url_redacts_credentials() -> Result<()> {
     let server = PackseServer::new("packages/pip-sync-wheel-only.toml");
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let mut wheel_url = Url::parse(&server.file_url("windows_wheel-1.0.0-cp313-cp313-win32.whl"))?;
     wheel_url
@@ -6861,7 +6803,7 @@ fn incompatible_direct_url_redacts_credentials() -> Result<()> {
 #[test]
 fn incompatible_platform_direct_url() -> Result<()> {
     let server = PackseServer::new("packages/pip-sync-wheel-only.toml");
-    let context = uv_test::test_context!("3.13").with_local_index();
+    let context = uv_test::test_context!("3.13");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -6891,9 +6833,7 @@ fn incompatible_platform_direct_url() -> Result<()> {
 #[test]
 fn sync_missing_python_no_target() -> Result<()> {
     // Create a context that only has Python 3.11 available.
-    let context = uv_test::test_context!("3.11")
-        .with_local_index()
-        .with_managed_python_dirs();
+    let context = uv_test::test_context!("3.11").with_managed_python_dirs();
 
     let requirements = context.temp_dir.child("requirements.txt");
     requirements.write_str("anyio")?;
@@ -6915,7 +6855,6 @@ fn sync_missing_python_no_target() -> Result<()> {
 fn sync_with_target_installs_missing_python() -> Result<()> {
     // Create a context that only has Python 3.11 available.
     let context = uv_test::test_context!("3.11")
-        .with_local_index()
         .with_managed_python_dirs()
         .with_filtered_latest_python_versions();
 

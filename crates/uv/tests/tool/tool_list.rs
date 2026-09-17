@@ -14,7 +14,6 @@ use wiremock::{
 fn tool_list() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filtered_exe_suffix()
         .with_filter((r#"index-url = ".*"\n"#, ""))
@@ -41,7 +40,6 @@ fn tool_list() {
 fn tool_list_paths() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filtered_exe_suffix()
         .with_filter((r#"index-url = ".*"\n"#, ""))
@@ -69,7 +67,6 @@ fn tool_list_paths() {
 fn tool_list_paths_windows() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filtered_exe_suffix()
         .with_filter((r#"index-url = ".*"\n"#, ""));
@@ -98,7 +95,6 @@ fn tool_list_paths_windows() {
 fn tool_list_empty() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filtered_exe_suffix()
         .with_filter((r#"index-url = ".*"\n"#, ""))
@@ -118,7 +114,6 @@ fn tool_list_empty() {
 fn tool_list_outdated_empty() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filtered_exe_suffix()
         .with_filter((r#"index-url = ".*"\n"#, ""))
@@ -138,7 +133,6 @@ fn tool_list_outdated_empty() {
 fn tool_list_outdated() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filtered_exe_suffix()
         .with_filter((r#"index-url = ".*"\n"#, ""))
@@ -164,7 +158,6 @@ fn tool_list_outdated() {
 #[tokio::test]
 async fn tool_list_outdated_respects_configured_index() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_packse_index("packages/tool-run.toml")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -214,7 +207,6 @@ async fn tool_list_outdated_respects_configured_index() -> Result<()> {
 #[test]
 fn tool_list_outdated_respects_exclude_newer() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_packse_index("packages/tool-run.toml")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -239,7 +231,6 @@ fn tool_list_outdated_respects_exclude_newer() {
 #[test]
 fn tool_list_outdated_recomputes_relative_exclude_newer() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_packse_index("packages/tool-run.toml")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -271,7 +262,6 @@ fn tool_list_outdated_recomputes_relative_exclude_newer() {
 #[test]
 fn tool_list_outdated_cli_exclude_newer() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_packse_index("packages/tool-run.toml")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -297,7 +287,6 @@ fn tool_list_outdated_cli_exclude_newer() {
 fn tool_list_missing_receipt() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filtered_exe_suffix()
         .with_filter((r#"index-url = ".*"\n"#, ""))
@@ -326,7 +315,6 @@ fn tool_list_missing_receipt() {
 fn tool_list_bad_environment() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter((r#"index-url = ".*"\n"#, ""));
     let context = context
@@ -378,7 +366,6 @@ fn tool_list_bad_environment() -> Result<()> {
 fn tool_list_deprecated() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filtered_exe_suffix()
         .with_filter((r#"index-url = ".*"\n"#, ""))
@@ -458,7 +445,6 @@ fn tool_list_deprecated() -> Result<()> {
 fn tool_list_show_version_specifiers() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filtered_exe_suffix()
         .with_filter((r#"index-url = ".*"\n"#, ""))
@@ -504,7 +490,6 @@ fn tool_list_show_version_specifiers() {
 fn tool_list_show_with() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filtered_exe_suffix()
         .with_filter((r#"index-url = ".*"\n"#, ""))
@@ -603,7 +588,6 @@ fn tool_list_show_with() {
 fn tool_list_show_extras() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filtered_exe_suffix()
         .with_filter((r#"index-url = ".*"\n"#, ""))
@@ -699,7 +683,6 @@ fn tool_list_show_extras() {
 fn tool_list_show_python() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filtered_exe_suffix()
         .with_filter((r#"index-url = ".*"\n"#, ""))
@@ -726,7 +709,6 @@ fn tool_list_show_python() {
 fn tool_list_show_all() {
     let _server = uv_test::packse::PackseServer::new("packages/tool-list.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filtered_exe_suffix()
         .with_filter((r#"index-url = ".*"\n"#, ""))
