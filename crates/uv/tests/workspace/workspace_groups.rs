@@ -5,6 +5,8 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileWriteStr, PathChild, PathCreateDir};
 use indoc::{formatdoc, indoc};
 use uv_pep508::MarkerTree;
+use uv_test::packse::PackseServer;
+use uv_test::packse::scenario::Scenario;
 use uv_test::{TestContext, uv_snapshot};
 
 use super::workspace_metadata::write_wheel_with_metadata;
@@ -78,6 +80,208 @@ fn workspace(context: &TestContext) -> Result<()> {
             &[],
         )?;
     }
+    Ok(())
+}
+
+fn workspace_groups_conflict_fixture(
+    context: &TestContext,
+    group_configuration: &str,
+    project_conflict_first: Option<bool>,
+) -> Result<PackseServer> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "workspace-group-extra-group-splits"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.shared-leaf.versions."1.0.0"]
+        sdist = false
+        [packages.shared-leaf.versions."2.0.0"]
+        sdist = false
+        [packages.extra-leaf.versions."1.0.0"]
+        sdist = false
+        [packages.extra-leaf.versions."2.0.0"]
+        sdist = false
+        [packages.group-leaf.versions."1.0.0"]
+        sdist = false
+        [packages.group-leaf.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let project_conflict = r#"    [{ package = "root-a" }, { package = "root-b" }],"#;
+    context.temp_dir.child("pyproject.toml").write_str(
+        &indoc! {r#"
+            [tool.uv]
+            conflicts = [
+            # project-conflict-first
+                [{ package = "root-a", extra = "legacy" }, { package = "root-a", extra = "modern" }],
+                [{ package = "root-a", group = "legacy" }, { package = "root-a", group = "modern" }],
+            # project-conflict-last
+            ]
+            [tool.uv.workspace]
+            members = ["members/*"]
+            # workspace-groups
+        "#}
+        .replace(
+            "# project-conflict-first",
+            if project_conflict_first == Some(true) {
+                project_conflict
+            } else {
+                ""
+            },
+        )
+        .replace(
+            "# project-conflict-last",
+            if project_conflict_first == Some(false) {
+                project_conflict
+            } else {
+                ""
+            },
+        )
+        .replace("# workspace-groups", group_configuration),
+    )?;
+    context
+        .temp_dir
+        .child("members/root-a/pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "root-a"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["shared-leaf<2"]
+            [project.optional-dependencies]
+            legacy = ["extra-leaf<2"]
+            modern = ["extra-leaf>=2"]
+            [dependency-groups]
+            legacy = ["group-leaf<2"]
+            modern = ["group-leaf>=2"]
+            [tool.uv]
+            package = false
+        "#})?;
+    context
+        .temp_dir
+        .child("members/root-b/pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "root-b"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["shared-leaf>=2"]
+            [tool.uv]
+            package = false
+        "#})?;
+    Ok(PackseServer::from_scenario(&scenario))
+}
+
+#[test]
+fn workspace_groups_inferred_extra_and_group_splits() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = workspace_groups_conflict_fixture(
+        &context,
+        indoc! {r#"
+            [[tool.uv.workspace.groups]]
+            name = "a"
+            members = ["root-a"]
+            [[tool.uv.workspace.groups]]
+            name = "b"
+            members = ["root-b"]
+        "#},
+        None,
+    )?;
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    ");
+    let lock = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    ");
+    assert_eq!(lock, context.read("uv.lock"));
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--workspace-group", "a", "--extra", "legacy", "--group", "modern",
+            "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    extra-leaf==1.0.0
+    group-leaf==2.0.0
+    shared-leaf==1.0.0
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--workspace-group", "a", "--extra", "modern", "--group", "legacy",
+            "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    extra-leaf==2.0.0
+    group-leaf==1.0.0
+    shared-leaf==1.0.0
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--workspace-group", "b", "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shared-leaf==2.0.0
+    ");
+    Ok(())
+}
+
+#[test]
+fn workspace_groups_explicit_project_conflicts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let groups = indoc! {r#"
+        [[tool.uv.workspace.groups]]
+        name = "apps"
+        members = ["root-a", "root-b"]
+    "#};
+    let server = workspace_groups_conflict_fixture(&context, groups, Some(false))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "package-conflicts", "--index-url"]).arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    ");
+    let lock = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "package-conflicts", "--locked", "--index-url"]).arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    ");
+    assert_eq!(lock, context.read("uv.lock"));
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--workspace-group", "apps", "--package", "root-a",
+            "--extra", "legacy", "--group", "modern", "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    extra-leaf==1.0.0
+    group-leaf==2.0.0
+    shared-leaf==1.0.0
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--workspace-group", "apps", "--package", "root-b",
+            "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shared-leaf==2.0.0
+    ");
+    // Dependency groups do not require their base project to be installed.
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--workspace-group", "apps", "--only-group", "modern",
+            "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    group-leaf==2.0.0
+    ");
+
+    // Project conflict ordering must not change the set of possible forks.
+    let server = workspace_groups_conflict_fixture(&context, groups, Some(true))?;
+    fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "package-conflicts", "--index-url"]).arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    ");
     Ok(())
 }
 
