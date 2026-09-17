@@ -7468,6 +7468,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "toml",
+ "toml_edit",
  "url",
  "uv-cache",
  "uv-client",
