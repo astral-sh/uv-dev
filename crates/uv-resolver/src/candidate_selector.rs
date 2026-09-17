@@ -172,8 +172,9 @@ impl CandidateSelector {
     /// lockfile or matches a sibling fork. We try an exact match for the current markers (fork
     /// or specific) first, to ensure stability with repeated locking. If that doesn't work, we
     /// fall back to current-lock and sibling-fork preferences that don't match in hopes of still
-    /// resolving different forks into the same version. Inherited preferences apply only to the
-    /// environments and registry sources recorded by the other workspace.
+    /// resolving different forks into the same version. Inherited preferences require a matching
+    /// registry and an overlapping marker; they do not split a fork solely to reproduce another
+    /// workspace's version choices.
     fn get_preferred<'a, InstalledPackages: InstalledPackagesProvider>(
         &'a self,
         package_name: &'a PackageName,
