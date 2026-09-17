@@ -2,7 +2,6 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
-use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use uv_small_str::SmallString;
@@ -27,13 +26,7 @@ impl serde::Serialize for DefaultExtras {
     {
         match self {
             Self::All => serializer.serialize_str("all"),
-            Self::List(extras) => {
-                let mut seq = serializer.serialize_seq(Some(extras.len()))?;
-                for extra in extras {
-                    seq.serialize_element(&extra)?;
-                }
-                seq.end()
-            }
+            Self::List(extras) => extras.serialize(serializer),
         }
     }
 }
