@@ -16,15 +16,18 @@ while retaining `UV_NATIVE_TLS` as a legacy alias. astral-sh/uv#18705 subsequent
 warning reported here. Current source emits it whenever `UV_NATIVE_TLS` is present, before resolving
 which certificate setting is effective, with no check for `UV_SYSTEM_CERTS`.
 
-## Draft response
+The latest maintainer feedback leans against suppressing the warning. The warning is considered
+meaningful because it tells users to remove `UV_NATIVE_TLS`, and the maintainer asked why the
+reporter cannot remove it once `UV_SYSTEM_CERTS` is configured. The report already gives a
+mixed-version uv deployment as the reason for retaining both variables, so the remaining decision
+is whether compatibility with older uv versions warrants an exception to the deprecation warning.
 
-Thanks. astral-sh/uv#18705 intentionally added this warning after astral-sh/uv#18550 introduced
-`UV_SYSTEM_CERTS` as the clearer replacement. The current settings code warns whenever
-`UV_NATIVE_TLS` is present, before resolving whether `UV_SYSTEM_CERTS` already supplies the
-effective setting. Keeping both variables for compatibility with older uv versions is a valid
-migration case. We can use this issue to consider suppressing the warning when the replacement
-variable makes the legacy alias redundant, while retaining it for combinations where
-`UV_NATIVE_TLS` can still affect behavior.
+## Maintainer position
+
+A repository maintainer expressed reluctance to remove the warning because it communicates the
+intended migration action: remove `UV_NATIVE_TLS`. No final decision or alternative workaround was
+provided. The open point is the reporter's stated need to share one environment configuration
+across uv versions that predate and postdate `UV_SYSTEM_CERTS`.
 
 ## Classification
 
@@ -33,6 +36,10 @@ astral-sh/uv#18705, rather than a regression or a feature that fails to work. Th
 would refine that behavior for mixed-version environments by suppressing a warning when the
 replacement setting already makes the legacy alias redundant. No existing issue or pull request
 tracks this special case, so this is not a duplicate.
+
+Maintainer feedback reinforces that the current warning is intentional and indicates that the
+requested exception may not be accepted without a stronger reason to retain `UV_NATIVE_TLS` than
+the mixed-version constraint already reported.
 
 The distinction between variables merely being present and their Boolean values matters to a
 future implementation: suppression should not hide the warning in combinations where
