@@ -72,6 +72,16 @@ impl ForkScope {
                 .conflict()
                 .is_none_or(|conflict| env.included_by_group(conflict))
     }
+
+    /// The full environment in which this entry is applicable.
+    fn universal_marker(&self) -> UniversalMarker {
+        UniversalMarker::new(
+            self.marker,
+            self.conflict
+                .as_ref()
+                .map_or(ConflictMarker::TRUE, ConflictMarker::from_conflict_item),
+        )
+    }
 }
 
 impl<T> Default for ForkMap<T> {
@@ -120,18 +130,114 @@ impl<T> ForkMap<T> {
             .map(|entry| &entry.value)
             .collect()
     }
+
+    /// Whether one value is imposed throughout the entire universal fork.
+    ///
+    /// Unlike [`Self::get`], mere marker overlap is insufficient. Every applicable value must
+    /// agree, and their complete PEP 508 and conflict scopes must cover the fork.
+    pub(crate) fn is_fixed(
+        &self,
+        package_name: &PackageName,
+        env: &ResolverEnvironment,
+        expected: &T,
+    ) -> bool
+    where
+        T: PartialEq,
+    {
+        let Some(environment) = env.try_universal_markers() else {
+            return false;
+        };
+        let Some(entries) = self.0.get(package_name) else {
+            return false;
+        };
+        let mut covered = MarkerTree::FALSE;
+        for entry in entries.iter().filter(|entry| entry.scope.matches(env)) {
+            if &entry.value != expected {
+                return false;
+            }
+            covered = covered.or(entry.scope.universal_marker().combined());
+        }
+        !covered.is_false() && environment.combined().is_disjoint(covered.negate())
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
     use std::path::PathBuf;
     use std::str::FromStr;
 
     use uv_distribution_types::{RequirementScope, RequirementSource};
-    use uv_normalize::{GroupName, PackageName};
+    use uv_normalize::{ExtraName, GroupName, PackageName};
+    use uv_pep440::VersionSpecifiers;
     use uv_pep508::VerbatimUrl;
 
     use super::*;
+
+    fn registry_requirement(name: PackageName, marker: MarkerTree) -> Requirement {
+        Requirement {
+            name,
+            extras: Box::default(),
+            groups: Box::default(),
+            marker,
+            source: RequirementSource::Registry {
+                specifier: VersionSpecifiers::empty(),
+                index: None,
+                conflict: None,
+            },
+            scope: RequirementScope::Global,
+            origin: None,
+        }
+    }
+
+    #[test]
+    fn fixed_values_require_complete_marker_coverage() -> Result<(), Box<dyn Error>> {
+        let name: PackageName = "demo".parse()?;
+        let env = ResolverEnvironment::universal(Vec::new());
+        let mut requirement =
+            registry_requirement(name.clone(), "python_version < '3.12'".parse()?);
+        let mut map = ForkMap::default();
+        map.add(&requirement, 1);
+        assert!(!map.is_fixed(&name, &env, &1));
+
+        requirement.marker = requirement.marker.negate();
+        map.add(&requirement, 1);
+        assert!(map.is_fixed(&name, &env, &1));
+        assert!(!map.is_fixed(&name, &env, &2));
+
+        map.add(&requirement, 2);
+        assert!(!map.is_fixed(&name, &env, &1));
+        Ok(())
+    }
+
+    #[test]
+    fn fixed_values_include_conflict_scope() -> Result<(), Box<dyn Error>> {
+        let name: PackageName = "demo".parse()?;
+        let item = ConflictItem::from((
+            "project".parse::<PackageName>()?,
+            "feature".parse::<ExtraName>()?,
+        ));
+        let mut requirement = registry_requirement(name.clone(), MarkerTree::TRUE);
+        requirement.source = RequirementSource::Registry {
+            specifier: VersionSpecifiers::empty(),
+            index: None,
+            conflict: Some(item.clone()),
+        };
+        let mut map = ForkMap::default();
+        map.add(&requirement, 1);
+        let env = ResolverEnvironment::universal(Vec::new());
+        assert!(!map.is_fixed(&name, &env, &1));
+
+        let included = env
+            .filter_by_group([Ok(item.clone())])
+            .ok_or("included conflict scope should be valid")?;
+        assert!(map.is_fixed(&name, &included, &1));
+        let excluded = env
+            .filter_by_group([Err(item)])
+            .ok_or("excluded conflict scope should be valid")?;
+        assert!(!map.is_fixed(&name, &excluded, &1));
+        Ok(())
+    }
 
     #[test]
     fn add_scopes_non_registry_requirements_without_origin() {
