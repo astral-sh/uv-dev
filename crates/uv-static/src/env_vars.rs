@@ -560,7 +560,7 @@ impl EnvVars {
     ///
     /// Version requests without an explicit build variant, such as `3.13` or `3.13+freethreaded`,
     /// use implementation-specific variables such as `UV_PYTHON_CPYTHON_BUILD`.
-    #[attr_added_in("0.12.6")]
+    #[attr_added_in("next release")]
     pub const UV_PYTHON_BUILD: &'static str = "UV_PYTHON_BUILD";
 
     /// Pin managed PyPy versions to a specific build version.
