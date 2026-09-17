@@ -1,0 +1,28 @@
+name = "export-markers"
+description = "Conditional transitive extras and conflicting workspace-member markers."
+
+[root]
+
+[expected]
+satisfiable = true
+
+[packages.optional-parent.versions."2.7.0"]
+requires_python = ">=3.10"
+sdist_backend = "in-tree"
+extras = { backport = ["optional-backport==1.5.0; python_full_version < '3.14'"] }
+
+[packages.optional-backport.versions."1.5.0"]
+requires_python = ">=3.10"
+sdist_backend = "in-tree"
+
+[packages.forked-package.versions."4.2.0"]
+sdist_backend = "in-tree"
+
+[packages.forked-package.versions."4.3.0"]
+sdist_backend = "in-tree"
+
+[packages.forked-package.versions."4.4.0"]
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true
