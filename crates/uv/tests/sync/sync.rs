@@ -52,7 +52,7 @@ fn sync() -> Result<()> {
     Ok(())
 }
 
-+/// A project environment must satisfy every selected root, not the workspace-wide union.
+/// A project environment must satisfy every selected root, not the workspace-wide union.
 #[test]
 fn explicit_workspace_roots_python_intersection() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
@@ -258,7 +258,6 @@ fn explicit_workspace_roots_python_dependency_groups() -> Result<()> {
     ");
     Ok(())
 }
-
 
 /// Sync a frozen resolution after removing the project manifest.
 #[test]
