@@ -479,6 +479,116 @@ fn tool_run_from_install() {
 }
 
 #[test]
+#[cfg(feature = "test-python-managed")]
+fn tool_run_from_install_python_build_variant() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_managed_python_dirs()
+        .with_tool_dirs()
+        .with_filtered_python_keys()
+        .with_filtered_latest_python_versions()
+        .with_filtered_counts();
+    context.python_install().arg("3.13").assert().success();
+
+    let managed_dir = context.temp_dir.child("managed");
+    let installations = ManagedPythonInstallations::from_settings(Some(managed_dir.to_path_buf()))?;
+    let stock = installations
+        .find_all()?
+        .next()
+        .context("Missing stock installation")?;
+    let platform = platform_key_from_env()?;
+    let custom = managed_dir.child(format!(
+        "cpython-{}+custom-{platform}",
+        stock.key().version()
+    ));
+    copy_dir_all(stock.path(), &custom)?;
+    let context = context.with_env(EnvVars::UV_PYTHON_DOWNLOADS, "never");
+
+    let foo = context.temp_dir.child("foo");
+    foo.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "1.0.0"
+        requires-python = ">=3.13"
+        dependencies = []
+
+        [project.scripts]
+        foo = "foo:run"
+    "#})?;
+    foo.child("src/foo/__init__.py").write_str(indoc! {r"
+        import sys
+        from pathlib import Path
+
+        def run():
+            print(Path(sys.base_prefix).resolve().as_posix())
+            print(Path(sys.prefix).resolve().as_posix())
+    "})?;
+
+    context
+        .tool_install()
+        .args(["--python", "3.13", "./foo"])
+        .assert()
+        .success();
+
+    // A compatible stock request reuses the installed tool environment.
+    uv_snapshot!(context.filters(), context.tool_run()
+        .args(["--from", "./foo", "--python", "3.13", "foo"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]-[PLATFORM]
+    [TEMP_DIR]/tools/foo
+    ");
+
+    // A custom request must use a separate environment, even at the same Python version.
+    uv_snapshot!(context.filters(), context.tool_run()
+        .args(["--from", "./foo", "--python", "3.13+custom", "foo"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]
+    [CACHE_DIR]/archive-v0/[HASH]
+
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + foo==1.0.0 (from file://[TEMP_DIR]/foo)
+    ");
+
+    // Running with custom Python leaves the installed stock tool environment intact.
+    uv_snapshot!(context.filters(), context.tool_run()
+        .args(["--from", "./foo", "--python", "3.13", "foo"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]-[PLATFORM]
+    [TEMP_DIR]/tools/foo
+    ");
+
+    context
+        .tool_install()
+        .args(["--force", "--python", "3.13+custom", "./foo"])
+        .assert()
+        .success();
+
+    // A compatible custom request reuses the installed environment instead of the cached one.
+    uv_snapshot!(context.filters(), context.tool_run()
+        .args(["--from", "./foo", "--python", "3.13+custom", "foo"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]
+    [TEMP_DIR]/tools/foo
+    ");
+
+    // Repeated requests continue to reuse the installed custom tool environment.
+    uv_snapshot!(context.filters(), context.tool_run()
+        .args(["--from", "./foo", "--python", "3.13+custom", "foo"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]
+    [TEMP_DIR]/tools/foo
+    ");
+
+    Ok(())
+}
+
+#[test]
 fn tool_run_from_install_constraints() {
     let context = uv_test::test_context!("3.12")
         .with_filtered_counts()
