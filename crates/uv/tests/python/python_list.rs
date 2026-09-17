@@ -674,6 +674,16 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
         .mount(&server)
         .await;
 
+    // Future schema versions need not use the version-1 payload shape.
+    Mock::given(method("GET"))
+        .and(path("/unsupported-version"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(r#"{"version": 2, "artifacts": []}"#, "application/json"),
+        )
+        .mount(&server)
+        .await;
+
     // Test showing all interpreters from the remote JSON URL
     uv_snapshot!(context
         .python_list()
@@ -738,12 +748,12 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     uv_snapshot!(context.filters(), context
         .python_list()
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
-        .arg("--python-downloads-json-url").arg(format!("{}/versioned-invalid-default", server.uri())), @"
+        .arg("--python-downloads-json-url").arg(format!("{}/versioned-invalid-default", server.uri())), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Unable to parse the JSON Python download list at http://[LOCALHOST]/versioned-invalid-default
-      cause: invalid type: integer `1`, expected struct JsonPythonDownload at line 1 column 13
-    ");
+      cause: invalid type: string "false", expected a boolean at line 53 column 30
+    "#);
 
     uv_snapshot!(context.filters(), context
         .python_list()
@@ -752,7 +762,16 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Unable to parse the JSON Python download list at http://[LOCALHOST]/versioned-invalid-build-variant
-      cause: invalid type: integer `1`, expected struct JsonPythonDownload at line 1 column 13
+      cause: invalid type: integer `42`, expected a string at line 52 column 31
+    ");
+
+    uv_snapshot!(context.filters(), context
+        .python_list()
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .arg("--python-downloads-json-url").arg(format!("{}/unsupported-version", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: This version of uv is too old to support the JSON Python download list at http://[LOCALHOST]/unsupported-version
     ");
 
     Ok(())

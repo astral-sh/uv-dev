@@ -981,8 +981,13 @@ struct JsonPythonDownload {
 
 #[derive(Debug, Deserialize)]
 struct VersionedPythonDownloads {
-    version: u8,
     downloads: HashMap<String, JsonPythonDownload>,
+}
+
+/// Read the schema version independently of the payload, which may use an unsupported format.
+#[derive(Debug, Deserialize)]
+struct PythonDownloadsVersion {
+    version: u8,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -1124,13 +1129,15 @@ fn parse_downloads_json(
             // As an explicit compatibility mechanism, if there's a top-level "version" key, it
             // prevents older uv versions from treating build variants as stock downloads. New
             // versions can opt into supported schemas explicitly.
-            let Ok(versioned) = serde_json::from_slice::<VersionedPythonDownloads>(buf) else {
+            let Ok(version) = serde_json::from_slice::<PythonDownloadsVersion>(buf) else {
                 return Err(Error::InvalidPythonDownloadsJSON(source, legacy_error));
             };
-            if versioned.version != 1 {
+            if version.version != 1 {
                 return Err(Error::UnsupportedPythonDownloadsJSON(source));
             }
-            Ok(versioned.downloads)
+            serde_json::from_slice::<VersionedPythonDownloads>(buf)
+                .map(|versioned| versioned.downloads)
+                .map_err(|err| Error::InvalidPythonDownloadsJSON(source, err))
         }
     }
 }
