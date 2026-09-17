@@ -286,7 +286,7 @@ async fn python_install_build_variant() -> anyhow::Result<()> {
 
 #[test]
 #[cfg(feature = "test-python-managed")]
-fn python_find_build_variant_subset() -> anyhow::Result<()> {
+fn python_find_build_variant_tags() -> anyhow::Result<()> {
     let (context, stock) = python_build_variant_context()?;
     let context = context.with_filtered_latest_python_versions();
     let managed_dir = context.temp_dir.child("managed");
@@ -295,21 +295,44 @@ fn python_find_build_variant_subset() -> anyhow::Result<()> {
     let version = stock_name
         .strip_suffix(&format!("-{platform}"))
         .context("Missing platform suffix")?;
-    // Discover a composite build using only a subset of its build tags.
+    // Discover a composite build with the same tags in any order.
     let optimized_name = format!("{version}+custom+pgo+lto-{platform}");
     let optimized_path = managed_dir.join(&optimized_name);
     fs_err::rename(stock.path(), &optimized_path)?;
 
-    uv_snapshot!(context.filters(), context.python_find().arg("3.13+custom"), @"
+    uv_snapshot!(context.filters(), context.python_find().arg("3.13+lto+pgo+custom"), @"
     exit_code: 0 (success)
     ----- stdout -----
     [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
 
-    uv_snapshot!(context.filters(), context.python_find().arg("3.13+custom+lto"), @"
+    uv_snapshot!(context.filters(), context.python_find().arg("3.13+custom+lto+pgo"), @"
     exit_code: 0 (success)
     ----- stdout -----
     [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    ");
+    uv_snapshot!(context.filters(), context.python_find().arg("3.13+custom"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for Python 3.13+custom in [PYTHON SOURCES]
+    ");
+    uv_snapshot!(context.filters(), context.python_find().arg("3.13+custom+lto"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for Python 3.13+custom+lto in [PYTHON SOURCES]
+    ");
+    uv_snapshot!(context.filters(), context.python_find().arg("3.13+custom+pgo+lto+extra"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for Python 3.13+custom+pgo+lto+extra in [PYTHON SOURCES]
+    ");
+    // A build with just the requested tag remains distinct from the composite build.
+    let custom_path = managed_dir.join(format!("{version}+custom-{platform}"));
+    copy_dir_all(&optimized_path, &custom_path)?;
+    uv_snapshot!(context.filters(), context.python_find().arg("3.13+custom"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
     Ok(())
 }
@@ -347,7 +370,7 @@ async fn python_build_variant_catalog_selection() -> anyhow::Result<()> {
             .success();
     }
 
-    // Unqualified and optimization-only requests select the stock catalog default.
+    // Unqualified requests select the default; explicit requests match every build tag.
     uv_snapshot!(context.filters(), find("3.13"), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -363,13 +386,13 @@ async fn python_build_variant_catalog_selection() -> anyhow::Result<()> {
     ----- stdout -----
     [TEMP_DIR]/managed/cpython-3.13.[LATEST]+pgo+lto-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
-    // Provider tags are explicit, while optimization tags may be omitted or reordered.
-    uv_snapshot!(context.filters(), find("3.13+custom"), @"
+    // Provider and optimization tags can be reordered.
+    uv_snapshot!(context.filters(), find("3.13+custom+pgo+lto"), @"
     exit_code: 0 (success)
     ----- stdout -----
     [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
-    uv_snapshot!(context.filters(), find("3.13+lto+custom"), @"
+    uv_snapshot!(context.filters(), find("3.13+lto+custom+pgo"), @"
     exit_code: 0 (success)
     ----- stdout -----
     [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
@@ -477,20 +500,26 @@ async fn python_build_variant_catalog_custom_default() -> anyhow::Result<()> {
     ----- stdout -----
     [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
+    // Explicit tags select their matching build independently of the catalog default.
     uv_snapshot!(context.filters(), find("3.13+pgo+lto"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+pgo+lto-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    ");
+    uv_snapshot!(context.filters(), find("3.13+lto+custom+pgo"), @"
     exit_code: 0 (success)
     ----- stdout -----
     [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
     uv_snapshot!(context.filters(), find("3.13+custom"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for Python 3.13+custom in [PYTHON SOURCES]
     ");
     uv_snapshot!(context.filters(), find("3.13+custom+lto"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for Python 3.13+custom+lto in [PYTHON SOURCES]
     ");
 
     // Missing required optimization tags still reject a default custom build.
@@ -568,7 +597,7 @@ async fn python_build_variant_catalog_unavailable() -> anyhow::Result<()> {
     ----- stdout -----
     [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
-    uv_snapshot!(context.filters(), find("3.13+pgo+lto").env(EnvVars::UV_HTTP_RETRIES, "0"), @"
+    uv_snapshot!(context.filters(), find("3.13+lto+custom+pgo").env(EnvVars::UV_HTTP_RETRIES, "0"), @"
     exit_code: 0 (success)
     ----- stdout -----
     [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]/[INSTALL-BIN]/[PYTHON]

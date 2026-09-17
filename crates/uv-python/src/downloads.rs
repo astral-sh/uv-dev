@@ -2218,13 +2218,13 @@ mod tests {
             };
             for (request, expected) in [
                 ("3.13", default),
-                ("3.13+pgo+lto", default),
-                ("3.13+lto+pgo", default),
-                ("3.13+custom", "custom+pgo+lto"),
-                ("3.13+lto+custom", "custom+pgo+lto"),
+                ("3.13+pgo+lto", "pgo+lto"),
+                ("3.13+lto+pgo", "pgo+lto"),
+                ("3.13+custom+pgo+lto", "custom+pgo+lto"),
+                ("3.13+lto+custom+pgo", "custom+pgo+lto"),
                 ("3.13+noopt", "noopt"),
                 ("3.13+freethreaded", "custom+pgo+lto"),
-                ("3.13+freethreaded+lto+pgo", "custom+pgo+lto"),
+                ("3.13+freethreaded+lto+pgo+custom", "custom+pgo+lto"),
             ] {
                 let request = PythonDownloadRequest::default()
                     .with_version(VersionRequest::from_str(request).expect("Valid request"));
@@ -2237,20 +2237,22 @@ mod tests {
                     )
                 );
             }
-            let request = PythonDownloadRequest::default()
-                .with_version(VersionRequest::from_str("3.13+lto").expect("Valid request"));
-            let available = downloads
-                .iter_matching(&request)
-                .filter_map(|download| download.key().build_variant().map(ToString::to_string))
-                .collect::<Vec<_>>();
-            assert_eq!(
-                available,
-                if custom_default {
-                    vec!["custom+pgo+lto", "pgo+lto"]
-                } else {
-                    vec!["pgo+lto"]
-                }
-            );
+            for request in [
+                "3.13+custom",
+                "3.13+custom+lto",
+                "3.13+lto",
+                "3.13+pgo",
+                "3.13+custom+pgo+lto+extra",
+                "3.13+freethreaded+custom",
+                "3.13+freethreaded+pgo+lto",
+            ] {
+                let request = PythonDownloadRequest::default()
+                    .with_version(VersionRequest::from_str(request).expect("Valid request"));
+                assert!(
+                    downloads.iter_matching(&request).next().is_none(),
+                    "{request:?}"
+                );
+            }
             let request = PythonDownloadRequest::default()
                 .with_version(VersionRequest::from_str("3+pgo+lto").expect("Valid request"));
             assert_eq!(

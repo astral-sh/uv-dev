@@ -729,11 +729,11 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     cpython-3.12.9+custom-linux-x86_64-gnu    https://custom.com/cpython-3.12.9+custom-linux-x86_64-gnu.tar.gz
     ");
 
-    // A provider request accepts artifacts with additional optimization tags.
+    // Composite build tags can be reordered.
     uv_snapshot!(context
         .python_list()
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
-        .arg("3.12+custom")
+        .arg("3.12+lto+pgo+custom")
         .arg("--only-downloads")
         .arg("--all-platforms")
         .arg("--all-arches")
@@ -742,6 +742,18 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     cpython-3.12.9+custom+pgo+lto-linux-x86_64-gnu    https://custom.com/cpython-3.12.9+custom+pgo+lto-linux-x86_64-gnu.tar.gz
+    ");
+
+    // A request must include every build tag on the artifact.
+    uv_snapshot!(context
+        .python_list()
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .arg("3.12+custom")
+        .arg("--only-downloads")
+        .arg("--all-platforms")
+        .arg("--all-arches")
+        .arg("--python-downloads-json-url").arg(format!("{}/build-variants", server.uri())), @"
+    exit_code: 0 (success)
     ");
 
     // Optimization tags alone must not expose a non-default provider build.

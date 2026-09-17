@@ -235,13 +235,12 @@ impl VariantRequest {
     fn matches_build_variant(&self, key: &PythonInstallationKey) -> bool {
         self.build.as_ref().is_none_or(|requested| {
             key.build_variant().is_some_and(|available| {
-                // A request may omit additional build tags, e.g., `custom` matches `custom+pgo+lto`.
-                requested.as_str().split('+').all(|tag| {
-                    available
-                        .as_str()
-                        .split('+')
-                        .any(|available_tag| available_tag == tag)
-                })
+                // Build tags are unique, so equal counts and membership ignore only tag order.
+                let mut requested = requested.as_str().split('+');
+                let available = available.as_str().split('+');
+                requested.clone().count() == available.clone().count()
+                    && requested
+                        .all(|tag| available.clone().any(|available_tag| available_tag == tag))
             })
         })
     }
@@ -4696,13 +4695,18 @@ mod tests {
     #[test]
     fn variant_request_matches_build_tags() {
         for (request, available, expected) in [
-            ("custom", "custom+pgo+lto", true),
-            ("custom+lto", "custom+pgo+lto", true),
+            ("custom", "custom", true),
+            ("custom", "custom+pgo+lto", false),
+            ("custom+lto", "custom+pgo+lto", false),
             ("custom+pgo+lto", "custom+pgo+lto", true),
             ("lto+custom+pgo", "custom+pgo+lto", true),
-            ("pgo", "pgo+lto", true),
-            ("lto", "custom+pgo+lto", true),
+            ("custom+lto+pgo", "custom+pgo+lto", true),
+            ("custom+pgo+lto", "lto+pgo+custom", true),
+            ("pgo", "pgo+lto", false),
+            ("lto", "custom+pgo+lto", false),
             ("pgo+lto", "lto+pgo", true),
+            ("custom", "custompython", false),
+            ("custom+pgo+lto", "custom+noopt+lto", false),
             ("custom", "custompython+pgo+lto", false),
             ("other", "custom+pgo+lto", false),
             ("custom+noopt", "custom+pgo+lto", false),
@@ -4710,7 +4714,13 @@ mod tests {
             ("pgo+lto", "pgo", false),
             ("custom", "", false),
             ("", "custom+pgo+lto", true),
-            ("freethreaded+custom", "freethreaded+custom+pgo+lto", true),
+            ("freethreaded+custom", "freethreaded+custom+pgo+lto", false),
+            (
+                "freethreaded+lto+custom+pgo",
+                "freethreaded+custom+pgo+lto",
+                true,
+            ),
+            ("freethreaded+custom+pgo+lto", "custom+pgo+lto", false),
             ("freethreaded+custom", "custom+pgo+lto", false),
             ("custom", "freethreaded+custom+pgo+lto", false),
         ] {
