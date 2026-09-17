@@ -7,6 +7,7 @@ use uv_distribution_types::{
 };
 use uv_pep440::{MIN_VERSION, Version, VersionSpecifiers};
 use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder, MarkerTree};
+use uv_resolver_types::PackageNodeKind;
 use uv_types::EmptyInstalledPackages;
 
 use crate::dependency_provider::UvDependencyProvider;
@@ -24,8 +25,7 @@ type Decision = (Id<PubGrubPackage>, Version);
 fn package(name: &str) -> PubGrubPackage {
     PubGrubPackage::from_package(
         name.parse().expect("valid package name"),
-        None,
-        None,
+        PackageNodeKind::Base,
         MarkerTree::TRUE,
     )
 }
@@ -60,7 +60,7 @@ fn initialized_state(dependencies: Vec<PubGrubDependency>) -> (ForkState, InMemo
     );
     let index = InMemoryIndex::default();
     let (sender, _receiver) = mpsc::channel(1);
-    let requests = MetadataRequests::new(index.clone(), sender);
+    let requests = MetadataRequests::new(index.clone(), sender, None);
     let pubgrub = State::<UvDependencyProvider>::init(
         PubGrubPackage::from(PubGrubPackageInner::Root(None)),
         MIN_VERSION.clone(),

@@ -70,6 +70,9 @@ impl Indexes {
         env: &ResolverEnvironment,
         index: &IndexMetadata,
     ) -> bool {
-        self.0.is_fixed(name, env, index)
+        if let Some(recorder) = &self.recorder {
+            recorder.source_policy(name);
+        }
+        self.indexes.is_fixed(name, env, index)
     }
 }
