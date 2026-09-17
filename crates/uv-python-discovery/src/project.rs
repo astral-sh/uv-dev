@@ -323,7 +323,10 @@ fn find_workspace_python_requirement_for_roots(
         for root in roots {
             let root_requires = requires_python
                 .iter()
-                .filter(|((package, _), _)| package == root)
+                .filter(|(source, _)| match source {
+                    RequiresPythonDeclaration::Member(package, _) => package == root,
+                    RequiresPythonDeclaration::Workspace(_) => true,
+                })
                 .map(|(source, specifiers)| (source.clone(), specifiers.clone()))
                 .collect::<RequiresPythonSources>();
             if root_requires.is_empty() {
