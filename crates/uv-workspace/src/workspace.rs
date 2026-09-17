@@ -3071,9 +3071,9 @@ impl VirtualProject {
 #[cfg(test)]
 #[cfg(unix)] // Avoid path escaping for the unit tests
 mod tests {
+    use fs_err::os::unix::fs::symlink;
     use std::collections::BTreeMap;
     use std::env;
-    use std::os::unix::fs::symlink;
     use std::path::Path;
     use std::str::FromStr;
     use std::sync::Arc;
