@@ -1,0 +1,30 @@
+name = "export-conflict-markers"
+description = "An explicit index with platform-specific local versions for export conflict marker tests."
+
+[root]
+requires = ["jinja2"]
+
+[expected]
+satisfiable = true
+
+[expected.packages]
+jinja2 = "3.1.2+cpu"
+
+[packages.jinja2.versions."3.1.2"]
+requires_python = ">=3.8"
+requires = ["markupsafe>=2.0"]
+sdist = false
+wheel_tags = ["py3-none-macosx_10_13_universal2"]
+
+[packages.jinja2.versions."3.1.2+cpu"]
+requires_python = ">=3.8"
+requires = ["markupsafe>=2.0"]
+sdist = false
+wheel_tags = [
+  "py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64",
+  "py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64",
+  "py3-none-win_amd64",
+]
+
+[testgen]
+disable = true
