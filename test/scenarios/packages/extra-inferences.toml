@@ -1,0 +1,57 @@
+name = "extra-inferences"
+description = "Conflicting branches converge through paths of unequal lengths."
+
+[root]
+
+[expected]
+satisfiable = true
+
+[packages.inference-root.versions."1.0.2"]
+requires = ["inference-engine>=2.5.0,<2.7", "inference-common"]
+sdist_backend = "in-tree"
+
+[packages.inference-engine.versions."2.5.0"]
+requires = ["inference-direct==1.0.0", "inference-indirect==1.0.0"]
+sdist_backend = "in-tree"
+
+[packages.inference-engine.versions."2.6.0"]
+requires = ["inference-direct==2.0.0", "inference-indirect==2.0.0"]
+sdist_backend = "in-tree"
+
+[packages.inference-direct.versions."1.0.0"]
+requires = ["inference-convergence==1.0.0"]
+sdist_backend = "in-tree"
+
+[packages.inference-direct.versions."2.0.0"]
+requires = ["inference-convergence==2.0.0"]
+sdist_backend = "in-tree"
+
+[packages.inference-indirect.versions."1.0.0"]
+requires = ["inference-middle==1.0.0"]
+sdist_backend = "in-tree"
+
+[packages.inference-indirect.versions."2.0.0"]
+requires = ["inference-middle==2.0.0"]
+sdist_backend = "in-tree"
+
+[packages.inference-middle.versions."1.0.0"]
+requires = ["inference-convergence==1.0.0"]
+sdist_backend = "in-tree"
+
+[packages.inference-middle.versions."2.0.0"]
+requires = ["inference-convergence==2.0.0"]
+sdist_backend = "in-tree"
+
+[packages.inference-convergence.versions."1.0.0"]
+requires = ["inference-common"]
+sdist_backend = "in-tree"
+
+[packages.inference-convergence.versions."2.0.0"]
+requires = ["inference-common"]
+sdist_backend = "in-tree"
+
+[packages.inference-common.versions."1.0.0"]
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true
