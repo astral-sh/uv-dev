@@ -20,10 +20,11 @@ use insta::{allow_duplicates, assert_snapshot};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tokio_stream::wrappers::ReceiverStream;
-use wiremock::matchers::{any, method};
+use wiremock::matchers::{any, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 use uv_static::EnvVars;
+use uv_test::packse::PackseServer;
 use uv_test::{TestContext, uv_snapshot};
 
 /// Creates a CONNECT tunnel proxy that forwards connections to the target.
@@ -104,20 +105,30 @@ fn start_connect_tunnel_proxy() -> std::net::SocketAddr {
 
 /// Creates a mock that serves a Simple API index page for iniconfig.
 async fn mock_simple_api(server: &MockServer) {
-    // Simple API response for iniconfig pointing to the real PyPI wheel.
-    // Uses upload-time before EXCLUDE_NEWER (2024-03-25) so the package is available.
+    let artifacts = PackseServer::new("packages/pip-install.toml");
+    let filename = "iniconfig-2.0.0-py3-none-any.whl";
+    let wheel = artifacts
+        .file_bytes(filename)
+        .expect("scenario distribution should exist");
+    let wheel_path = format!("/files/{filename}");
     let body = json!({
         "name": "iniconfig",
         "files": [{
-            "filename": "iniconfig-2.0.0-py3-none-any.whl",
-            "url": "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl",
+            "filename": filename,
+            "url": format!("{}{wheel_path}", server.uri()),
             "hashes": {
-                "sha256": "b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374"
+                "sha256": artifacts.file_hash(filename).expect("scenario distribution should exist")
             },
             "requires-python": ">=3.8",
             "upload-time": "2024-01-01T00:00:00Z"
         }]
     });
+
+    Mock::given(path(wheel_path))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel.to_vec()))
+        .with_priority(1)
+        .mount(server)
+        .await;
 
     // Serve the simple index for iniconfig - use any() matcher since HTTP proxy
     // requests may have the full URL in the path
@@ -253,7 +264,7 @@ where
 /// Invalid explicit certificate files disable the default trust roots rather than being ignored.
 #[tokio::test]
 async fn invalid_ssl_cert_file_warns_default_roots_are_disabled() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let (_server_drop_guard, mock_server_uri) = http_error_server().await;
 
     uv_snapshot!(context.filters(), context
@@ -276,7 +287,7 @@ async fn invalid_ssl_cert_file_warns_default_roots_are_disabled() {
 /// Invalid explicit certificate directories disable the default trust roots rather than being ignored.
 #[tokio::test]
 async fn invalid_ssl_cert_dir_warns_default_roots_are_disabled() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let (_server_drop_guard, mock_server_uri) = http_error_server().await;
 
     uv_snapshot!(context.filters(), context
@@ -299,7 +310,7 @@ async fn invalid_ssl_cert_dir_warns_default_roots_are_disabled() {
 /// Check the simple index error message when the server returns HTTP status 500, a retryable error.
 #[tokio::test]
 async fn simple_http_500() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let (_server_drop_guard, mock_server_uri) = http_error_server().await;
 
@@ -320,7 +331,7 @@ async fn simple_http_500() {
 /// Check the simple index error message when the server returns a retryable IO error.
 #[tokio::test]
 async fn simple_io_err() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let (_server_drop_guard, mock_server_uri) = io_error_server().await;
 
@@ -343,7 +354,7 @@ async fn simple_io_err() {
 /// Check the find links error message when the server returns HTTP status 500, a retryable error.
 #[tokio::test]
 async fn find_links_http_500() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let (_server_drop_guard, mock_server_uri) = http_error_server().await;
 
@@ -366,7 +377,7 @@ async fn find_links_http_500() {
 /// Check the find links error message when the server returns a retryable IO error.
 #[tokio::test]
 async fn find_links_io_error() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let (_server_drop_guard, mock_server_uri) = io_error_server().await;
 
@@ -392,7 +403,7 @@ async fn find_links_io_error() {
 /// returns different kinds of retryable errors.
 #[tokio::test]
 async fn find_links_mixed_error() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let (_server_drop_guard, mock_server_uri) = mixed_error_server().await;
 
@@ -415,7 +426,7 @@ async fn find_links_mixed_error() {
 /// Check that a missing direct package URL is classified as a user error.
 #[tokio::test]
 async fn direct_url_http_404() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let server = MockServer::start().await;
     Mock::given(any())
@@ -458,7 +469,7 @@ async fn direct_url_http_404() {
 /// error.
 #[tokio::test]
 async fn direct_url_http_500() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let (_server_drop_guard, mock_server_uri) = http_error_server().await;
 
@@ -481,7 +492,7 @@ async fn direct_url_http_500() {
 /// Check the direct package URL error message when the server returns a retryable IO error.
 #[tokio::test]
 async fn direct_url_io_error() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let (_server_drop_guard, mock_server_uri) = io_error_server().await;
 
@@ -507,7 +518,7 @@ async fn direct_url_io_error() {
 /// different kinds of retryable errors.
 #[tokio::test]
 async fn direct_url_mixed_error() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let (_server_drop_guard, mock_server_uri) = mixed_error_server().await;
 
@@ -558,6 +569,7 @@ fn write_python_downloads_json(context: &TestContext, mock_server_uri: &String) 
 #[tokio::test]
 async fn python_install_http_500() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .without_python_download_cache()
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -586,6 +598,7 @@ async fn python_install_http_500() {
 #[tokio::test]
 async fn python_install_io_error() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .without_python_download_cache()
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -614,7 +627,7 @@ async fn python_install_io_error() {
 
 #[tokio::test]
 async fn install_http_retries() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let server = MockServer::start().await;
 
@@ -675,7 +688,7 @@ async fn install_http_retries() {
 
 #[tokio::test]
 async fn install_http_retry_low_level() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let server = MockServer::start().await;
 
@@ -707,7 +720,7 @@ async fn install_http_retry_low_level() {
 /// Test problem details with a 403 error containing license compliance information
 #[tokio::test]
 async fn rfc9457_problem_details_license_violation() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let server = MockServer::start().await;
 
@@ -751,7 +764,7 @@ async fn rfc9457_problem_details_license_violation() {
 /// Test that invalid proxy URL in uv.toml produces a helpful error message.
 #[tokio::test]
 async fn proxy_invalid_url_in_uv_toml() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let uv_toml = context.temp_dir.child("uv.toml");
     uv_toml
@@ -779,7 +792,7 @@ async fn proxy_invalid_url_in_uv_toml() {
 /// Test that invalid proxy URL (not a URL) in uv.toml produces a helpful error message.
 #[tokio::test]
 async fn proxy_invalid_url_not_a_url_in_uv_toml() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let uv_toml = context.temp_dir.child("uv.toml");
     uv_toml
@@ -807,7 +820,7 @@ async fn proxy_invalid_url_not_a_url_in_uv_toml() {
 /// Test that a SOCKS proxy URL without a host produces a configuration error.
 #[test]
 fn proxy_url_without_host() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context
         .temp_dir
@@ -835,10 +848,9 @@ fn proxy_url_without_host() -> Result<()> {
 }
 
 /// Test that valid proxy URL in uv.toml routes requests through the proxy.
-#[cfg(feature = "test-pypi")]
 #[tokio::test]
 async fn proxy_valid_url_in_uv_toml() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let target_server = MockServer::start().await;
     Mock::given(any())
@@ -891,10 +903,9 @@ async fn proxy_valid_url_in_uv_toml() {
 }
 
 /// Test that https-proxy in uv.toml routes HTTPS requests through a CONNECT tunnel proxy.
-#[cfg(feature = "test-pypi")]
 #[test]
 fn proxy_https_proxy_in_uv_toml() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let proxy_addr = start_connect_tunnel_proxy();
     let proxy_uri = format!("http://{proxy_addr}");
@@ -925,10 +936,9 @@ fn proxy_https_proxy_in_uv_toml() {
 }
 
 /// Test that no-proxy in uv.toml bypasses the proxy for specified hosts.
-#[cfg(feature = "test-pypi")]
 #[tokio::test]
 async fn proxy_no_proxy_in_uv_toml() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let target_server = MockServer::start().await;
     mock_simple_api(&target_server).await;
@@ -990,10 +1000,9 @@ no-proxy = ["{target_host}"]
 }
 
 /// Test that proxy URLs without a scheme in uv.toml default to http://.
-#[cfg(feature = "test-pypi")]
 #[tokio::test]
 async fn proxy_schemeless_url_in_uv_toml() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let target_server = MockServer::start().await;
     Mock::given(any())
@@ -1053,7 +1062,7 @@ async fn proxy_schemeless_url_in_uv_toml() {
 
 #[test]
 fn connect_timeout_index() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Create a server that never responds, causing a timeout for our requests.
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1085,7 +1094,7 @@ fn connect_timeout_index() {
 
 #[test]
 fn connect_timeout_stream() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Create a server that never responds, causing a timeout for our requests.
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1116,7 +1125,9 @@ fn connect_timeout_stream() {
 
 #[tokio::test]
 async fn retry_read_timeout_index() {
-    let context = uv_test::test_context!("3.12").with_fast_http_retry();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_fast_http_retry();
 
     let (server, _guard) = streaming_server(time_out_response);
 
@@ -1137,7 +1148,9 @@ async fn retry_read_timeout_index() {
 
 #[tokio::test]
 async fn retry_read_timeout_python_downloads_json() {
-    let context = uv_test::test_context!("3.12").with_fast_http_retry();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_fast_http_retry();
 
     let (server, _guard) = streaming_server(time_out_response);
 
@@ -1159,7 +1172,9 @@ async fn retry_read_timeout_python_downloads_json() {
 
 #[tokio::test]
 async fn retry_read_timeout_stream() {
-    let context = uv_test::test_context!("3.12").with_fast_http_retry();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_fast_http_retry();
 
     let (server, _guard) = streaming_server(time_out_response);
 
@@ -1335,7 +1350,7 @@ fn assert_wheel_download(
     full_requests: usize,
     resumed_requests: usize,
 ) -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let (server, _guard, requests, hash) = wheel_server(&context, range_response, retries)?;
     write_wheel_lockfile(&context, &server, 932, &hash)?;
     allow_duplicates! {
@@ -1389,7 +1404,7 @@ fn assert_wheel_download_timeout(
     full_requests: usize,
     resumed_requests: usize,
 ) -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let (server, _guard, requests, _) = wheel_server(&context, range_response, retries)?;
 
     let wheel_url = format!("{server}/build_tag-1.0.0-1-py2.py3-none-any.whl");
@@ -1432,7 +1447,7 @@ fn write_wheel_lockfile(context: &TestContext, server: &str, size: u64, hash: &s
 
 #[test]
 fn direct_url_content_length_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let (server, _guard, requests, hash) = wheel_server(&context, RangeResponse::NotAdvertised, 1)?;
     write_wheel_lockfile(&context, &server, 1, &hash)?;
 
@@ -1500,7 +1515,7 @@ fn direct_url_unsatisfiable_range_does_not_bypass_retry() -> Result<()> {
 /// An invalid continuation response does not bypass regular retry handling.
 #[test]
 fn direct_url_invalid_range_does_not_bypass_retry() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let (server, _guard, requests, _) =
         wheel_server(&context, RangeResponse::InvalidContentRange, 1)?;
@@ -1530,7 +1545,7 @@ fn direct_url_invalid_range_does_not_bypass_retry() -> Result<()> {
 /// A complete HTTP body with the wrong range length fails without retrying the full download.
 #[test]
 fn direct_url_range_size_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let (server, _guard, requests, _) = wheel_server(&context, RangeResponse::ShortBody, 1)?;
 
     let wheel_url = format!("{server}/build_tag-1.0.0-1-py2.py3-none-any.whl");

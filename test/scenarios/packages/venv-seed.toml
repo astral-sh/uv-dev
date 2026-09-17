@@ -1,0 +1,28 @@
+name = "venv-seed"
+description = "Seed packages used when creating virtual environments."
+
+[root]
+requires = ["pip", "setuptools", "wheel"]
+
+[expected]
+satisfiable = true
+
+[expected.packages]
+pip = "24.0"
+setuptools = "69.2.0"
+wheel = "0.43.0"
+
+[packages.pip.versions."24.0"]
+requires_python = ">=3.8"
+sdist_backend = "in-tree"
+
+[packages.setuptools.versions."69.2.0"]
+requires_python = ">=3.8"
+sdist_backend = "in-tree"
+
+[packages.wheel.versions."0.43.0"]
+requires_python = ">=3.8"
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true

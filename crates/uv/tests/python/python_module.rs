@@ -5,6 +5,7 @@ use indoc::{formatdoc, indoc};
 use uv_fs::Simplified;
 use uv_static::EnvVars;
 
+use uv_test::packse::PackseServer;
 use uv_test::{site_packages_path, uv_snapshot};
 
 /// Filter the user scheme, which differs between Windows and Unix.
@@ -33,6 +34,7 @@ print(uv.find_uv_bin())
 #[test]
 fn find_uv_bin_target() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -71,6 +73,7 @@ fn find_uv_bin_target() {
 #[test]
 fn find_uv_bin_prefix() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -114,6 +117,7 @@ fn find_uv_bin_prefix() {
 #[test]
 fn find_uv_bin_base_prefix() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -159,6 +163,7 @@ fn find_uv_bin_base_prefix() {
 #[test]
 fn find_uv_bin_in_ephemeral_environment() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -204,7 +209,10 @@ fn find_uv_bin_in_ephemeral_environment() -> anyhow::Result<()> {
 
 #[test]
 fn find_uv_bin_in_parent_of_ephemeral_environment() -> anyhow::Result<()> {
+    let server = PackseServer::new("packages/pip-commands.toml");
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&server.index_url())
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -232,7 +240,7 @@ fn find_uv_bin_in_parent_of_ephemeral_environment() -> anyhow::Result<()> {
     // environment
     uv_snapshot!(context.filters(), context.run()
         .arg("--with")
-        .arg("anyio")
+        .arg("simple-package")
         .arg("python")
         .arg("-c")
         .arg(TEST_SCRIPT),
@@ -246,12 +254,10 @@ fn find_uv_bin_in_parent_of_ephemeral_environment() -> anyhow::Result<()> {
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + uv==0.1.0 (from file://[WORKSPACE]/test/packages/fake-uv)
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + sniffio==1.3.1
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + simple-package==2.1.3
     "
     );
 
@@ -261,6 +267,7 @@ fn find_uv_bin_in_parent_of_ephemeral_environment() -> anyhow::Result<()> {
 #[test]
 fn find_uv_bin_user_bin() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -328,6 +335,7 @@ fn find_uv_bin_user_bin() {
 #[test]
 fn find_uv_bin_error_message() {
     let mut context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -401,6 +409,7 @@ fn find_uv_bin_error_message() {
 #[test]
 fn find_uv_bin_py38() {
     let context = uv_test::test_context!("3.8")
+        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -435,6 +444,7 @@ fn find_uv_bin_py38() {
 #[test]
 fn find_uv_bin_py39() {
     let context = uv_test::test_context!("3.9")
+        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -469,6 +479,7 @@ fn find_uv_bin_py39() {
 #[test]
 fn find_uv_bin_py310() {
     let context = uv_test::test_context!("3.10")
+        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -503,6 +514,7 @@ fn find_uv_bin_py310() {
 #[test]
 fn find_uv_bin_py311() {
     let context = uv_test::test_context!("3.11")
+        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -537,6 +549,7 @@ fn find_uv_bin_py311() {
 #[test]
 fn find_uv_bin_py312() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -571,6 +584,7 @@ fn find_uv_bin_py312() {
 #[test]
 fn find_uv_bin_py313() {
     let context = uv_test::test_context!("3.13")
+        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -605,6 +619,7 @@ fn find_uv_bin_py313() {
 #[test]
 fn find_uv_bin_py314() {
     let context = uv_test::test_context!("3.14")
+        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()

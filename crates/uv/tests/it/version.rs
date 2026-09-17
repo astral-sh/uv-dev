@@ -7,12 +7,13 @@ use indoc::indoc;
 use insta::assert_snapshot;
 
 use uv_static::EnvVars;
+use uv_test::packse::PackseServer;
 use uv_test::{apply_filters, uv_snapshot};
 
 // Print the version
 #[test]
 fn version_get() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -47,7 +48,7 @@ fn version_get() -> Result<()> {
 // Print the version (json format)
 #[test]
 fn version_get_json() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -87,7 +88,7 @@ fn version_get_json() -> Result<()> {
 // Print the version (--short)
 #[test]
 fn version_get_short() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -124,7 +125,7 @@ fn version_get_short() -> Result<()> {
 // Set the version
 #[test]
 fn version_set_value() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -165,7 +166,7 @@ requires-python = ">=3.12"
 // Set the version (--short)
 #[test]
 fn version_set_value_short() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -207,7 +208,7 @@ requires-python = ">=3.12"
 // Bump patch version
 #[test]
 fn version_bump_patch() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -246,7 +247,7 @@ requires-python = ">=3.12"
 
 #[test]
 fn version_bump_patch_value() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -285,7 +286,7 @@ requires-python = ">=3.12"
 
 #[test]
 fn version_bump_minor_value() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -324,7 +325,7 @@ requires-python = ">=3.12"
 
 #[test]
 fn version_bump_major_value() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -364,7 +365,7 @@ requires-python = ">=3.12"
 // Bump patch version (--short)
 #[test]
 fn version_bump_patch_short() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -404,7 +405,7 @@ requires-python = ">=3.12"
 
 #[test]
 fn version_bump_patch_value_must_increase() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -440,7 +441,7 @@ requires-python = ">=3.12"
 /// Preserve comments immediately preceding the version when bumping
 #[test]
 fn version_bump_preserves_preceding_comments() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -485,7 +486,7 @@ fn version_bump_preserves_preceding_comments() -> Result<()> {
 // Bump minor version
 #[test]
 fn version_bump_minor() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -525,7 +526,7 @@ requires-python = ">=3.12"
 // bump major version
 #[test]
 fn version_major_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -565,7 +566,7 @@ requires-python = ">=3.12"
 // Bump patch but the input version is missing a component
 #[test]
 fn version_patch_uncompleted() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -605,7 +606,7 @@ requires-python = ">=3.12"
 // Bump minor but the input version is missing a component
 #[test]
 fn version_minor_uncompleted() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -645,7 +646,7 @@ requires-python = ">=3.12"
 // Bump major but the input version is missing a component
 #[test]
 fn version_major_uncompleted() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -685,7 +686,7 @@ requires-python = ">=3.12"
 // Bump major but the input version is .dev
 #[test]
 fn version_major_dev() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -725,7 +726,7 @@ requires-python = ">=3.12"
 // Bump major but the input version is a complex mess
 #[test]
 fn version_major_complex_mess() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -768,7 +769,7 @@ requires-python = ">=3.12"
 // now it fails for a dozen reasons!
 #[test]
 fn many_bump_complex() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -811,7 +812,7 @@ requires-python = ">=3.12"
 // --bump stable
 #[test]
 fn bump_stable() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -851,7 +852,7 @@ requires-python = ">=3.12"
 // --bump alpha
 #[test]
 fn bump_alpha() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -891,7 +892,7 @@ requires-python = ">=3.12"
 // --bump beta
 #[test]
 fn bump_beta() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -930,7 +931,7 @@ requires-python = ">=3.12"
 
 #[test]
 fn bump_beta_with_value_existing() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -969,7 +970,7 @@ requires-python = ">=3.12"
 
 #[test]
 fn bump_beta_with_value_new() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1010,7 +1011,7 @@ requires-python = ">=3.12"
 // --bump rc
 #[test]
 fn bump_rc() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1050,7 +1051,7 @@ requires-python = ">=3.12"
 // --bump post
 #[test]
 fn bump_post() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1089,7 +1090,7 @@ requires-python = ">=3.12"
 
 #[test]
 fn bump_post_with_value_clears_dev() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1129,7 +1130,7 @@ requires-python = ">=3.12"
 // --bump dev
 #[test]
 fn bump_dev() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1168,7 +1169,7 @@ requires-python = ">=3.12"
 
 #[test]
 fn bump_dev_with_value() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1207,7 +1208,7 @@ requires-python = ">=3.12"
 
 #[test]
 fn bump_patch_and_dev_value() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1247,7 +1248,7 @@ requires-python = ">=3.12"
 
 #[test]
 fn bump_patch_and_dev_explicit_values_sorted() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1288,7 +1289,7 @@ requires-python = ">=3.12"
 // Bump major but the input version is .post
 #[test]
 fn version_major_post() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1327,7 +1328,7 @@ requires-python = ">=3.12"
 
 #[test]
 fn bump_invalid_component_fails() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context
         .temp_dir
@@ -1357,7 +1358,7 @@ fn bump_invalid_component_fails() -> Result<()> {
 
 #[test]
 fn bump_invalid_component_color() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let output = context
         .version()
@@ -1382,7 +1383,7 @@ fn bump_invalid_component_color() -> Result<()> {
 
 #[test]
 fn bump_stable_with_value_fails() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1409,7 +1410,7 @@ requires-python = ">=3.12"
 
 #[test]
 fn bump_empty_value_fails() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1436,7 +1437,7 @@ requires-python = ">=3.12"
 
 #[test]
 fn bump_invalid_numeric_value_fails() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1464,7 +1465,7 @@ requires-python = ">=3.12"
 // --bump stable but it decreases the version
 #[test]
 fn bump_decrease_stable() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1488,7 +1489,7 @@ requires-python = ">=3.12"
 // --bump alpha but it decreases the version by reverting beta
 #[test]
 fn bump_decrease_alpha_beta() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1512,7 +1513,7 @@ requires-python = ">=3.12"
 // --bump alpha but it decreases the version from a stable
 #[test]
 fn bump_decrease_alpha_stable() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1536,7 +1537,7 @@ requires-python = ">=3.12"
 // --bump dev but it decreases the version from a stable
 #[test]
 fn bump_decrease_dev_stable() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1560,7 +1561,7 @@ requires-python = ">=3.12"
 // --bump dev but it decreases the version from a pre-release
 #[test]
 fn bump_decrease_dev_prerelease() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1584,7 +1585,7 @@ requires-python = ">=3.12"
 // --bump major twice
 #[test]
 fn bump_double_major() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1609,7 +1610,7 @@ requires-python = ">=3.12"
 // --bump alpha twice
 #[test]
 fn bump_double_alpha() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1634,7 +1635,7 @@ requires-python = ">=3.12"
 // --bump stable --bump major
 #[test]
 fn bump_stable_major() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1659,7 +1660,7 @@ requires-python = ">=3.12"
 // --bump major --bump alpha
 #[test]
 fn bump_alpha_major() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1688,7 +1689,7 @@ requires-python = ">=3.12"
 // --bump major --bump minor
 #[test]
 fn bump_minor_major() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1713,7 +1714,7 @@ requires-python = ">=3.12"
 // --bump alpha --bump dev
 #[test]
 fn bump_alpha_dev() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1738,7 +1739,7 @@ requires-python = ">=3.12"
 // --bump major --bump dev
 #[test]
 fn bump_dev_major() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1767,7 +1768,7 @@ requires-python = ">=3.12"
 // --bump major --bump post
 #[test]
 fn bump_post_major() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1792,7 +1793,7 @@ requires-python = ">=3.12"
 // Set version --dry-run
 #[test]
 fn version_set_dry() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1829,7 +1830,7 @@ requires-python = ">=3.12"
 // Bump version --dry-run
 #[test]
 fn version_major_dry() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1866,7 +1867,7 @@ requires-python = ">=3.12"
 // Set version invalid
 #[test]
 fn version_set_invalid() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1902,7 +1903,7 @@ requires-python = ">=3.12"
 // forget --bump but pass a valid bump name
 #[test]
 fn version_missing_bump() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1938,7 +1939,7 @@ requires-python = ">=3.12"
 // Dynamic version should error on read
 #[test]
 fn version_get_dynamic() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -1973,7 +1974,7 @@ fn version_get_dynamic() -> Result<()> {
 /// Existing sources should survive the in-memory project refresh before re-locking.
 #[test]
 fn version_preserves_existing_sources_during_staged_update() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context
         .temp_dir
@@ -2032,7 +2033,7 @@ fn version_preserves_existing_sources_during_staged_update() -> Result<()> {
 // Dynamic version should error on write
 #[test]
 fn version_set_dynamic() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2069,7 +2070,7 @@ fn version_set_dynamic() -> Result<()> {
 /// (In this case, because tool.uv.managed = false)
 #[test]
 fn version_get_fallback_unmanaged() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2108,7 +2109,7 @@ fn version_get_fallback_unmanaged() -> Result<()> {
 // version_get_fallback with `--short`
 #[test]
 fn version_get_fallback_unmanaged_short() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2173,7 +2174,7 @@ fn git_version_info_expected() -> bool {
 // and --project was passed explicitly.
 #[test]
 fn version_get_fallback_unmanaged_strict() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2214,7 +2215,7 @@ fn version_get_fallback_unmanaged_strict() -> Result<()> {
 // and --project was passed explicitly.
 #[test]
 fn version_get_fallback_missing_strict() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.version()
         .arg("--project").arg("."), @"
@@ -2229,7 +2230,7 @@ fn version_get_fallback_missing_strict() -> Result<()> {
 /// Should error with hint if pyproject.toml is missing in normal mode
 #[test]
 fn version_get_missing_with_hint() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.version(), @"
     exit_code: 2 (failure)
@@ -2246,7 +2247,7 @@ fn version_get_missing_with_hint() -> Result<()> {
 // (also setup a honeypot project and make sure it's not used)
 #[test]
 fn self_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2280,7 +2281,7 @@ fn self_version() -> Result<()> {
 // (also setup a honeypot project and make sure it's not used)
 #[test]
 fn self_version_short() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2321,6 +2322,7 @@ fn self_version_short() -> Result<()> {
 #[test]
 fn self_version_json() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filter((
             r#"version": "\d+\.\d+\.\d+(-(alpha|beta|rc)\.\d+)?(\+\d+)?""#,
             r#"version": "[VERSION]""#,
@@ -2395,7 +2397,7 @@ fn self_version_json() -> Result<()> {
 // Ensure that the global `--project` option is respected.
 #[test]
 fn version_get_workspace() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2461,7 +2463,7 @@ fn version_get_workspace() -> Result<()> {
 /// Ensure that virtual workspace roots are rejected before discovering their members.
 #[test]
 fn version_virtual_workspace_root_rejects_before_members() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -2486,6 +2488,7 @@ fn version_virtual_workspace_root_rejects_before_members() -> Result<()> {
 #[test]
 fn version_get_frozen_workspace_without_python() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_cache_dir("cache-file")
         .with_filter((
             r"cause: failed to create directory `[^`]+`: .*",
@@ -2563,9 +2566,8 @@ fn version_get_frozen_workspace_without_python() -> Result<()> {
 ///
 /// Also check that --locked/--frozen/--no-sync do what they say
 #[test]
-#[cfg(feature = "test-pypi")]
 fn version_set_workspace() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let workspace = context.temp_dir.child("pyproject.toml");
     workspace.write_str(indoc! {r#"
@@ -2584,8 +2586,8 @@ fn version_set_workspace() -> Result<()> {
         ]
 
         [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
 
         [tool.uv.sources]
         child2 = { workspace = true }
@@ -2607,8 +2609,8 @@ fn version_set_workspace() -> Result<()> {
         dependencies = []
 
         [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
     "#})?;
     context
         .temp_dir
@@ -2875,33 +2877,35 @@ fn version_set_workspace() -> Result<()> {
 /// It would be nice to have a case where we still get a package dependency, but
 /// this still demonstrates the non-trivial "hazard" of a version change.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn version_set_evil_constraints() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("packages/version-constraints.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&server.index_url());
 
     let workspace = context.temp_dir.child("pyproject.toml");
     workspace.write_str(indoc! {r#"
         [tool.uv.workspace]
-        members = ["idna", "myproj"]
+        members = ["version-child", "myproj"]
     "#})?;
 
-    let pyproject_toml = context.temp_dir.child("idna/pyproject.toml");
+    let pyproject_toml = context.temp_dir.child("version-child/pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
         [project]
-        name = "idna"
-        version = "3.10.0"
+        name = "version-child"
+        version = "3.0.0"
         requires-python = ">=3.12"
         dependencies = []
 
         [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
     "#})?;
     context
         .temp_dir
-        .child("idna")
+        .child("version-child")
         .child("src")
-        .child("idna")
+        .child("version_child")
         .child("__init__.py")
         .touch()?;
 
@@ -2912,12 +2916,12 @@ fn version_set_evil_constraints() -> Result<()> {
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = [
-            "anyio",
+            "version-parent",
         ]
 
         [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
     "#})?;
     context
         .temp_dir
@@ -2931,13 +2935,12 @@ fn version_set_evil_constraints() -> Result<()> {
     uv_snapshot!(context.filters(),  context.sync(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.10.0 (from file://[TEMP_DIR]/idna)
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
      + myproj==0.1.0 (from file://[TEMP_DIR]/myproj)
-     + sniffio==1.3.1
+     + version-child==3.0.0 (from file://[TEMP_DIR]/version-child)
+     + version-parent==2.0.0
     ");
 
     let lock = context.read("uv.lock");
@@ -2956,69 +2959,62 @@ fn version_set_evil_constraints() -> Result<()> {
 
         [manifest]
         members = [
-            "idna",
             "myproj",
+            "version-child",
         ]
-
-        [[package]]
-        name = "anyio"
-        version = "4.3.0"
-        source = { registry = "https://pypi.org/simple" }
-        dependencies = [
-            { name = "idna" },
-            { name = "sniffio" },
-        ]
-        sdist = { url = "https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz", hash = "sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6", size = 159642, upload-time = "2024-02-19T08:36:28.641Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl", hash = "sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8", size = 85584, upload-time = "2024-02-19T08:36:26.842Z" },
-        ]
-
-        [[package]]
-        name = "idna"
-        version = "3.10.0"
-        source = { editable = "idna" }
 
         [[package]]
         name = "myproj"
         version = "0.1.0"
         source = { editable = "myproj" }
         dependencies = [
-            { name = "anyio" },
+            { name = "version-parent" },
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "anyio" }]
+        requires-dist = [{ name = "version-parent" }]
 
         [[package]]
-        name = "sniffio"
-        version = "1.3.1"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
+        name = "version-child"
+        version = "3.0.0"
+        source = { editable = "version-child" }
+
+        [[package]]
+        name = "version-parent"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "version-child" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/version_parent-2.0.0.tar.gz", hash = "sha256:32b6753f0abd914d00b41bd47c407b8d328bed5c4cda499dcb21a46e367c09c0", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
+            { url = "http://[LOCALHOST]/files/version_parent-2.0.0-py3-none-any.whl", hash = "sha256:570849087f13b897463fcb5f6ce2ae4cae0cfbf7dabb4093eab796a96e1e9177", upload-time = "2024-03-24T00:00:00Z" },
         ]
         "#
         );
     });
 
-    // Reduce idna's version, forcing a downgrade of anyio (used by myproj)
+    // Reduce version-child's version, forcing a downgrade of version-parent (used by myproj)
     // This will not appear in the sync, but it will show up in the lock,
     // because we use "sufficient" sync semantics
     let mut version_cmd = context.version();
-    version_cmd.arg("--project").arg("idna").arg("2.0.0");
+    version_cmd
+        .arg("--project")
+        .arg("version-child")
+        .arg("2.0.0");
 
     uv_snapshot!(context.filters(), version_cmd, @"
     exit_code: 0 (success)
     ----- stdout -----
-    idna 3.10.0 => 2.0.0
+    version-child 3.0.0 => 2.0.0
 
     ----- stderr -----
-    Resolved 5 packages in [TIME]
+    Resolved 3 packages in [TIME]
     Prepared 1 package in [TIME]
     Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
-     - idna==3.10.0 (from file://[TEMP_DIR]/idna)
-     + idna==2.0.0 (from file://[TEMP_DIR]/idna)
+     - version-child==3.0.0 (from file://[TEMP_DIR]/version-child)
+     + version-child==2.0.0 (from file://[TEMP_DIR]/version-child)
     ");
 
     let lock = context.read("uv.lock");
@@ -3037,55 +3033,36 @@ fn version_set_evil_constraints() -> Result<()> {
 
         [manifest]
         members = [
-            "idna",
             "myproj",
+            "version-child",
         ]
-
-        [[package]]
-        name = "anyio"
-        version = "1.3.1"
-        source = { registry = "https://pypi.org/simple" }
-        dependencies = [
-            { name = "async-generator" },
-            { name = "sniffio" },
-        ]
-        sdist = { url = "https://files.pythonhosted.org/packages/44/eb/c5f29a8c854cf454cb995dc791152c641eb8948b2d71cb30e233eb262c53/anyio-1.3.1.tar.gz", hash = "sha256:a46bb2b7743455434afd9adea848a3c4e0b7321aee3e9d08844b11d348d3b5a0", size = 56763, upload-time = "2020-05-31T11:50:54.61Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/ab/c2/17b5c64a1a92c5dbd7ab3fd24c4db4332aa78ebe132e54136d1bc5eb1bd5/anyio-1.3.1-py3-none-any.whl", hash = "sha256:f21b4fafeec1b7db81e09a907e44e374a1e39718d782a488fdfcdcf949c8950c", size = 35056, upload-time = "2020-05-31T11:50:53.646Z" },
-        ]
-
-        [[package]]
-        name = "async-generator"
-        version = "1.10"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/ce/b6/6fa6b3b598a03cba5e80f829e0dadbb49d7645f523d209b2fb7ea0bbb02a/async_generator-1.10.tar.gz", hash = "sha256:6ebb3d106c12920aaae42ccb6f787ef5eefdcdd166ea3d628fa8476abe712144", size = 29870, upload-time = "2018-08-01T03:36:21.69Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/71/52/39d20e03abd0ac9159c162ec24b93fbcaa111e8400308f2465432495ca2b/async_generator-1.10-py3-none-any.whl", hash = "sha256:01c7bf666359b4967d2cda0000cc2e4af16a0ae098cbffcb8472fb9e8ad6585b", size = 18857, upload-time = "2018-08-01T03:36:20.029Z" },
-        ]
-
-        [[package]]
-        name = "idna"
-        version = "2.0.0"
-        source = { editable = "idna" }
 
         [[package]]
         name = "myproj"
         version = "0.1.0"
         source = { editable = "myproj" }
         dependencies = [
-            { name = "anyio" },
+            { name = "version-parent" },
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "anyio" }]
+        requires-dist = [{ name = "version-parent" }]
 
         [[package]]
-        name = "sniffio"
-        version = "1.3.1"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
+        name = "version-child"
+        version = "2.0.0"
+        source = { editable = "version-child" }
+
+        [[package]]
+        name = "version-parent"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "version-child" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/version_parent-1.0.0.tar.gz", hash = "sha256:13aee3dbd435f25b27a3f39bf9c6043df23d9bc0bca89b3818a9c6fece060906", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
+            { url = "http://[LOCALHOST]/files/version_parent-1.0.0-py3-none-any.whl", hash = "sha256:33357598f97288a9e469a824b73da765042c8c019e121db33fdb06c11544d0c5", upload-time = "2024-03-24T00:00:00Z" },
         ]
         "#
         );
@@ -3095,13 +3072,12 @@ fn version_set_evil_constraints() -> Result<()> {
     uv_snapshot!(context.filters(),  context.sync(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 5 packages in [TIME]
-    Prepared 2 packages in [TIME]
+    Resolved 3 packages in [TIME]
+    Prepared 1 package in [TIME]
     Uninstalled 1 package in [TIME]
-    Installed 2 packages in [TIME]
-     - anyio==4.3.0
-     + anyio==1.3.1
-     + async-generator==1.10
+    Installed 1 package in [TIME]
+     - version-parent==2.0.0
+     + version-parent==1.0.0
     ");
 
     Ok(())
@@ -3110,7 +3086,7 @@ fn version_set_evil_constraints() -> Result<()> {
 #[test]
 fn virtual_empty() -> Result<()> {
     // testing how `uv version` reacts to a pyproject with no `[project]` and nothing useful to it
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -3168,7 +3144,7 @@ fn add_virtual_dependency_group() -> Result<()> {
     // testing basic `uv version` functionality
     // when the pyproject.toml is fully virtual (no `[project]`)
     // But at least has some dependency-group tables (shouldn't matter to this command)
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -3229,9 +3205,11 @@ fn add_virtual_dependency_group() -> Result<()> {
 /// Bump the version with conflicting extras, to ensure we're activating the correct subset of
 /// extras during the resolve.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn version_extras() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("packages/version-extras.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&server.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -3242,9 +3220,9 @@ version = "1.10.31"
 requires-python = ">=3.12"
 
 [project.optional-dependencies]
-foo = ["requests"]
-bar = ["httpx"]
-baz = ["flask"]
+foo = ["extra-foo"]
+bar = ["extra-bar"]
+baz = ["extra-baz"]
 
 [tool.uv]
 conflicts = [[{"extra" = "foo"}, {"extra" = "bar"}]]
@@ -3258,7 +3236,7 @@ conflicts = [[{"extra" = "foo"}, {"extra" = "bar"}]]
     myproject 1.10.31 => 1.10.32
 
     ----- stderr -----
-    Resolved 19 packages in [TIME]
+    Resolved 4 packages in [TIME]
     Checked in [TIME]
     ");
 
@@ -3272,7 +3250,7 @@ conflicts = [[{"extra" = "foo"}, {"extra" = "bar"}]]
     myproject 1.10.32 => 1.10.33
 
     ----- stderr -----
-    Resolved 19 packages in [TIME]
+    Resolved 4 packages in [TIME]
     Checked in [TIME]
     ");
 
