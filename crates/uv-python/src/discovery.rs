@@ -2508,7 +2508,7 @@ impl PythonRequest {
         }
     }
 
-    /// Return the runtime and build variants carried by this request, if any.
+    /// Return owned runtime and build variants carried by this request, if any.
     #[cfg(test)]
     fn variants(&self) -> Option<VariantRequest> {
         match self {
@@ -2521,6 +2521,7 @@ impl PythonRequest {
             | Self::ExecutableName(_)
             | Self::Implementation(_) => None,
         }
+        .map(Cow::into_owned)
     }
 
     /// Convert an interpreter request into [`VersionSpecifiers`] representing the range of
@@ -3593,16 +3594,16 @@ impl VersionRequest {
     }
 
     /// Return the [`VariantRequest`] of the request, if any.
-    pub(crate) fn variants(&self) -> Option<VariantRequest> {
+    pub(crate) fn variants(&self) -> Option<Cow<'_, VariantRequest>> {
         match self {
             Self::Any => None,
-            Self::Default => Some(VariantRequest::default()),
+            Self::Default => Some(Cow::Owned(VariantRequest::default())),
             Self::Major(_, variant)
             | Self::MajorMinor(_, _, variant)
             | Self::MajorMinorPatch(_, _, _, variant)
             | Self::MajorMinorPrerelease(_, _, _, variant)
             | Self::MajorMinorPatchPrerelease(_, _, _, _, variant)
-            | Self::Range(_, variant) => Some(variant.clone()),
+            | Self::Range(_, variant) => Some(Cow::Borrowed(variant)),
         }
     }
 
