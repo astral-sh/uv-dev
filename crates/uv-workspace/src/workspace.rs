@@ -2111,7 +2111,7 @@ impl<'workspace> WorkspaceChildren<'workspace> {
                     .is_some_and(|boundary| boundary.contains(&child_root))
                 {
                     debug!(
-                        "Ignoring cache directory while discovering child workspaces: `{}`",
+                        "Ignoring cache directory while discovering child workspaces: {}",
                         child_root.simplified_display()
                     );
                     continue;
@@ -2218,7 +2218,12 @@ async fn workspace_path_aliases(
                 && !external_cache.is_some_and(|boundary| boundary.contains(&canonical_candidate))
                 && let Ok(suffix) = canonical_path.strip_prefix(&canonical_candidate)
             {
-                let candidate = candidate.join(suffix);
+                // Joining an empty suffix adds a separator that a literal pattern rejects.
+                let candidate = if suffix.as_os_str().is_empty() {
+                    candidate
+                } else {
+                    candidate.join(suffix)
+                };
                 if absolute_pattern.matches_path_with(candidate.simplified(), match_options) {
                     aliases.insert(candidate);
                 }
@@ -2247,7 +2252,11 @@ async fn workspace_path_aliases(
                 let Ok(suffix) = canonical_path.strip_prefix(&canonical_candidate) else {
                     continue;
                 };
-                candidate.join(suffix)
+                if suffix.as_os_str().is_empty() {
+                    candidate
+                } else {
+                    candidate.join(suffix)
+                }
             } else {
                 if canonical_candidate != canonical_path {
                     continue;
@@ -2628,14 +2637,14 @@ async fn find_parent_workspace_root(
         }
         let Ok(contents) = fs_err::tokio::read_to_string(&pyproject_path).await else {
             debug!(
-                "Ignoring unreadable ancestor `pyproject.toml` during parent workspace lookup: `{}`",
+                "Ignoring unreadable ancestor `pyproject.toml` during parent workspace lookup: {}",
                 pyproject_path.simplified_display()
             );
             continue;
         };
         let Ok(registration) = toml::from_str::<toml::Value>(&contents) else {
             debug!(
-                "Ignoring malformed ancestor `pyproject.toml` during parent workspace lookup: `{}`",
+                "Ignoring malformed ancestor `pyproject.toml` during parent workspace lookup: {}",
                 pyproject_path.simplified_display()
             );
             continue;
@@ -4856,7 +4865,7 @@ foo_bar = ["iniconfig"]
             .expect_err("a matching parent must have valid project metadata");
         let root_escaped = regex::escape(root.to_string_lossy().as_ref());
         insta::with_settings!({filters => vec![(root_escaped.as_str(), "[ROOT]")]}, {
-            assert_snapshot!(error, @"Failed to parse: `[ROOT]/pyproject.toml`");
+            assert_snapshot!(error, @"Failed to parse: [ROOT]/pyproject.toml");
         });
         Ok(())
     }
@@ -5324,6 +5333,8 @@ foo_bar = ["iniconfig"]
                     )
                     .await?,
                     Some(root.to_path_buf()),
+                    "pattern {pattern:?}, child path {}",
+                    child_root.display(),
                 );
             }
         }
