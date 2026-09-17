@@ -15,6 +15,7 @@ use uv_cache_key::CanonicalUrl;
 use uv_pep508::{Scheme, VerbatimUrl, VerbatimUrlError, split_scheme};
 use uv_pypi_types::HashAlgorithm;
 use uv_redacted::DisplaySafeUrl;
+use uv_static::EnvVars;
 use uv_warnings::warn_user;
 
 use crate::{ExcludeNewerOverride, Index, IndexStatusCodeStrategy, Verbatim};
@@ -23,6 +24,12 @@ pub static PYPI_URL: LazyLock<DisplaySafeUrl> =
     LazyLock::new(|| DisplaySafeUrl::parse("https://pypi.org/simple").unwrap());
 
 static DEFAULT_INDEX: LazyLock<Index> = LazyLock::new(|| {
+    if let Ok(index) = std::env::var(EnvVars::UV_INTERNAL__TEST_DEFAULT_INDEX) {
+        return Index::from_index_url(
+            IndexUrl::parse(&index, None)
+                .expect("UV_INTERNAL__TEST_DEFAULT_INDEX must be a valid index URL"),
+        );
+    }
     Index::from_index_url(IndexUrl::Pypi(Arc::new(VerbatimUrl::from_url(
         PYPI_URL.clone(),
     ))))
