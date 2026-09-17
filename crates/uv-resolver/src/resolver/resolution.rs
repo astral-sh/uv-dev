@@ -18,13 +18,13 @@ use crate::{InMemoryIndex, MetadataResponse, ResolveError, ResolverEnvironment, 
 
 /// The resolution from a single fork including the virtual packages and the edges between them.
 #[derive(Debug)]
-pub(crate) struct Resolution<'index> {
+pub(crate) struct Resolution {
     pub(crate) nodes: Vec<(ResolutionPackage, Version)>,
     /// The directed connections between the nodes, where the marker is the edge weight. We don't
     /// store the requirement itself, but it can be retrieved from the package metadata.
     pub(crate) edges: Vec<ResolutionDependencyEdge>,
     /// Pinned artifacts and metadata for the selected package versions.
-    pub(crate) pins: FilePins<'index>,
+    pub(crate) pins: FilePins,
     /// The environment setting this resolution was found under.
     pub(crate) env: ResolverEnvironment,
 }
@@ -56,7 +56,7 @@ impl SelectedDistribution {
     pub(crate) fn new(
         package: &ResolutionPackage,
         version: Version,
-        pins: &FilePins<'_>,
+        pins: &FilePins,
         index: &InMemoryIndex,
         git: &GitResolver,
     ) -> Result<Self, ResolveError> {
@@ -129,7 +129,7 @@ impl SelectedDistribution {
     }
 }
 
-impl Resolution<'_> {
+impl Resolution {
     /// When trace level logging is enabled, we dump the final
     /// set of resolutions, including markers, to help with
     /// debugging. Namely, this tells use precisely the state
