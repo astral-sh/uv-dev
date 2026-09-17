@@ -14,6 +14,8 @@ use uv_test::{uv_snapshot, venv_bin_path};
 #[test]
 fn tool_run_args() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_packse_index("packages/tool-run.toml")
         .with_filtered_counts()
         .with_tool_dirs();
     let context = context
@@ -29,38 +31,38 @@ fn tool_run_args() {
     // We treat arguments before the command as uv tool run arguments
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--help")
-        .arg("pytest"), @"
+        .arg("run-tool"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Run a command provided by a Python package
 
-    [UV TOOL RUN HELP]");
+    [UV TOOL RUN HELP]
+    ");
 
     // We don't treat arguments after the command as uv tool run arguments
     uv_snapshot!(context.filters(), context.tool_run()
-        .arg("pytest")
+        .arg("run-tool")
         .arg("--help"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    [PYTEST HELP]
+    run-tool 8.1.1
+
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
+     + run-helper==1.4.0
+     + run-tool==8.1.1
     ");
 
     // Can use `--` to separate uv arguments from the command arguments.
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--")
-        .arg("pytest")
+        .arg("run-tool")
         .arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.1.1
+    run-tool 8.1.1
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
@@ -69,49 +71,49 @@ fn tool_run_args() {
 
 #[test]
 fn tool_run_at_version() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("pytest@8.0.0")
-        .arg("--version"), @"
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context.with_filtered_exe_suffix().with_tool_dirs();
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("run-tool@8.0.0").arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.0.0
+    run-tool 8.0.0
 
     ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.0.0
-    ");
-
-    // Empty versions are just treated as package and command names
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("pytest@")
-        .arg("--version"), @"
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + run-helper==1.4.0
+     + run-tool==8.0.0
+    "
+    ); // Empty versions are just treated as package and command names
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("run-tool@").arg("--version"),
+        @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to parse: `pytest@`
+    error: Failed to parse: `run-tool@`
       cause: Expected URL
-             pytest@
-                    ^
-    ");
-
-    // Invalid versions are just treated as package and command names
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("pytest@invalid")
-        .arg("--version"), @"
+             run-tool@
+                      ^
+    "
+    ); // Invalid versions are just treated as package and command names
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("run-tool@invalid").arg("--version"),
+        @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to resolve tool requirement
       cause: Distribution not found at: file://[TEMP_DIR]/invalid
-    ");
-
+    "
+    );
     let filters = context
         .filters()
         .into_iter()
@@ -120,28 +122,28 @@ fn tool_run_at_version() {
             "cause: program not found",
             "cause: No such file or directory (os error 2)",
         )])
-        .collect::<Vec<_>>();
-
-    // When `--from` is used, `@` is not treated as a version request
-    uv_snapshot!(filters, context.tool_run()
-        .arg("--from")
-        .arg("pytest")
-        .arg("pytest@8.0.0")
-        .arg("--version"), @"
+        .collect::<Vec<_>>(); // When `--from` is used, `@` is not treated as a version request
+    uv_snapshot!(
+        filters,
+        context
+            .tool_run()
+            .arg("--from")
+            .arg("run-tool")
+            .arg("run-tool@8.0.0")
+            .arg("--version"),
+        @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 4 packages in [TIME]
+    Resolved 2 packages in [TIME]
     Prepared 1 package in [TIME]
-    Installed 4 packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
-    An executable named `pytest@8.0.0` is not provided by package `pytest`.
+    Installed 2 packages in [TIME]
+     + run-helper==1.4.0
+     + run-tool==8.1.1
+    An executable named `run-tool@8.0.0` is not provided by package `run-tool`.
     The following executables are available:
-    - py.test
-    - pytest
-    ");
+    - run-tool
+    "
+    );
 }
 
 #[test]
@@ -179,181 +181,164 @@ fn tool_run_no_binary_package_env_var() {
 
 #[test]
 fn tool_run_from_version() {
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_server.index_url())
+        .with_tool_dirs();
 
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--from")
-        .arg("pytest==8.0.0")
-        .arg("pytest")
+        .arg("run-tool==8.0.0")
+        .arg("run-tool")
         .arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.0.0
+    run-tool 8.0.0
 
     ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.0.0
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + run-helper==1.4.0
+     + run-tool==8.0.0
     ");
 }
 
 #[test]
 fn tool_run_constraints() {
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_server.index_url())
+        .with_tool_dirs();
 
     let constraints_txt = context.temp_dir.child("constraints.txt");
-    constraints_txt.write_str("pluggy<1.4.0").unwrap();
+    constraints_txt.write_str("run-helper<1.4.0").unwrap();
 
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--constraints")
         .arg("constraints.txt")
-        .arg("pytest")
+        .arg("run-tool")
         .arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.0.2
+    run-tool 8.0.2
 
     ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.3.0
-     + pytest==8.0.2
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + run-helper==1.3.0
+     + run-tool==8.0.2
     ");
 }
 
 #[test]
 fn tool_run_overrides() {
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_server.index_url())
+        .with_tool_dirs();
 
     let overrides_txt = context.temp_dir.child("overrides.txt");
-    overrides_txt.write_str("pluggy<1.4.0").unwrap();
+    overrides_txt.write_str("run-helper<1.4.0").unwrap();
 
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--overrides")
         .arg("overrides.txt")
-        .arg("pytest")
+        .arg("run-tool")
         .arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.1.1
+    run-tool 8.1.1
 
     ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.3.0
-     + pytest==8.1.1
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + run-helper==1.3.0
+     + run-tool==8.1.1
     ");
 }
 
 #[test]
 fn tool_run_suggest_valid_commands() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    // Executable suffixes change the ordering of these names on Windows.
+    let context = context
         .with_filtered_exe_suffix()
+        .with_filter((
+            r"- format-tool-daemon\r?\n- format-tool\b",
+            "- format-tool\n- format-tool-daemon",
+        ))
         .with_tool_dirs();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-    .arg("--from")
-    .arg("black")
-    .arg("orange"), @"
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--from")
+            .arg("format-tool")
+            .arg("orange"),
+        @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Prepared 6 packages in [TIME]
-    Installed 6 packages in [TIME]
-     + black==24.3.0
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    An executable named `orange` is not provided by package `black`.
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + format-support==1.0.0
+     + format-tool==24.3.0
+    An executable named `orange` is not provided by package `format-tool`.
     The following executables are available:
-    - black
-    - blackd
-    ");
-
-    uv_snapshot!(context.filters(), context.tool_run()
-    .arg("fastapi-cli"), @"
+    - format-tool
+    - format-tool-daemon
+    "
+    );
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("no-script"),
+        @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + fastapi-cli==0.0.1
-     + importlib-metadata==1.7.0
-     + zipp==3.18.1
-    Package `fastapi-cli` does not provide any executables.
-    ");
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + no-script==2.31.0
+     + no-script-leaf==1.0.0
+    Package `no-script` does not provide any executables.
+    "
+    );
 }
 
 #[test]
 fn tool_run_warn_executable_not_in_from() {
-    // FastAPI 0.111 is only available from this date onwards.
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_exclude_newer("2024-05-04T00:00:00Z")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    let context = context
-        .with_filter(("\\+ uvloop(.+)\n ", ""))
-        // Strip off the `fastapi` command output.
-        .with_filter(("(?s)fastapi` instead.*", "fastapi` instead."));
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("fastapi")
-        .arg("fastapi"), @"
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context.with_filtered_exe_suffix().with_tool_dirs();
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--from")
+            .arg("cli-provider")
+            .arg("cli-provider"),
+        @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Resolved 35 packages in [TIME]
-    Prepared 35 packages in [TIME]
-    Installed 35 packages in [TIME]
-     + annotated-types==0.6.0
-     + anyio==4.3.0
-     + certifi==2024.2.2
-     + click==8.1.7
-     + dnspython==2.6.1
-     + email-validator==2.1.1
-     + fastapi==0.111.0
-     + fastapi-cli==0.0.2
-     + h11==0.14.0
-     + httpcore==1.0.5
-     + httptools==0.6.1
-     + httpx==0.27.0
-     + idna==3.7
-     + jinja2==3.1.3
-     + markdown-it-py==3.0.0
-     + markupsafe==2.1.5
-     + mdurl==0.1.2
-     + orjson==3.10.3
-     + pydantic==2.7.1
-     + pydantic-core==2.18.2
-     + pygments==2.17.2
-     + python-dotenv==1.0.1
-     + python-multipart==0.0.9
-     + pyyaml==6.0.1
-     + rich==13.7.1
-     + shellingham==1.5.4
-     + sniffio==1.3.1
-     + starlette==0.37.2
-     + typer==0.12.3
-     + typing-extensions==4.11.0
-     + ujson==5.9.0
-     + uvicorn==0.29.0
-     + watchfiles==0.21.0
-     + websockets==12.0
-    warning: An executable named `fastapi` is not provided by package `fastapi` but is available via the dependency `fastapi-cli`. Consider using `uv tool run --from fastapi-cli fastapi` instead.
-    ");
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + cli-provider==0.1.0
+     + provider-cli==0.1.0
+    warning: An executable named `cli-provider` is not provided by package `cli-provider` but is available via the dependency `provider-cli`. Consider using `uv tool run --from provider-cli cli-provider` instead.
+    "
+    );
 }
 
 #[test]
@@ -1710,24 +1695,25 @@ fn tool_run_invalid_with() {
 
 #[test]
 fn warn_no_executables_found() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("requests"), @"
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context.with_filtered_exe_suffix().with_tool_dirs();
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("no-script"),
+        @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 5 packages in [TIME]
-    Prepared 5 packages in [TIME]
-    Installed 5 packages in [TIME]
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + idna==3.6
-     + requests==2.31.0
-     + urllib3==2.2.1
-    Package `requests` does not provide any executables.
-    ");
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + no-script==2.31.0
+     + no-script-leaf==1.0.0
+    Package `no-script` does not provide any executables.
+    "
+    );
 }
 
 /// Warn when a user passes `--upgrade` to `uv tool run`.
@@ -1782,184 +1768,178 @@ fn tool_run_upgrade_warn() {
 /// If we fail to resolve the tool, we should include "tool" in the error message.
 #[test]
 fn tool_run_resolution_error() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("add"), @"
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs();
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("add"),
+        @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving tool dependencies
-      cause: Because there are no versions of add and you require add, we can conclude that your requirements are unsatisfiable.
-    ");
+      cause: Because add was not found in the package registry and you require add, we can conclude that your requirements are unsatisfiable.
+    "
+    );
 }
 
 #[test]
 fn tool_run_latest() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    // Install `pytest` at a specific version.
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context.with_filtered_exe_suffix().with_tool_dirs(); // Install `run-tool` at a specific version.
     context
         .tool_install()
-        .arg("pytest==7.0.0")
+        .arg("run-tool==7.0.0")
         .assert()
-        .success();
-
-    // Run `pytest`, which should use the installed version.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("pytest")
-        .arg("--version"), @"
+        .success(); // Run `run-tool`, which should use the installed version.
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("run-tool").arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 7.0.0
-    ");
-
-    // Run `pytest@latest`, which should use the latest version.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("pytest@latest")
-        .arg("--version"), @"
+    run-tool 7.0.0
+    "
+    ); // Run `run-tool@latest`, which should use the latest version.
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("run-tool@latest").arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.1.1
+    run-tool 8.1.1
 
     ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
-    ");
-
-    // Run `pytest`, which should use the installed version.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("pytest")
-        .arg("--version"), @"
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + run-helper==1.4.0
+     + run-tool==8.1.1
+    "
+    ); // Run `run-tool`, which should use the installed version.
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("run-tool").arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 7.0.0
-    ");
+    run-tool 7.0.0
+    "
+    );
 }
 
 #[test]
 fn tool_run_latest_extra() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("flask[dotenv]@latest")
-        .arg("--version"), @"
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context.with_filtered_exe_suffix().with_tool_dirs();
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("web-tool[dotenv]@latest")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.2
-    Werkzeug 3.0.1
+    web-tool 3.0.2
 
     ----- stderr -----
-    Resolved 8 packages in [TIME]
-    Prepared 8 packages in [TIME]
-    Installed 8 packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + python-dotenv==1.0.1
-     + werkzeug==3.0.1
-    ");
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("flask[dotenv]@3.0.0")
-        .arg("--version"), @"
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + web-extra==1.0.1
+     + web-runtime==3.0.1
+     + web-tool==3.0.2
+    "
+    );
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("web-tool[dotenv]@3.0.0")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.0
-    Werkzeug 3.0.1
+    web-tool 3.0.0
 
     ----- stderr -----
-    Resolved 8 packages in [TIME]
+    Resolved 2 packages in [TIME]
     Prepared 1 package in [TIME]
-    Installed 8 packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.0
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + python-dotenv==1.0.1
-     + werkzeug==3.0.1
-    ");
+    Installed 2 packages in [TIME]
+     + web-runtime==3.0.1
+     + web-tool==3.0.0
+    warning: The package `web-tool==3.0.0` does not have an extra named `dotenv`
+    "
+    );
 }
 
 #[test]
 fn tool_run_extra() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("flask[dotenv]")
-        .arg("--version"), @"
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context.with_filtered_exe_suffix().with_tool_dirs();
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("web-tool[dotenv]").arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.2
-    Werkzeug 3.0.1
+    web-tool 3.0.2
 
     ----- stderr -----
-    Resolved 8 packages in [TIME]
-    Prepared 8 packages in [TIME]
-    Installed 8 packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + python-dotenv==1.0.1
-     + werkzeug==3.0.1
-    ");
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + web-extra==1.0.1
+     + web-runtime==3.0.1
+     + web-tool==3.0.2
+    "
+    );
 }
 
 #[test]
 fn tool_run_specifier() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("flask<3.0.0")
-        .arg("--version"), @"
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context.with_filtered_exe_suffix().with_tool_dirs();
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("web-tool<3.0.0").arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 2.3.3
-    Werkzeug 3.0.1
+    web-tool 2.3.3
 
     ----- stderr -----
-    Resolved 7 packages in [TIME]
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==2.3.3
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
-    ");
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + web-runtime==2.3.8
+     + web-tool==2.3.3
+    "
+    );
 }
 
 #[test]
 fn tool_run_python() {
-    let context = uv_test::test_context!("3.12").with_filtered_counts();
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts();
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("python")
         .arg("--version"), @"
@@ -1987,7 +1967,11 @@ fn tool_run_python() {
 
 #[test]
 fn tool_run_python_at_version() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context
         .with_filtered_counts()
         .with_filtered_python_sources();
 
@@ -2162,7 +2146,11 @@ fn tool_run_python_at_version() {
 
 #[test]
 fn tool_run_hint_version_not_available() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context_with_versions!(&[])
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context
         .with_filtered_counts()
         .with_filtered_python_sources();
 
@@ -2214,7 +2202,11 @@ fn tool_run_hint_version_not_available() {
 
 #[test]
 fn tool_run_python_from_global_version_file() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context
         .with_filtered_counts()
         .with_filtered_python_sources();
 
@@ -2240,7 +2232,11 @@ fn tool_run_python_from_global_version_file() {
 
 #[test]
 fn tool_run_python_version_overrides_global_pin() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context
         .with_filtered_counts()
         .with_filtered_python_sources();
 
@@ -2268,7 +2264,11 @@ fn tool_run_python_version_overrides_global_pin() {
 
 #[test]
 fn tool_run_python_with_explicit_default_bypasses_global_pin() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context
         .with_filtered_counts()
         .with_filtered_python_sources();
 
@@ -2298,7 +2298,11 @@ fn tool_run_python_with_explicit_default_bypasses_global_pin() {
 
 #[test]
 fn tool_run_python_from() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context
         .with_filtered_counts()
         .with_filtered_python_sources();
 
@@ -2689,74 +2693,51 @@ fn tool_run_from_at() {
 
 #[test]
 fn tool_run_verbatim_name() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
 
     // The normalized package name is `change-wheel-version`, but the executable is `change_wheel_version`.
     uv_snapshot!(context.filters(), context.tool_run()
-        .arg("change_wheel_version")
+        .arg("verbatim_tool")
         .arg("--help"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    usage: change_wheel_version [-h] [--local-version LOCAL_VERSION] [--version VERSION]
-                                [--delete-old-wheel] [--allow-same-version]
-                                wheel
-
-    positional arguments:
-      wheel
-
-    options:
-      -h, --help            show this help message and exit
-      --local-version LOCAL_VERSION
-      --version VERSION
-      --delete-old-wheel
-      --allow-same-version
+    verbatim-tool 0.5.0
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + change-wheel-version==0.5.0
-     + installer==0.7.0
-     + packaging==24.0
-     + wheel==0.43.0
+     + verbatim-tool==0.5.0
     ");
 
     uv_snapshot!(context.filters(), context.tool_run()
-        .arg("change-wheel-version")
+        .arg("verbatim-tool")
         .arg("--help"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    An executable named `change-wheel-version` is not provided by package `change-wheel-version`.
+    An executable named `verbatim-tool` is not provided by package `verbatim-tool`.
     The following executables are available:
-    - change_wheel_version
+    - verbatim_tool
 
-    Use `uv tool run --from change-wheel-version change_wheel_version` instead.
+    Use `uv tool run --from verbatim-tool verbatim_tool` instead.
     ");
 
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--from")
-        .arg("change-wheel-version")
-        .arg("change_wheel_version")
+        .arg("verbatim-tool")
+        .arg("verbatim_tool")
         .arg("--help"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    usage: change_wheel_version [-h] [--local-version LOCAL_VERSION] [--version VERSION]
-                                [--delete-old-wheel] [--allow-same-version]
-                                wheel
-
-    positional arguments:
-      wheel
-
-    options:
-      -h, --help            show this help message and exit
-      --local-version LOCAL_VERSION
-      --version VERSION
-      --delete-old-wheel
-      --allow-same-version
+    verbatim-tool 0.5.0
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
