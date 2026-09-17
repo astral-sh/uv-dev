@@ -219,6 +219,8 @@ struct ObservedDecision {
 struct ForkObservations {
     decisions: Vec<ObservedDecision>,
     observations: Observations,
+    backtrack_generation: u64,
+    has_missing_pins: bool,
     marker: UniversalMarker,
     source_sizes: (usize, usize),
 }
@@ -232,6 +234,8 @@ impl ForkObservations {
         let mut observations = Self {
             decisions: Vec::new(),
             observations: Observations::new(),
+            backtrack_generation: state.backtrack_generation,
+            has_missing_pins: false,
             marker: UniversalMarker::TRUE,
             source_sizes: (0, 0),
         };
@@ -253,38 +257,77 @@ impl ForkObservations {
         // File pins and successful source mappings are immutable within a fork. A newly recorded
         // source can change an earlier decision's identity, even when that decision is retained.
         let sources_changed = self.source_sizes != source_sizes || self.marker != marker;
-        let mut retained = 0;
-        for (package, version) in state.pubgrub.partial_solution.extract_solution() {
-            if self
-                .decisions
-                .get(retained)
-                .is_some_and(|previous| previous.package == package && previous.version == version)
-            {
-                // A missing pin can become available later. Proxy decisions remain cheap to skip.
-                if sources_changed || self.decisions[retained].observation.is_none() {
-                    let observation =
-                        observe_decision(state, package, &version, marker, identities);
-                    self.replace_observation(retained, observation, ledger);
-                }
-            } else {
-                self.truncate(retained, ledger);
-                let observation = observe_decision(state, package, &version, marker, identities);
-                if let Some(observation) = &observation
-                    && self.observations.insert(observation.clone())
-                {
-                    ledger.insert(observation);
-                }
-                self.decisions.push(ObservedDecision {
-                    package,
-                    version,
-                    observation,
-                });
+        let decisions = state.pubgrub.partial_solution.extract_solution();
+        if !sources_changed
+            && self.backtrack_generation == state.backtrack_generation
+            && !self.has_missing_pins
+            && decisions.size_hint().0 >= self.decisions.len()
+        {
+            // Without a backjump, PubGrub's ordered decision prefix can only grow. `skip` also
+            // avoids cloning the retained versions from its indexed solution iterator.
+            debug_assert!(
+                self.decisions
+                    .iter()
+                    .map(|decision| (decision.package, decision.version.clone()))
+                    .eq(state
+                        .pubgrub
+                        .partial_solution
+                        .extract_solution()
+                        .take(self.decisions.len())),
+                "the retained decision prefix changed without a backjump",
+            );
+            for (package, version) in decisions.skip(self.decisions.len()) {
+                self.push_decision(state, package, version, marker, ledger, identities);
             }
-            retained += 1;
+        } else {
+            self.has_missing_pins = false;
+            let mut retained = 0;
+            for (package, version) in decisions {
+                if self.decisions.get(retained).is_some_and(|previous| {
+                    previous.package == package && previous.version == version
+                }) {
+                    if sources_changed || self.decisions[retained].observation.is_none() {
+                        let observation =
+                            observe_decision(state, package, &version, marker, identities);
+                        self.replace_observation(retained, observation, ledger);
+                    }
+                    self.has_missing_pins |= self.decisions[retained].observation.is_none()
+                        && observable_name(state, package).is_some();
+                } else {
+                    self.truncate(retained, ledger);
+                    self.push_decision(state, package, version, marker, ledger, identities);
+                }
+                retained += 1;
+            }
+            self.truncate(retained, ledger);
         }
-        self.truncate(retained, ledger);
+        self.backtrack_generation = state.backtrack_generation;
         self.marker = marker;
         self.source_sizes = source_sizes;
+    }
+
+    fn push_decision(
+        &mut self,
+        state: &ForkState,
+        package: Id<PubGrubPackage>,
+        version: Version,
+        marker: UniversalMarker,
+        ledger: &mut ObservationLedger,
+        identities: &mut SourceIdentities,
+    ) {
+        let observation = observe_decision(state, package, &version, marker, identities);
+        // A canonical package without a pin must be retried; proxy decisions are never observed.
+        self.has_missing_pins |= observation.is_none() && observable_name(state, package).is_some();
+        if let Some(observation) = &observation
+            && self.observations.insert(observation.clone())
+        {
+            ledger.insert(observation);
+        }
+        self.decisions.push(ObservedDecision {
+            package,
+            version,
+            observation,
+        });
     }
 
     fn replace_observation(
@@ -570,13 +613,7 @@ fn observe(state: &ForkState) -> Observations {
         .collect()
 }
 
-fn observe_decision(
-    state: &ForkState,
-    package: Id<PubGrubPackage>,
-    version: &Version,
-    marker: UniversalMarker,
-    identities: &mut SourceIdentities,
-) -> Option<Observation> {
+fn observable_name(state: &ForkState, package: Id<PubGrubPackage>) -> Option<&PackageName> {
     let PubGrubPackageInner::Package {
         name,
         extra: None,
@@ -586,6 +623,17 @@ fn observe_decision(
     else {
         return None;
     };
+    Some(name)
+}
+
+fn observe_decision(
+    state: &ForkState,
+    package: Id<PubGrubPackage>,
+    version: &Version,
+    marker: UniversalMarker,
+    identities: &mut SourceIdentities,
+) -> Option<Observation> {
+    let name = observable_name(state, package)?;
     let source = if let Some(url) = state.fork_urls.get(name) {
         let mut url = url.verbatim.to_url();
         url.remove_credentials();
@@ -1082,8 +1130,10 @@ fn prepare_trial(
                     .any(|(target, version)| *target == package && *version != selected)
                     .then_some(package)
             });
-    if let Some(package) = backtrack {
-        state.pubgrub.backtrack_package(package);
+    if let Some(package) = backtrack
+        && state.pubgrub.backtrack_package(package).is_some()
+    {
+        state.backtrack_generation = state.backtrack_generation.wrapping_add(1);
     }
     for (package, version) in &packages {
         state
@@ -1109,6 +1159,9 @@ fn prepare_trial(
             *remaining_steps -= 1;
             state.next = *package;
             let conflicts = state.pubgrub.unit_propagation(*package).ok()?;
+            if !conflicts.is_empty() {
+                state.backtrack_generation = state.backtrack_generation.wrapping_add(1);
+            }
             for (affected, incompatibility) in conflicts {
                 state.record_conflict(affected, None, incompatibility);
             }
