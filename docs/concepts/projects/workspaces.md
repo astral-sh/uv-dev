@@ -8,8 +8,9 @@ Workspaces organize large codebases by splitting them into multiple packages wit
 dependencies. Think: a FastAPI-based web application, alongside a series of libraries that are
 versioned and maintained as separate Python packages, all in the same Git repository.
 
-In a workspace, each package defines its own `pyproject.toml`, but the workspace shares a single
-lockfile, ensuring that the workspace operates with a consistent set of dependencies.
+In a workspace, each package defines its own `pyproject.toml`, but the workspace members share a
+single lockfile, ensuring that they operate with a consistent set of dependencies. A workspace can
+also register [independently locked child workspaces](#nested-workspaces).
 
 As such, `uv lock` operates on the entire workspace at once, while `uv run` and `uv sync` operate on
 the workspace root by default, though both accept a `--package` argument, allowing you to run a
@@ -24,9 +25,8 @@ create a workspace rooted at that package.
 
     By default, running `uv init` inside an existing package will add the newly created member to the workspace, creating a `tool.uv.workspace` table in the workspace root if it doesn't already exist.
 
-In defining a workspace, you must specify the `members` (required) and `exclude` (optional) keys,
-which direct the workspace to include or exclude specific directories as members respectively, and
-accept lists of globs:
+The `members` and `exclude` keys direct the workspace to include or exclude specific directories as
+members respectively, and accept lists of globs:
 
 ```toml title="pyproject.toml"
 [project]
@@ -157,6 +157,77 @@ albatross
 Since `seeds` was excluded in the `pyproject.toml`, the workspace has two members total: `albatross`
 (the root) and `bird-feeder`.
 
+## Nested workspaces
+
+!!! note
+
+    Nested workspaces are in [preview](../preview.md), and may change in a future release. Declaring
+    child workspaces opts in to the behavior. Enable the `nested-workspaces` preview feature to
+    silence the warning.
+
+Use `tool.uv.workspace.workspaces` to register child workspaces that should remain independently
+resolvable. Unlike ordinary workspace members, each child has its own `uv.lock`, virtual
+environment, Python requirement, and settings.
+
+For example, a parent workspace can establish a shared dependency baseline:
+
+```toml title="pyproject.toml"
+[project]
+name = "platform"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["pydantic>=2,<3"]
+
+[tool.uv.workspace]
+members = ["packages/*"]
+workspaces = ["services/*"]
+```
+
+The `workspaces` entries accept globs and explicit paths relative to the parent root. Every selected
+directory must be a strict descendant of the parent and contain its own `tool.uv.workspace` table.
+Neither a child root nor its packages can also be ordinary members of the parent.
+
+A child is otherwise an ordinary workspace:
+
+```toml title="services/legacy/pyproject.toml"
+[project]
+name = "legacy"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["pydantic<2"]
+
+[tool.uv.workspace]
+members = ["packages/*"]
+```
+
+Run `uv lock` in the parent first. When a child needs a fresh resolution, it automatically finds the
+nearest ancestor that registers it and uses that parent's lockfile as a source of preferred exact
+registry versions. An inherited version must be available from the same registry and its markers
+must overlap the child's supported environments. These are best-effort preferences, not additional
+requirements or overrides. The child's own dependency graph, including transitive requirements,
+remains authoritative, so `legacy` can resolve a different version of `pydantic`.
+
+Parent preferences apply within the child's existing resolution forks. They do not create additional
+forks solely to reproduce the parent's platform or Python splits, and do not guarantee a globally
+parent-aligned solution or the fewest differences from the parent.
+
+Only packages present in the parent's lockfile provide a baseline. Declare those packages in the
+parent project, its ordinary workspace members, or a dependency group. A `constraint-dependencies`
+entry can restrict the parent's selection, but does not itself add a package to its lockfile. The
+child does not inherit the parent's sources, indexes, constraints, overrides, or Python requirement.
+Git revisions and URL or local-path selections are not inherited.
+
+Commands operate on the selected workspace. Locking the parent does not re-lock its children, and a
+child command does not update the parent's lockfile. A registered parent must already have a valid
+lockfile when the child needs a fresh resolution; a missing or invalid parent lockfile is an error.
+
+An existing valid child lockfile remains unchanged when the parent lockfile changes. `--locked` and
+`--frozen` continue to use the child's lockfile, and a child copied outside its parent can operate
+independently. During an update, the child's existing locked versions take precedence over inherited
+preferences. The usual `--upgrade` and `--upgrade-package` options stop preferring the selected
+versions from the child's lockfile, while retaining preferences from the parent. To adopt newer
+parent selections, update the parent lockfile first, then use the child's usual upgrade command.
+
 ## When (not) to use workspaces
 
 Workspaces are intended to facilitate the development of multiple interconnected packages within a
@@ -175,9 +246,10 @@ Other common use cases for workspaces include:
   dependency on the root.
 
 Workspaces are _not_ suited for cases in which members have conflicting requirements, or desire a
-separate virtual environment for each member. In this case, path dependencies are often preferable.
-For example, rather than grouping `albatross` and its members in a workspace, you can always define
-each package as its own independent project, with inter-package dependencies defined as path
+separate virtual environment for each member. In this case, [nested workspaces](#nested-workspaces)
+can provide a shared version baseline without a shared resolution. Path dependencies are also an
+option. For example, rather than grouping `albatross` and its members in a workspace, you can always
+define each package as its own independent project, with inter-package dependencies defined as path
 dependencies in `tool.uv.sources`:
 
 ```toml title="pyproject.toml"

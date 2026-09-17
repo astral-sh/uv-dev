@@ -22,6 +22,8 @@ use uv_types::HashStrategyError;
 use uv_workspace::dependency_groups::DependencyGroupError;
 use uv_workspace::{DefaultGroupsError, WorkspaceError};
 
+use crate::parent_lock::ParentLockError;
+
 /// The source of a missing lockfile error.
 #[derive(Debug, Clone, Copy)]
 pub enum MissingLockfileSource {
@@ -72,6 +74,9 @@ pub enum LockError {
         "The lockfile at `uv.lock` needs to be updated, but {1} was provided: Missing workspace member `{0}`."
     )]
     LockWorkspaceMismatch(PackageName, MissingLockfileSource),
+
+    #[error(transparent)]
+    ParentLock(#[from] ParentLockError),
 
     #[error(
         "The lockfile at `uv.lock` uses an unsupported schema version (v{1}, but only v{0} is supported). Downgrade to a compatible uv version, or remove the `uv.lock` prior to running `uv lock` or `uv sync`."
@@ -186,6 +191,7 @@ impl From<LockError> for UvError {
             error @ (LockError::LockMismatch(..)
             | LockError::LockFormat(..)
             | LockError::MissingLockfile(..)
+            | LockError::ParentLock(..)
             | LockError::LockWorkspaceMismatch(..)) => Self::user(error),
             LockError::Resolve(error) => Self::from(*error),
             error @ (LockError::UnsupportedLockVersion(..)
@@ -235,6 +241,7 @@ impl Hinted for LockError {
             Self::Lock(error) => error.hints(),
             Self::PythonSelection(error) => error.hints(),
             Self::MissingLockfile(..)
+            | Self::ParentLock(..)
             | Self::UnsupportedLockVersion(..)
             | Self::UnparsableLockVersion(..)
             | Self::LockSerialization(_)
