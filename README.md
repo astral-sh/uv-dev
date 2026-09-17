@@ -11,6 +11,10 @@ The reporter asks whether a skill such as `ppt-master` can use uv instead of pip
 conflicts. They do not provide a failing uv command, platform, version, error, or link to the
 skill's implementation.
 
+Repository member `zsol` confirmed that the answer is yes and directed the reporter to uv's
+[scripts guide](https://docs.astral.sh/uv/guides/scripts/). This maintainer response agrees with
+the reproduction and implementation evidence below.
+
 uv already provides the relevant building blocks. PEP 723 inline metadata can give each script
 its own declared dependency set; `uv add --script` edits those declarations; and `uv run` creates
 and reuses the environment needed to run the script. A script lockfile is optional and can be
@@ -138,6 +142,10 @@ manifest behavior.
   implemented `uv lock --script`, which can create an adjacent lockfile for a skill script.
 
 ## Supporting evidence
+
+Repository member `zsol` answered the question affirmatively and recommended the scripts guide in
+the discussion on astral-sh/uv#21772. This establishes the maintainer-supported direction without
+adding any new requirement or limitation specific to `ppt-master`.
 
 The current scripts guide recommends a project or inline metadata for declaring dependencies. It
 documents `uv add --script`, says `uv run` automatically creates an environment with the script's
