@@ -849,7 +849,11 @@ fn render_versions(
         } else {
             ""
         };
-        let yanked = if row.metadata.yanked { " (yanked)" } else { "" };
+        let yanked = if row.metadata.yanked.is_yanked() {
+            " (yanked)"
+        } else {
+            ""
+        };
         lines.push(format!(
             "{prefix}{pointer}{satisfied}{package_name}-{}{yanked}",
             row.label
@@ -871,7 +875,7 @@ fn matching_versions<'a>(
         .versions
         .iter()
         .filter(|(version, metadata)| {
-            if metadata.yanked {
+            if metadata.yanked.is_yanked() {
                 return requirement.is_none();
             }
             requirement
