@@ -46,6 +46,7 @@ use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache, WorkspaceError};
 
 use crate::commands::ExitStatus;
 use crate::commands::pip::operations;
+use crate::commands::project::resolution_axes::member_workspace_axes_python_view;
 use crate::commands::project::{ProjectError, find_requires_python};
 use crate::commands::reporters::PythonDownloadReporter;
 use crate::printer::Printer;
@@ -611,6 +612,21 @@ async fn build_package(
     // (3) `Requires-Python` in `pyproject.toml`
     if interpreter_request.is_none() {
         if let Ok(workspace) = workspace {
+            let source_directory = match &source.source {
+                Source::Directory(source_directory) => {
+                    Some(normalize_path(source_directory.as_ref()))
+                }
+                Source::File(_) => None,
+            };
+            let axis_workspace = if let Some(source_directory) = source_directory
+                && let Some((member, _)) = workspace.packages().iter().find(|(_, member)| {
+                    normalize_path(member.root().as_path()).as_ref() == source_directory.as_ref()
+                }) {
+                member_workspace_axes_python_view(workspace, member, &NoSources::All)?
+            } else {
+                None
+            };
+            let workspace = axis_workspace.as_ref().unwrap_or(workspace);
             let groups = DependencyGroupsWithDefaults::none();
             interpreter_request = find_requires_python(workspace, &groups)?
                 .as_ref()

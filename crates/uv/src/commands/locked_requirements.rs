@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use anyhow::Result;
+use rustc_hash::FxHashSet;
 use tracing::info_span;
 
 use uv_configuration::Upgrade;
@@ -8,6 +9,7 @@ use uv_distribution_types::IndexUrl;
 use uv_fs::CWD;
 use uv_git::ResolvedRepositoryReference;
 use uv_lock::{Lock, LockError, PylockToml, PylockTomlErrorKind};
+use uv_normalize::PackageName;
 use uv_pep508::VerbatimUrl;
 use uv_requirements_txt::RequirementsTxt;
 use uv_resolver::{Preference, PreferenceError, UpgradePackages};
@@ -66,15 +68,15 @@ pub(crate) async fn read_requirements_txt(
     })
 }
 
-/// Load the preferred requirements from an existing lockfile, applying the upgrade strategy.
-pub(crate) fn read_lock_requirements(
-    lock: &Lock,
-    install_path: &Path,
-    upgrade: &Upgrade,
-) -> Result<LockedRequirements, LockError> {
-    // As an optimization, skip iterating over the lockfile is we're upgrading all packages anyway.
+/// Expand a project upgrade selection against the lockfile's dependency groups. This is
+/// independent of whether a locked distribution has a version suitable for a resolver preference.
+pub(crate) fn upgrade_packages_for_lock(lock: &Lock, upgrade: &Upgrade) -> FxHashSet<PackageName> {
     if upgrade.is_all() {
-        return Ok(LockedRequirements::default());
+        return lock
+            .packages()
+            .iter()
+            .map(|package| package.name().clone())
+            .collect();
     }
 
     // Resolve the full set of packages to upgrade, combining `--upgrade-package` and
@@ -105,6 +107,20 @@ pub(crate) fn read_lock_requirements(
             }
         }
     }
+    upgrade_packages
+}
+
+/// Load the preferred requirements from an existing lockfile, applying the upgrade strategy.
+pub(crate) fn read_lock_requirements(
+    lock: &Lock,
+    install_path: &Path,
+    upgrade: &Upgrade,
+) -> Result<LockedRequirements, LockError> {
+    // As an optimization, skip iterating over the lockfile is we're upgrading all packages anyway.
+    if upgrade.is_all() {
+        return Ok(LockedRequirements::default());
+    }
+    let upgrade_packages = upgrade_packages_for_lock(lock, upgrade);
 
     let mut preferences = Vec::new();
     let mut git = Vec::new();

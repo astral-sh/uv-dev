@@ -8,7 +8,7 @@ use uv_python::downloads::ManagedPythonDownloadList;
 
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
-use uv_configuration::DependencyGroupsWithDefaults;
+use uv_configuration::{DependencyGroupsWithDefaults, NoSources};
 use uv_fs::Simplified;
 use uv_python::{
     EnvironmentPreference, PYTHON_VERSION_FILENAME, PythonDownloads, PythonInstallation,
@@ -18,6 +18,7 @@ use uv_settings::PythonInstallMirrors;
 use uv_warnings::{warn_user_once, warn_user_once_with_chain};
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
 
+use crate::commands::project::resolution_axes::member_workspace_axes_python_view;
 use crate::commands::{
     ExitStatus, project::find_requires_python, reporters::PythonDownloadReporter,
 };
@@ -340,7 +341,14 @@ fn assert_pin_compatible_with_project(pin: &Pin, virtual_project: &VirtualProjec
                 project_workspace.workspace().install_path().display()
             );
 
-            let requires_python = find_requires_python(project_workspace.workspace(), &groups)?;
+            let workspace = project_workspace.workspace();
+            let axis_workspace = member_workspace_axes_python_view(
+                workspace,
+                project_workspace.project_name(),
+                &NoSources::All,
+            )?;
+            let requires_python =
+                find_requires_python(axis_workspace.as_ref().unwrap_or(workspace), &groups)?;
             (requires_python, "project")
         }
         VirtualProject::NonProject(workspace) => {

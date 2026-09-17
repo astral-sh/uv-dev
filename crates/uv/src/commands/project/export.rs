@@ -26,7 +26,10 @@ use uv_requirements::is_pylock_toml;
 use uv_scripts::Pep723Script;
 use uv_settings::PythonInstallMirrors;
 use uv_warnings::warn_user;
-use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, WorkspaceCache};
+use uv_workspace::{
+    DiscoveryOptions, MemberDiscovery, VirtualProject, WorkspaceAxisAssignment,
+    WorkspaceAxisSelection, WorkspaceCache,
+};
 
 use crate::commands::pip::loggers::DefaultResolveLogger;
 use crate::commands::project::install_target::InstallTarget;
@@ -35,6 +38,11 @@ use crate::commands::project::lock::{
     workspace_selection_members,
 };
 use crate::commands::project::lock_target::LockTarget;
+use crate::commands::project::resolution_axes::{
+    command_workspace_axes, command_workspace_axes_python_view,
+    command_workspace_axis_default_groups, discover_frozen_workspace_axis_project,
+    locked_command_workspace_axes, locked_workspace_axis_default_groups,
+};
 use crate::commands::project::{
     ProjectEnvironmentPolicy, ProjectInterpreter, ScriptInterpreter, UniversalState,
     WorkspacePython, detect_conflicts,
@@ -78,6 +86,10 @@ struct BatchExport {
     #[serde(default)]
     all_packages: bool,
     #[serde(default)]
+    all_matching_packages: bool,
+    #[serde(default)]
+    resolution_axes: WorkspaceAxisSelection,
+    #[serde(default)]
     extra: Vec<ExtraName>,
     #[serde(default)]
     no_extra: Vec<ExtraName>,
@@ -116,6 +128,11 @@ impl ExportBatch {
             if entry.all_packages && !entry.package.is_empty() {
                 bail!("`all-packages` cannot be combined with `package`");
             }
+            if entry.all_matching_packages && (entry.all_packages || !entry.package.is_empty()) {
+                bail!(
+                    "`all-matching-packages` cannot be combined with `all-packages` or `package`"
+                );
+            }
             if entry.all_extras && !entry.extra.is_empty() {
                 bail!("`all-extras` cannot be combined with `extra`");
             }
@@ -138,6 +155,8 @@ pub(crate) async fn export(
     all_packages: bool,
     mut package: Vec<PackageName>,
     workspace_group: Option<GroupName>,
+    resolution_axes: Vec<WorkspaceAxisAssignment>,
+    all_matching_packages: bool,
     prune: Vec<PackageName>,
     hashes: bool,
     install_options: InstallOptions,
@@ -183,7 +202,7 @@ pub(crate) async fn export(
     let target = if let Some(script) = script {
         ExportTarget::Script(script)
     } else {
-        let project = if frozen.is_some() {
+        let project = if let Some(frozen) = frozen {
             let options = DiscoveryOptions {
                 members: if package.is_empty()
                     && batch.as_ref().is_none_or(|batch| {
@@ -197,12 +216,13 @@ pub(crate) async fn export(
             };
 
             if let [name] = package.as_slice() {
-                VirtualProject::discover_with_package(
+                discover_frozen_workspace_axis_project(
                     project_dir,
                     &options,
+                    Some(name),
+                    frozen,
                     cache,
                     workspace_cache,
-                    name.clone(),
                 )
                 .await?
             } else {
@@ -237,12 +257,63 @@ pub(crate) async fn export(
         ExportTarget::Project(project)
     };
 
+    let default_groups = match &target {
+        ExportTarget::Project(project) => {
+            match command_workspace_axis_default_groups(project, &package, frozen).await? {
+                Some(defaults) => defaults,
+                None => project.default_groups()?,
+            }
+        }
+        ExportTarget::Script(_) => DefaultGroups::default(),
+    };
+    let selected_groups = groups.with_defaults(default_groups);
+    let selected_extras = extras.with_defaults(DefaultExtras::default());
     let mut selection_members = match &target {
         ExportTarget::Project(project) => {
             workspace_selection_members(project, &package, all_packages)
         }
         ExportTarget::Script(_) => BTreeSet::new(),
     };
+    let axis_selection = if batch.is_none() {
+        match &target {
+            ExportTarget::Project(project) => command_workspace_axes(
+                project,
+                &resolution_axes,
+                &package,
+                all_packages,
+                all_matching_packages,
+                &selected_extras,
+                &selected_groups,
+                frozen,
+                &settings.sources,
+            )
+            .await
+            .map_err(UvError::from)?,
+            ExportTarget::Script(_) => {
+                if !resolution_axes.is_empty() || all_matching_packages {
+                    bail!("Workspace resolution axes are not supported for scripts");
+                }
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let batch_axis_workspace = if batch.is_some() && frozen.is_none() {
+        match &target {
+            ExportTarget::Project(project) => command_workspace_axes_python_view(
+                project.workspace(),
+                &resolution_axes,
+                &settings.sources,
+            )?,
+            ExportTarget::Script(_) => None,
+        }
+    } else {
+        None
+    };
+    if let Some(selection) = &axis_selection {
+        selection_members.clone_from(&selection.members);
+    }
     let explicit_workspace_group = workspace_group.is_some();
     let workspace_group = match &target {
         ExportTarget::Project(project) => command_workspace_group(
@@ -307,13 +378,16 @@ pub(crate) async fn export(
                 let interpreter_groups = if batch.is_some() {
                     DependencyGroupsWithDefaults::none()
                 } else {
-                    groups.with_defaults(project.default_groups()?)
+                    selected_groups.clone()
                 };
                 let workspace_python = WorkspacePython::from_request(
                     python.as_deref().map(PythonRequest::parse),
                     Some(
-                        group_workspace
+                        axis_selection
                             .as_ref()
+                            .map(|selection| &selection.workspace)
+                            .or(batch_axis_workspace.as_ref())
+                            .or(group_workspace.as_ref())
                             .unwrap_or_else(|| project.workspace()),
                     ),
                     &interpreter_groups,
@@ -322,8 +396,11 @@ pub(crate) async fn export(
                 )
                 .await?;
                 ProjectInterpreter::discover(
-                    group_workspace
+                    axis_selection
                         .as_ref()
+                        .map(|selection| &selection.workspace)
+                        .or(batch_axis_workspace.as_ref())
+                        .or(group_workspace.as_ref())
                         .unwrap_or_else(|| project.workspace()),
                     &interpreter_groups,
                     workspace_python,
@@ -377,14 +454,21 @@ pub(crate) async fn export(
     )
     .await
     {
-        Ok(result) => select_workspace_group_lock(
-            result.into_lock(),
-            workspace_group
-                .as_ref()
-                .filter(|group| explicit_workspace_group || group.definition.default)
-                .map(|group| &group.definition.name),
-            &selection_members,
-        )?,
+        Ok(result) => {
+            let lock = result.into_lock();
+            if lock.workspace_axes().is_some() {
+                lock
+            } else {
+                select_workspace_group_lock(
+                    lock,
+                    workspace_group
+                        .as_ref()
+                        .filter(|group| explicit_workspace_group || group.definition.default)
+                        .map(|group| &group.definition.name),
+                    &selection_members,
+                )?
+            }
+        }
         Err(err) => return Err(UvError::from(err).into()),
     };
 
@@ -394,7 +478,14 @@ pub(crate) async fn export(
         };
         let mut writers = Vec::with_capacity(batch.export.len());
         for entry in &batch.export {
-            let default_groups = project.default_groups_for_packages(&entry.package)?;
+            let default_groups = match frozen
+                .map(|_| locked_workspace_axis_default_groups(project, &lock, &entry.package))
+                .transpose()?
+                .flatten()
+            {
+                Some(defaults) => defaults,
+                None => project.default_groups_for_packages(&entry.package)?,
+            };
             let groups = DependencyGroups::from_args(
                 None,
                 entry.group.clone(),
@@ -412,13 +503,40 @@ pub(crate) async fn export(
                 entry.all_extras,
             )
             .with_defaults(DefaultExtras::default());
+            let assignments = resolution_axes
+                .iter()
+                .cloned()
+                .chain(entry.resolution_axes.iter().map(|(axis, section)| {
+                    WorkspaceAxisAssignment {
+                        axis: axis.clone(),
+                        section: section.clone(),
+                    }
+                }))
+                .collect::<Vec<_>>();
+            let entry_selection = locked_command_workspace_axes(
+                project,
+                &lock,
+                &assignments,
+                &entry.package,
+                entry.all_packages,
+                entry.all_matching_packages,
+                &extras,
+                &groups,
+            )?;
+            let selected_lock = entry_selection
+                .as_ref()
+                .map(|selection| selection.select_lock(&lock, None, &extras, &groups))
+                .transpose()?;
             writers.push(
                 render_export(
                     &target,
-                    &lock,
+                    selected_lock.as_ref().unwrap_or(&lock),
                     format,
                     entry.all_packages,
                     &entry.package,
+                    entry_selection
+                        .as_ref()
+                        .and_then(|selection| selection.matching_members.as_deref()),
                     &prune,
                     hashes,
                     &install_options,
@@ -448,12 +566,13 @@ pub(crate) async fn export(
         return Ok(ExitStatus::Success);
     }
 
-    let default_groups = match &target {
-        ExportTarget::Project(project) => project.default_groups()?,
-        ExportTarget::Script(_) => DefaultGroups::default(),
+    let groups = selected_groups;
+    let extras = selected_extras;
+    let lock = if let Some(selection) = &axis_selection {
+        selection.select_lock(&lock, None, &extras, &groups)?
+    } else {
+        lock
     };
-    let groups = groups.with_defaults(default_groups);
-    let extras = extras.with_defaults(DefaultExtras::default());
 
     render_export(
         &target,
@@ -461,6 +580,9 @@ pub(crate) async fn export(
         format,
         all_packages,
         &package,
+        axis_selection
+            .as_ref()
+            .and_then(|selection| selection.matching_members.as_deref()),
         &prune,
         hashes,
         &install_options,
@@ -494,6 +616,7 @@ async fn render_export<'output>(
     format: Option<ExportFormat>,
     all_packages: bool,
     package: &[PackageName],
+    matching_packages: Option<&[PackageName]>,
     prune: &[PackageName],
     hashes: bool,
     install_options: &InstallOptions,
@@ -513,55 +636,71 @@ async fn render_export<'output>(
     preview: Preview,
 ) -> Result<OutputWriter<'output>> {
     // Identify the installation target.
-    let target = match target {
-        ExportTarget::Project(VirtualProject::Project(project)) => {
-            if all_packages {
-                InstallTarget::Workspace {
-                    workspace: project.workspace(),
-                    lock,
-                }
-            } else {
-                match package {
-                    // By default, install the root project.
-                    [] => InstallTarget::Project {
+    let target = if let (ExportTarget::Project(project), Some(names)) = (target, matching_packages)
+    {
+        match names {
+            [name] => InstallTarget::Project {
+                workspace: project.workspace(),
+                name,
+                lock,
+            },
+            names => InstallTarget::Projects {
+                workspace: project.workspace(),
+                names,
+                lock,
+            },
+        }
+    } else {
+        match target {
+            ExportTarget::Project(VirtualProject::Project(project)) => {
+                if all_packages {
+                    InstallTarget::Workspace {
                         workspace: project.workspace(),
-                        name: project.project_name(),
                         lock,
-                    },
-                    [name] => InstallTarget::Project {
-                        workspace: project.workspace(),
-                        name,
-                        lock,
-                    },
-                    names => InstallTarget::Projects {
-                        workspace: project.workspace(),
-                        names,
-                        lock,
-                    },
+                    }
+                } else {
+                    match package {
+                        // By default, install the root project.
+                        [] => InstallTarget::Project {
+                            workspace: project.workspace(),
+                            name: project.project_name(),
+                            lock,
+                        },
+                        [name] => InstallTarget::Project {
+                            workspace: project.workspace(),
+                            name,
+                            lock,
+                        },
+                        names => InstallTarget::Projects {
+                            workspace: project.workspace(),
+                            names,
+                            lock,
+                        },
+                    }
                 }
             }
-        }
-        ExportTarget::Project(VirtualProject::NonProject(workspace)) => {
-            if all_packages {
-                InstallTarget::NonProjectWorkspace { workspace, lock }
-            } else {
-                match package {
-                    // By default, install the entire workspace.
-                    [] => InstallTarget::NonProjectWorkspace { workspace, lock },
-                    [name] => InstallTarget::Project {
-                        workspace,
-                        name,
-                        lock,
-                    },
-                    names => InstallTarget::Projects {
-                        workspace,
-                        names,
-                        lock,
-                    },
+            ExportTarget::Project(VirtualProject::NonProject(workspace)) => {
+                if all_packages {
+                    InstallTarget::NonProjectWorkspace { workspace, lock }
+                } else {
+                    match package {
+                        // By default, install the entire workspace.
+                        [] => InstallTarget::NonProjectWorkspace { workspace, lock },
+                        [name] => InstallTarget::Project {
+                            workspace,
+                            name,
+                            lock,
+                        },
+                        names => InstallTarget::Projects {
+                            workspace,
+                            names,
+                            lock,
+                        },
+                    }
                 }
             }
+            ExportTarget::Script(script) => InstallTarget::Script { script, lock },
         }
-        ExportTarget::Script(script) => InstallTarget::Script { script, lock },
     };
 
     // Validate that the set of requested extras and development groups are defined in the lockfile.

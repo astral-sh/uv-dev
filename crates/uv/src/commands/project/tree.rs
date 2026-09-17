@@ -26,7 +26,7 @@ use crate::commands::pip::resolution_markers;
 use crate::commands::project::lock::{LockMode, LockOperation};
 use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
-    ProjectEnvironmentPolicy, ProjectInterpreter, ScriptInterpreter, UniversalState,
+    ProjectEnvironmentPolicy, ProjectError, ProjectInterpreter, ScriptInterpreter, UniversalState,
     WorkspacePython,
 };
 use crate::commands::reporters::LatestVersionReporter;
@@ -89,6 +89,15 @@ pub(crate) async fn tree(
         .await?;
         LockTarget::Workspace(virtual_project.workspace())
     };
+
+    // A frozen tree cannot choose an axis context. Recognize a valid selector-aware lock before
+    // interpreter discovery, without changing ordinary discovery or lockfile error precedence.
+    if frozen.is_some()
+        && let Ok(Some(lock)) = target.read().await
+        && lock.workspace_axes().is_some()
+    {
+        return Err(ProjectError::WorkspaceAxesViewerUnsupported("uv tree").into());
+    }
 
     // Determine the groups to include.
     let default_groups = match target {
@@ -181,6 +190,10 @@ pub(crate) async fn tree(
         Ok(result) => result.into_lock(),
         Err(err) => return Err(UvError::from(err).into()),
     };
+
+    if lock.workspace_axes().is_some() {
+        return Err(ProjectError::WorkspaceAxesViewerUnsupported("uv tree").into());
+    }
 
     // Determine the markers to use for resolution.
     let markers = (!universal).then(|| {

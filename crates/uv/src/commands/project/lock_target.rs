@@ -370,6 +370,11 @@ impl<'lock> LockTarget<'lock> {
 
         // Check if the discovered workspace members match the locked workspace members.
         if let Self::Workspace(workspace) = self {
+            if existing.workspace_axes().is_some() {
+                // Selector-aware locks validate their complete root coverage while parsing.
+                // Frozen selection must not depend on every member directory being present.
+                return Ok(existing);
+            }
             if !existing.workspace_groups().is_empty() {
                 // Named groups define the locked roots. Other discovered members are only
                 // present when reachable from one of those roots.

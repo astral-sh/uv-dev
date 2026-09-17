@@ -78,6 +78,7 @@ pub(crate) mod install_target;
 pub(crate) mod lock;
 pub(crate) mod lock_target;
 pub(crate) mod remove;
+pub(crate) mod resolution_axes;
 pub(crate) mod run;
 pub(crate) mod sync;
 mod toolchain;
@@ -253,6 +254,26 @@ pub(crate) enum ProjectError {
 
     #[error("Workspace group `{0}` is not present in the lockfile; run `uv lock`")]
     MissingWorkspaceGroupLock(GroupName),
+
+    #[error("Failed to resolve workspace resolution context `{0}`")]
+    WorkspaceAxesResolution(String, #[source] Box<Self>),
+
+    #[error("Workspace resolution axes did not produce a lockfile")]
+    MissingWorkspaceAxesResolution,
+
+    #[error("No workspace resolution axes are configured")]
+    WorkspaceAxesNotConfigured,
+
+    #[error(
+        "`{0}` does not yet support workspace resolution axes; use `uv export --resolution-axis AXIS=SECTION` to select a resolution"
+    )]
+    WorkspaceAxesViewerUnsupported(&'static str),
+
+    #[error(transparent)]
+    WorkspaceAxis(#[from] uv_workspace::WorkspaceAxisError),
+
+    #[error(transparent)]
+    WorkspaceAxisSelection(#[from] uv_lock::WorkspaceAxisSelectionError),
 
     #[error("Environment marker is empty")]
     EmptyEnvironment,
@@ -3262,14 +3283,26 @@ pub(crate) fn detect_conflicts(
     for set in conflicts.iter() {
         let mut conflicts: Vec<ConflictItem> = vec![];
         for item in set.iter() {
-            if !packages.contains(item.package()) {
-                // Ignore items that are not in the install targets
-                continue;
-            }
-            let is_conflicting = match item.kind() {
-                ConflictKind::Project => groups.prod(),
-                ConflictKind::Extra(extra) => extras.contains(extra),
-                ConflictKind::Group(group1) => groups.contains(group1),
+            let is_conflicting = if let (Some(policy), ConflictKind::Group(group)) =
+                (lock.workspace_axis_command(), item.kind())
+            {
+                // A group-only inherited root is not a production package, and another group
+                // on that same root can be shadowed by the selected member. Use the exact
+                // locked owner/group activation for a selector-aware command.
+                policy
+                    .group_metadata()
+                    .active_groups(policy.members(), groups)
+                    .any(|(owner, active, _)| owner == Some(item.package()) && active == group)
+            } else {
+                if !packages.contains(item.package()) {
+                    // Ignore items that are not in the install targets.
+                    continue;
+                }
+                match item.kind() {
+                    ConflictKind::Project => groups.prod(),
+                    ConflictKind::Extra(extra) => extras.contains(extra),
+                    ConflictKind::Group(group) => groups.contains(group),
+                }
             };
             if is_conflicting {
                 conflicts.push(item.clone());

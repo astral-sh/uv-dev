@@ -57,6 +57,9 @@ use crate::commands::pip::operations::Modifications;
 use crate::commands::project::install_target::InstallTarget;
 use crate::commands::project::lock::LockMode;
 use crate::commands::project::lock_target::LockTarget;
+use crate::commands::project::resolution_axes::{
+    command_workspace_axes, command_workspace_axes_python_view,
+};
 use crate::commands::project::{
     LinkErrorReporting, PlatformState, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectError,
     ProjectInterpreter, ScriptInterpreter, UniversalState, WorkspacePython,
@@ -304,19 +307,43 @@ pub(crate) async fn add(
 
         // Enable the default groups of the project
         defaulted_groups = groups.with_defaults(project.default_groups()?);
+        let axis_workspace = if let Some(name) = project.project_name() {
+            command_workspace_axes(
+                &project,
+                &[],
+                std::slice::from_ref(name),
+                false,
+                false,
+                &defaulted_extras,
+                &defaulted_groups,
+                None,
+                &settings.resolver.sources,
+            )
+            .await?
+            .map(|selection| selection.workspace)
+        } else {
+            command_workspace_axes_python_view(
+                project.workspace(),
+                &[],
+                &settings.resolver.sources,
+            )?
+        };
+        let environment_workspace = axis_workspace
+            .as_ref()
+            .unwrap_or_else(|| project.workspace());
 
         if frozen.is_some() || no_sync {
             // Discover the interpreter.
             let workspace_python = WorkspacePython::from_request(
                 python.as_deref().map(PythonRequest::parse),
-                Some(project.workspace()),
+                Some(environment_workspace),
                 &defaulted_groups,
                 project_dir,
                 config_discovery,
             )
             .await?;
             let interpreter = ProjectInterpreter::discover(
-                project.workspace(),
+                environment_workspace,
                 &defaulted_groups,
                 workspace_python,
                 &client_builder,
@@ -336,7 +363,7 @@ pub(crate) async fn add(
         } else {
             // Discover or create the virtual environment.
             let environment = ProjectEnvironment::get_or_init(
-                project.workspace(),
+                environment_workspace,
                 &defaulted_groups,
                 python.as_deref().map(PythonRequest::parse),
                 &install_mirrors,

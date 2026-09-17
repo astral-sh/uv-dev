@@ -9,7 +9,8 @@ dependencies. Think: a FastAPI-based web application, alongside a series of libr
 versioned and maintained as separate Python packages, all in the same Git repository.
 
 In a workspace, each package defines its own `pyproject.toml`, but the workspace shares a single
-lockfile, ensuring that the workspace operates with a consistent set of dependencies.
+lockfile. By default, all members must have compatible requirements. Workspaces with intentional
+differences can opt into [resolution axes](#resolution-axes) while keeping a shared lockfile.
 
 As such, `uv lock` operates on the entire workspace at once, while `uv run` and `uv sync` operate on
 the workspace root by default, though both accept a `--package` argument, allowing you to run a
@@ -123,6 +124,117 @@ overrides the `tqdm` entry in its own `tool.uv.sources` table.
     limited by a [marker](dependencies.md#platform-specific-sources) that doesn't match the current
     platform.
 
+## Resolution axes
+
+The [`workspace-resolution-axes` preview feature](../preview.md) supports monorepos whose members
+need different Python or dependency versions. An axis defines independently selectable sections,
+such as Python 3.12 versus Python 3.13, or SQLAlchemy 1 versus SQLAlchemy 2. An axis can have more
+than two sections.
+
+For example, a workspace with `legacy-worker`, `migration-worker`, and `modern-worker` services
+could define:
+
+```toml title="pyproject.toml"
+[tool.uv]
+preview-features = ["workspace-resolution-axes"]
+
+[tool.uv.workspace]
+members = ["services/*", "packages/*"]
+
+[tool.uv.workspace.resolution-axes.python]
+py312 = { member-paths = ["services/legacy-*"], requires-python = "==3.12.*" }
+py313 = { members = ["migration-worker", "modern-worker"], requires-python = "==3.13.*" }
+
+[tool.uv.workspace.resolution-axes.sqlalchemy]
+v1 = { members = ["legacy-worker", "migration-worker"], constraint-dependencies = ["sqlalchemy>=1,<2"] }
+v2 = { members = ["modern-worker"], constraint-dependencies = ["sqlalchemy>=2,<3"] }
+
+[tool.uv.workspace.resolution-axes.protocol]
+v1 = { members = ["legacy-worker"], constraint-dependencies = ["protocol-lib>=1,<2"] }
+v2 = { members = ["migration-worker"], constraint-dependencies = ["protocol-lib>=2,<3"] }
+v3 = { members = ["modern-worker"], constraint-dependencies = ["protocol-lib>=3,<4"] }
+```
+
+The `members` entries are package names from each member's `project.name`. The `member-paths`
+entries are workspace-relative globs over members already discovered by `tool.uv.workspace`. They do
+not add new members to the workspace.
+
+A member can belong to at most one section of each axis, but it can belong to sections on several
+different axes. All of its assignments must match. In this example, `migration-worker` belongs to
+`python=py313`, `sqlalchemy=v1`, and `protocol=v2`. A member omitted from an axis is unrestricted on
+that axis; a member omitted from every axis is shared by all selections.
+
+A section's `constraint-dependencies` narrows dependencies requested by the selected packages; it
+does not add dependencies. A section's `requires-python` narrows the supported Python versions
+without changing each project's own `requires-python`. Dependencies on other workspace members must
+also be compatible with the selected sections.
+
+### Locking and consistency
+
+`uv lock` records all declared axis combinations in one `uv.lock`. Compatible combinations are
+resolved together without enumerating their full product. When a shared resolution is impossible, uv
+splits the affected combinations and tries to retain common dependency versions across the resulting
+resolutions. These alignment attempts are bounded: uv does not guarantee the globally smallest
+number of distinct versions.
+
+`uv tree` and `uv workspace metadata` do not yet support resolution-axis lockfiles. Use `uv export`
+with a selection to inspect a concrete resolution.
+
+Normal locking favors applicable versions already recorded for each context in `uv.lock`. Optional
+alignment does not replace unaffected existing pins during a selective upgrade. `--upgrade`, or a
+change to `--resolution` or `--fork-strategy`, lets uv reconsider those choices and the resolution
+partition. The default `requires-python` fork strategy favors recent versions on newer Python
+versions; `--fork-strategy fewest` permits sharing an older compatible version across those
+environments. `--resolution lowest-direct` retains each context's own direct dependency set. Without
+`resolution-axes`, workspace resolution is unchanged.
+
+### Selecting workspace members
+
+`uv run`, `uv sync`, and `uv export` accept repeated `--resolution-axis AXIS=SECTION` options. Use
+`--all-matching-packages` to operate on all members whose assignments match the selection:
+
+```console
+$ uv sync --all-matching-packages \
+    --resolution-axis python=py313 \
+    --resolution-axis sqlalchemy=v2 \
+    --resolution-axis protocol=v3
+```
+
+Requesting a member with `--package` also selects that member's assigned sections. For example,
+these commands infer all three assignments for `modern-worker`:
+
+```console
+$ uv run --package modern-worker python -m modern_worker
+$ uv export --frozen --package modern-worker
+```
+
+An omitted axis remains unresolved; uv does not choose a default section. A selector can be omitted
+when the requested members imply its value, or when the remaining choices do not affect the
+requested members or their locked dependencies. Otherwise, uv reports the ambiguous axes and asks
+for an explicit selection.
+
+Explicit package requests remain strict. `--package legacy-worker --package modern-worker` cannot
+silently drop either member, and `--all-packages` still requests every member. Use
+`--all-matching-packages` when intentionally selecting only the compatible members. Resolution axes
+cannot be combined with `tool.uv.workspace.groups`.
+
+The `batch-export` preview also supports a separate selection for each `[[export]]` entry:
+
+```toml title="exports.toml"
+[[export]]
+output-file = "requirements-modern.txt"
+all-matching-packages = true
+resolution-axes = { python = "py313", sqlalchemy = "v2", protocol = "v3" }
+```
+
+```console
+$ uv export --frozen --batch exports.toml --preview-features batch-export
+```
+
+Command-line `--resolution-axis` selections are combined with each entry's `resolution-axes`;
+contradictory assignments are errors. With `--batch`, set `all-matching-packages` in each entry
+instead of passing the command-line flag.
+
 ## Workspace layouts
 
 The most common workspace layout can be thought of as a root project with a series of accompanying
@@ -174,11 +286,12 @@ Other common use cases for workspaces include:
 - A library with a plugin system, where each plugin is a separate workspace package with a
   dependency on the root.
 
-Workspaces are _not_ suited for cases in which members have conflicting requirements, or desire a
-separate virtual environment for each member. In this case, path dependencies are often preferable.
-For example, rather than grouping `albatross` and its members in a workspace, you can always define
-each package as its own independent project, with inter-package dependencies defined as path
-dependencies in `tool.uv.sources`:
+By default, workspace members must have compatible requirements. The
+[resolution axes preview](#resolution-axes) allows intentional differences while retaining a shared
+lockfile. If members need independent lockfiles or separately managed virtual environments, path
+dependencies are often preferable. For example, rather than grouping `albatross` and its members in
+a workspace, you can define each package as its own independent project, with inter-package
+dependencies defined as path dependencies in `tool.uv.sources`:
 
 ```toml title="pyproject.toml"
 [project]
@@ -199,10 +312,10 @@ This approach conveys many of the same benefits, but allows for more fine-graine
 dependency resolution and virtual environment management (with the downside that `uv run --package`
 is no longer available; instead, commands must be run from the relevant package directory).
 
-Finally, uv's workspaces enforce a single `requires-python` for the entire workspace, taking the
-intersection of all members' `requires-python` values. If you need to support testing a given member
-on a Python version that isn't supported by the rest of the workspace, you may need to use `uv pip`
-to install that member in a separate virtual environment.
+Finally, ordinary workspaces enforce a single `requires-python` for the entire workspace, taking the
+intersection of all members' `requires-python` values. Resolution axes can restrict that
+intersection to the members and policies of each selection. For a member that needs a separately
+managed environment, you can also use `uv pip` to install it in that environment.
 
 !!! note
 

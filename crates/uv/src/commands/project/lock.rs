@@ -20,7 +20,7 @@ use uv_dispatch::BuildDispatch;
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
     DependencyMetadata, HashCollection, IndexLocations, NameRequirementSpecification, Requirement,
-    RequiresPython, UnresolvedRequirementSpecification,
+    RequirementSource, RequiresPython, UnresolvedRequirementSpecification,
 };
 use uv_git::ResolvedRepositoryReference;
 use uv_git_types::GitOid;
@@ -36,7 +36,7 @@ use uv_python::{
 };
 use uv_requirements::ExtrasResolver;
 use uv_resolver::{
-    FlatIndex, InMemoryIndex, Options, OptionsBuilder, PythonRequirement, ResolveError,
+    FlatIndex, InMemoryIndex, Options, OptionsBuilder, Preference, PythonRequirement, ResolveError,
     ResolverEnvironment, UniversalMarker,
 };
 use uv_scripts::Pep723Script;
@@ -53,6 +53,7 @@ use uv_workspace::{
 use crate::commands::locked_requirements::{LockedRequirements, read_lock_requirements};
 use crate::commands::pip::loggers::{DefaultResolveLogger, ResolveLogger, SummaryResolveLogger};
 use crate::commands::project::lock_target::{LockTarget, find_lock_format_error};
+use crate::commands::project::resolution_axes::do_lock_workspace_axes;
 use crate::commands::project::{
     MissingLockfileSource, ProjectEnvironmentPolicy, ProjectError, ProjectInterpreter,
     ScriptInterpreter, UniversalState, WorkspacePython, init_script_python_requirement,
@@ -373,11 +374,23 @@ pub(crate) async fn lock(
     } else {
         interpreter = match target {
             LockTarget::Workspace(workspace) => {
+                let axis_workspace = if let Some(axes) = workspace.resolution_axes()? {
+                    Some(workspace.resolution_axis_python_view(
+                        &axes,
+                        &axes.domain(),
+                        &settings.sources,
+                    )?)
+                } else {
+                    None
+                };
                 let workspace_groups =
                     workspace.workspace_groups_with_sources(&settings.sources)?;
                 let grouped_workspace = (!workspace_groups.is_empty())
                     .then(|| workspace.with_workspace_groups(&workspace_groups));
-                let workspace = grouped_workspace.as_ref().unwrap_or(workspace);
+                let workspace = axis_workspace
+                    .as_ref()
+                    .or(grouped_workspace.as_ref())
+                    .unwrap_or(workspace);
                 // Don't enable dependency groups' requires-python for interpreter discovery.
                 let groups = DependencyGroupsWithDefaults::none();
                 let workspace_python = WorkspacePython::from_request(
@@ -627,6 +640,7 @@ impl<'env> LockOperation<'env> {
                     self.mode,
                     check_lockfile_contents,
                     self.constraints,
+                    Vec::new(),
                     self.refresh,
                     self.settings,
                     self.client_builder,
@@ -681,6 +695,7 @@ impl<'env> LockOperation<'env> {
                     self.mode,
                     check_lockfile_contents,
                     self.constraints,
+                    Vec::new(),
                     self.refresh,
                     self.settings,
                     self.client_builder,
@@ -777,6 +792,7 @@ async fn do_lock_workspace_groups(
             mode,
             None,
             external.clone(),
+            Vec::new(),
             refresh,
             settings,
             client_builder,
@@ -836,7 +852,7 @@ async fn do_lock_workspace_groups(
 }
 
 /// Only incompatibilities in the dependency graph justify another resolution context.
-fn workspace_group_conflict(error: &ProjectError) -> bool {
+pub(super) fn workspace_group_conflict(error: &ProjectError) -> bool {
     fn resolver_conflict(error: &ResolveError) -> bool {
         match error {
             ResolveError::Dependencies(source, ..) => resolver_conflict(source),
@@ -855,13 +871,14 @@ fn workspace_group_conflict(error: &ProjectError) -> bool {
 }
 
 /// Lock the project requirements into a lockfile.
-async fn do_lock(
+pub(super) async fn do_lock(
     target: LockTarget<'_>,
     interpreter: &Interpreter,
     existing_lock: Option<Lock>,
     mode: LockMode<'_>,
     check_lockfile_contents: Option<String>,
     external: Vec<NameRequirementSpecification>,
+    additional_preferences: Vec<Preference>,
     refresh: Option<&Refresh>,
     settings: &ResolverSettings,
     client_builder: &BaseClientBuilder<'_>,
@@ -876,6 +893,58 @@ async fn do_lock(
     if let LockTarget::Workspace(workspace) = target
         && !workspace.is_workspace_group_resolution()
     {
+        if let Some(axes) = workspace.resolution_axes()? {
+            return Box::pin(do_lock_workspace_axes(
+                workspace,
+                axes,
+                interpreter,
+                existing_lock,
+                mode,
+                check_lockfile_contents,
+                external,
+                additional_preferences,
+                refresh,
+                settings,
+                client_builder,
+                state,
+                logger,
+                concurrency,
+                cache,
+                workspace_cache,
+                printer,
+                preview,
+            ))
+            .await;
+        }
+        if let Some(previous) = existing_lock.as_ref()
+            && let Some(axes) = previous.workspace_axes()
+        {
+            // Removing the axis configuration requires an ordinary solve. A selector-aware lock
+            // is not evidence that all of its formerly alternative roots can coexist.
+            let preferences = previous.workspace_axis_preferences(&axes.model().domain())?;
+            let lock = Box::pin(do_lock(
+                target,
+                interpreter,
+                preferences,
+                mode,
+                None,
+                external,
+                additional_preferences,
+                refresh,
+                settings,
+                client_builder,
+                state,
+                logger,
+                concurrency,
+                cache,
+                workspace_cache,
+                printer,
+                preview,
+            ))
+            .await?
+            .into_lock();
+            return Ok(LockResult::Changed(existing_lock, lock));
+        }
         let groups = workspace.workspace_groups_with_sources(&settings.sources)?;
         if !groups.is_empty() {
             return Box::pin(do_lock_workspace_groups(
@@ -1199,6 +1268,23 @@ async fn do_lock(
             .chain(lock_required_environments.iter().copied())
             .collect(),
     );
+    let workspace_axis_resolution = matches!(target, LockTarget::Workspace(workspace) if workspace.is_workspace_axis_resolution());
+    let unavailable_workspace_members = match target {
+        LockTarget::Workspace(workspace) => workspace.unavailable_workspace_members().clone(),
+        LockTarget::Script(_) => BTreeMap::new(),
+    };
+    let expected_workspace_members = match target {
+        LockTarget::Workspace(workspace) if workspace.is_workspace_axis_resolution() => workspace
+            .members_requirements()
+            .filter_map(|requirement| match requirement.source {
+                RequirementSource::Directory { install_path, .. } => {
+                    Some((requirement.name, install_path.into_path_buf()))
+                }
+                _ => None,
+            })
+            .collect(),
+        LockTarget::Workspace(_) | LockTarget::Script(_) => BTreeMap::new(),
+    };
 
     let options = OptionsBuilder::new()
         .resolution_mode(*resolution)
@@ -1208,6 +1294,7 @@ async fn do_lock(
         .index_strategy(*index_strategy)
         .build_options(build_options.clone())
         .artifact_environments(artifact_environments.clone())
+        .unavailable_workspace_members(unavailable_workspace_members)
         .build();
     // Checking an existing lockfile may build metadata and install build dependencies. Verify any
     // artifacts recorded in that lockfile, including for an ordinary unlocked command.
@@ -1364,6 +1451,24 @@ async fn do_lock(
         ))
         .await
         {
+            // External constraints, scoped local-source availability, and authoritative axis
+            // manifest roots are not part of an ordinary persisted manifest. They must reach
+            // the resolver even when the project metadata itself still matches the lockfile.
+            Ok(ValidatedLock::Satisfies(lock))
+                if !external.is_empty()
+                    || (workspace_axis_resolution
+                        && !lock.has_authoritative_workspace_axis_manifest_roots())
+                    || !lock.satisfies_workspace_member_availability(
+                        target.install_path(),
+                        &options.unavailable_workspace_members,
+                    )
+                    || !lock.satisfies_workspace_member_sources(
+                        target.install_path(),
+                        &expected_workspace_members,
+                    ) =>
+            {
+                Some(ValidatedLock::Preferable(lock))
+            }
             Ok(result) => Some(result),
             Err(ProjectError::Lock(err)) if err.is_resolution() || err.is_no_build() => {
                 // Resolver errors are not recoverable, as such errors can leave the resolver in a
@@ -1419,10 +1524,14 @@ async fn do_lock(
             });
 
             // If an existing lockfile exists, build up a set of preferences.
-            let LockedRequirements { preferences, git } = versions_lock
+            let LockedRequirements {
+                mut preferences,
+                git,
+            } = versions_lock
                 .map(|lock| read_lock_requirements(lock, target.install_path(), upgrade))
                 .transpose()?
                 .unwrap_or_default();
+            preferences.extend(additional_preferences);
 
             // Populate the Git resolver.
             for ResolvedRepositoryReference { reference, sha } in git {
@@ -1540,7 +1649,15 @@ async fn do_lock(
                 index_locations,
                 preview.is_enabled(PreviewFeature::LockWithoutMetadata),
             )?
-            .with_conflicts(conflicts)
+            .with_conflicts(conflicts);
+            let lock = if workspace_axis_resolution {
+                lock.with_authoritative_workspace_axis_manifest_roots(
+                    &resolution,
+                    target.install_path(),
+                )?
+            } else {
+                lock
+            }
             .with_required_environments(lock_required_environments.into_markers());
 
             let lock = if preview.is_enabled(PreviewFeature::MissingExcludeNewerPackageLock) {

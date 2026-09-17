@@ -169,6 +169,12 @@ impl From<project::ProjectError> for UvError {
             | project::ProjectError::LockFormat(..)
             | project::ProjectError::MissingLockfile(..)
             | project::ProjectError::LockWorkspaceMismatch(..)) => Self::user(error),
+            project::ProjectError::WorkspaceAxesResolution(selection, error) => Self::from(*error)
+                .map_user(|error| {
+                    error.context(format!(
+                        "Failed to resolve workspace resolution context `{selection}`"
+                    ))
+                }),
             project::ProjectError::Operation(error) => Self::from(error),
             project::ProjectError::Requirements(error) => {
                 Self::from(pip::operations::Error::Requirements(error))
