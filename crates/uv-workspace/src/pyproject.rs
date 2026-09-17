@@ -994,6 +994,22 @@ pub(crate) struct ToolUvWorkspace {
         "#
     )]
     pub(crate) members: Option<Vec<SerdePattern>>,
+    /// Independently locked child workspaces.
+    ///
+    /// Supports globs and explicit paths relative to this workspace root. Each selected directory
+    /// must be a strict descendant of this workspace and contain a `tool.uv.workspace` table.
+    /// Child workspace roots and their packages must not also be included in `members`.
+    /// Child workspaces have their own lockfiles and environments, and prefer versions from the
+    /// nearest registered parent's lockfile when resolving dependencies.
+    #[option(
+        default = "[]",
+        value_type = "list[str]",
+        example = r#"
+            workspaces = ["services/*", "tools/release"]
+        "#
+    )]
+    #[cfg_attr(test, serde(skip_serializing_if = "Option::is_none"))]
+    pub(crate) workspaces: Option<Vec<SerdePattern>>,
     /// Packages to exclude as workspace members. If a package matches both `members` and
     /// `exclude`, it will be excluded.
     ///

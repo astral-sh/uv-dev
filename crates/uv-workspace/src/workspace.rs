@@ -7,7 +7,7 @@ use std::error::Error;
 use std::fmt;
 use std::fmt::Display;
 use std::hash::BuildHasherDefault;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use glob::{GlobError, MatchOptions, Pattern, PatternError, glob};
@@ -211,8 +211,20 @@ pub enum WorkspaceErrorKind {
     MissingWorkspace(PathBuf),
     #[error("The project is marked as unmanaged: {}", _0.simplified_display())]
     NonWorkspace(PathBuf),
-    #[error("Nested workspaces are not supported, but workspace member has a `tool.uv.workspace` table: {}", _0.simplified_display())]
+    #[error("Workspace member `{}` is a workspace root; register it in `tool.uv.workspace.workspaces` instead", _0.simplified_display())]
     NestedWorkspace(PathBuf),
+    #[error("Child workspace `{}` is missing a `pyproject.toml` (matches: `{}`)", _0.simplified_display(), _1)]
+    MissingChildWorkspace(PathBuf, String),
+    #[error("Child workspace `{}` must contain a `tool.uv.workspace` table", _0.simplified_display())]
+    MissingChildWorkspaceDefinition(PathBuf),
+    #[error("Child workspace path `{}` is not a directory", _0.simplified_display())]
+    ChildWorkspaceNotDirectory(PathBuf),
+    #[error("Child workspace pattern `{pattern}` must be a relative path below `{}`", workspace.simplified_display())]
+    InvalidChildWorkspacePattern { workspace: PathBuf, pattern: String },
+    #[error("Child workspace `{}` must be a strict descendant of `{}`", child.simplified_display(), workspace.simplified_display())]
+    ChildWorkspaceOutside { workspace: PathBuf, child: PathBuf },
+    #[error("Workspace member `{}` overlaps independently locked child workspace `{}`", member.simplified_display(), child.simplified_display())]
+    ChildWorkspaceMemberOverlap { member: PathBuf, child: PathBuf },
     #[error("The workspace does not have a member {}: {}", _0, _1.simplified_display())]
     NoSuchMember(PackageName, PathBuf),
     #[error("Two workspace members are both named `{name}`: `{}` and `{}`", first.simplified_display(), second.simplified_display())]
@@ -233,6 +245,8 @@ pub enum WorkspaceErrorKind {
     // Syntax and other errors.
     #[error("Directory walking failed for `tool.uv.workspace.members` glob: `{0}`")]
     GlobWalk(String, #[source] GlobError),
+    #[error("Directory walking failed for `tool.uv.workspace.workspaces` glob: `{0}`")]
+    ChildWorkspaceGlobWalk(String, #[source] GlobError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error("Failed to parse: `{}`", _0.user_display())]
@@ -1046,6 +1060,57 @@ impl Workspace {
         }
     }
 
+    /// Return the nearest ancestor that explicitly registers this workspace.
+    ///
+    /// This lookup does not read a lockfile or discover the parent's other members. Callers can
+    /// defer it until a new resolution is needed, so an existing child lockfile remains usable
+    /// without its parent.
+    pub async fn parent_workspace_root(
+        &self,
+        options: &DiscoveryOptions,
+        cache: &Cache,
+    ) -> Result<Option<PathBuf>, WorkspaceError> {
+        find_parent_workspace_root(
+            &self.install_path,
+            &self.pyproject_toml,
+            Some(self.packages()),
+            options,
+            cache,
+        )
+        .await
+    }
+
+    /// Return the independently locked workspaces registered directly by this workspace.
+    ///
+    /// The returned paths are canonical, sorted, and deduplicated. A workspace matched by a more
+    /// distant ancestor's glob is omitted when a nearer ancestor also registers it. Reading a
+    /// child root does not discover its members or read its lockfile.
+    pub async fn child_workspace_roots(
+        &self,
+        options: &DiscoveryOptions,
+        cache: &Cache,
+    ) -> Result<Vec<PathBuf>, WorkspaceError> {
+        let Some(workspace) = workspace_definition(&self.pyproject_toml) else {
+            return Ok(Vec::new());
+        };
+        let children = WorkspaceChildren::new(&self.install_path, workspace)?;
+        if children.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let workspace_root = fs_err::tokio::canonicalize(&self.install_path).await?;
+        let mut child_roots = Vec::new();
+        for (child_root, pyproject_toml) in children.validated_roots(options, cache).await? {
+            let parent =
+                find_parent_workspace_root(&child_root, &pyproject_toml, None, options, cache)
+                    .await?;
+            if parent.as_ref() == Some(&workspace_root) {
+                child_roots.push(child_root);
+            }
+        }
+        Ok(child_roots)
+    }
+
     /// Collect the workspace member projects and build the workspace object.
     async fn build(
         workspace_root: PathBuf,
@@ -1145,6 +1210,19 @@ impl Workspace {
         cache: &Cache,
     ) -> Result<BTreeMap<PackageName, WorkspaceMember>, WorkspaceError> {
         let mut workspace_members = BTreeMap::new();
+        let child_workspaces = WorkspaceChildren::new(workspace_root, workspace_definition)?;
+        // A parent validates its child roots without collecting their independently resolved
+        // members. Partial discovery can omit roots that are not present in an isolated checkout.
+        let child_roots: BTreeSet<PathBuf> = match &options.members {
+            MemberDiscovery::None => BTreeSet::new(),
+            MemberDiscovery::All | MemberDiscovery::Existing | MemberDiscovery::Ignore(_) => {
+                child_workspaces
+                    .validated_roots(options, cache)
+                    .await?
+                    .into_keys()
+                    .collect()
+            }
+        };
         // Avoid reading a `pyproject.toml` more than once.
         let mut seen = FxHashSet::default();
 
@@ -1376,7 +1454,28 @@ impl Workspace {
             }
         }
 
-        // Test for nested workspaces.
+        // An independently locked child cannot also contribute packages to this workspace.
+        if !child_roots.is_empty() {
+            for member in workspace_members.values() {
+                if member.root() == workspace_root {
+                    continue;
+                }
+                let member_root = fs_err::tokio::canonicalize(member.root()).await?;
+                if let Some(child_root) = child_roots
+                    .iter()
+                    .find(|child_root| member_root.starts_with(child_root))
+                {
+                    return Err(WorkspaceErrorKind::ChildWorkspaceMemberOverlap {
+                        member: member.root().clone(),
+                        child: child_root.clone(),
+                    }
+                    .into());
+                }
+            }
+        }
+
+        // A nested workspace selected as an ordinary member still cannot be resolved as part of
+        // this workspace.
         for member in workspace_members.values() {
             if member.root() != workspace_root
                 && member
@@ -1828,6 +1927,552 @@ impl ProjectWorkspace {
             workspace: result?,
         })
     }
+}
+
+/// The independently locked workspaces declared by one workspace root.
+struct WorkspaceChildren<'workspace> {
+    workspace_root: &'workspace Path,
+    patterns: Vec<ChildWorkspacePattern>,
+}
+
+struct ChildWorkspacePattern {
+    relative: PathBuf,
+    absolute: Pattern,
+    original: String,
+    has_glob: bool,
+}
+
+impl ChildWorkspacePattern {
+    fn new(workspace_root: &Path, child_glob: &str) -> Result<Self, WorkspaceError> {
+        let relative = normalize_path(Path::new(child_glob));
+        if relative.as_os_str().is_empty()
+            || relative.components().any(|component| match component {
+                Component::Prefix(_) | Component::RootDir | Component::ParentDir => true,
+                Component::CurDir | Component::Normal(_) => false,
+            })
+        {
+            return Err(WorkspaceErrorKind::InvalidChildWorkspacePattern {
+                workspace: workspace_root.to_path_buf(),
+                pattern: child_glob.to_string(),
+            }
+            .into());
+        }
+
+        Ok(Self {
+            absolute: Self::absolute_pattern(workspace_root, relative.as_ref())?,
+            relative: relative.into_owned(),
+            original: child_glob.to_string(),
+            has_glob: child_glob.contains(['*', '?', '[']),
+        })
+    }
+
+    fn absolute_pattern(
+        workspace_root: &Path,
+        child_glob: &Path,
+    ) -> Result<Pattern, WorkspaceError> {
+        let absolute = PathBuf::from(Pattern::escape(
+            workspace_root.simplified().to_string_lossy().as_ref(),
+        ))
+        .join(child_glob);
+        let absolute = normalize_path(&absolute);
+        let absolute = absolute.to_string_lossy();
+        Pattern::new(&absolute)
+            .map_err(|err| WorkspaceErrorKind::Pattern(absolute.to_string(), err).into())
+    }
+}
+
+impl<'workspace> WorkspaceChildren<'workspace> {
+    fn new(
+        workspace_root: &'workspace Path,
+        workspace: &ToolUvWorkspace,
+    ) -> Result<Self, WorkspaceError> {
+        let patterns = workspace
+            .workspaces
+            .iter()
+            .flatten()
+            .map(|child_glob| ChildWorkspacePattern::new(workspace_root, child_glob.as_str()))
+            .collect::<Result<_, WorkspaceError>>()?;
+
+        Ok(Self {
+            workspace_root,
+            patterns,
+        })
+    }
+
+    /// Inspect only the registration table before committing to an ancestor as a parent.
+    fn from_registration(
+        workspace_root: &'workspace Path,
+        pyproject_toml: &toml::Value,
+        child_root: &Path,
+        canonical_child_root: &Path,
+    ) -> Result<Option<Self>, WorkspaceError> {
+        let Some(patterns) = pyproject_toml
+            .get("tool")
+            .and_then(|tool| tool.get("uv"))
+            .and_then(|uv| uv.get("workspace"))
+            .and_then(|workspace| workspace.get("workspaces"))
+            .and_then(toml::Value::as_array)
+        else {
+            return Ok(None);
+        };
+        let options = MatchOptions {
+            require_literal_separator: true,
+            ..MatchOptions::new()
+        };
+        let mut children = Vec::new();
+        for pattern in patterns.iter().filter_map(toml::Value::as_str) {
+            match ChildWorkspacePattern::new(workspace_root, pattern) {
+                Ok(pattern) => children.push(pattern),
+                Err(error) => {
+                    // Invalid declarations in unrelated ancestors do not change standalone
+                    // resolution. A declaration that directly identifies this child is still an
+                    // error, even when its path is absolute or escapes the parent.
+                    if let Ok(pattern) =
+                        ChildWorkspacePattern::absolute_pattern(workspace_root, Path::new(pattern))
+                        && (pattern.matches_path_with(child_root, options)
+                            || pattern.matches_path_with(canonical_child_root, options))
+                    {
+                        return Err(error);
+                    }
+                }
+            }
+        }
+        Ok(Some(Self {
+            workspace_root,
+            patterns: children,
+        }))
+    }
+
+    fn is_empty(&self) -> bool {
+        self.patterns.is_empty()
+    }
+
+    /// Validate child workspace roots without discovering their members.
+    async fn validated_roots(
+        &self,
+        options: &DiscoveryOptions,
+        cache: &Cache,
+    ) -> Result<BTreeMap<PathBuf, PyProjectToml>, WorkspaceError> {
+        if self.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let allow_missing = match &options.members {
+            MemberDiscovery::Existing => true,
+            MemberDiscovery::All | MemberDiscovery::None | MemberDiscovery::Ignore(_) => false,
+        };
+        let mut roots = BTreeMap::new();
+        for (child_root, pattern) in self.roots(options, cache, !allow_missing).await? {
+            let pyproject_toml = match read_child_workspace(&child_root, &pattern).await {
+                Ok(pyproject_toml) => pyproject_toml,
+                Err(error) => {
+                    if allow_missing
+                        && let WorkspaceErrorKind::MissingChildWorkspace(..) = error.as_ref()
+                    {
+                        continue;
+                    }
+                    return Err(error);
+                }
+            };
+            validate_explicit_child_workspace(&child_root, &pyproject_toml)?;
+            roots.insert(child_root, pyproject_toml);
+        }
+        Ok(roots)
+    }
+
+    /// Expand child-root paths without reading the children's metadata.
+    async fn roots(
+        &self,
+        options: &DiscoveryOptions,
+        cache: &Cache,
+        require_present: bool,
+    ) -> Result<BTreeMap<PathBuf, String>, WorkspaceError> {
+        let workspace_root = fs_err::tokio::canonicalize(self.workspace_root).await?;
+        let external_cache = discovery_cache_boundary(options, cache).filter(|boundary| {
+            !boundary.contains(self.workspace_root) && !boundary.contains(&workspace_root)
+        });
+        let mut roots = BTreeMap::new();
+
+        for pattern in &self.patterns {
+            let mut found = false;
+            for child_root in glob(pattern.absolute.as_str())
+                .map_err(|err| WorkspaceErrorKind::Pattern(pattern.absolute.to_string(), err))?
+            {
+                let child_root = child_root.map_err(|err| {
+                    WorkspaceErrorKind::ChildWorkspaceGlobWalk(pattern.absolute.to_string(), err)
+                })?;
+                found = true;
+                if external_cache
+                    .as_ref()
+                    .is_some_and(|boundary| boundary.contains(&child_root))
+                {
+                    continue;
+                }
+                let metadata = match fs_err::tokio::metadata(&child_root).await {
+                    Ok(metadata) => metadata,
+                    Err(err) if !require_present && err.kind() == std::io::ErrorKind::NotFound => {
+                        continue;
+                    }
+                    Err(err) => return Err(err.into()),
+                };
+                if !metadata.is_dir() {
+                    if !pattern.has_glob {
+                        return Err(
+                            WorkspaceErrorKind::ChildWorkspaceNotDirectory(child_root).into()
+                        );
+                    }
+                    continue;
+                }
+                let child_root = fs_err::tokio::canonicalize(child_root).await?;
+                if external_cache
+                    .as_ref()
+                    .is_some_and(|boundary| boundary.contains(&child_root))
+                {
+                    debug!(
+                        "Ignoring cache directory while discovering child workspaces: `{}`",
+                        child_root.simplified_display()
+                    );
+                    continue;
+                }
+                validate_child_workspace_containment(&workspace_root, &child_root)?;
+                roots
+                    .entry(child_root)
+                    .or_insert_with(|| pattern.original.clone());
+            }
+            if require_present && !found && !pattern.has_glob {
+                return Err(WorkspaceErrorKind::MissingChildWorkspace(
+                    self.workspace_root.join(&pattern.relative),
+                    pattern.original.clone(),
+                )
+                .into());
+            }
+        }
+        Ok(roots)
+    }
+
+    /// Match one child without reading or validating unrelated child metadata.
+    async fn contains(
+        &self,
+        child_root: &Path,
+        canonical_child_root: &Path,
+        discovery_options: &DiscoveryOptions,
+        cache: &Cache,
+    ) -> Result<bool, WorkspaceError> {
+        let options = MatchOptions {
+            require_literal_separator: true,
+            ..MatchOptions::new()
+        };
+        if self
+            .patterns
+            .iter()
+            .any(|pattern| pattern.absolute.matches_path_with(child_root, options))
+        {
+            return Ok(true);
+        }
+
+        // A registered path can be an in-tree symlink to the child's canonical root. Inspecting
+        // only the paths makes lookup consistent when the child is opened through either spelling.
+        let external_cache = discovery_cache_boundary(discovery_options, cache);
+        for pattern in &self.patterns {
+            for candidate in glob(pattern.absolute.as_str())
+                .map_err(|err| WorkspaceErrorKind::Pattern(pattern.absolute.to_string(), err))?
+            {
+                let candidate = candidate.map_err(|err| {
+                    WorkspaceErrorKind::ChildWorkspaceGlobWalk(pattern.absolute.to_string(), err)
+                })?;
+                if external_cache
+                    .as_ref()
+                    .is_some_and(|boundary| boundary.contains(&candidate))
+                {
+                    continue;
+                }
+                match fs_err::tokio::canonicalize(candidate).await {
+                    Ok(candidate)
+                        if candidate == canonical_child_root
+                            && !external_cache
+                                .as_ref()
+                                .is_some_and(|boundary| boundary.contains(&candidate)) =>
+                    {
+                        return Ok(true);
+                    }
+                    Ok(_) => {}
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(err) => return Err(err.into()),
+                }
+            }
+        }
+        Ok(false)
+    }
+}
+
+fn workspace_definition(pyproject_toml: &PyProjectToml) -> Option<&ToolUvWorkspace> {
+    pyproject_toml
+        .tool
+        .as_ref()
+        .and_then(|tool| tool.uv.as_ref())
+        .and_then(|uv| uv.workspace.as_ref())
+}
+
+fn validate_explicit_child_workspace(
+    child_root: &Path,
+    pyproject_toml: &PyProjectToml,
+) -> Result<(), WorkspaceError> {
+    if pyproject_toml
+        .tool
+        .as_ref()
+        .and_then(|tool| tool.uv.as_ref())
+        .and_then(|uv| uv.managed)
+        == Some(false)
+    {
+        return Err(WorkspaceErrorKind::NonWorkspace(child_root.to_path_buf()).into());
+    }
+    if workspace_definition(pyproject_toml).is_none() {
+        return Err(
+            WorkspaceErrorKind::MissingChildWorkspaceDefinition(child_root.to_path_buf()).into(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_child_workspace_containment(
+    workspace_root: &Path,
+    child_root: &Path,
+) -> Result<(), WorkspaceError> {
+    if child_root == workspace_root || !child_root.starts_with(workspace_root) {
+        return Err(WorkspaceErrorKind::ChildWorkspaceOutside {
+            workspace: workspace_root.to_path_buf(),
+            child: child_root.to_path_buf(),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+async fn read_child_workspace(
+    child_root: &Path,
+    pattern: &str,
+) -> Result<PyProjectToml, WorkspaceError> {
+    let pyproject_path = child_root.join("pyproject.toml");
+    let contents = match fs_err::tokio::read_to_string(&pyproject_path).await {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Err(WorkspaceErrorKind::MissingChildWorkspace(
+                child_root.to_path_buf(),
+                pattern.to_string(),
+            )
+            .into());
+        }
+        Err(err) => return Err(err.into()),
+    };
+    PyProjectToml::from_string(contents, &pyproject_path)
+        .map_err(|err| WorkspaceErrorKind::Toml(pyproject_path, Box::new(err)).into())
+}
+
+struct DiscoveryCacheBoundary {
+    root: PathBuf,
+    canonical_root: PathBuf,
+}
+
+impl DiscoveryCacheBoundary {
+    fn contains(&self, path: &Path) -> bool {
+        path.starts_with(&self.root) || path.starts_with(&self.canonical_root)
+    }
+}
+
+/// The configured cache is an isolation boundary unless the caller supplied a tighter boundary.
+fn discovery_cache_boundary(
+    options: &DiscoveryOptions,
+    cache: &Cache,
+) -> Option<DiscoveryCacheBoundary> {
+    if options.stop_discovery_at.is_some() {
+        return None;
+    }
+    let cache_root = if cache.root().is_absolute() {
+        cache.root().to_path_buf()
+    } else {
+        CWD.join(cache.root())
+    };
+    let cache_root = normalize_path(&cache_root).into_owned();
+    Some(DiscoveryCacheBoundary {
+        canonical_root: fs_err::canonicalize(&cache_root).unwrap_or_else(|_| cache_root.clone()),
+        root: cache_root,
+    })
+}
+
+async fn find_parent_workspace_root(
+    child_root: &Path,
+    child_pyproject_toml: &PyProjectToml,
+    child_members: Option<&BTreeMap<PackageName, WorkspaceMember>>,
+    options: &DiscoveryOptions,
+    cache: &Cache,
+) -> Result<Option<PathBuf>, WorkspaceError> {
+    let child_root = std::path::absolute(child_root).map_err(WorkspaceErrorKind::Normalize)?;
+    let child_root = normalize_path(&child_root);
+    let canonical_child_root = fs_err::tokio::canonicalize(child_root.as_ref()).await?;
+    let canonical_stop = match options.stop_discovery_at.as_deref() {
+        Some(stop) => Some(fs_err::tokio::canonicalize(stop).await?),
+        None => None,
+    };
+    if canonical_stop
+        .as_ref()
+        .is_some_and(|stop| !canonical_child_root.starts_with(stop))
+    {
+        return Ok(None);
+    }
+    if discovery_cache_boundary(options, cache).is_some_and(|boundary| {
+        boundary.contains(child_root.as_ref()) || boundary.contains(&canonical_child_root)
+    }) {
+        return Ok(None);
+    }
+
+    for parent_root in child_root
+        .ancestors()
+        .take_while(|path| {
+            options
+                .stop_discovery_at
+                .as_deref()
+                .and_then(Path::parent)
+                .is_none_or(|stop_discovery_at| stop_discovery_at != *path)
+        })
+        .skip(1)
+    {
+        let canonical_parent_root = if let Some(stop) = canonical_stop.as_ref() {
+            let parent = fs_err::tokio::canonicalize(parent_root).await?;
+            if !parent.starts_with(stop) {
+                break;
+            }
+            Some(parent)
+        } else {
+            None
+        };
+        let pyproject_path = parent_root.join("pyproject.toml");
+        if !pyproject_path.is_file() {
+            continue;
+        }
+        let contents = match fs_err::tokio::read_to_string(&pyproject_path).await {
+            Ok(contents) => contents,
+            Err(_) => {
+                debug!(
+                    "Ignoring unreadable ancestor `pyproject.toml` during parent workspace lookup: `{}`",
+                    pyproject_path.simplified_display()
+                );
+                continue;
+            }
+        };
+        let Ok(registration) = toml::from_str::<toml::Value>(&contents) else {
+            debug!(
+                "Ignoring malformed ancestor `pyproject.toml` during parent workspace lookup: `{}`",
+                pyproject_path.simplified_display()
+            );
+            continue;
+        };
+        let Some(children) = WorkspaceChildren::from_registration(
+            parent_root,
+            &registration,
+            child_root.as_ref(),
+            &canonical_child_root,
+        )?
+        else {
+            continue;
+        };
+        if children.is_empty()
+            || !children
+                .contains(child_root.as_ref(), &canonical_child_root, options, cache)
+                .await?
+        {
+            continue;
+        }
+
+        // Once the registration matches, the owning workspace is authoritative and all of its
+        // configuration must be valid.
+        let pyproject_toml = PyProjectToml::from_string(contents, &pyproject_path)
+            .map_err(|err| WorkspaceErrorKind::Toml(pyproject_path, Box::new(err)))?;
+        let Some(workspace) = workspace_definition(&pyproject_toml) else {
+            continue;
+        };
+        WorkspaceChildren::new(parent_root, workspace)?;
+
+        let canonical_parent_root = match canonical_parent_root {
+            Some(parent) => parent,
+            None => fs_err::tokio::canonicalize(parent_root).await?,
+        };
+        validate_child_workspace_containment(&canonical_parent_root, &canonical_child_root)?;
+        validate_explicit_child_workspace(&canonical_child_root, child_pyproject_toml)?;
+        validate_explicit_child_workspace(&canonical_parent_root, &pyproject_toml)?;
+        validate_parent_member_overlap(
+            parent_root,
+            workspace,
+            &canonical_child_root,
+            child_members,
+            options,
+            cache,
+        )
+        .await?;
+        return Ok(Some(canonical_parent_root));
+    }
+    Ok(None)
+}
+
+/// Check the parent's member paths without discovering unrelated member metadata.
+async fn validate_parent_member_overlap(
+    parent_root: &Path,
+    parent_definition: &ToolUvWorkspace,
+    child_root: &Path,
+    child_members: Option<&BTreeMap<PackageName, WorkspaceMember>>,
+    options: &DiscoveryOptions,
+    cache: &Cache,
+) -> Result<(), WorkspaceError> {
+    let canonical_parent_root = fs_err::tokio::canonicalize(parent_root).await?;
+    let external_cache = discovery_cache_boundary(options, cache).filter(|boundary| {
+        !boundary.contains(parent_root) && !boundary.contains(&canonical_parent_root)
+    });
+    let exclusions = WorkspaceExclusions::new(parent_root, parent_definition)?;
+    let mut canonical_child_members = FxHashSet::default();
+    if let Some(child_members) = child_members {
+        for member in child_members.values() {
+            canonical_child_members.insert(fs_err::tokio::canonicalize(member.root()).await?);
+        }
+    }
+
+    for member_glob in parent_definition.members.iter().flatten() {
+        let normalized_glob = normalize_path(Path::new(member_glob.as_str()));
+        let absolute_glob = PathBuf::from(Pattern::escape(
+            parent_root.simplified().to_string_lossy().as_ref(),
+        ))
+        .join(normalized_glob.as_ref())
+        .to_string_lossy()
+        .to_string();
+        for member_root in glob(&absolute_glob)
+            .map_err(|err| WorkspaceErrorKind::Pattern(absolute_glob.clone(), err))?
+        {
+            let member_root = member_root
+                .map_err(|err| WorkspaceErrorKind::GlobWalk(absolute_glob.clone(), err))?;
+            if !member_root.is_dir()
+                || exclusions.matches(&member_root)
+                || external_cache
+                    .as_ref()
+                    .is_some_and(|boundary| boundary.contains(&member_root))
+            {
+                continue;
+            }
+            let canonical_member_root = fs_err::tokio::canonicalize(&member_root).await?;
+            if external_cache
+                .as_ref()
+                .is_some_and(|boundary| boundary.contains(&canonical_member_root))
+            {
+                continue;
+            }
+            if canonical_member_root.starts_with(child_root)
+                || canonical_child_members.contains(&canonical_member_root)
+            {
+                return Err(WorkspaceErrorKind::ChildWorkspaceMemberOverlap {
+                    member: member_root,
+                    child: child_root.to_path_buf(),
+                }
+                .into());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Find the workspace root above the current project, if any.
@@ -2373,6 +3018,7 @@ impl VirtualProject {
 mod tests {
     use std::collections::BTreeMap;
     use std::env;
+    use std::os::unix::fs::symlink;
     use std::path::Path;
     use std::str::FromStr;
     use std::sync::Arc;
@@ -3581,6 +4227,537 @@ foo_bar = ["iniconfig"]
     }
 
     #[tokio::test]
+    async fn independent_child_workspaces() -> Result<()> {
+        let temporary = tempfile::TempDir::new()?;
+        let root = ChildPath::new(fs_err::canonicalize(temporary.path())?);
+        let options = DiscoveryOptions {
+            stop_discovery_at: Some(root.to_path_buf()),
+            ..DiscoveryOptions::default()
+        };
+        let cache = Cache::from_path(root.join(".uv-cache"));
+        let workspace_cache = WorkspaceCache::default();
+
+        root.child("pyproject.toml").write_str(
+            r#"
+            [tool.uv.workspace]
+            members = ["packages/*"]
+            workspaces = ["services/*", "services/./alpha", "services/alpha/nested/*"]
+            "#,
+        )?;
+        root.child("packages/shared/pyproject.toml").write_str(
+            r#"
+            [project]
+            name = "shared"
+            version = "1.0.0"
+            "#,
+        )?;
+        root.child("services/alpha/pyproject.toml").write_str(
+            r#"
+            [tool.uv.workspace]
+            members = ["packages/*"]
+            workspaces = ["nested/*"]
+            "#,
+        )?;
+        root.child("services/alpha/packages/shared/pyproject.toml")
+            .write_str(
+                r#"
+            [project]
+            name = "shared"
+            version = "2.0.0"
+            "#,
+            )?;
+        root.child("services/beta/pyproject.toml")
+            .write_str("[tool.uv.workspace]\n")?;
+        root.child("services/alpha/nested/grandchild/pyproject.toml")
+            .write_str("[tool.uv.workspace]\n")?;
+
+        let workspace =
+            Workspace::discover(root.as_ref(), &options, &cache, &workspace_cache).await?;
+        assert_eq!(workspace.packages().len(), 1);
+        assert_eq!(
+            workspace.child_workspace_roots(&options, &cache).await?,
+            vec![root.join("services/alpha"), root.join("services/beta")],
+        );
+
+        let alpha = Workspace::discover(
+            &root.join("services/alpha"),
+            &options,
+            &cache,
+            &workspace_cache,
+        )
+        .await?;
+        assert_eq!(alpha.install_path(), &root.join("services/alpha"));
+        assert_eq!(alpha.packages().len(), 1);
+        assert_eq!(
+            alpha.parent_workspace_root(&options, &cache).await?,
+            Some(root.to_path_buf()),
+        );
+        assert_eq!(
+            alpha.child_workspace_roots(&options, &cache).await?,
+            vec![root.join("services/alpha/nested/grandchild")],
+        );
+
+        let member = ProjectWorkspace::discover(
+            &root.join("services/alpha/packages/shared"),
+            &options,
+            &cache,
+            &workspace_cache,
+        )
+        .await?;
+        assert_eq!(member.workspace().install_path(), alpha.install_path());
+
+        let grandchild = Workspace::discover(
+            &root.join("services/alpha/nested/grandchild"),
+            &options,
+            &cache,
+            &workspace_cache,
+        )
+        .await?;
+        assert_eq!(
+            grandchild.parent_workspace_root(&options, &cache).await?,
+            Some(root.join("services/alpha")),
+        );
+
+        // The child remains its own workspace when upward discovery is limited to its root.
+        let standalone_options = DiscoveryOptions {
+            stop_discovery_at: Some(alpha.install_path().clone()),
+            ..DiscoveryOptions::default()
+        };
+        assert_eq!(
+            alpha
+                .parent_workspace_root(&standalone_options, &cache)
+                .await?,
+            None,
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn child_workspaces_require_explicit_roots() -> Result<()> {
+        let temporary = tempfile::TempDir::new()?;
+        let root = ChildPath::new(fs_err::canonicalize(temporary.path())?);
+        let options = DiscoveryOptions {
+            stop_discovery_at: Some(root.to_path_buf()),
+            ..DiscoveryOptions::default()
+        };
+        let cache = Cache::from_path(root.join(".uv-cache"));
+        let workspace_cache = WorkspaceCache::default();
+        root.child("pyproject.toml").write_str(
+            r#"
+            [tool.uv.workspace]
+            workspaces = ["child"]
+            "#,
+        )?;
+        root.child("child/pyproject.toml").write_str(
+            r#"
+            [project]
+            name = "child"
+            version = "1.0.0"
+            "#,
+        )?;
+
+        let children_error = Workspace::discover(root.as_ref(), &options, &cache, &workspace_cache)
+            .await
+            .expect_err("registered children require explicit workspace roots");
+        let child =
+            Workspace::discover(&root.join("child"), &options, &cache, &workspace_cache).await?;
+        let parent_error = child
+            .parent_workspace_root(&options, &cache)
+            .await
+            .expect_err("an implicit project is not an independently locked child workspace");
+        let root_escaped = regex::escape(root.to_string_lossy().as_ref());
+        insta::with_settings!({filters => vec![(root_escaped.as_str(), "[ROOT]")]}, {
+            assert_snapshot!(parent_error, @"Child workspace `[ROOT]/child` must contain a `tool.uv.workspace` table");
+            assert_snapshot!(children_error, @"Child workspace `[ROOT]/child` must contain a `tool.uv.workspace` table");
+        });
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn child_workspace_parent_lookup_ignores_siblings() -> Result<()> {
+        let temporary = tempfile::TempDir::new()?;
+        let root = ChildPath::new(fs_err::canonicalize(temporary.path())?);
+        let options = DiscoveryOptions {
+            stop_discovery_at: Some(root.to_path_buf()),
+            ..DiscoveryOptions::default()
+        };
+        let cache = Cache::from_path(root.join(".uv-cache"));
+        root.child("pyproject.toml").write_str(
+            r#"
+            [tool.uv.workspace]
+            workspaces = ["services/*"]
+            "#,
+        )?;
+        root.child("services/good/pyproject.toml")
+            .write_str("[tool.uv.workspace]\n")?;
+        root.child("services/broken/pyproject.toml")
+            .write_str("[invalid\n")?;
+        root.child("uv.lock").write_str("invalid lockfile\n")?;
+
+        let child = Workspace::discover(
+            &root.join("services/good"),
+            &options,
+            &cache,
+            &WorkspaceCache::default(),
+        )
+        .await?;
+        assert_eq!(
+            child.parent_workspace_root(&options, &cache).await?,
+            Some(root.to_path_buf()),
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn child_workspace_parent_lookup_ignores_unrelated_ancestors() -> Result<()> {
+        let temporary = tempfile::TempDir::new()?;
+        let root = ChildPath::new(fs_err::canonicalize(temporary.path())?);
+        let options = DiscoveryOptions {
+            stop_discovery_at: Some(root.to_path_buf()),
+            ..DiscoveryOptions::default()
+        };
+        let cache = Cache::from_path(root.join(".uv-cache"));
+        root.child("child/pyproject.toml")
+            .write_str("[tool.uv.workspace]\n")?;
+        let child = Workspace::discover(
+            &root.join("child"),
+            &options,
+            &cache,
+            &WorkspaceCache::default(),
+        )
+        .await?;
+
+        for pyproject in [
+            "[invalid\n",
+            "[project]\nname = 42\n",
+            "[project]\nname = 42\n[tool.uv.workspace]\nworkspaces = [\"elsewhere/*\"]\n",
+            "[tool.uv.workspace]\nworkspaces = [\"../outside\"]\n",
+        ] {
+            root.child("pyproject.toml").write_str(pyproject)?;
+            assert_eq!(child.parent_workspace_root(&options, &cache).await?, None,);
+        }
+
+        root.child("pyproject.toml")
+            .write_str("[project]\nname = 42\n[tool.uv.workspace]\nworkspaces = [\"child\"]\n")?;
+        let error = child
+            .parent_workspace_root(&options, &cache)
+            .await
+            .expect_err("a matching parent must have valid project metadata");
+        let root_escaped = regex::escape(root.to_string_lossy().as_ref());
+        insta::with_settings!({filters => vec![(root_escaped.as_str(), "[ROOT]")]}, {
+            assert_snapshot!(error, @"Failed to parse: `[ROOT]/pyproject.toml`");
+        });
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn child_workspace_member_overlap() -> Result<()> {
+        let temporary = tempfile::TempDir::new()?;
+        let root = ChildPath::new(fs_err::canonicalize(temporary.path())?);
+        let options = DiscoveryOptions {
+            stop_discovery_at: Some(root.to_path_buf()),
+            ..DiscoveryOptions::default()
+        };
+        let cache = Cache::from_path(root.join(".uv-cache"));
+        root.child("pyproject.toml").write_str(
+            r#"
+            [tool.uv.workspace]
+            members = ["child/packages/*"]
+            workspaces = ["child"]
+            "#,
+        )?;
+        root.child("child/pyproject.toml").write_str(
+            r#"
+            [tool.uv.workspace]
+            members = ["packages/*"]
+            "#,
+        )?;
+        root.child("child/packages/member/pyproject.toml")
+            .write_str(
+                r#"
+            [project]
+            name = "member"
+            version = "1.0.0"
+            "#,
+            )?;
+
+        let parent_error =
+            Workspace::discover(root.as_ref(), &options, &cache, &WorkspaceCache::default())
+                .await
+                .expect_err("a parent cannot own packages beneath an independent child root");
+        let child = Workspace::discover(
+            &root.join("child"),
+            &options,
+            &cache,
+            &WorkspaceCache::default(),
+        )
+        .await?;
+        let child_error = child
+            .parent_workspace_root(&options, &cache)
+            .await
+            .expect_err("upward lookup also validates ownership");
+        let root_escaped = regex::escape(root.to_string_lossy().as_ref());
+        insta::with_settings!({filters => vec![(root_escaped.as_str(), "[ROOT]")]}, {
+            assert_snapshot!(parent_error, @"Workspace member `[ROOT]/child/packages/member` overlaps independently locked child workspace `[ROOT]/child`");
+            assert_snapshot!(child_error, @"Workspace member `[ROOT]/child/packages/member` overlaps independently locked child workspace `[ROOT]/child`");
+        });
+
+        root.child("pyproject.toml").write_str(
+            r#"
+            [tool.uv.workspace]
+            members = ["child/packages/*"]
+            exclude = ["child/packages/*"]
+            workspaces = ["child"]
+            "#,
+        )?;
+        assert_eq!(
+            child.parent_workspace_root(&options, &cache).await?,
+            Some(root.to_path_buf()),
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn child_workspace_invalid_patterns() -> Result<()> {
+        let temporary = tempfile::TempDir::new()?;
+        let root = ChildPath::new(fs_err::canonicalize(temporary.path())?);
+        let cache = Cache::from_path(root.join(".uv-cache"));
+        let mut errors = Vec::new();
+        for pattern in [".", "children/..", "../outside", "/outside"] {
+            root.child("pyproject.toml").write_str(&format!(
+                "[tool.uv.workspace]\nworkspaces = [{pattern:?}]\n"
+            ))?;
+            let error = Workspace::discover(
+                root.as_ref(),
+                &DiscoveryOptions::default(),
+                &cache,
+                &WorkspaceCache::default(),
+            )
+            .await
+            .expect_err("child workspace patterns must stay below their root");
+            errors.push(error.to_string());
+        }
+        let root_escaped = regex::escape(root.to_string_lossy().as_ref());
+        insta::with_settings!({filters => vec![(root_escaped.as_str(), "[ROOT]")]}, {
+            assert_json_snapshot!(errors, @r#"
+            [
+              "Child workspace pattern `.` must be a relative path below `[ROOT]`",
+              "Child workspace pattern `children/..` must be a relative path below `[ROOT]`",
+              "Child workspace pattern `../outside` must be a relative path below `[ROOT]`",
+              "Child workspace pattern `/outside` must be a relative path below `[ROOT]`"
+            ]
+            "#);
+        });
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn child_workspace_invalid_roots() -> Result<()> {
+        let temporary = tempfile::TempDir::new()?;
+        let root = ChildPath::new(fs_err::canonicalize(temporary.path())?);
+        let options = DiscoveryOptions {
+            stop_discovery_at: Some(root.to_path_buf()),
+            ..DiscoveryOptions::default()
+        };
+        let cache = Cache::from_path(root.join(".uv-cache"));
+        root.child("empty").create_dir_all()?;
+        root.child("not-a-directory").write_str("file\n")?;
+        let mut errors = Vec::new();
+        for pattern in ["missing", "empty", "not-a-directory"] {
+            root.child("pyproject.toml").write_str(&format!(
+                "[tool.uv.workspace]\nworkspaces = [{pattern:?}]\n"
+            ))?;
+            let error =
+                Workspace::discover(root.as_ref(), &options, &cache, &WorkspaceCache::default())
+                    .await
+                    .expect_err("each explicit child path must be a workspace root");
+            errors.push(error.to_string());
+            if pattern != "not-a-directory" {
+                let existing_options = DiscoveryOptions {
+                    members: MemberDiscovery::Existing,
+                    ..options.clone()
+                };
+                let workspace = Workspace::discover(
+                    root.as_ref(),
+                    &existing_options,
+                    &cache,
+                    &WorkspaceCache::default(),
+                )
+                .await?;
+                assert!(
+                    workspace
+                        .child_workspace_roots(&existing_options, &cache)
+                        .await?
+                        .is_empty()
+                );
+            }
+        }
+        let root_escaped = regex::escape(root.to_string_lossy().as_ref());
+        insta::with_settings!({filters => vec![(root_escaped.as_str(), "[ROOT]")]}, {
+            assert_json_snapshot!(errors, @r#"
+            [
+              "Child workspace `[ROOT]/missing` is missing a `pyproject.toml` (matches: `missing`)",
+              "Child workspace `[ROOT]/empty` is missing a `pyproject.toml` (matches: `empty`)",
+              "Child workspace path `[ROOT]/not-a-directory` is not a directory"
+            ]
+            "#);
+        });
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn child_workspace_cache_boundary() -> Result<()> {
+        let temporary = tempfile::TempDir::new()?;
+        let root = ChildPath::new(fs_err::canonicalize(temporary.path())?);
+        let cache = Cache::from_path(root.join("cache"));
+        let options = DiscoveryOptions::default();
+        let workspace_cache = WorkspaceCache::default();
+        root.child("pyproject.toml").write_str(
+            r#"
+            [tool.uv.workspace]
+            workspaces = ["cache/clone", "services/*"]
+            "#,
+        )?;
+        root.child("cache/clone/pyproject.toml").write_str(
+            r#"
+            [tool.uv.workspace]
+            workspaces = ["child"]
+            "#,
+        )?;
+        root.child("cache/clone/child/pyproject.toml")
+            .write_str("[tool.uv.workspace]\n")?;
+        root.child("services/child/pyproject.toml")
+            .write_str("[tool.uv.workspace]\n")?;
+
+        let workspace =
+            Workspace::discover(root.as_ref(), &options, &cache, &workspace_cache).await?;
+        assert_eq!(
+            workspace.child_workspace_roots(&options, &cache).await?,
+            vec![root.join("services/child")],
+        );
+        let cached_child = Workspace::discover(
+            &root.join("cache/clone/child"),
+            &options,
+            &cache,
+            &workspace_cache,
+        )
+        .await?;
+        assert_eq!(
+            cached_child.parent_workspace_root(&options, &cache).await?,
+            None,
+        );
+        let isolated = DiscoveryOptions {
+            stop_discovery_at: Some(root.join("cache/clone")),
+            ..DiscoveryOptions::default()
+        };
+        assert_eq!(
+            cached_child
+                .parent_workspace_root(&isolated, &cache)
+                .await?,
+            Some(root.join("cache/clone")),
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn child_workspace_symlink_containment() -> Result<()> {
+        let temporary = tempfile::TempDir::new()?;
+        let root = ChildPath::new(fs_err::canonicalize(temporary.path())?);
+        let options = DiscoveryOptions {
+            stop_discovery_at: Some(root.to_path_buf()),
+            ..DiscoveryOptions::default()
+        };
+        let cache = Cache::from_path(root.join(".uv-cache"));
+        root.child("pyproject.toml").write_str(
+            r#"
+            [tool.uv.workspace]
+            workspaces = ["children/*", "aliases/*"]
+            "#,
+        )?;
+        root.child("children/child/pyproject.toml")
+            .write_str("[tool.uv.workspace]\n")?;
+        root.child("aliases").create_dir_all()?;
+        symlink(root.join("children/child"), root.join("aliases/child"))?;
+
+        let workspace =
+            Workspace::discover(root.as_ref(), &options, &cache, &WorkspaceCache::default())
+                .await?;
+        assert_eq!(
+            workspace.child_workspace_roots(&options, &cache).await?,
+            vec![root.join("children/child")],
+        );
+        let child = Workspace::discover(
+            &root.join("aliases/child"),
+            &options,
+            &cache,
+            &WorkspaceCache::default(),
+        )
+        .await?;
+        assert_eq!(
+            child.parent_workspace_root(&options, &cache).await?,
+            Some(root.to_path_buf()),
+        );
+
+        symlink(root.as_ref(), root.join("aliases/self"))?;
+        let error = workspace
+            .child_workspace_roots(&options, &cache)
+            .await
+            .expect_err("a symlink cannot register the parent as its own child");
+        let root_escaped = regex::escape(root.to_string_lossy().as_ref());
+        insta::with_settings!({filters => vec![(root_escaped.as_str(), "[ROOT]")]}, {
+            assert_snapshot!(error, @"Child workspace `[ROOT]` must be a strict descendant of `[ROOT]`");
+        });
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn child_workspace_symlink_escape() -> Result<()> {
+        let temporary = tempfile::TempDir::new()?;
+        let root = ChildPath::new(fs_err::canonicalize(temporary.path())?);
+        let outside_temporary = tempfile::TempDir::new()?;
+        let outside = ChildPath::new(fs_err::canonicalize(outside_temporary.path())?);
+        let options = DiscoveryOptions::default();
+        let cache = Cache::from_path(root.join(".uv-cache"));
+        root.child("pyproject.toml").write_str(
+            r#"
+            [tool.uv.workspace]
+            workspaces = ["outside"]
+            "#,
+        )?;
+        outside
+            .child("pyproject.toml")
+            .write_str("[tool.uv.workspace]\n")?;
+        symlink(outside.as_ref(), root.join("outside"))?;
+
+        let parent_error =
+            Workspace::discover(root.as_ref(), &options, &cache, &WorkspaceCache::default())
+                .await
+                .expect_err("a registered child cannot escape its parent through a symlink");
+        let child = Workspace::discover(
+            &root.join("outside"),
+            &options,
+            &cache,
+            &WorkspaceCache::default(),
+        )
+        .await?;
+        let child_error = child
+            .parent_workspace_root(&options, &cache)
+            .await
+            .expect_err("upward lookup checks the same canonical containment");
+        let root_escaped = regex::escape(root.to_string_lossy().as_ref());
+        let outside_escaped = regex::escape(outside.to_string_lossy().as_ref());
+        let filters = vec![
+            (root_escaped.as_str(), "[ROOT]"),
+            (outside_escaped.as_str(), "[OUTSIDE]"),
+        ];
+        insta::with_settings!({filters => filters}, {
+            assert_snapshot!(parent_error, @"Child workspace `[OUTSIDE]` must be a strict descendant of `[ROOT]`");
+            assert_snapshot!(child_error, @"Child workspace `[OUTSIDE]` must be a strict descendant of `[ROOT]`");
+        });
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn nested_workspace() -> Result<()> {
         let root = tempfile::TempDir::new()?;
         let root = ChildPath::new(root.path());
@@ -3621,7 +4798,7 @@ foo_bar = ["iniconfig"]
         insta::with_settings!({filters => filters}, {
             assert_snapshot!(
                 error,
-            @"Nested workspaces are not supported, but workspace member has a `tool.uv.workspace` table: [ROOT]/packages/seeds");
+            @"Workspace member `[ROOT]/packages/seeds` is a workspace root; register it in `tool.uv.workspace.workspaces` instead");
         });
 
         Ok(())
