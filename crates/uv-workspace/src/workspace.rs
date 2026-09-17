@@ -201,6 +201,8 @@ impl Error for WorkspaceError {
 
 #[derive(thiserror::Error, Debug)]
 pub enum WorkspaceErrorKind {
+    #[error(transparent)]
+    ResolutionAxes(#[from] crate::WorkspaceAxisError),
     #[error("Workspace group `{0}` is defined more than once")]
     DuplicateWorkspaceGroup(GroupName),
     #[error("Workspace groups `{0}` and `{1}` are both marked as default")]
@@ -809,6 +811,14 @@ impl Workspace {
                 .map(|requires_python| ((name.to_owned(), None), requires_python.clone()));
             requires.extend(top_requires);
 
+            if self
+                .resolution
+                .as_ref()
+                .is_some_and(|resolution| resolution.group_python_complete)
+            {
+                continue;
+            }
+
             // Get the requires-python for each enabled group on this package
             // We need to do full flattening here because include-group can transfer requires-python
             let dependency_groups =
@@ -896,16 +906,18 @@ impl Workspace {
 
     /// Returns the set of constraints for the workspace.
     pub fn constraints(&self) -> Vec<uv_pep508::Requirement<VerbatimParsedUrl>> {
-        let Some(constraints) = self
+        let mut constraints = self
             .pyproject_toml
             .tool
             .as_ref()
             .and_then(|tool| tool.uv.as_ref())
             .and_then(|uv| uv.constraint_dependencies.as_ref())
-        else {
-            return vec![];
-        };
-        constraints.clone()
+            .cloned()
+            .unwrap_or_default();
+        if let Some(resolution) = &self.resolution {
+            constraints.extend(resolution.constraints.iter().cloned());
+        }
+        constraints
     }
 
     /// Returns the set of build constraints for the workspace.
@@ -1037,6 +1049,28 @@ impl Workspace {
     /// Returns whether this workspace is one scoped resolution attempt.
     pub fn is_workspace_group_resolution(&self) -> bool {
         self.resolution.is_some()
+    }
+
+    /// Returns whether this workspace is a scoped resolution of configured workspace axes.
+    pub fn is_workspace_axis_resolution(&self) -> bool {
+        self.resolution.is_some()
+            && self
+                .pyproject_toml()
+                .tool
+                .as_ref()
+                .and_then(|tool| tool.uv.as_ref())
+                .and_then(|uv| uv.workspace.as_ref())
+                .and_then(|workspace| workspace.resolution_axes.as_ref())
+                .is_some_and(|axes| !axes.is_empty())
+    }
+
+    /// Local source identities that cannot participate in the current axis resolution.
+    /// Named flat groups restrict roots, not the availability of their transitive members.
+    pub fn unavailable_workspace_members(&self) -> &BTreeMap<PackageName, PathBuf> {
+        static EMPTY: BTreeMap<PackageName, PathBuf> = BTreeMap::new();
+        self.resolution
+            .as_ref()
+            .map_or(&EMPTY, |resolution| &resolution.unavailable_members)
     }
 
     fn root_marker(&self, name: &PackageName) -> Option<MarkerTree> {

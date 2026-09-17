@@ -79,6 +79,9 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
 
     #[allow(refining_impl_trait)]
     fn roots(&self) -> Box<dyn Iterator<Item = &PackageName> + '_> {
+        if let Some(policy) = self.lock().workspace_axis_command() {
+            return Box::new(policy.members().iter());
+        }
         match self {
             Self::Project { name, .. } => Box::new(std::iter::once(*name)),
             Self::Projects { names, .. } => Box::new(names.iter()),
@@ -99,6 +102,9 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
     }
 
     fn group_root(&self, groups: &DependencyGroupsWithDefaults) -> Option<&PackageName> {
+        if let Some(policy) = self.lock().workspace_axis_command() {
+            return policy.group_root(groups);
+        }
         let Self::Project {
             name,
             lock,
@@ -135,6 +141,9 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
         group: &GroupName,
         groups: &DependencyGroupsWithDefaults,
     ) -> bool {
+        if let Some(policy) = self.lock().workspace_axis_command() {
+            return policy.includes_group(package, group, groups);
+        }
         if !groups.contains(group) {
             return false;
         }
@@ -500,6 +509,33 @@ impl<'lock> InstallTarget<'lock> {
     ) -> Result<(), ProjectError> {
         // If no groups were specified, short-circuit.
         if groups.explicit_names().next().is_none() {
+            return Ok(());
+        }
+
+        if let Some(policy) = self.lock().workspace_axis_command() {
+            let metadata = policy.group_metadata();
+            let inherited_root = (policy.members().len() == 1)
+                .then(|| metadata.project_root())
+                .flatten();
+            let known_groups = metadata
+                .iter()
+                .filter(|(owner, _, _)| {
+                    owner.is_none_or(|owner| {
+                        policy.members().contains(owner) || inherited_root == Some(owner)
+                    })
+                })
+                .map(|(_, group, _)| group)
+                .collect::<FxHashSet<_>>();
+            for group in groups.explicit_names() {
+                if !known_groups.contains(group) {
+                    return match self {
+                        Self::Project { .. } => {
+                            Err(ProjectError::MissingGroupProject(group.clone()))
+                        }
+                        _ => Err(ProjectError::MissingGroupProjects(group.clone())),
+                    };
+                }
+            }
             return Ok(());
         }
 

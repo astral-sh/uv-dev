@@ -337,6 +337,8 @@ impl<'de> de::Deserializer<'de> for DocumentDeserializer<'_, 'de> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MapKind {
     Root,
+    WorkspaceAxes,
+    WorkspaceAxisContext,
     Options,
     OptionsExcludeNewerPackage,
     Manifest,
@@ -351,6 +353,7 @@ enum MapKind {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SequenceKind {
+    WorkspaceAxisContexts,
     Packages,
     ManifestDependencyMetadata,
 }
@@ -460,6 +463,16 @@ impl<'de> DocumentMapAccess<'_, 'de> {
     fn section_key<K: DeserializeSeed<'de>>(&mut self, seed: K) -> Result<Option<K::Value>, Error> {
         let header = self.cursor.header()?;
         let child = match (self.kind, header) {
+            (MapKind::Root, "[workspace-axes]") => Some((
+                "workspace-axes",
+                Pending::Map(MapKind::WorkspaceAxes),
+                "[workspace-axes]",
+            )),
+            (MapKind::WorkspaceAxes, "[[workspace-axes.context]]") => Some((
+                "context",
+                Pending::Sequence(SequenceKind::WorkspaceAxisContexts),
+                "[[workspace-axes.context]]",
+            )),
             (MapKind::Root, "[options]") => {
                 Some(("options", Pending::Map(MapKind::Options), "[options]"))
             }
@@ -542,9 +555,13 @@ impl<'de> de::Deserializer<'de> for SectionDeserializer<'_, 'de> {
         })
     }
 
+    fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
+        visitor.visit_some(self)
+    }
+
     forward_to_deserialize_any! {
         bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string bytes
-        byte_buf option unit unit_struct newtype_struct seq tuple tuple_struct map
+        byte_buf unit unit_struct newtype_struct seq tuple tuple_struct map
         struct enum identifier ignored_any
     }
 }
@@ -592,6 +609,7 @@ impl<'de> SeqAccess<'de> for SectionSequenceAccess<'_, 'de> {
             }
 
             let expected = match self.kind {
+                SequenceKind::WorkspaceAxisContexts => "[[workspace-axes.context]]",
                 SequenceKind::Packages => "[[package]]",
                 SequenceKind::ManifestDependencyMetadata => "[[manifest.dependency-metadata]]",
             };
@@ -603,6 +621,7 @@ impl<'de> SeqAccess<'de> for SectionSequenceAccess<'_, 'de> {
 
         self.started = true;
         let kind = match self.kind {
+            SequenceKind::WorkspaceAxisContexts => MapKind::WorkspaceAxisContext,
             SequenceKind::Packages => MapKind::Package,
             SequenceKind::ManifestDependencyMetadata => MapKind::ManifestDependencyMetadata,
         };
@@ -874,7 +893,7 @@ mod tests {
 
     use serde::Deserialize;
 
-    use super::super::{LockParseError, WORKSPACE_GROUPS_VERSION};
+    use super::super::{LockParseError, WORKSPACE_AXES_VERSION};
     use super::{Cursor, Error, Lock, ValueDeserializer, from_str};
 
     const CANONICAL_LOCK: &str = r#"version = 1
@@ -1029,14 +1048,14 @@ dev = [{ name = "dependency", specifier = ">=1" }]
 
     #[test]
     fn unsupported_lock_version_is_rejected() {
-        let version = WORKSPACE_GROUPS_VERSION + 1;
+        let version = WORKSPACE_AXES_VERSION + 1;
         let input = CANONICAL_LOCK.replacen("version = 1", &format!("version = {version}"), 1);
         let error = Lock::from_toml(&input).expect_err("unsupported lock versions are rejected");
 
         assert_matches!(
             error,
             LockParseError::UnsupportedVersion {
-                supported: WORKSPACE_GROUPS_VERSION,
+                supported: WORKSPACE_AXES_VERSION,
                 version: actual,
             } if actual == version
         );
@@ -1044,7 +1063,7 @@ dev = [{ name = "dependency", specifier = ">=1" }]
 
     #[test]
     fn unparsable_unsupported_lock_version_is_identified() {
-        let version = WORKSPACE_GROUPS_VERSION + 1;
+        let version = WORKSPACE_AXES_VERSION + 1;
         let input = CANONICAL_LOCK
             .replacen("version = 1", &format!("version = {version}"), 1)
             .replacen("name = \"dependency\"", "name = false", 1);
@@ -1054,7 +1073,7 @@ dev = [{ name = "dependency", specifier = ">=1" }]
         assert_matches!(
             error,
             LockParseError::UnparsableVersion {
-                supported: WORKSPACE_GROUPS_VERSION,
+                supported: WORKSPACE_AXES_VERSION,
                 version: actual,
                 ..
             } if actual == version

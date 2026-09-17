@@ -103,6 +103,17 @@ pub trait Installable<'lock> {
     /// Return the [`PackageName`] of the root packages in the target.
     fn roots(&self) -> impl Iterator<Item = &PackageName>;
 
+    /// Resolve a named root to the exact locked distribution included by this target.
+    fn root_package(&self, name: &PackageName) -> Result<&'lock Package, LockError> {
+        if let Some(policy) = self.lock().workspace_axis_command() {
+            return policy.root_package(self.lock(), name);
+        }
+        self.lock()
+            .find_by_name(name)
+            .map_err(|_| LockErrorKind::MultipleRootPackages { name: name.clone() })?
+            .ok_or_else(|| LockErrorKind::MissingRootPackage { name: name.clone() }.into())
+    }
+
     /// Return the package whose dependency groups, but not production dependencies, are included.
     fn group_root(&self, _groups: &DependencyGroupsWithDefaults) -> Option<&PackageName> {
         None
@@ -133,18 +144,8 @@ pub trait Installable<'lock> {
         build_options: &BuildOptions,
         install_options: &InstallOptions,
     ) -> Result<Resolution, LockError> {
-        let resolve_root = |root_name: &PackageName| {
-            self.lock()
-                .find_by_name(root_name)
-                .map_err(|_| LockErrorKind::MultipleRootPackages {
-                    name: root_name.clone(),
-                })?
-                .ok_or_else(|| {
-                    LockError::from(LockErrorKind::MissingRootPackage {
-                        name: root_name.clone(),
-                    })
-                })
-        };
+        self.lock().ensure_workspace_axes_selected()?;
+        let resolve_root = |root_name: &PackageName| self.root_package(root_name);
         let roots = self
             .roots()
             .map(&resolve_root)
@@ -234,11 +235,10 @@ pub trait Installable<'lock> {
         install_options: &InstallOptions,
         marker_env: &ResolverMarkerEnvironment,
     ) -> Result<Node, LockError> {
-        if install_options.include_package(
-            package.as_install_target(),
-            self.project_name(),
-            self.lock().members(),
-        ) {
+        if self
+            .lock()
+            .includes_install_target(package, self.project_name(), install_options)
+        {
             self.installable_node(package, tags, marker_env, build_options)
         } else {
             self.non_installable_node(package, tags, marker_env)
@@ -265,6 +265,7 @@ trait InstallableExt<'lock>: Installable<'lock> {
         build_options: &BuildOptions,
         install_options: &InstallOptions,
     ) -> Result<Resolution, LockError> {
+        self.lock().ensure_workspace_axes_selected()?;
         let size_guess = self.lock().packages.len();
         let mut petgraph = Graph::with_capacity(size_guess, size_guess);
         let mut inverse = vec![None; size_guess];
@@ -484,109 +485,69 @@ trait InstallableExt<'lock>: Installable<'lock> {
         }
 
         if include_manifest {
-            // Add any requirements that are exclusive to the workspace root (e.g., dependencies in
-            // PEP 723 scripts).
-            for dependency in self.lock().requirements() {
-                if !dependency.marker.evaluate(marker_env, &[]) {
-                    continue;
-                }
+            if let Some(dependencies) = self.lock().workspace_axis_manifest_dependencies()? {
+                let dependencies = dependencies
+                    .into_iter()
+                    .filter(|dependency| {
+                        dependency
+                            .group
+                            .is_none_or(|group| self.includes_group(None, group, groups))
+                    })
+                    .collect::<Vec<_>>();
 
-                let root_name = &dependency.name;
-                let dist = self
-                    .lock()
-                    .find_by_markers(root_name, marker_env)
-                    .map_err(|_| LockErrorKind::MultipleRootPackages {
-                        name: root_name.clone(),
-                    })?
-                    .ok_or_else(|| LockErrorKind::MissingRootPackage {
-                        name: root_name.clone(),
-                    })?;
-
-                // Add the package to the graph.
-                let package_index = self.lock().by_id[&dist.id];
-                let index = petgraph.add_node(if groups.prod() {
-                    self.package_to_node(dist, tags, build_options, install_options, marker_env)?
-                } else {
-                    self.non_installable_node(dist, tags, marker_env)?
-                });
-                inverse[package_index.0] = Some(index);
-
-                // Add the edge.
-                petgraph.add_edge(root, index, Edge::Prod);
-
-                // Push its dependencies on the queue.
-                add_reachability(
-                    &mut conflict_reachability,
-                    (package_index, None),
-                    UniversalMarker::TRUE,
-                );
-                if seen.insert((package_index, None)) {
-                    queue.push_back((package_index, None));
-                }
-                for extra in &dependency.extras {
-                    add_reachability(
-                        &mut conflict_reachability,
-                        (package_index, Some(extra)),
-                        UniversalMarker::TRUE,
-                    );
-                    if seen.insert((package_index, Some(extra))) {
-                        queue.push_back((package_index, Some(extra)));
-                    }
-                }
-            }
-
-            // Add any dependency groups that are exclusive to the workspace root (e.g., dev
-            // dependencies in non-project workspace roots).
-            for (group, dependency) in self
-                .lock()
-                .dependency_groups()
-                .iter()
-                .filter_map(|(group, deps)| {
-                    if self.includes_group(None, group, groups) {
-                        Some(deps.iter().map(move |dep| (group, dep)))
-                    } else {
-                        None
-                    }
-                })
-                .flatten()
-            {
-                if !dependency.marker.evaluate(marker_env, &[]) {
-                    continue;
-                }
-
-                let root_name = &dependency.name;
-                let dist = self
-                    .lock()
-                    .find_by_markers(root_name, marker_env)
-                    .map_err(|_| LockErrorKind::MultipleRootPackages {
-                        name: root_name.clone(),
-                    })?
-                    .ok_or_else(|| LockErrorKind::MissingRootPackage {
-                        name: root_name.clone(),
-                    })?;
-
-                // Add the package to the graph.
-                let package_index = self.lock().by_id[&dist.id];
-                let index = match inverse[package_index.0] {
-                    None => {
-                        let index = petgraph.add_node(self.package_to_node(
-                            dist,
-                            tags,
-                            build_options,
-                            install_options,
+                // A mapped root can activate an extra or a package group that appears in
+                // another root's conflict predicate. Collect those direct activations before
+                // materializing source-specific root nodes.
+                loop {
+                    let mut changed = false;
+                    for dependency in &dependencies {
+                        let additional_extras = dependency
+                            .extras
+                            .iter()
+                            .map(|extra| (&dependency.package.id.name, *extra));
+                        let additional_groups = dependency.activated_group.into_iter();
+                        if !dependency.marker.evaluate(
                             marker_env,
-                        )?);
-                        inverse[package_index.0] = Some(index);
-                        index
+                            activated_projects.iter().copied(),
+                            activated_extras.iter().copied().chain(additional_extras),
+                            activated_groups.iter().copied().chain(additional_groups),
+                        ) {
+                            continue;
+                        }
+                        for extra in &dependency.extras {
+                            let key = (&dependency.package.id.name, *extra);
+                            if !activated_extras.contains(&key) {
+                                activated_extras.push(key);
+                                changed = true;
+                            }
+                        }
+                        if let Some(key) = dependency.activated_group
+                            && !activated_groups.contains(&key)
+                        {
+                            activated_groups.push(key);
+                            changed = true;
+                        }
                     }
-                    Some(index) => {
-                        // Critically, if the package is already in the graph, then it's a workspace
-                        // member. If it was omitted due to, e.g., `--only-dev`, but is itself
-                        // referenced as a development dependency, then we need to re-enable it.
-                        let node = &mut petgraph[index];
-                        if !groups.prod() {
-                            *node = self.package_to_node(
-                                dist,
+                    if !changed {
+                        break;
+                    }
+                }
+
+                for dependency in dependencies {
+                    if !dependency.marker.evaluate(
+                        marker_env,
+                        activated_projects.iter().copied(),
+                        activated_extras.iter().copied(),
+                        activated_groups.iter().copied(),
+                    ) {
+                        continue;
+                    }
+                    let package_index = self.lock().by_id[&dependency.package.id];
+                    let install = dependency.group.is_some() || groups.prod();
+                    let index = if let Some(index) = inverse[package_index.0] {
+                        if install && matches!(petgraph[index], Node::Dist { install: false, .. }) {
+                            petgraph[index] = self.package_to_node(
+                                dependency.package,
                                 tags,
                                 build_options,
                                 install_options,
@@ -594,40 +555,200 @@ trait InstallableExt<'lock>: Installable<'lock> {
                             )?;
                         }
                         index
-                    }
-                };
-
-                // Add the edge.
-                petgraph.add_edge(root, index, Edge::Dev(group.clone()));
-
-                // Persist any self-extras activated by this group dependency. Mirrors the
-                // handling in the package-level `dependency_groups` loop above; without this,
-                // conflict markers on transitive dependencies gated by the activated extra
-                // would not evaluate to `true` during the graph traversals below.
-                for extra in &dependency.extras {
-                    let key = (&dist.id.name, extra);
-                    if !activated_extras.contains(&key) {
-                        activated_extras.push(key);
-                    }
-                }
-
-                // Push its dependencies on the queue.
-                add_reachability(
-                    &mut conflict_reachability,
-                    (package_index, None),
-                    UniversalMarker::TRUE,
-                );
-                if seen.insert((package_index, None)) {
-                    queue.push_back((package_index, None));
-                }
-                for extra in &dependency.extras {
+                    } else {
+                        let node = if install {
+                            self.package_to_node(
+                                dependency.package,
+                                tags,
+                                build_options,
+                                install_options,
+                                marker_env,
+                            )?
+                        } else {
+                            self.non_installable_node(dependency.package, tags, marker_env)?
+                        };
+                        let index = petgraph.add_node(node);
+                        inverse[package_index.0] = Some(index);
+                        index
+                    };
+                    petgraph.add_edge(
+                        root,
+                        index,
+                        dependency
+                            .group
+                            .map_or(Edge::Prod, |group| Edge::Dev(group.clone())),
+                    );
                     add_reachability(
                         &mut conflict_reachability,
-                        (package_index, Some(extra)),
+                        (package_index, None),
+                        dependency.marker,
+                    );
+                    if seen.insert((package_index, None)) {
+                        queue.push_back((package_index, None));
+                    }
+                    for extra in dependency.extras {
+                        add_reachability(
+                            &mut conflict_reachability,
+                            (package_index, Some(extra)),
+                            dependency.marker,
+                        );
+                        if seen.insert((package_index, Some(extra))) {
+                            queue.push_back((package_index, Some(extra)));
+                        }
+                    }
+                }
+            } else {
+                // Add any requirements that are exclusive to the workspace root (e.g., dependencies in
+                // PEP 723 scripts).
+                for dependency in self.lock().requirements() {
+                    if !dependency.marker.evaluate(marker_env, &[]) {
+                        continue;
+                    }
+
+                    let root_name = &dependency.name;
+                    let dist = self
+                        .lock()
+                        .find_by_markers(root_name, marker_env)
+                        .map_err(|_| LockErrorKind::MultipleRootPackages {
+                            name: root_name.clone(),
+                        })?
+                        .ok_or_else(|| LockErrorKind::MissingRootPackage {
+                            name: root_name.clone(),
+                        })?;
+
+                    // Add the package to the graph.
+                    let package_index = self.lock().by_id[&dist.id];
+                    let index = petgraph.add_node(if groups.prod() {
+                        self.package_to_node(
+                            dist,
+                            tags,
+                            build_options,
+                            install_options,
+                            marker_env,
+                        )?
+                    } else {
+                        self.non_installable_node(dist, tags, marker_env)?
+                    });
+                    inverse[package_index.0] = Some(index);
+
+                    // Add the edge.
+                    petgraph.add_edge(root, index, Edge::Prod);
+
+                    // Push its dependencies on the queue.
+                    add_reachability(
+                        &mut conflict_reachability,
+                        (package_index, None),
                         UniversalMarker::TRUE,
                     );
-                    if seen.insert((package_index, Some(extra))) {
-                        queue.push_back((package_index, Some(extra)));
+                    if seen.insert((package_index, None)) {
+                        queue.push_back((package_index, None));
+                    }
+                    for extra in &dependency.extras {
+                        add_reachability(
+                            &mut conflict_reachability,
+                            (package_index, Some(extra)),
+                            UniversalMarker::TRUE,
+                        );
+                        if seen.insert((package_index, Some(extra))) {
+                            queue.push_back((package_index, Some(extra)));
+                        }
+                    }
+                }
+
+                // Add any dependency groups that are exclusive to the workspace root (e.g., dev
+                // dependencies in non-project workspace roots).
+                for (group, dependency) in self
+                    .lock()
+                    .dependency_groups()
+                    .iter()
+                    .filter_map(|(group, deps)| {
+                        if self.includes_group(None, group, groups) {
+                            Some(deps.iter().map(move |dep| (group, dep)))
+                        } else {
+                            None
+                        }
+                    })
+                    .flatten()
+                {
+                    if !dependency.marker.evaluate(marker_env, &[]) {
+                        continue;
+                    }
+
+                    let root_name = &dependency.name;
+                    let dist = self
+                        .lock()
+                        .find_by_markers(root_name, marker_env)
+                        .map_err(|_| LockErrorKind::MultipleRootPackages {
+                            name: root_name.clone(),
+                        })?
+                        .ok_or_else(|| LockErrorKind::MissingRootPackage {
+                            name: root_name.clone(),
+                        })?;
+
+                    // Add the package to the graph.
+                    let package_index = self.lock().by_id[&dist.id];
+                    let index = match inverse[package_index.0] {
+                        None => {
+                            let index = petgraph.add_node(self.package_to_node(
+                                dist,
+                                tags,
+                                build_options,
+                                install_options,
+                                marker_env,
+                            )?);
+                            inverse[package_index.0] = Some(index);
+                            index
+                        }
+                        Some(index) => {
+                            // Critically, if the package is already in the graph, then it's a workspace
+                            // member. If it was omitted due to, e.g., `--only-dev`, but is itself
+                            // referenced as a development dependency, then we need to re-enable it.
+                            let node = &mut petgraph[index];
+                            if !groups.prod() {
+                                *node = self.package_to_node(
+                                    dist,
+                                    tags,
+                                    build_options,
+                                    install_options,
+                                    marker_env,
+                                )?;
+                            }
+                            index
+                        }
+                    };
+
+                    // Add the edge.
+                    petgraph.add_edge(root, index, Edge::Dev(group.clone()));
+
+                    // Persist any self-extras activated by this group dependency. Mirrors the
+                    // handling in the package-level `dependency_groups` loop above; without this,
+                    // conflict markers on transitive dependencies gated by the activated extra
+                    // would not evaluate to `true` during the graph traversals below.
+                    for extra in &dependency.extras {
+                        let key = (&dist.id.name, extra);
+                        if !activated_extras.contains(&key) {
+                            activated_extras.push(key);
+                        }
+                    }
+
+                    // Push its dependencies on the queue.
+                    add_reachability(
+                        &mut conflict_reachability,
+                        (package_index, None),
+                        UniversalMarker::TRUE,
+                    );
+                    if seen.insert((package_index, None)) {
+                        queue.push_back((package_index, None));
+                    }
+                    for extra in &dependency.extras {
+                        add_reachability(
+                            &mut conflict_reachability,
+                            (package_index, Some(extra)),
+                            UniversalMarker::TRUE,
+                        );
+                        if seen.insert((package_index, Some(extra))) {
+                            queue.push_back((package_index, Some(extra)));
+                        }
                     }
                 }
             }

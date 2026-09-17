@@ -239,6 +239,8 @@ pub enum PreviewFeature {
     AddBounds,
     /// Allows defining workspace conflicts at the package level.
     PackageConflicts,
+    /// Allows defining independent workspace resolution axes.
+    WorkspaceResolutionAxes,
     /// Allows specifying additional dependencies for package builds.
     ExtraBuildDependencies,
     /// Warns when multiple packages would install conflicting Python modules into the same

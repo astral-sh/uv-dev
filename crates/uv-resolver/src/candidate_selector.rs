@@ -14,7 +14,7 @@ use uv_pep440::Version;
 use uv_platform_tags::Tags;
 use uv_types::InstalledPackagesProvider;
 
-use crate::preferences::{Entry, PreferenceSource, Preferences};
+use crate::preferences::{Entry, PreferenceIndex, PreferenceSource, Preferences};
 use crate::prerelease::{PrereleaseSelection, PrereleaseStrategy};
 use crate::pubgrub::Range;
 use crate::resolution_mode::ResolutionStrategy;
@@ -171,11 +171,10 @@ impl CandidateSelector {
     /// from a sibling fork, and the preference satisfies the current range, use that.
     ///
     /// We try to find a resolution that, depending on the input, does not diverge from the
-    /// lockfile or matches a sibling fork. We try an exact match for the current markers (fork
-    /// or specific) first, to ensure stability with repeated locking. If that doesn't work, we
-    /// fall back to preferences that don't match in hopes of still resolving different forks into
-    /// the same version; A solution with less different versions is more desirable than one where
-    /// we may have more recent version in some cases, but overall more versions.
+    /// lockfile or matches a sibling fork. Preferences whose complete marker overlaps the current
+    /// fork are tried first, followed by preferences from disjoint forks. Within each category,
+    /// preferences from existing input take precedence over choices made during this solve. This
+    /// keeps repeated locking stable while still allowing different forks to reuse a version.
     fn get_preferred<'a, InstalledPackages: InstalledPackagesProvider>(
         &'a self,
         package_name: &'a PackageName,
@@ -199,7 +198,7 @@ impl CandidateSelector {
                 if index.is_some_and(|index| !entry.index().matches(index)) {
                     return None;
                 }
-                Either::Left(std::iter::once((entry.pin().version(), entry.source())))
+                Either::Left(std::iter::once(entry))
             }
             [..] => {
                 type Entries<'a> = SmallVec<[&'a Entry; 3]>;
@@ -209,29 +208,9 @@ impl CandidateSelector {
                 // Filter out preferences that map to a conflicting index.
                 preferences.retain(|entry| index.is_none_or(|index| entry.index().matches(index)));
 
-                // Sort the preferences by priority.
-                let highest = self.use_highest_version(package_name, env);
-                preferences.sort_by_key(|entry| {
-                    let marker = entry.marker();
+                self.sort_preferences(package_name, &mut preferences, env);
 
-                    // Prefer preferences that match the current environment.
-                    let matches_env = env.included_by_marker(marker.pep508());
-
-                    // Prefer the latest (or earliest) version.
-                    let version = if highest {
-                        Either::Left(entry.pin().version())
-                    } else {
-                        Either::Right(std::cmp::Reverse(entry.pin().version()))
-                    };
-
-                    std::cmp::Reverse((matches_env, version))
-                });
-
-                Either::Right(
-                    preferences
-                        .into_iter()
-                        .map(|entry| (entry.pin().version(), entry.source())),
-                )
+                Either::Right(preferences.into_iter())
             }
         };
 
@@ -247,9 +226,40 @@ impl CandidateSelector {
         )
     }
 
+    /// Order preferences by fork compatibility, their source, and the resolution strategy.
+    fn sort_preferences(
+        &self,
+        package_name: &PackageName,
+        preferences: &mut [&Entry],
+        env: &ResolverEnvironment,
+    ) {
+        let highest = self.use_highest_version(package_name, env);
+        let marker = env.try_universal_markers();
+        preferences.sort_by_key(|entry| {
+            // Conflict predicates distinguish forks that support the same PEP 508 environments.
+            let matches_env = marker.is_none_or(|marker| !marker.is_disjoint(*entry.marker()));
+
+            // Existing pins should not be displaced by a version selected in a sibling fork.
+            let existing = match entry.source() {
+                PreferenceSource::Environment
+                | PreferenceSource::Lock
+                | PreferenceSource::RequirementsTxt => true,
+                PreferenceSource::Resolver => false,
+            };
+
+            let version = if highest {
+                Either::Left(entry.pin().version())
+            } else {
+                Either::Right(std::cmp::Reverse(entry.pin().version()))
+            };
+
+            std::cmp::Reverse((matches_env, existing, version))
+        });
+    }
+
     /// Return the first preference that satisfies the current range and is allowed.
     fn get_preferred_from_iter<'a, InstalledPackages: InstalledPackagesProvider>(
-        preferences: impl Iterator<Item = (&'a Version, PreferenceSource)>,
+        preferences: impl Iterator<Item = &'a Entry>,
         package_name: &'a PackageName,
         range: &Range<Version>,
         version_maps: &'a [VersionMap],
@@ -258,7 +268,9 @@ impl CandidateSelector {
         prerelease_selection: PrereleaseSelection,
         tags: Option<&Tags>,
     ) -> Option<Candidate<'a>> {
-        for (version, source) in preferences {
+        for entry in preferences {
+            let version = entry.pin().version();
+            let source = entry.source();
             // Respect the version range for this requirement.
             if !range.contains(version) {
                 continue;
@@ -266,7 +278,11 @@ impl CandidateSelector {
 
             // Check for a locally installed distribution that matches the preferred version, unless
             // we have to reinstall, in which case we can't reuse an already-installed distribution.
-            if !reinstall {
+            // Installed metadata cannot establish the index identity of a sibling-fork suggestion.
+            if !(reinstall
+                || source == PreferenceSource::Resolver
+                    && matches!(entry.index(), PreferenceIndex::Explicit(_)))
+            {
                 let installed_dists = installed_packages.get_packages(package_name);
                 match installed_dists.as_slice() {
                     [] => {}
@@ -327,10 +343,10 @@ impl CandidateSelector {
             }
 
             // Check for a remote distribution that matches the preferred version
-            if let Some((version_map, file)) = version_maps
-                .iter()
-                .find_map(|version_map| version_map.get(version).map(|dist| (version_map, dist)))
-            {
+            if let Some((version_map, file)) = version_maps.iter().find_map(|version_map| {
+                let dist = version_map.get(version)?;
+                Self::matches_resolved_preference(entry, dist).then_some((version_map, dist))
+            }) {
                 // If the preferred version has a local variant, prefer that.
                 if version_map.local() {
                     for local in version_map
@@ -348,6 +364,9 @@ impl CandidateSelector {
                             continue;
                         }
                         if let Some(dist) = version_map.get(local) {
+                            if !Self::matches_resolved_preference(entry, dist) {
+                                continue;
+                            }
                             debug!("Preferring local version `{package_name}` (v{local})");
                             return Some(Candidate::new(
                                 package_name,
@@ -368,6 +387,30 @@ impl CandidateSelector {
             }
         }
         None
+    }
+
+    /// A current-solve suggestion only aligns candidates from the registry where it was resolved.
+    /// The selected file is authoritative because a version map can also contain `--find-links`
+    /// distributions from other indexes. Pins read from existing inputs retain their usual policy.
+    fn matches_resolved_preference(entry: &Entry, dist: &PrioritizedDist) -> bool {
+        if entry.source() != PreferenceSource::Resolver
+            || !matches!(entry.index(), PreferenceIndex::Explicit(_))
+        {
+            return true;
+        }
+        if let Some(candidate) = dist.get() {
+            return candidate
+                .for_installation()
+                .index()
+                .is_some_and(|index| entry.index().matches(index));
+        }
+        if dist.incompatible_source().is_some() {
+            return dist
+                .source_dist()
+                .is_some_and(|sdist| entry.index().matches(&sdist.index));
+        }
+        dist.best_wheel()
+            .is_some_and(|(wheel, _)| entry.index().matches(&wheel.index))
     }
 
     /// Check for an installed distribution that satisfies the current range and is allowed.
@@ -808,10 +851,438 @@ fn is_after(version: &Version, bound: Bound<&Version>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use uv_configuration::ResolutionMode;
+    use uv_distribution_filename::WheelFilename;
+    use uv_distribution_types::{
+        File, FileLocation, HashComparison, RegistryBuiltWheel, Requirement, RequirementSource,
+        WheelCompatibility,
+    };
+    use uv_normalize::GroupName;
+    use uv_pep440::VersionSpecifiers;
+    use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder, MarkerTree};
+    use uv_pypi_types::{ConflictItem, HashDigests, ResolverMarkerEnvironment};
+    use uv_types::EmptyInstalledPackages;
+
     use super::*;
+    use crate::preferences::Preference;
+    use crate::universal_marker::{ConflictMarker, UniversalMarker};
 
     fn version(value: &str) -> Version {
         value.parse().expect("valid test version")
+    }
+
+    fn package_name(value: &str) -> PackageName {
+        value.parse().expect("valid test package name")
+    }
+
+    fn group(value: &str) -> ConflictItem {
+        ConflictItem::from((
+            package_name("project"),
+            value.parse::<GroupName>().expect("valid test group name"),
+        ))
+    }
+
+    fn group_marker(group: &ConflictItem) -> UniversalMarker {
+        UniversalMarker::new(MarkerTree::TRUE, ConflictMarker::from_conflict_item(group))
+    }
+
+    fn preferences(
+        package_name: &PackageName,
+        entries: &[(&str, UniversalMarker, PreferenceSource)],
+    ) -> Preferences {
+        let mut preferences = Preferences::default();
+        for &(value, marker, source) in entries {
+            preferences.insert(package_name.clone(), None, marker, version(value), source);
+        }
+        preferences
+    }
+
+    fn selector(mode: ResolutionMode) -> CandidateSelector {
+        CandidateSelector::for_resolution(
+            &Options {
+                resolution_mode: mode,
+                ..Options::default()
+            },
+            &Manifest::simple(Vec::new()),
+            &ResolverEnvironment::universal(Vec::new()),
+        )
+    }
+
+    fn registry_wheel(
+        package_name: &PackageName,
+        value: &str,
+        index: &IndexUrl,
+    ) -> PrioritizedDist {
+        let filename = format!(
+            "{}-{value}-py3-none-any.whl",
+            package_name.as_dist_info_name()
+        );
+        let mut dist = PrioritizedDist::default();
+        dist.insert_built(
+            RegistryBuiltWheel {
+                filename: filename.parse::<WheelFilename>().expect("valid test wheel"),
+                file: Box::new(File {
+                    dist_info_metadata: None,
+                    filename: filename.clone().into(),
+                    hashes: HashDigests::empty(),
+                    requires_python: None,
+                    size: None,
+                    upload_time_utc_ms: None,
+                    url: FileLocation::new(filename.into(), &"https://files.example/".into()),
+                    yanked: None,
+                }),
+                index: index.clone(),
+                size_is_authoritative: false,
+            },
+            [],
+            WheelCompatibility::Compatible(HashComparison::Matched, None, None),
+        );
+        dist
+    }
+
+    fn sorted_preferences(
+        selector: &CandidateSelector,
+        package_name: &PackageName,
+        preferences: &Preferences,
+        env: &ResolverEnvironment,
+    ) -> Vec<Version> {
+        let mut entries = preferences.get(package_name).iter().collect::<Vec<_>>();
+        selector.sort_preferences(package_name, &mut entries, env);
+        entries
+            .into_iter()
+            .map(|entry| entry.pin().version().clone())
+            .collect()
+    }
+
+    #[test]
+    fn preference_order_uses_complete_fork_markers() {
+        let package_name = package_name("demo");
+        let legacy = group("legacy");
+        let modern = group("modern");
+        let env = ResolverEnvironment::universal(Vec::new())
+            .filter_by_group([Ok(legacy.clone()), Err(modern.clone())])
+            .expect("valid test fork");
+        let preferences = Preferences::from_iter(
+            [
+                Preference::from_resolved(
+                    package_name.clone(),
+                    version("4"),
+                    None,
+                    vec![group_marker(&modern)],
+                ),
+                Preference::from_resolved(
+                    package_name.clone(),
+                    version("3"),
+                    None,
+                    vec![group_marker(&legacy)],
+                ),
+                Preference::from_locked(
+                    package_name.clone(),
+                    version("2"),
+                    None,
+                    vec![group_marker(&modern)],
+                ),
+                Preference::from_locked(
+                    package_name.clone(),
+                    version("1"),
+                    None,
+                    vec![group_marker(&legacy)],
+                ),
+            ],
+            &env,
+        );
+
+        // The matching lock pin wins over both a newer sibling choice and a newer pin for a
+        // disjoint group. Disjoint preferences remain available if matching versions cannot work.
+        assert_eq!(
+            sorted_preferences(
+                &selector(ResolutionMode::Highest),
+                &package_name,
+                &preferences,
+                &env,
+            ),
+            [version("1"), version("3"), version("2"), version("4")]
+        );
+    }
+
+    #[test]
+    fn preference_order_preserves_existing_inputs() {
+        let package_name = package_name("demo");
+        let env = ResolverEnvironment::universal(Vec::new());
+        let preferences = preferences(
+            &package_name,
+            &[
+                ("5", UniversalMarker::TRUE, PreferenceSource::Resolver),
+                ("1", UniversalMarker::TRUE, PreferenceSource::Lock),
+                (
+                    "4",
+                    UniversalMarker::TRUE,
+                    PreferenceSource::RequirementsTxt,
+                ),
+                ("3", UniversalMarker::TRUE, PreferenceSource::Environment),
+                ("2", UniversalMarker::TRUE, PreferenceSource::Lock),
+            ],
+        );
+
+        assert_eq!(
+            sorted_preferences(
+                &selector(ResolutionMode::Highest),
+                &package_name,
+                &preferences,
+                &env,
+            ),
+            [
+                version("4"),
+                version("3"),
+                version("2"),
+                version("1"),
+                version("5")
+            ]
+        );
+        assert_eq!(
+            sorted_preferences(
+                &selector(ResolutionMode::Lowest),
+                &package_name,
+                &preferences,
+                &env,
+            ),
+            [
+                version("1"),
+                version("2"),
+                version("3"),
+                version("4"),
+                version("5")
+            ]
+        );
+    }
+
+    #[test]
+    fn preference_order_respects_lowest_direct_scope() {
+        let package_name = package_name("demo");
+        let legacy = group("legacy");
+        let modern = group("modern");
+        let env = ResolverEnvironment::universal(Vec::new());
+        let manifest = Manifest::simple(vec![Requirement {
+            name: package_name.clone(),
+            extras: Box::default(),
+            groups: Box::default(),
+            marker: MarkerTree::TRUE,
+            source: RequirementSource::Registry {
+                specifier: VersionSpecifiers::empty(),
+                index: None,
+                conflict: Some(legacy.clone()),
+            },
+            origin: None,
+        }]);
+        let selector = CandidateSelector::for_resolution(
+            &Options {
+                resolution_mode: ResolutionMode::LowestDirect,
+                ..Options::default()
+            },
+            &manifest,
+            &env,
+        );
+        let preferences = preferences(
+            &package_name,
+            &[
+                ("1", UniversalMarker::TRUE, PreferenceSource::Lock),
+                ("2", UniversalMarker::TRUE, PreferenceSource::Lock),
+            ],
+        );
+        let direct = env
+            .filter_by_group([Ok(legacy.clone()), Err(modern.clone())])
+            .expect("valid direct test fork");
+        let transitive = env
+            .filter_by_group([Err(legacy), Ok(modern)])
+            .expect("valid transitive test fork");
+
+        assert_eq!(
+            sorted_preferences(&selector, &package_name, &preferences, &direct),
+            [version("1"), version("2")]
+        );
+        assert_eq!(
+            sorted_preferences(&selector, &package_name, &preferences, &transitive),
+            [version("2"), version("1")]
+        );
+    }
+
+    #[test]
+    fn preference_order_in_specific_environment() {
+        let package_name = package_name("demo");
+        let marker_env = MarkerEnvironment::try_from(MarkerEnvironmentBuilder {
+            implementation_name: "cpython",
+            implementation_version: "3.12.0",
+            os_name: "posix",
+            platform_machine: "x86_64",
+            platform_python_implementation: "CPython",
+            platform_release: "",
+            platform_system: "Linux",
+            platform_version: "",
+            python_full_version: "3.12.0",
+            python_version: "3.12",
+            sys_platform: "linux",
+        })
+        .expect("valid test marker environment");
+        let env = ResolverEnvironment::specific(ResolverMarkerEnvironment::from(marker_env));
+        let preferences = preferences(
+            &package_name,
+            &[
+                ("1", group_marker(&group("legacy")), PreferenceSource::Lock),
+                ("2", group_marker(&group("modern")), PreferenceSource::Lock),
+            ],
+        );
+
+        assert_eq!(
+            sorted_preferences(
+                &selector(ResolutionMode::Highest),
+                &package_name,
+                &preferences,
+                &env,
+            ),
+            [version("2"), version("1")]
+        );
+    }
+
+    #[test]
+    fn resolver_preference_preserves_registry_identity() {
+        let package_name = package_name("demo");
+        let first: IndexUrl = "https://first.example/simple/".parse().unwrap();
+        let second: IndexUrl = "https://second.example/simple/".parse().unwrap();
+        let env = ResolverEnvironment::universal(Vec::new());
+        let selector = selector(ResolutionMode::Highest);
+        let maps = [
+            VersionMap::from_test_distributions([
+                (version("1"), registry_wheel(&package_name, "1", &second)),
+                (version("2"), registry_wheel(&package_name, "2", &second)),
+            ]),
+            VersionMap::from_test_distributions([(
+                version("1"),
+                registry_wheel(&package_name, "1", &first),
+            )]),
+        ];
+        let resolver_preferences = Preferences::from_iter(
+            [Preference::from_resolved(
+                package_name.clone(),
+                version("1"),
+                Some(first.clone()),
+                vec![],
+            )],
+            &env,
+        );
+        let exclusions = Exclusions::default();
+        let installed = EmptyInstalledPackages;
+
+        let selected = selector
+            .select(
+                &package_name,
+                &Range::full(),
+                &maps,
+                &resolver_preferences,
+                &installed,
+                &exclusions,
+                None,
+                &env,
+                None,
+            )
+            .expect("candidate on the recorded index");
+        assert_eq!(selected.version(), &version("1"));
+        assert_eq!(
+            selected.compatible().unwrap().for_installation().index(),
+            Some(&first)
+        );
+
+        let selected = selector
+            .select(
+                &package_name,
+                &Range::full(),
+                &maps[..1],
+                &resolver_preferences,
+                &installed,
+                &exclusions,
+                None,
+                &env,
+                None,
+            )
+            .expect("ordinary highest candidate");
+        assert_eq!(selected.version(), &version("2"));
+
+        // An existing lock pin is still usable after an implicit registry source is changed.
+        let lock_preferences = Preferences::from_iter(
+            [Preference::from_locked(
+                package_name.clone(),
+                version("1"),
+                Some(first),
+                vec![],
+            )],
+            &env,
+        );
+        let selected = selector
+            .select(
+                &package_name,
+                &Range::full(),
+                &maps[..1],
+                &lock_preferences,
+                &installed,
+                &exclusions,
+                None,
+                &env,
+                None,
+            )
+            .expect("existing lock preference");
+        assert_eq!(selected.version(), &version("1"));
+        assert_eq!(
+            selected.compatible().unwrap().for_installation().index(),
+            Some(&second)
+        );
+    }
+
+    #[test]
+    fn resolver_preference_checks_local_variant_index() {
+        let package_name = package_name("demo");
+        let first: IndexUrl = "https://first.example/simple/".parse().unwrap();
+        let second: IndexUrl = "https://second.example/simple/".parse().unwrap();
+        let env = ResolverEnvironment::universal(Vec::new());
+        let selector = selector(ResolutionMode::Highest);
+        let maps = [VersionMap::from_test_distributions([
+            (version("1"), registry_wheel(&package_name, "1", &first)),
+            (
+                version("1+cpu"),
+                registry_wheel(&package_name, "1+cpu", &first),
+            ),
+            (
+                version("1+zeta"),
+                registry_wheel(&package_name, "1+zeta", &second),
+            ),
+        ])];
+        let preferences = Preferences::from_iter(
+            [Preference::from_resolved(
+                package_name.clone(),
+                version("1"),
+                Some(first.clone()),
+                vec![],
+            )],
+            &env,
+        );
+        let exclusions = Exclusions::default();
+        let installed = EmptyInstalledPackages;
+        let selected = selector
+            .select(
+                &package_name,
+                &Range::full(),
+                &maps,
+                &preferences,
+                &installed,
+                &exclusions,
+                None,
+                &env,
+                None,
+            )
+            .expect("same-index local version");
+        assert_eq!(selected.version(), &version("1+cpu"));
+        assert_eq!(
+            selected.compatible().unwrap().for_installation().index(),
+            Some(&first)
+        );
     }
 
     fn assert_range_cursor(highest: bool, values: &[&str]) {

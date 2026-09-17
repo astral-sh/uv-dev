@@ -48,7 +48,9 @@ use uv_shell::WindowsRunnable;
 use uv_static::EnvVars;
 use uv_types::SourceTreeEditablePolicy;
 use uv_warnings::warn_user;
-use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceErrorKind};
+use uv_workspace::{
+    DiscoveryOptions, VirtualProject, WorkspaceAxisAssignment, WorkspaceCache, WorkspaceErrorKind,
+};
 
 use crate::base_client_builder;
 use crate::child::run_to_completion;
@@ -67,12 +69,17 @@ use crate::commands::pip::loggers::{
     DefaultInstallLogger, DefaultResolveLogger, SummaryInstallLogger, SummaryResolveLogger,
 };
 use crate::commands::pip::operations::Modifications;
+use crate::commands::pip::resolution_markers;
 use crate::commands::project::environment::{CachedEnvironment, EphemeralEnvironment};
 use crate::commands::project::install_target::InstallTarget;
 use crate::commands::project::lock::{
     LockMode, command_workspace_group, select_workspace_group_lock, workspace_selection_members,
 };
 use crate::commands::project::lock_target::LockTarget;
+use crate::commands::project::resolution_axes::{
+    command_workspace_axes, command_workspace_axis_default_groups,
+    discover_frozen_workspace_axis_project,
+};
 use crate::commands::project::{
     EnvironmentSpecification, LinkErrorReporting, PreferenceLocation, ProjectEnvironment,
     ProjectError, ScriptEnvironment, ScriptInterpreter, UniversalState, WorkspacePython,
@@ -103,6 +110,8 @@ pub(crate) async fn run(
     all_packages: bool,
     package: Option<PackageName>,
     workspace_group: Option<GroupName>,
+    resolution_axes: Vec<WorkspaceAxisAssignment>,
+    all_matching_packages: bool,
     no_project: bool,
     config_discovery: ConfigDiscovery,
     extras: ExtrasSpecification,
@@ -187,6 +196,9 @@ pub(crate) async fn run(
     let script_interpreter = if let Some(script) = script {
         if workspace_group.is_some() {
             bail!("Workspace groups are not supported for scripts");
+        }
+        if !resolution_axes.is_empty() || all_matching_packages {
+            bail!("Workspace resolution axes are not supported for scripts");
         }
         match &script {
             Pep723Item::Script(script) => {
@@ -545,24 +557,49 @@ pub(crate) async fn run(
         let project = if let Some(package) = package.as_ref() {
             // We need a workspace, but we don't need to have a current package, we can be e.g. in
             // the root of a virtual workspace and then switch into the selected package.
-            let project = VirtualProject::discover_with_package(
-                project_dir,
-                &DiscoveryOptions::default(),
-                &cache,
-                workspace_cache,
-                package.clone(),
-            )
-            .await?;
+            let project = if let Some(frozen) = frozen {
+                discover_frozen_workspace_axis_project(
+                    project_dir,
+                    &DiscoveryOptions::default(),
+                    Some(package),
+                    frozen,
+                    &cache,
+                    workspace_cache,
+                )
+                .await?
+            } else {
+                VirtualProject::discover_with_package(
+                    project_dir,
+                    &DiscoveryOptions::default(),
+                    &cache,
+                    workspace_cache,
+                    package.clone(),
+                )
+                .await?
+            };
             Some(project)
         } else {
-            match VirtualProject::discover(
-                project_dir,
-                &DiscoveryOptions::default(),
-                &cache,
-                workspace_cache,
-            )
-            .await
-            {
+            let discovery = if let Some(frozen) = frozen {
+                discover_frozen_workspace_axis_project(
+                    project_dir,
+                    &DiscoveryOptions::default(),
+                    None,
+                    frozen,
+                    &cache,
+                    workspace_cache,
+                )
+                .await
+            } else {
+                VirtualProject::discover(
+                    project_dir,
+                    &DiscoveryOptions::default(),
+                    &cache,
+                    workspace_cache,
+                )
+                .await
+                .map_err(ProjectError::from)
+            };
+            match discovery {
                 Ok(project) => {
                     if no_project {
                         debug!("Ignoring discovered project due to `--no-project`");
@@ -572,11 +609,10 @@ pub(crate) async fn run(
                     }
                 }
                 Err(err) => {
-                    if matches!(
-                        err.as_ref(),
-                        WorkspaceErrorKind::MissingPyprojectToml
-                            | WorkspaceErrorKind::NonWorkspace(_)
-                    ) {
+                    if matches!(&err, ProjectError::Workspace(error) if matches!(
+                        error.as_ref(),
+                        WorkspaceErrorKind::MissingPyprojectToml | WorkspaceErrorKind::NonWorkspace(_)
+                    )) {
                         if no_project {
                             warn!("`--no-project` was provided, but no project was found");
                         }
@@ -630,9 +666,37 @@ pub(crate) async fn run(
         if project.is_none() && workspace_group.is_some() {
             bail!("Workspace groups require a project");
         }
+        if project.is_none() && (!resolution_axes.is_empty() || all_matching_packages) {
+            bail!("Workspace resolution axes require a project");
+        }
         if let Some(project) = project {
+            let default_groups =
+                match command_workspace_axis_default_groups(&project, package.as_slice(), frozen)
+                    .await?
+                {
+                    Some(defaults) => defaults,
+                    None => project.default_groups()?,
+                };
+            let groups = groups.with_defaults(default_groups);
+            let extras = extras.with_defaults(DefaultExtras::default());
             let mut selection_members =
                 workspace_selection_members(&project, package.as_slice(), all_packages);
+            let axis_selection = command_workspace_axes(
+                &project,
+                &resolution_axes,
+                package.as_slice(),
+                all_packages,
+                all_matching_packages,
+                &extras,
+                &groups,
+                frozen,
+                &settings.resolver.sources,
+            )
+            .await
+            .map_err(UvError::from)?;
+            if let Some(selection) = &axis_selection {
+                selection_members.clone_from(&selection.members);
+            }
             let explicit_workspace_group = workspace_group.is_some();
             let workspace_group = command_workspace_group(
                 project.workspace(),
@@ -657,8 +721,10 @@ pub(crate) async fn run(
                     .workspace()
                     .with_workspace_groups(std::slice::from_ref(group))
             });
-            let environment_workspace = group_workspace
+            let environment_workspace = axis_selection
                 .as_ref()
+                .map(|selection| &selection.workspace)
+                .or(group_workspace.as_ref())
                 .unwrap_or_else(|| project.workspace());
             let group_members = workspace_group
                 .as_ref()
@@ -679,12 +745,6 @@ pub(crate) async fn run(
                     project.workspace().install_path().display()
                 );
             }
-            // Determine the groups and extras to include.
-            let default_groups = project.default_groups()?;
-            let default_extras = DefaultExtras::default();
-            let groups = groups.with_defaults(default_groups);
-            let extras = extras.with_defaults(default_extras);
-
             let venv = if isolated {
                 debug!("Creating isolated virtual environment");
 
@@ -766,6 +826,8 @@ pub(crate) async fn run(
                 .await?
                 .into_environment()?
             };
+            let selection_environment =
+                resolution_markers(None, python_platform.as_ref(), venv.interpreter());
 
             if no_sync {
                 debug!("Skipping environment synchronization due to `--no-sync`");
@@ -779,14 +841,32 @@ pub(crate) async fn run(
                         .ok()
                         .flatten()
                     {
-                        base_lock = Some((
-                            select_workspace_group_lock(
-                                lock,
-                                selected_workspace_group,
-                                &selection_members,
-                            )?,
-                            project.workspace().install_path().to_owned(),
-                        ));
+                        if lock.workspace_axes().is_some() && axis_selection.is_none() {
+                            // Removing axis configuration makes its former alternatives invalid
+                            // as one ordinary set of preferences. `--no-sync` must not relock, so
+                            // the overlay can instead use the installed environment's versions.
+                            debug!(
+                                "Ignoring workspace-axis lock preferences after their configuration was removed"
+                            );
+                        } else {
+                            base_lock = Some((
+                                if let Some(selection) = &axis_selection {
+                                    selection.select_lock(
+                                        &lock,
+                                        Some(selection_environment.markers()),
+                                        &extras,
+                                        &groups,
+                                    )?
+                                } else {
+                                    select_workspace_group_lock(
+                                        lock,
+                                        selected_workspace_group,
+                                        &selection_members,
+                                    )?
+                                },
+                                project.workspace().install_path().to_owned(),
+                            ));
+                        }
                     }
                 }
                 // `--with` may still build an overlay under `--no-sync`. Unless explicitly frozen,
@@ -843,20 +923,43 @@ pub(crate) async fn run(
                 )
                 .await
                 {
-                    Ok(result) => result
-                        .select_workspace_group(selected_workspace_group, &selection_members)?,
+                    Ok(result) => {
+                        if let Some(selection) = &axis_selection {
+                            selection.select_result(
+                                result,
+                                Some(selection_environment.markers()),
+                                &extras,
+                                &groups,
+                            )?
+                        } else {
+                            result.select_workspace_group(
+                                selected_workspace_group,
+                                &selection_members,
+                            )?
+                        }
+                    }
                     Err(err) => return Err(UvError::from(err).into()),
                 };
 
                 // Identify the installation target.
-                let target = if let Some(names) = group_members.as_deref()
+                let target = if let Some(names) = axis_selection
+                    .as_ref()
+                    .and_then(|selection| selection.matching_members.as_deref())
+                    .or(group_members.as_deref())
                     && package.is_none()
                     && !all_packages
                 {
-                    InstallTarget::Projects {
-                        workspace: project.workspace(),
-                        names,
-                        lock: result.lock(),
+                    match names {
+                        [name] => InstallTarget::Project {
+                            workspace: project.workspace(),
+                            name,
+                            lock: result.lock(),
+                        },
+                        names => InstallTarget::Projects {
+                            workspace: project.workspace(),
+                            names,
+                            lock: result.lock(),
+                        },
                     }
                 } else {
                     match &project {

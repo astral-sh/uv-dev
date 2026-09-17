@@ -65,6 +65,7 @@ use uv_settings::{
 use uv_static::EnvVars;
 use uv_torch::{AmdGpuArchitecture, TorchMode};
 use uv_warnings::warn_user_once;
+use uv_workspace::WorkspaceAxisAssignment;
 use uv_workspace::pyproject::{DependencyType, ExtraBuildDependencies, OverrideDependency};
 use uv_workspace::pyproject_mut::AddBoundsKind;
 
@@ -761,6 +762,8 @@ fn resolve_lock_check(
 #[derive(Debug, Clone)]
 pub(crate) struct RunSettings {
     pub(crate) workspace_group: Option<GroupName>,
+    pub(crate) resolution_axes: Vec<WorkspaceAxisAssignment>,
+    pub(crate) all_matching_packages: bool,
     pub(crate) lock_check: LockCheck,
     pub(crate) frozen: Option<FrozenSource>,
     pub(crate) extras: ExtrasSpecification,
@@ -804,6 +807,8 @@ impl RunSettings {
     ) -> anyhow::Result<Self> {
         let RunArgs {
             workspace_group,
+            resolution_axis: resolution_axes,
+            all_matching_packages,
             extra,
             all_extras,
             no_extra,
@@ -938,6 +943,8 @@ impl RunSettings {
             all_packages,
             package,
             workspace_group,
+            resolution_axes,
+            all_matching_packages,
             no_project,
             no_sync: no_sync.is_enabled(),
             active: flag(active, no_active, "active")?.into(),
@@ -1938,6 +1945,8 @@ impl PythonPinSettings {
 #[derive(Debug, Clone)]
 pub(crate) struct SyncSettings {
     pub(super) workspace_group: Option<GroupName>,
+    pub(super) resolution_axes: Vec<WorkspaceAxisAssignment>,
+    pub(super) all_matching_packages: bool,
     pub(super) lock_check: LockCheck,
     pub(super) frozen: Option<FrozenSource>,
     pub(super) dry_run: DryRun,
@@ -1968,6 +1977,8 @@ impl SyncSettings {
     ) -> anyhow::Result<Self> {
         let SyncArgs {
             workspace_group,
+            resolution_axis: resolution_axes,
+            all_matching_packages,
             extra,
             all_extras,
             no_extra,
@@ -2145,6 +2156,8 @@ impl SyncSettings {
             package,
             python: python.and_then(Maybe::into_option),
             workspace_group,
+            resolution_axes,
+            all_matching_packages,
             python_platform,
             refresh: Refresh::try_from(refresh)?,
             settings,
@@ -2947,6 +2960,8 @@ impl TreeSettings {
 #[derive(Debug, Clone)]
 pub(crate) struct ExportSettings {
     pub(super) workspace_group: Option<GroupName>,
+    pub(super) resolution_axes: Vec<WorkspaceAxisAssignment>,
+    pub(super) all_matching_packages: bool,
     pub(super) format: Option<ExportFormat>,
     pub(super) all_packages: bool,
     pub(super) package: Vec<PackageName>,
@@ -2980,6 +2995,8 @@ impl ExportSettings {
     ) -> anyhow::Result<Self> {
         let ExportArgs {
             workspace_group,
+            resolution_axis: resolution_axes,
+            all_matching_packages,
             format,
             all_packages,
             package,
@@ -3068,6 +3085,8 @@ impl ExportSettings {
         Ok(Self {
             format,
             workspace_group,
+            resolution_axes,
+            all_matching_packages,
             all_packages,
             package,
             prune,

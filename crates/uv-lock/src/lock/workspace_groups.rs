@@ -431,7 +431,10 @@ fn remove_redundant_markers(markers: &BTreeSet<UniversalMarker>) -> Vec<Universa
         .collect()
 }
 
-fn package_environment(package: &Package, requires_python: &RequiresPython) -> MarkerTree {
+pub(super) fn package_environment(
+    package: &Package,
+    requires_python: &RequiresPython,
+) -> MarkerTree {
     if package.fork_markers.is_empty() {
         requires_python.to_exact_marker_tree()
     } else {
@@ -554,7 +557,7 @@ fn root_marker(
     (!marker.is_false()).then_some(marker)
 }
 
-fn merge_package(
+pub(super) fn merge_package(
     packages: &mut BTreeMap<PackageId, Package>,
     package: Package,
     requires_python: &RequiresPython,
@@ -618,7 +621,7 @@ fn retain_reachable(
     packages.retain(|package| reachable.contains(&package.id));
 }
 
-fn scope_dependencies(
+pub(super) fn scope_dependencies(
     dependencies: &mut Vec<Dependency>,
     scope: UniversalMarker,
     requires_python: &RequiresPython,
@@ -651,7 +654,10 @@ fn select_dependencies(
     merge_dependencies(dependencies, requires_python);
 }
 
-fn merge_dependencies(dependencies: &mut Vec<Dependency>, requires_python: &RequiresPython) {
+pub(super) fn merge_dependencies(
+    dependencies: &mut Vec<Dependency>,
+    requires_python: &RequiresPython,
+) {
     let mut merged = BTreeMap::<(PackageId, BTreeSet<ExtraName>), UniversalMarker>::new();
     for dependency in dependencies.drain(..) {
         merged

@@ -41,7 +41,10 @@ use uv_settings::{MalwareCheckSettings, PythonInstallMirrors};
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::pyproject::Source;
-use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, Workspace, WorkspaceCache};
+use uv_workspace::{
+    DiscoveryOptions, MemberDiscovery, VirtualProject, Workspace, WorkspaceAxisAssignment,
+    WorkspaceAxisSelection, WorkspaceCache,
+};
 
 use crate::commands::editable::apply_editable_mode;
 use crate::commands::pip::loggers::{DefaultInstallLogger, DefaultResolveLogger, InstallLogger};
@@ -54,6 +57,9 @@ use crate::commands::project::lock::{
     workspace_selection_members,
 };
 use crate::commands::project::lock_target::LockTarget;
+use crate::commands::project::resolution_axes::{
+    command_workspace_axes, command_workspace_axis_default_groups,
+};
 use crate::commands::project::{
     EnvironmentUpdate, LinkErrorReporting, MalwareFindings, PlatformState, ProjectEnvironment,
     ProjectError, ScriptEnvironment, UniversalState, detect_conflicts, script_extra_build_requires,
@@ -76,6 +82,8 @@ pub(crate) async fn sync(
     all_packages: bool,
     mut package: Vec<PackageName>,
     workspace_group: Option<GroupName>,
+    resolution_axes: Vec<WorkspaceAxisAssignment>,
+    all_matching_packages: bool,
     extras: ExtrasSpecification,
     groups: DependencyGroups,
     editable: Option<EditableMode>,
@@ -152,12 +160,49 @@ pub(crate) async fn sync(
         SyncTarget::Project(project)
     };
 
+    // Determine the groups and extras before selecting an axis-dependent interpreter.
+    let default_groups = match &target {
+        SyncTarget::Project(project) => {
+            match command_workspace_axis_default_groups(project, &package, frozen).await? {
+                Some(defaults) => defaults,
+                None => project.default_groups()?,
+            }
+        }
+        SyncTarget::Script(..) => DefaultGroups::default(),
+    };
+    let groups = groups.with_defaults(default_groups);
+    let extras = extras.with_defaults(DefaultExtras::default());
+
     let mut selection_members = match &target {
         SyncTarget::Project(project) => {
             workspace_selection_members(project, &package, all_packages)
         }
         SyncTarget::Script(_) => BTreeSet::new(),
     };
+    let axis_selection = match &target {
+        SyncTarget::Project(project) => command_workspace_axes(
+            project,
+            &resolution_axes,
+            &package,
+            all_packages,
+            all_matching_packages,
+            &extras,
+            &groups,
+            frozen,
+            &settings.resolver.sources,
+        )
+        .await
+        .map_err(UvError::from)?,
+        SyncTarget::Script(_) => {
+            if !resolution_axes.is_empty() || all_matching_packages {
+                anyhow::bail!("Workspace resolution axes are not supported for scripts");
+            }
+            None
+        }
+    };
+    if let Some(selection) = &axis_selection {
+        selection_members.clone_from(&selection.members);
+    }
     let explicit_workspace_group = workspace_group.is_some();
     let workspace_group = match &target {
         SyncTarget::Project(project) => command_workspace_group(
@@ -194,24 +239,14 @@ pub(crate) async fn sync(
         }
     }
 
-    // Determine the groups and extras to include.
-    let default_groups = match &target {
-        SyncTarget::Project(project) => project.default_groups()?,
-        SyncTarget::Script(..) => DefaultGroups::default(),
-    };
-    let default_extras = match &target {
-        SyncTarget::Project(_project) => DefaultExtras::default(),
-        SyncTarget::Script(..) => DefaultExtras::default(),
-    };
-    let groups = groups.with_defaults(default_groups);
-    let extras = extras.with_defaults(default_extras);
-
     // Discover or create the virtual environment.
     let environment = match &target {
         SyncTarget::Project(project) => SyncEnvironment::Project(
             ProjectEnvironment::get_or_init(
-                group_workspace
+                axis_selection
                     .as_ref()
+                    .map(|selection| &selection.workspace)
+                    .or(group_workspace.as_ref())
                     .unwrap_or_else(|| project.workspace()),
                 &groups,
                 python.as_deref().map(PythonRequest::parse),
@@ -399,6 +434,8 @@ pub(crate) async fn sync(
         SyncTarget::Project(project) => LockTarget::from(project.workspace()),
         SyncTarget::Script(script) => LockTarget::from(script),
     };
+    let selection_environment =
+        resolution_markers(None, python_platform.as_ref(), environment.interpreter());
 
     let outcome = match Box::pin(
         LockOperation::new(
@@ -417,15 +454,22 @@ pub(crate) async fn sync(
     )
     .await
     {
-        Ok(result) => Outcome::Success(
+        Ok(result) => Outcome::Success(if let Some(selection) = &axis_selection {
+            selection.select_result(
+                result,
+                Some(selection_environment.markers()),
+                &extras,
+                &groups,
+            )?
+        } else {
             result.select_workspace_group(
                 workspace_group
                     .as_ref()
                     .filter(|group| explicit_workspace_group || group.definition.default)
                     .map(|group| &group.definition.name),
                 &selection_members,
-            )?,
-        ),
+            )?
+        }),
         Err(ProjectError::Operation(err)) => {
             return Err(UvError::from(err).into());
         }
@@ -450,7 +494,41 @@ pub(crate) async fn sync(
     }
 
     // Identify the installation target.
-    let sync_target = identify_installation_target(&target, outcome.lock(), all_packages, &package);
+    let selected_mismatch_lock = if let Outcome::LockMismatch(..) = &outcome
+        && let Some(selection) = &axis_selection
+    {
+        Some(selection.select_lock(
+            outcome.lock(),
+            Some(selection_environment.markers()),
+            &extras,
+            &groups,
+        )?)
+    } else {
+        None
+    };
+    let sync_lock = selected_mismatch_lock
+        .as_ref()
+        .unwrap_or_else(|| outcome.lock());
+    let sync_target = if let SyncTarget::Project(project) = &target
+        && let Some(names) = axis_selection
+            .as_ref()
+            .and_then(|selection| selection.matching_members.as_deref())
+    {
+        match names {
+            [name] => InstallTarget::Project {
+                workspace: project.workspace(),
+                name,
+                lock: sync_lock,
+            },
+            names => InstallTarget::Projects {
+                workspace: project.workspace(),
+                names,
+                lock: sync_lock,
+            },
+        }
+    } else {
+        identify_installation_target(&target, sync_lock, all_packages, &package)
+    };
 
     // TODO(lucab): improve warning content
     // <https://github.com/astral-sh/uv/issues/7428>
@@ -703,10 +781,21 @@ pub(crate) async fn do_sync<'a>(
 ) -> Result<Changelog, ProjectError> {
     let malware_context = malware_settings.into();
 
-    // Commands that edit a project also sync through this entry point. A grouped lock
+    // Commands that edit a project also sync through this entry point. A selector-aware lock
     // must be projected before any installation graph is traversed.
     let selected_lock;
-    let target = if target.lock().workspace_groups().is_empty() {
+    let target = if target.lock().workspace_axes().is_some() {
+        let members = target.roots().cloned().collect();
+        let marker_environment = resolution_markers(None, python_platform, venv.interpreter());
+        selected_lock = target.lock().select_workspace_axes_for_command(
+            &WorkspaceAxisSelection::default(),
+            &members,
+            Some(marker_environment.markers()),
+            extras,
+            groups,
+        )?;
+        target.with_lock(&selected_lock)
+    } else if target.lock().workspace_groups().is_empty() {
         target
     } else {
         let members = if matches!(

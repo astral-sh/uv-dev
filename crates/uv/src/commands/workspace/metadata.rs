@@ -163,6 +163,11 @@ pub(crate) async fn metadata(
     {
         Ok(lock) => {
             let lock = lock.into_lock();
+            if lock.workspace_axes().is_some() {
+                return Err(
+                    ProjectError::WorkspaceAxesViewerUnsupported("uv workspace metadata").into(),
+                );
+            }
             let install_target = match target {
                 LockTarget::Workspace(workspace) => InstallTarget::Workspace {
                     workspace,

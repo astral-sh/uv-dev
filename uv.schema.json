@@ -1818,6 +1818,7 @@
             "pylock",
             "add-bounds",
             "package-conflicts",
+            "workspace-resolution-axes",
             "extra-build-dependencies",
             "detect-module-conflicts",
             "format-command",
@@ -2753,6 +2754,17 @@
           "items": {
             "$ref": "#/definitions/SerdePattern"
           }
+        },
+        "resolution-axes": {
+          "description": "Independent choices used to resolve different sets of workspace members.\n\nSections within an axis are mutually exclusive. A member can belong to one section per\naxis, and assignments on different axes apply together. Section `members` are package\nnames; `member-paths` are workspace-relative globs. Section constraints do not install\npackages that are not otherwise required.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkspaceAxes"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -3052,6 +3064,53 @@
         "scripts": {
           "type": ["string", "null"],
           "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkspaceAxes": {
+      "description": "The workspace's declared, independently selectable resolution axes.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/WorkspaceAxis"
+      }
+    },
+    "WorkspaceAxis": {
+      "description": "The named sections of one resolution axis.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/WorkspaceAxisSection"
+      }
+    },
+    "WorkspaceAxisSection": {
+      "description": "Members and resolution policy associated with one section of an axis.",
+      "type": "object",
+      "properties": {
+        "constraint-dependencies": {
+          "description": "Constraints narrow dependencies that are requested elsewhere; they do not install them.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "member-paths": {
+          "description": "Workspace-relative globs matched against already discovered member directories.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "members": {
+          "description": "Normalized `project.name` values, not filesystem paths.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PackageName"
+          },
+          "uniqueItems": true
+        },
+        "requires-python": {
+          "type": ["string", "null"]
         }
       },
       "additionalProperties": false

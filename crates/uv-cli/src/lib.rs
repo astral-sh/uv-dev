@@ -34,6 +34,7 @@ use uv_settings::PythonInstallMirrors;
 use uv_static::EnvVars;
 use uv_torch::TorchMode;
 use uv_warnings::warn_user_once;
+use uv_workspace::WorkspaceAxisAssignment;
 use uv_workspace::pyproject_mut::AddBoundsKind;
 
 pub mod comma;
@@ -3516,6 +3517,22 @@ pub struct RunArgs {
     /// Run using the named workspace group's resolution.
     #[arg(long, value_name = "NAME", conflicts_with = "no_project")]
     pub workspace_group: Option<GroupName>,
+    /// Select a section of a workspace resolution axis.
+    ///
+    /// May be provided more than once for independent axes.
+    #[arg(
+        long,
+        value_name = "AXIS=SECTION",
+        conflicts_with = "workspace_group",
+        conflicts_with = "no_project"
+    )]
+    pub resolution_axis: Vec<WorkspaceAxisAssignment>,
+    /// Run with all workspace members matching the selected resolution axes.
+    #[arg(
+        long,
+        conflicts_with_all = ["workspace_group", "all_packages", "package", "no_project"]
+    )]
+    pub all_matching_packages: bool,
     /// Include optional dependencies from the specified extra name.
     ///
     /// May be provided more than once.
@@ -3798,6 +3815,14 @@ pub struct SyncArgs {
     /// Sync the named workspace group's members and resolution.
     #[arg(long, value_name = "NAME")]
     pub workspace_group: Option<GroupName>,
+    /// Select a section of a workspace resolution axis.
+    ///
+    /// May be provided more than once for independent axes.
+    #[arg(long, value_name = "AXIS=SECTION", conflicts_with = "workspace_group")]
+    pub resolution_axis: Vec<WorkspaceAxisAssignment>,
+    /// Sync all workspace members matching the selected resolution axes.
+    #[arg(long, conflicts_with_all = ["workspace_group", "all_packages", "package"])]
+    pub all_matching_packages: bool,
     /// Include optional dependencies from the specified extra name.
     ///
     /// May be provided more than once.
@@ -4745,6 +4770,17 @@ pub struct ExportArgs {
     /// Export the named workspace group's members and resolution.
     #[arg(long, value_name = "NAME")]
     pub workspace_group: Option<GroupName>,
+    /// Select a section of a workspace resolution axis.
+    ///
+    /// May be provided more than once for independent axes.
+    #[arg(long, value_name = "AXIS=SECTION", conflicts_with = "workspace_group")]
+    pub resolution_axis: Vec<WorkspaceAxisAssignment>,
+    /// Export all workspace members matching the selected resolution axes.
+    #[arg(
+        long,
+        conflicts_with_all = ["workspace_group", "all_packages", "package", "batch"]
+    )]
+    pub all_matching_packages: bool,
     /// The format to which `uv.lock` should be exported.
     ///
     /// Supports `requirements.txt`, `pylock.toml` (PEP 751) and CycloneDX v1.5 JSON output formats.

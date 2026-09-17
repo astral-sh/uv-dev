@@ -7,7 +7,10 @@ use rustc_hash::FxHashMap;
 
 use uv_normalize::{ExtraName, GroupName, InvalidNameError, PackageName};
 use uv_pep508::{ExtraOperator, MarkerEnvironment, MarkerExpression, MarkerOperator, MarkerTree};
-use uv_pypi_types::{ConflictItem, ConflictKind, Conflicts, Inference};
+use uv_pypi_types::{
+    ConflictItem, ConflictKind, Conflicts, Inference, is_workspace_axis_extra,
+    select_workspace_axis_marker, without_workspace_axis_markers, workspace_axis_marker,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConflictMarkerError {
@@ -136,6 +139,32 @@ impl UniversalMarker {
         pep508: MarkerTree::FALSE,
     };
 
+    /// Restrict a locked graph to one section of a named workspace resolution axis.
+    pub fn workspace_axis(axis: &str, section: &str) -> Self {
+        Self::from_combined(workspace_axis_marker(axis, section))
+    }
+
+    /// Evaluate one workspace axis without changing other selector or conflict dimensions.
+    #[must_use]
+    pub fn select_workspace_axis(self, axis: &str, section: &str) -> Self {
+        Self::from_combined(select_workspace_axis_marker(self.marker, axis, section))
+    }
+
+    /// Existentially remove named-axis selectors from a marker restricted to a valid domain.
+    #[must_use]
+    pub fn without_workspace_axes(self) -> Self {
+        Self::from_combined(without_workspace_axis_markers(self.marker))
+    }
+
+    /// Return whether this marker depends on a named workspace resolution axis.
+    pub fn has_workspace_axis(self) -> bool {
+        let mut found = false;
+        self.marker.visit_extras_once(|_, extra| {
+            found |= is_workspace_axis_extra(extra);
+        });
+        found
+    }
+
     /// Restrict a locked graph to a named workspace resolution context.
     pub fn workspace_group(group: &GroupName) -> Self {
         let name = uv_pep508::MarkerValueExtra::Extra(encode_workspace_group(group));
@@ -161,7 +190,7 @@ impl UniversalMarker {
     /// Return whether this marker depends on a workspace-group selection.
     pub fn has_workspace_group(self) -> bool {
         let mut found = false;
-        self.marker.visit_extras(|_, extra| {
+        self.marker.visit_extras_once(|_, extra| {
             found |= extra.as_ref().starts_with("workspace-");
         });
         found
@@ -544,7 +573,7 @@ impl ConflictMarker {
     ) -> Self {
         let mut referenced = BTreeSet::new();
         for marker in markers {
-            marker.marker.visit_extras(|_, extra| {
+            marker.marker.visit_extras_once(|_, extra| {
                 referenced.insert(extra.clone());
             });
         }
@@ -1282,5 +1311,19 @@ mod tests {
         let cm = MarkerTree::from_str("python_version >= '3.10' and extra == 'bar'").unwrap();
         let cm = resolve_activated_extras(cm, Some(&package), &known_conflicts);
         assert!(cm.is_false());
+    }
+
+    #[test]
+    fn resolve_unencoded_extra_with_private_selector_spelling() {
+        let known_conflicts =
+            create_known_conflicts([("uv-axis-a73716c-s7631", "sys_platform == 'darwin'")]);
+        let package = create_package("pkg");
+        let marker = MarkerTree::from_str("extra == 'uv-axis-a73716c-s7631'")
+            .expect("valid ordinary extra marker");
+        let marker = resolve_activated_extras(marker, Some(&package), &known_conflicts);
+        assert_eq!(
+            marker.try_to_string().as_deref(),
+            Some("sys_platform == 'darwin'")
+        );
     }
 }

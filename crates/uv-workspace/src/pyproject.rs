@@ -36,7 +36,7 @@ use uv_pypi_types::{
 use uv_redacted::DisplaySafeUrl;
 use uv_toml::deserialize_unique_map;
 
-use crate::{DefaultGroupsError, WorkspaceGroup};
+use crate::{DefaultGroupsError, WorkspaceAxes, WorkspaceGroup};
 
 #[derive(Error, Debug)]
 pub enum PyprojectTomlError {
@@ -1022,6 +1022,21 @@ pub(crate) struct ToolUvWorkspace {
     )]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) groups: Option<Vec<WorkspaceGroup>>,
+    /// Independent choices used to resolve different sets of workspace members.
+    ///
+    /// Sections within an axis are mutually exclusive. A member can belong to one section per
+    /// axis, and assignments on different axes apply together. Section `members` are package
+    /// names; `member-paths` are workspace-relative globs. Section constraints do not install
+    /// packages that are not otherwise required.
+    #[option(
+        default = "{}",
+        value_type = "dict",
+        example = r#"
+            resolution-axes = { python = { py312 = { members = ["worker"], requires-python = "==3.12.*" }, py313 = { members = ["api"], requires-python = "==3.13.*" } } }
+        "#
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) resolution_axes: Option<WorkspaceAxes>,
 }
 
 /// (De)serialize globs as strings.
