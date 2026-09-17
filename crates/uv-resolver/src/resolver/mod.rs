@@ -48,7 +48,7 @@ use crate::fork_indexes::ForkIndexes;
 use crate::fork_urls::ForkUrls;
 use crate::manifest::Manifest;
 use crate::pins::FilePins;
-use crate::preferences::{PreferenceSource, Preferences};
+use crate::preferences::{Entry as PreferenceEntry, PreferenceSource, Preferences};
 use crate::pubgrub::{
     DependencySource, PubGrubDependency, PubGrubPackage, PubGrubPackageInner, PubGrubPriorities,
     PubGrubPython, Range,
@@ -61,6 +61,7 @@ pub(crate) use crate::resolver::availability::{
     UnavailableVersion, UnsatisfiableRequirement,
 };
 use crate::resolver::batch_prefetch::BatchPrefetcher;
+use crate::resolver::coordination::ForkPreferences;
 use crate::resolver::derivation::DerivationChainBuilder;
 pub use crate::resolver::environment::ResolverEnvironment;
 use crate::resolver::environment::{
@@ -382,7 +383,14 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             let mut preferences = self.preferences.clone();
             let mut resolutions = Vec::new();
             while let Some(state) = forked_states.pop() {
-                match self.solve_fork(state, &preferences, &mut visited, requests, false, None)? {
+                match self.solve_fork(
+                    state,
+                    ForkPreferences::fixed(&preferences),
+                    &mut visited,
+                    requests,
+                    false,
+                    None,
+                )? {
                     ForkOutcome::Pending(state) => forked_states.push(state),
                     ForkOutcome::Split(states) => forked_states.extend(states),
                     ForkOutcome::Complete(state) => {
@@ -466,7 +474,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
     fn solve_fork(
         &self,
         mut state: ForkState,
-        preferences: &Preferences,
+        preferences: ForkPreferences<'_>,
         visited: &mut FxHashSet<PackageName>,
         requests: &MetadataRequests,
         yield_decisions: bool,
@@ -627,13 +635,14 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 {
                     Some(ResolverVersion::Unforked(version.clone()))
                 } else {
+                    let preferences = preferences.for_package(self, &state, next_package.name());
                     let decision = self.choose_version(
                         next_package,
                         next_id,
                         source,
                         range,
                         &mut state.pins,
-                        preferences,
+                        &preferences,
                         &state.env,
                         &state.python_requirement,
                         &state.pubgrub,
@@ -1141,7 +1150,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         source: PackageSource<'_>,
         range: &Range<Version>,
         pins: &mut FilePins<'index>,
-        preferences: &Preferences,
+        preferences: &[PreferenceEntry],
         env: &ResolverEnvironment,
         python_requirement: &PythonRequirement,
         pubgrub: &State<UvDependencyProvider>,
@@ -1331,7 +1340,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         name: &PackageName,
         index: Option<&IndexMetadata>,
         range: &Range<Version>,
-        preferences: &Preferences,
+        preferences: &[PreferenceEntry],
         env: &ResolverEnvironment,
         python_requirement: &PythonRequirement,
         pubgrub: &State<UvDependencyProvider>,
@@ -1515,7 +1524,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         name: &PackageName,
         index: Option<&IndexUrl>,
         range: &Range<Version>,
-        preferences: &Preferences,
+        preferences: &[PreferenceEntry],
         env: &ResolverEnvironment,
         pubgrub: &State<UvDependencyProvider>,
         pins: &mut FilePins<'index>,
@@ -2237,7 +2246,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     &package_name,
                     &range,
                     version_map,
-                    &self.preferences,
+                    self.preferences.get(&package_name),
                     &self.installed_packages,
                     &self.exclusions,
                     None,
