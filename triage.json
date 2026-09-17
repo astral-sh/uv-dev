@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 21805,
+        "title": "Ignore `UV_NATIVE_TLS` when `UV_SYSTEM_CERTS` is set",
+        "url": "https://github.com/astral-sh/uv/pull/21805",
+        "state": "open",
+        "reason": "This predates the issue and covers the exact defect, making any `UV_SYSTEM_CERTS` value authoritative and testing false against true and invalid legacy values."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21788,
+        "title": "Avoid warning when both `UV_NATIVE_TLS` and `UV_SYSTEM_CERTS` are set",
+        "url": "https://github.com/astral-sh/uv/pull/21788",
+        "state": "merged",
+        "reason": "This introduced the warning-suppression mismatch without changing precedence. Its review explicitly identified the same false/true corner case."
+      },
+      {
+        "kind": "issue",
+        "number": 21774,
+        "title": "Remove the annoying message \"`UV_NATIVE_TLS` environment variable is deprecated\" when both variables are defined",
+        "url": "https://github.com/astral-sh/uv/issues/21774",
+        "state": "closed",
+        "reason": "This originating warning report explains why users set both variables for compatibility, but does not isolate false-valued precedence."
+      }
+    ],
+    "search_scope": "Searched literal identifiers, `UV_SYSTEM_CERTS=false`, deprecation-warning text, and ignore/fall-through wording across open and closed issues and pull requests in every state. Conceptual searches covered TLS-setting precedence, replacement environment variables, migration, and warning suppression. Fix-oriented inspection followed astral-sh/uv#21774, astral-sh/uv#21788, astral-sh/uv#21806, and astral-sh/uv#21805 through comments, reviews, diffs, tests, and cross-references. astral-sh/uv#21035 was ruled out because it concerns the broader deprecation timeline, while astral-sh/uv#21806 only concerns configuration files, where explicit false already wins."
+  },
+  "type": "duplicate",
+  "type_reason": "The source confirms incorrect behavior: warning suppression treats any present `UV_SYSTEM_CERTS` as authoritative, while resolution only treats true as authoritative. Duplicate takes precedence because open astral-sh/uv#21805 predates astral-sh/uv#21807 and already tracks and tests this exact defect; it was not created in response to the issue.",
+  "summary": "Open astral-sh/uv#21805 is the exact tracker and fix. Merged astral-sh/uv#21788 created the warning/resolution mismatch, while astral-sh/uv#21774 provides the compatibility context.",
+  "draft_response": "Thanks. This exact environment-variable precedence case is already being addressed in astral-sh/uv#21805, which predates this report. The current code suppresses the warning whenever `UV_SYSTEM_CERTS` is present but only gives it precedence when true, allowing false to fall through to `UV_NATIVE_TLS=true`. astral-sh/uv#21805 makes `UV_SYSTEM_CERTS` authoritative whenever set, ignores the deprecated variable, and adds coverage for true and invalid legacy values. We’ll centralize the fix there."
+}
