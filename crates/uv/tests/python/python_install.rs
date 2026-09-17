@@ -914,7 +914,7 @@ async fn python_project_build_variant_catalog() -> anyhow::Result<()> {
         .sync()
         .current_dir(&project)
         .arg("--python")
-        .arg("3.13+custom")
+        .arg("3.13+custom+pgo+lto")
         .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, &metadata_url)
         .assert()
         .success();
@@ -929,9 +929,9 @@ async fn python_project_build_variant_catalog() -> anyhow::Result<()> {
         command
     };
 
-    // An explicit provider request reuses its environment even when it is not the default.
+    // Reordered build tags reuse the environment even when it is not the default.
     project.child(".venv/custom-marker").touch()?;
-    uv_snapshot!(context.filters(), project_run("3.13+custom")
+    uv_snapshot!(context.filters(), project_run("3.13+lto+pgo+custom")
         .arg("python").arg("-c").arg(base_prefix), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -940,6 +940,27 @@ async fn python_project_build_variant_catalog() -> anyhow::Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     Checked in [TIME]
+    ");
+    project
+        .child(".venv/custom-marker")
+        .assert(predicate::path::exists());
+
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .context("Missing request log")?
+            .len(),
+        requests_before_project
+    );
+
+    // A request missing build tags must not reuse the composite build's environment.
+    uv_snapshot!(context.filters(), project_run("3.13+custom")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "never")
+        .arg("python").arg("-c").arg(base_prefix), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for Python 3.13+custom in [PYTHON SOURCES]
     ");
     project
         .child(".venv/custom-marker")
@@ -962,14 +983,6 @@ async fn python_project_build_variant_catalog() -> anyhow::Result<()> {
     project
         .child(".venv/custom-marker")
         .assert(predicate::path::missing());
-    assert_eq!(
-        server
-            .received_requests()
-            .await
-            .context("Missing request log")?
-            .len(),
-        requests_before_project
-    );
 
     Ok(())
 }
@@ -1100,7 +1113,7 @@ fn python_project_build_variant_catalog_error() -> anyhow::Result<()> {
         .sync()
         .current_dir(&project)
         .arg("--python")
-        .arg("3.13+custom")
+        .arg("3.13+custom+pgo+lto")
         .assert()
         .success();
     let base_prefix = "import os, sys; print(os.path.realpath(sys.base_prefix))";
@@ -1156,7 +1169,7 @@ fn python_build_variant_catalog_explicit_path() -> anyhow::Result<()> {
         .sync()
         .current_dir(&project)
         .arg("--python")
-        .arg("3.13+custom")
+        .arg("3.13+custom+pgo+lto")
         .assert()
         .success();
     let base_prefix = "import os, sys; print(os.path.realpath(sys.base_prefix))";
