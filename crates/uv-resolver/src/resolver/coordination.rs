@@ -13,6 +13,7 @@ use uv_pep440::Version;
 use uv_pep508::{MarkerTree, RequirementOrigin, VerbatimUrl};
 use uv_pypi_types::{ConflictItem, ConflictKindRef, VerbatimParsedUrl};
 use uv_redacted::DisplaySafeUrl;
+use uv_resolver_types::PackageNodeKind;
 use uv_types::InstalledPackagesProvider;
 
 use crate::ResolutionMode;
@@ -23,6 +24,7 @@ use crate::preferences::{Entry, PreferenceIndex, PreferenceSource, Preferences};
 use crate::pubgrub::{PubGrubPackage, PubGrubPackageInner, Range};
 use crate::universal_marker::{ConflictMarker, UniversalMarker};
 
+use super::selected_versions::SiblingPreference;
 use super::{
     ForkContinuation, ForkMap, ForkOutcome, ForkState, MetadataRequests, RequirementContext,
     RequirementExpander, Resolution, ResolverState, UnavailableReason, VersionsResponse,
@@ -377,6 +379,54 @@ pub(super) struct ForkPreferences<'a> {
     shared: Option<(&'a ObservationLedger, &'a Observations)>,
 }
 
+/// Preferences with an optional, deferred sibling overlay.
+pub(super) struct PackagePreferences<'a> {
+    entries: Cow<'a, [Entry]>,
+    siblings: Option<Vec<SiblingPreference>>,
+}
+
+impl<'a> PackagePreferences<'a> {
+    fn new(base: &'a [Entry], capture_siblings: bool) -> Self {
+        Self {
+            entries: Cow::Borrowed(base),
+            siblings: capture_siblings.then(Vec::new),
+        }
+    }
+
+    fn push_resolver(&mut self, index: &IndexUrl, marker: UniversalMarker, version: &Version) {
+        if let Some(siblings) = &mut self.siblings {
+            siblings.push(SiblingPreference::new(
+                index.clone(),
+                marker,
+                version.clone(),
+            ));
+        } else {
+            self.entries.to_mut().push(Entry::from_resolver(
+                index.clone(),
+                marker,
+                version.clone(),
+            ));
+        }
+    }
+
+    pub(super) fn siblings(&self) -> Option<&[SiblingPreference]> {
+        self.siblings.as_deref()
+    }
+
+    /// Materialize entries only when candidate selection needs them. The recorded overlay is
+    /// returned unchanged so a successful selection can retain its exact pre-selection key.
+    pub(super) fn into_parts(mut self) -> (Cow<'a, [Entry]>, Option<Vec<SiblingPreference>>) {
+        if let Some(siblings) = &self.siblings
+            && !siblings.is_empty()
+        {
+            self.entries
+                .to_mut()
+                .extend(siblings.iter().map(SiblingPreference::to_entry));
+        }
+        (self.entries, self.siblings)
+    }
+}
+
 impl<'a> ForkPreferences<'a> {
     pub(super) fn fixed(base: &'a Preferences) -> Self {
         Self { base, shared: None }
@@ -393,24 +443,29 @@ impl<'a> ForkPreferences<'a> {
         }
     }
 
+    pub(super) fn is_shared(&self) -> bool {
+        self.shared.is_some()
+    }
+
     pub(super) fn for_package<InstalledPackages: InstalledPackagesProvider>(
         &self,
         resolver: &ResolverState<InstalledPackages>,
         state: &ForkState,
         name: Option<&PackageName>,
-    ) -> Cow<'a, [Entry]> {
+        capture_siblings: bool,
+    ) -> PackagePreferences<'a> {
         let Some(name) = name else {
-            return Cow::Borrowed(&[]);
+            return PackagePreferences::new(&[], false);
         };
         let base = self.base.get(name);
         let Some((ledger, excluded)) = self.shared else {
-            return Cow::Borrowed(base);
+            return PackagePreferences::new(base, false);
         };
+        let mut preferences = PackagePreferences::new(base, capture_siblings);
         if resolver.workspace_members.contains(name) {
-            return Cow::Borrowed(base);
+            return preferences;
         }
 
-        let mut entries = None;
         let mut previous_index = None;
         for observation in ledger.for_package(name, excluded) {
             let Source::Registry(index) = &observation.source else {
@@ -425,19 +480,10 @@ impl<'a> ForkPreferences<'a> {
                 }
             };
             if matches {
-                entries
-                    .get_or_insert_with(|| base.to_vec())
-                    .push(Entry::from_resolver(
-                        index.clone(),
-                        observation.marker,
-                        observation.version.clone(),
-                    ));
+                preferences.push_resolver(index, observation.marker, &observation.version);
             }
         }
-        match entries {
-            Some(entries) => Cow::Owned(entries),
-            None => Cow::Borrowed(base),
-        }
+        preferences
     }
 }
 
@@ -476,6 +522,8 @@ struct CompletedFork {
 impl CompletedFork {
     fn new(mut state: ForkState, observations: Observations) -> Self {
         state.decision_journal = None;
+        // Completed checkpoints only run again as trials, which require fresh selection context.
+        state.selected_versions.clear();
         Self {
             checkpoint: state.clone(),
             states: vec![state],
@@ -538,9 +586,9 @@ pub(super) fn solve<InstalledPackages: InstalledPackagesProvider>(
         } = fork;
         let preferences =
             ForkPreferences::shared(&resolver.preferences, &ledger, &observations.observations);
-        // Both sibling decisions and newly fetched index metadata can change which live
-        // preferences apply. The normal candidate cache does not include either in its key.
-        state.selected_versions.clear();
+        // Sibling decisions and newly fetched index metadata are revalidated lazily for each
+        // package when its next candidate is selected.
+        state.selected_versions.start_resume();
         let yield_decisions = !live.is_empty() || !completed.is_empty();
         if !yield_decisions {
             // No other owner can observe intermediate decisions until this fork splits or ends.
@@ -630,8 +678,7 @@ fn observe(state: &ForkState) -> Observations {
 fn observable_name(state: &ForkState, package: Id<PubGrubPackage>) -> Option<&PackageName> {
     let PubGrubPackageInner::Package {
         name,
-        extra: None,
-        group: None,
+        kind: PackageNodeKind::Base,
         marker: MarkerTree::TRUE,
     } = &*state.pubgrub.package_store[package]
     else {
@@ -1124,8 +1171,7 @@ fn prepare_trial(
                 .package_store
                 .alloc(PubGrubPackage::from_package(
                     package.name.clone(),
-                    None,
-                    None,
+                    PackageNodeKind::Base,
                     MarkerTree::TRUE,
                 ));
             (package, version.clone())
@@ -1277,13 +1323,15 @@ mod tests {
     use crate::fork_indexes::ForkIndexes;
     use crate::fork_urls::ForkUrls;
     use crate::preferences::{PreferenceIndex, PreferenceSource, Preferences};
+    use crate::resolver::selected_versions::SiblingPreference;
     use crate::universal_marker::{ConflictMarker, UniversalMarker};
 
     use super::{
-        Agreements, AttemptBudget, Observation, ObservationLedger, Observations, Proposal,
-        RegistryPackage, Source, cached_sources_match, credential_free_index, duplicate_count,
-        has_selected_preference, preference_index_matches, preferences_preserved,
-        proposal_changes_preference, sources_fixed_by_policy, with_agreement,
+        Agreements, AttemptBudget, Observation, ObservationLedger, Observations,
+        PackagePreferences, Proposal, RegistryPackage, Source, cached_sources_match,
+        credential_free_index, duplicate_count, has_selected_preference, preference_index_matches,
+        preferences_preserved, proposal_changes_preference, sources_fixed_by_policy,
+        with_agreement,
     };
 
     fn observation(name: &str, index: &str, version: u64) -> Result<Observation, Box<dyn Error>> {
@@ -1314,6 +1362,53 @@ mod tests {
             credential_free_index(&authenticated),
             credential_free_index(&anonymous)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn captured_overlay_excludes_base_preferences() -> Result<(), Box<dyn Error>> {
+        let name: PackageName = "example".parse()?;
+        let index = IndexUrl::parse("https://pypi.org/simple", None)?;
+        let other_index = IndexUrl::parse("https://example.org/simple", None)?;
+        let marker = UniversalMarker::from_combined("python_version < '3.12'".parse()?);
+        let mut base = Preferences::default();
+        base.insert(
+            name.clone(),
+            Some(index.clone()),
+            UniversalMarker::TRUE,
+            Version::new([1]),
+            PreferenceSource::Lock,
+        );
+
+        let mut preferences = PackagePreferences::new(base.get(&name), true);
+        preferences.push_resolver(&index, marker, &Version::new([2]));
+        preferences.push_resolver(&other_index, UniversalMarker::TRUE, &Version::new([3]));
+        assert_eq!(preferences.entries.len(), 1);
+        let (entries, siblings) = preferences.into_parts();
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| (entry.pin().version().clone(), entry.source()))
+                .collect::<Vec<_>>(),
+            [
+                (Version::new([1]), PreferenceSource::Lock),
+                (Version::new([2]), PreferenceSource::Resolver),
+                (Version::new([3]), PreferenceSource::Resolver),
+            ],
+        );
+        assert_eq!(
+            siblings,
+            Some(vec![
+                SiblingPreference::new(index.clone(), marker, Version::new([2])),
+                SiblingPreference::new(other_index, UniversalMarker::TRUE, Version::new([3])),
+            ]),
+        );
+
+        let mut preferences = PackagePreferences::new(base.get(&name), false);
+        preferences.push_resolver(&index, marker, &Version::new([2]));
+        let (entries, siblings) = preferences.into_parts();
+        assert!(siblings.is_none());
+        assert_eq!(entries.len(), 2);
         Ok(())
     }
 

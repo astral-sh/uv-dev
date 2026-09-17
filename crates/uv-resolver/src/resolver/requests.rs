@@ -1,3 +1,4 @@
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use tokio::sync::{mpsc::Sender, oneshot};
@@ -10,7 +11,6 @@ use uv_once_map::Registration;
 use uv_pep440::Version;
 
 use crate::pubgrub::Range;
-use crate::resolver::index::FxRegisteredEntry;
 use crate::resolver::{InMemoryIndex, MetadataResponse, Request, Response, VersionsResponse};
 use crate::{PythonRequirement, ResolveError};
 
@@ -72,35 +72,54 @@ impl Name for MetadataRequest<'_> {
 }
 
 /// A registered version-list request, bound to its package and index scope.
-pub(crate) enum PendingVersions<'index> {
-    Implicit(FxRegisteredEntry<'index, PackageName, Arc<VersionsResponse>>),
-    Explicit(FxRegisteredEntry<'index, (PackageName, IndexUrl), Arc<VersionsResponse>>),
+pub(crate) enum PendingVersions {
+    Implicit(InMemoryIndex, PackageName),
+    Explicit(InMemoryIndex, (PackageName, IndexUrl)),
 }
 
-impl PendingVersions<'_> {
+impl PendingVersions {
     pub(crate) fn wait(self) -> Arc<VersionsResponse> {
         match self {
-            Self::Implicit(entry) => entry.wait_blocking(),
-            Self::Explicit(entry) => entry.wait_blocking(),
+            Self::Implicit(index, name) => index
+                .implicit()
+                .get_registered(name)
+                .expect("a pending version request remains registered")
+                .wait_blocking(),
+            Self::Explicit(index, key) => index
+                .explicit()
+                .get_registered(key)
+                .expect("a pending version request remains registered")
+                .wait_blocking(),
         }
     }
 }
 
 /// A distribution whose metadata was registered or supplied before resolution.
 ///
-/// Selected pins retain a registered entry that prevents cache removal while borrowed.
-#[derive(Clone, Debug)]
-pub(crate) struct RegisteredMetadata<'index>(
-    FxRegisteredEntry<'index, DistributionId, Arc<MetadataResponse>>,
-);
+/// Selected pins retain an index owner that prevents exclusive cache access and removal.
+#[derive(Clone)]
+pub(crate) struct RegisteredMetadata(InMemoryIndex, DistributionId);
 
-impl RegisteredMetadata<'_> {
+impl Debug for RegisteredMetadata {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_tuple("RegisteredMetadata")
+            .field(&self.1)
+            .finish()
+    }
+}
+
+impl RegisteredMetadata {
     pub(crate) fn id(&self) -> &DistributionId {
-        self.0.key()
+        &self.1
     }
 
     pub(crate) fn wait(&self) -> Arc<MetadataResponse> {
-        self.0.wait_blocking()
+        self.0
+            .distributions()
+            .get_registered(self.1.clone())
+            .expect("registered metadata remains available while its index is retained")
+            .wait_blocking()
     }
 }
 
@@ -199,58 +218,63 @@ impl MetadataRequests {
         &self,
         name: &PackageName,
         index: Option<&IndexMetadata>,
-    ) -> Result<PendingVersions<'_>, ResolveError> {
+    ) -> Result<PendingVersions, ResolveError> {
         if let Some(speculative) = &self.speculative {
             if let Some(index) = index {
                 let key = (name.clone(), index.url().clone());
-                if let Some(entry) = self.index.explicit().get_registered(key.clone()) {
-                    return Ok(PendingVersions::Explicit(entry));
+                if self.index.explicit().get_registered(key.clone()).is_some() {
+                    return Ok(PendingVersions::Explicit(self.index.clone(), key));
                 }
-                if let Some(entry) = speculative.explicit().get_registered(key.clone()) {
-                    return Ok(PendingVersions::Explicit(entry));
+                if speculative.explicit().get_registered(key.clone()).is_some() {
+                    return Ok(PendingVersions::Explicit(speculative.clone(), key));
                 }
                 self.request_speculative(Request::Package(name.clone(), Some(index.clone())))?;
-                if let Some(entry) = self.index.explicit().get_registered(key.clone()) {
-                    return Ok(PendingVersions::Explicit(entry));
+                if self.index.explicit().get_registered(key.clone()).is_some() {
+                    return Ok(PendingVersions::Explicit(self.index.clone(), key));
                 }
-                return speculative
-                    .explicit()
-                    .get_registered(key)
-                    .map(PendingVersions::Explicit)
-                    .ok_or_else(|| ResolveError::UnregisteredTask(name.to_string()));
+                if speculative.explicit().get_registered(key.clone()).is_some() {
+                    return Ok(PendingVersions::Explicit(speculative.clone(), key));
+                }
+                return Err(ResolveError::UnregisteredTask(name.to_string()));
             }
 
-            if let Some(entry) = self.index.implicit().get_registered(name.clone()) {
-                return Ok(PendingVersions::Implicit(entry));
+            if self.index.implicit().get_registered(name.clone()).is_some() {
+                return Ok(PendingVersions::Implicit(self.index.clone(), name.clone()));
             }
-            if let Some(entry) = speculative.implicit().get_registered(name.clone()) {
-                return Ok(PendingVersions::Implicit(entry));
-            }
-            self.request_speculative(Request::Package(name.clone(), None))?;
-            if let Some(entry) = self.index.implicit().get_registered(name.clone()) {
-                return Ok(PendingVersions::Implicit(entry));
-            }
-            return speculative
+            if speculative
                 .implicit()
                 .get_registered(name.clone())
-                .map(PendingVersions::Implicit)
-                .ok_or_else(|| ResolveError::UnregisteredTask(name.to_string()));
+                .is_some()
+            {
+                return Ok(PendingVersions::Implicit(speculative.clone(), name.clone()));
+            }
+            self.request_speculative(Request::Package(name.clone(), None))?;
+            if self.index.implicit().get_registered(name.clone()).is_some() {
+                return Ok(PendingVersions::Implicit(self.index.clone(), name.clone()));
+            }
+            if speculative
+                .implicit()
+                .get_registered(name.clone())
+                .is_some()
+            {
+                return Ok(PendingVersions::Implicit(speculative.clone(), name.clone()));
+            }
+            return Err(ResolveError::UnregisteredTask(name.to_string()));
         }
 
         if let Some(index) = index {
-            let entry = match self
-                .index
-                .explicit()
-                .register_entry((name.clone(), index.url().clone()))
-            {
+            let key = (name.clone(), index.url().clone());
+            let entry = match self.index.explicit().register_entry(key.clone()) {
                 Registration::New(entry) => {
-                    self.sender
-                        .blocking_send(Request::Package(name.clone(), Some(index.clone())).into())?;
+                    self.sender.blocking_send(
+                        Request::Package(name.clone(), Some(index.clone())).into(),
+                    )?;
                     entry
                 }
                 Registration::Existing(entry) => entry,
             };
-            Ok(PendingVersions::Explicit(entry))
+            drop(entry);
+            Ok(PendingVersions::Explicit(self.index.clone(), key))
         } else {
             let entry = match self.index.implicit().register_entry(name.clone()) {
                 Registration::New(entry) => {
@@ -260,7 +284,8 @@ impl MetadataRequests {
                 }
                 Registration::Existing(entry) => entry,
             };
-            Ok(PendingVersions::Implicit(entry))
+            drop(entry);
+            Ok(PendingVersions::Implicit(self.index.clone(), name.clone()))
         }
     }
 
@@ -271,11 +296,12 @@ impl MetadataRequests {
     ) -> Result<(), ResolveError> {
         if let Some(speculative) = &self.speculative {
             let id = request.id();
-            if self.index.distributions().get_registered(id.clone()).is_none()
-                && speculative
-                    .distributions()
-                    .get_registered(id)
-                    .is_none()
+            if self
+                .index
+                .distributions()
+                .get_registered(id.clone())
+                .is_none()
+                && speculative.distributions().get_registered(id).is_none()
             {
                 self.request_speculative(request.into_request())?;
             }
@@ -294,30 +320,48 @@ impl MetadataRequests {
         &self,
         request: MetadataRequest<'_>,
         validate: impl FnOnce(&MetadataRequest<'_>) -> Result<(), ResolveError>,
-    ) -> Result<RegisteredMetadata<'_>, ResolveError> {
+    ) -> Result<RegisteredMetadata, ResolveError> {
         if let Some(speculative) = &self.speculative {
             let id = request.id();
-            if let Some(entry) = self.index.distributions().get_registered(id.clone()) {
-                return Ok(RegisteredMetadata(entry));
+            if self
+                .index
+                .distributions()
+                .get_registered(id.clone())
+                .is_some()
+            {
+                return Ok(RegisteredMetadata(self.index.clone(), id));
             }
-            if let Some(entry) = speculative.distributions().get_registered(id.clone()) {
-                return Ok(RegisteredMetadata(entry));
+            if speculative
+                .distributions()
+                .get_registered(id.clone())
+                .is_some()
+            {
+                return Ok(RegisteredMetadata(speculative.clone(), id));
             }
             validate(&request)?;
             let request = request.into_request();
             let description = request.to_string();
             self.request_speculative(request)?;
-            if let Some(entry) = self.index.distributions().get_registered(id.clone()) {
-                return Ok(RegisteredMetadata(entry));
-            }
-            return speculative
+            if self
+                .index
                 .distributions()
-                .get_registered(id)
-                .map(RegisteredMetadata)
-                .ok_or_else(|| ResolveError::UnregisteredTask(description));
+                .get_registered(id.clone())
+                .is_some()
+            {
+                return Ok(RegisteredMetadata(self.index.clone(), id));
+            }
+            if speculative
+                .distributions()
+                .get_registered(id.clone())
+                .is_some()
+            {
+                return Ok(RegisteredMetadata(speculative.clone(), id));
+            }
+            return Err(ResolveError::UnregisteredTask(description));
         }
 
-        let entry = match self.index.distributions().register_entry(request.id()) {
+        let id = request.id();
+        let entry = match self.index.distributions().register_entry(id.clone()) {
             Registration::New(entry) => {
                 validate(&request)?;
                 self.sender.blocking_send(request.into_request().into())?;
@@ -325,7 +369,8 @@ impl MetadataRequests {
             }
             Registration::Existing(entry) => entry,
         };
-        Ok(RegisteredMetadata(entry))
+        drop(entry);
+        Ok(RegisteredMetadata(self.index.clone(), id))
     }
 
     /// Schedule speculative candidate selection using an already-requested package version map.
@@ -344,25 +389,36 @@ impl MetadataRequests {
     }
 
     /// Acquire metadata registered during input preparation or package visitation.
-    pub(crate) fn metadata(&self, dist: &Dist) -> Result<RegisteredMetadata<'_>, ResolveError> {
+    pub(crate) fn metadata(&self, dist: &Dist) -> Result<RegisteredMetadata, ResolveError> {
+        let id = dist.distribution_id();
         if let Some(speculative) = &self.speculative {
-            return self
+            if self
                 .index
                 .distributions()
-                .get_registered(dist.distribution_id())
-                .or_else(|| {
-                    speculative
-                        .distributions()
-                        .get_registered(dist.distribution_id())
-                })
-                .map(RegisteredMetadata)
-                .ok_or_else(|| ResolveError::UnregisteredTask(dist.to_string()));
+                .get_registered(id.clone())
+                .is_some()
+            {
+                return Ok(RegisteredMetadata(self.index.clone(), id));
+            }
+            if speculative
+                .distributions()
+                .get_registered(id.clone())
+                .is_some()
+            {
+                return Ok(RegisteredMetadata(speculative.clone(), id));
+            }
+            return Err(ResolveError::UnregisteredTask(dist.to_string()));
         }
-        self.index
+        if self
+            .index
             .distributions()
-            .get_registered(dist.distribution_id())
-            .map(RegisteredMetadata)
-            .ok_or_else(|| ResolveError::UnregisteredTask(dist.to_string()))
+            .get_registered(id.clone())
+            .is_some()
+        {
+            Ok(RegisteredMetadata(self.index.clone(), id))
+        } else {
+            Err(ResolveError::UnregisteredTask(dist.to_string()))
+        }
     }
 }
 
@@ -385,7 +441,7 @@ mod tests {
         InMemoryIndex, MetadataResponse, MetadataUnavailable, Request, Response, VersionsResponse,
     };
 
-    use super::{MetadataRequest, MetadataRequests, PendingVersions, RegisteredMetadata};
+    use super::{MetadataRequest, MetadataRequests, PendingVersions};
 
     fn wheel() -> Result<Dist, Box<dyn Error>> {
         let url = VerbatimUrl::parse_url("https://example.com/example-1.0.0-py3-none-any.whl")?;
@@ -560,7 +616,7 @@ mod tests {
         let worker = thread::spawn(move || {
             speculative
                 .request_metadata(MetadataRequest::Dist(requested_dist), |_| Ok(()))
-                .map(RegisteredMetadata::wait)
+                .map(|registered| registered.wait())
         });
         receiver
             .blocking_recv()
