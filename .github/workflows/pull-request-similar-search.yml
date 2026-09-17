@@ -1,4 +1,4 @@
-# Find related issues and pull requests when a pull request is opened.
+# Find related issues and pull requests when a same-repository pull request is opened.
 name: "Pull request similar search"
 
 on:
@@ -42,7 +42,7 @@ jobs:
         run: |
           gh pr view "$PULL_REQUEST_NUMBER" \
             --repo "$GITHUB_REPOSITORY" \
-            --json number,title,body,author,url,state,baseRefName,baseRefOid,headRefName,headRefOid,isDraft,labels,files,additions,deletions,changedFiles,closingIssuesReferences \
+            --json number,title,body,author,url,state,baseRefName,baseRefOid,headRefName,headRefOid,isCrossRepository,isDraft,labels,files,additions,deletions,changedFiles,closingIssuesReferences \
             > .pull-request-similar-search-event.json
 
           if ! jq --exit-status \
@@ -52,6 +52,12 @@ jobs:
             .pull-request-similar-search-event.json > /dev/null; then
             echo "The pull request must belong to $GITHUB_REPOSITORY." >&2
             exit 1
+          fi
+
+          if ! jq --exit-status '.isCrossRepository == false' \
+            .pull-request-similar-search-event.json > /dev/null; then
+            echo "The pull request is from a fork; skipping the search."
+            exit 0
           fi
 
           if ! jq --exit-status --arg head "$HEAD_SHA" \
@@ -66,12 +72,12 @@ jobs:
 
           gh pr view "$PULL_REQUEST_NUMBER" \
             --repo "$GITHUB_REPOSITORY" \
-            --json state,baseRefOid,headRefOid \
+            --json state,baseRefOid,headRefOid,isCrossRepository \
             > "$RUNNER_TEMP/pull-request-similar-search-current.json"
 
           if ! jq --exit-status \
             --slurpfile current "$RUNNER_TEMP/pull-request-similar-search-current.json" \
-            '$current[0].state == "OPEN" and .baseRefOid == $current[0].baseRefOid and .headRefOid == $current[0].headRefOid' \
+            '$current[0].state == "OPEN" and $current[0].isCrossRepository == false and .baseRefOid == $current[0].baseRefOid and .headRefOid == $current[0].headRefOid' \
             .pull-request-similar-search-event.json > /dev/null; then
             echo "The pull request changed while collecting its diff; skipping stale search."
             exit 0

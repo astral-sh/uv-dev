@@ -49,8 +49,10 @@
       "on": {
         "pull_request": ["opened"]
       },
+      "conditions": {
+        "/pull_request/head/repo/full_name": "astral-sh/uv"
+      },
       "allow_draft": true,
-      "allow_forks": true,
       "workflow": "pull-request-similar-search.yml"
     },
     {
