@@ -12,9 +12,11 @@ The reporter asks for an opt-in mode in which `uv pip install` remembers explici
 
 Repository evidence establishes that separate `uv pip install` invocations intentionally resolve independently: a constraint passed only to the first command is not automatically a constraint on the second command. This exact successive-install symptom was discussed in astral-sh/uv#18551. Current enforcement is split between `uv pip install --strict`, which reports relevant environment incompatibilities as warnings while returning success, and `uv pip check`, which returns a failure status when it finds incompatibilities.
 
-The discussion now includes a concrete package pair: install `west==1.5.0`, which selects `pyyaml==6.0.3`, then independently install `pyyaml==3.10`, which replaces 6.0.3. The reporter says `west` subsequently fails at runtime because it calls APIs incompatible with PyYAML 3.10, but no failing `west` command or traceback is provided. A maintainer asks whether `west==1.5.0` actually declares package metadata that makes it incompatible with `pyyaml==3.10`; that is not answered in the available discussion.
+The discussion includes a concrete package pair: install `west==1.5.0`, which selects `pyyaml==6.0.3`, then independently install `pyyaml==3.10`, which replaces 6.0.3. The reporter says `west` subsequently fails at runtime because it calls APIs incompatible with PyYAML 3.10, but no failing `west` command or traceback is provided. A maintainer asks whether `west==1.5.0` actually declares package metadata that makes it incompatible with `pyyaml==3.10`; that is not answered in the available discussion.
 
-That metadata question determines which behavior is at issue. If `west==1.5.0` declares an incompatible PyYAML range, the second install leaves a dependency-graph incompatibility that existing `--strict` or `uv pip check` diagnostics may detect. If its metadata permits PyYAML 3.10, the environment is metadata-valid and the proposal requires uv to persist an earlier selected or explicitly constrained version for reasons not represented by installed package metadata. One maintainer says warning or error behavior based on incompatibility with another installed package is substantially more plausible than remembering constraints from earlier invocations. Another maintainer considers the non-stateful `uv pip install` behavior intentional, notes that pip behaves the same way, and points to `uv sync` as the interface for declaring dependencies in one place and letting uv maintain the environment. The reporter's generated, multi-file input explains why that migration is not straightforward, but does not yet establish that a project and `uv sync` workflow cannot model or consume the inputs. The issue still provides no uv version, platform, or demonstrated runtime failure.
+A second reporter supplies a metadata-explicit reproduction on uv 0.12.15 for Windows x86-64: create two local packages that require `flake8==7.2.0` and `flake8==7.3.0`, respectively, then install them into the same environment with separate `uv pip install` calls. Both local packages remain installed and Flake8 ends at 7.3.0, so the first package's exact declared dependency is no longer satisfied. This directly demonstrates the installed-package incompatibility variant without requiring persisted command-line history.
+
+That metadata question determines which behavior the West example exercises. If `west==1.5.0` declares an incompatible PyYAML range, the second install leaves a dependency-graph incompatibility that existing `--strict` or `uv pip check` diagnostics may detect. If its metadata permits PyYAML 3.10, the environment is metadata-valid and the proposal requires uv to persist an earlier selected or explicitly constrained version for reasons not represented by installed package metadata. The local Flake8 reproduction establishes the former category independently. One maintainer says warning or error behavior based on incompatibility with another installed package is substantially more plausible than remembering constraints from earlier invocations. Another maintainer considers the non-stateful `uv pip install` behavior intentional, notes that pip behaves the same way, and points to `uv sync` as the interface for declaring dependencies in one place and letting uv maintain the environment. The reporter's generated, multi-file input explains why that migration is not straightforward, but does not yet establish that a project and `uv sync` workflow cannot model or consume the inputs. The West report still provides no uv version, platform, or demonstrated runtime failure.
 
 ## Concrete reproduction reported
 
@@ -24,9 +26,23 @@ That metadata question determines which behavior is at issue. If `west==1.5.0` d
 
 The installation transcript is user-reported and has not been independently reproduced in the handoff. The declared dependency range in the `west==1.5.0` distribution metadata also remains to be checked.
 
+### Local-package conflict reported
+
+On uv 0.12.15 (`d35f1f270`, 2026-09-15, `x86_64-pc-windows-msvc`):
+
+1. Create a bare project `blab_1` and run `uv add flake8==7.2.0` in it.
+2. Create a bare project `blab_2` and run `uv add flake8==7.3.0` in it.
+3. Create and sync a third bare project to provide the target environment.
+4. From that environment, run `uv pip install ./blab_1`, followed by `uv pip install ./blab_2`.
+5. The supplied `uv pip list` output contains both local packages but only `flake8==7.3.0`; no install error was reported.
+
+The second reporter ran `uv check` and received `No python files found` followed by `All checks passed`. That command checks project source and does not validate the installed dependency graph. The relevant command is `uv pip check`, which repository evidence shows returns failure for incompatible installed metadata. No `uv pip check` result was supplied, so this reproduction does not show that dependency checking itself misses the conflict.
+
 ## Current workaround
 
 The reporter's script stores the arguments produced by `west packages pip`, appends any additional requirements files, and passes the accumulated argument set to every `uv pip install` invocation. This keeps all prior requirements in each resolution and works for scripted installs. It does not protect the environment when a user later runs an independent `uv pip install <package>` command, which is the remaining motivation for persisted constraint history or another guardrail.
+
+The reporter also tried importing the generated requirement files and project requirements through `uv add --dev`. They report that resolution then fails on conflicts, but did not include the conflicts. Their remaining project-interface question is how to express the needed overrides from the command line, since `uv add` does not offer the `uv pip install --overrides` flag.
 
 ## Maintainer direction
 
@@ -36,7 +52,7 @@ For any narrower `uv pip` change, one maintainer considers emitting a warning or
 
 The reporter has established that the existing inputs are a dynamically generated list of requirement files rather than a dependency list they own, and that discovering them requires installing `west` first. One interface investigation is therefore whether the top-level project workflow can support this bootstrap sequence—install `west`, run `west packages pip`, then incorporate the generated requirement files—without requiring the reporter to duplicate and maintain hundreds of Zephyr requirements and constraints or rely on independent, unconstrained install calls.
 
-The immediate technical investigation is to inspect the dependency metadata shipped by `west==1.5.0` and determine whether it excludes `pyyaml==3.10`. The reproduction should also be completed with the exact failing `west` command and traceback, plus the uv version and platform. This will distinguish an installed dependency conflict that the maintainer's preferred warning-or-error approach can observe from an application-level incompatibility absent from package metadata, which would require an externally supplied constraint source or the less-favored persisted-history design. The maintainer has not specified whether such diagnostics should be automatic or opt-in, whether an error should occur before mutation, or how this would relate to existing `--strict` behavior.
+For the West example, the immediate technical investigation is to inspect the dependency metadata shipped by `west==1.5.0` and determine whether it excludes `pyyaml==3.10`. That reproduction should also be completed with the exact failing `west` command and traceback, plus the uv version and platform. For the local-package example, the next check is to run `uv pip check` after the second install and confirm the expected metadata diagnostic; `uv check` is not evidence about environment compatibility. These results will distinguish installed dependency conflicts that the maintainer's preferred warning-or-error approach can observe from application-level incompatibilities absent from package metadata. The maintainer has not specified whether install diagnostics should be automatic or opt-in, whether an error should occur before mutation, or how this would relate to existing `--strict` behavior.
 
 ## Classification
 
