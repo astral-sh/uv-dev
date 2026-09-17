@@ -84,6 +84,10 @@ impl FindLinksServer {
     pub fn url(&self) -> &str {
         self.server.url()
     }
+    /// Return the URL of a file served by this index.
+    pub fn file_url(&self, filename: &str) -> String {
+        format!("{}/{filename}", self.server.url())
+    }
 }
 
 fn handle_request(
