@@ -129,7 +129,7 @@ impl PythonInstallation {
     }
 
     /// Find an existing [`PythonInstallation`].
-    pub(crate) fn find_existing(
+    fn find_existing(
         request: &PythonRequest,
         environments: EnvironmentPreference,
         preference: PythonPreference,

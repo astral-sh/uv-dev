@@ -1804,25 +1804,7 @@ pub(crate) async fn find_best_python_installation(
 ) -> Result<PythonInstallation, crate::Error> {
     debug!("Starting Python discovery for {request}");
     let original_request = request;
-    // Catalog selection only applies to managed installations. System-only searches can proceed
-    // directly through the fallback requests without loading download metadata.
-    let (mut first_result, download_list) = if preference.allows_managed() {
-        let result = PythonInstallation::find_existing(request, environments, preference, cache);
-        let discovery = find_python_installation_with_cached_catalog(
-            result,
-            request,
-            environments,
-            preference,
-            client_builder,
-            cache,
-            python_downloads_json_url,
-        )
-        .await?;
-        (Some(discovery.result), discovery.download_list)
-    } else {
-        (None, None)
-    };
-
+    let mut download_list = None;
     let mut previous_fetch_failed = false;
     let mut download_state = None;
 
@@ -1853,15 +1835,35 @@ pub(crate) async fn find_best_python_installation(
                 String::new()
             }
         );
-        let result = first_result.take().unwrap_or_else(|| {
-            Ok(find_python_installation_with_catalog(
+        let mut result = match find_python_installation_with_catalog(
+            request,
+            environments,
+            preference,
+            cache,
+            download_list.as_ref(),
+        ) {
+            Ok(result) => result.map_err(crate::Error::from),
+            Err(error) => Err(error.into()),
+        };
+        // Load the catalog to validate a managed candidate or attempt a download. Otherwise, a
+        // missing interpreter can fall back to another local version without consulting metadata.
+        if download_list.is_none()
+            && preference.allows_managed()
+            && (downloads_enabled || result.as_ref().is_ok_and(PythonInstallation::is_managed))
+        {
+            let discovery = find_python_installation_with_cached_catalog(
+                result,
                 request,
                 environments,
                 preference,
+                client_builder,
                 cache,
-                download_list.as_ref(),
-            )??)
-        });
+                python_downloads_json_url,
+            )
+            .await?;
+            result = discovery.result;
+            download_list = discovery.download_list;
+        }
         let error = match result {
             Ok(installation) => {
                 warn_on_unsupported_python(installation.interpreter());
@@ -1879,17 +1881,16 @@ pub(crate) async fn find_best_python_installation(
             && let Some(download_list) = &download_list
             && let Some(download_request) = PythonDownloadRequest::from_request(request)
         {
-            let (client, retry_policy, download_list) =
-                if let Some(download_state) = &mut download_state {
-                    download_state
-                } else {
-                    let retry_policy = client_builder.retry_policy();
+            let (client, retry_policy) = if let Some(download_state) = &mut download_state {
+                download_state
+            } else {
+                let retry_policy = client_builder.retry_policy();
 
-                    // Python downloads are performing their own retries to catch stream errors, disable
-                    // the default retries to avoid the middleware performing uncontrolled retries.
-                    let client = client_builder.clone().retries(0).build()?;
-                    download_state.insert((client, retry_policy, download_list))
-                };
+                // Python downloads are performing their own retries to catch stream errors, disable
+                // the default retries to avoid the middleware performing uncontrolled retries.
+                let client = client_builder.clone().retries(0).build()?;
+                download_state.insert((client, retry_policy))
+            };
 
             let download = download_request
                 .clone()
