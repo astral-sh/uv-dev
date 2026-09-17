@@ -33,6 +33,18 @@ pub struct VersionMap {
 }
 
 impl VersionMap {
+    /// Create a version map from already-prioritized distributions for resolver tests.
+    #[cfg(test)]
+    pub(crate) fn from_test_distributions(
+        distributions: impl IntoIterator<Item = (Version, PrioritizedDist)>,
+    ) -> Self {
+        let map = distributions.into_iter().collect::<BTreeMap<_, _>>();
+        let local = map.keys().any(Version::is_local);
+        Self {
+            inner: VersionMapInner::Eager(VersionMapEager { map, local }),
+        }
+    }
+
     /// Initialize a [`VersionMap`] from the given metadata.
     ///
     /// Note it is possible for files to have a different yank status per PEP 592 but in the official
