@@ -36,7 +36,7 @@ On uv 0.12.15 (`d35f1f270`, 2026-09-15, `x86_64-pc-windows-msvc`):
 4. From that environment, run `uv pip install ./blab_1`, followed by `uv pip install ./blab_2`.
 5. The supplied `uv pip list` output contains both local packages but only `flake8==7.3.0`; no install error was reported.
 
-The second reporter ran `uv check` and received `No python files found` followed by `All checks passed`. That command checks project source and does not validate the installed dependency graph. The relevant command is `uv pip check`, which repository evidence shows returns failure for incompatible installed metadata. No `uv pip check` result was supplied, so this reproduction does not show that dependency checking itself misses the conflict.
+The second reporter ran `uv check` and received `No python files found` followed by `All checks passed`. That command checks project source and does not validate the installed dependency graph. A maintainer directed them to `uv pip check`, which validates whether an environment is internally consistent and returns failure for incompatible installed metadata. No `uv pip check` result was supplied, so this reproduction does not show that dependency checking itself misses the conflict.
 
 ## Current workaround
 
