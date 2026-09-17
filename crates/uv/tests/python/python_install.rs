@@ -5442,6 +5442,29 @@ fn python_find_build_variant_revision_variables() -> anyhow::Result<()> {
 }
 
 #[test]
+fn python_find_build_variant_revision_reordered_tags() -> anyhow::Result<()> {
+    let (context, _installation) = python_build_variant_revision_context("custom+pgo+lto")?;
+    let context = context.with_filtered_python_sources();
+
+    uv_snapshot!(context.filters(), context.python_find()
+        .args(["3.13+lto+pgo+custom", "--show-version"])
+        .env(EnvVars::UV_PYTHON_BUILD, "20260825"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.13.7
+    ");
+    uv_snapshot!(context.filters(), context.python_find()
+        .args(["3.13+lto+pgo+custom", "--show-version"])
+        .env(EnvVars::UV_PYTHON_BUILD, "20260901"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for Python 3.13+lto+pgo+custom in [PYTHON SOURCES]
+    ");
+
+    Ok(())
+}
+
+#[test]
 fn python_find_build_variant_revision_on_path() -> anyhow::Result<()> {
     let (context, installation) = python_build_variant_revision_context("custom")?;
     let context = context.with_filtered_python_sources();
