@@ -329,7 +329,9 @@ Python version instead.
 Python download metadata can label artifacts with build variants such as `pgo+lto` or a
 provider-defined tag such as `custom`. Select them explicitly with requests like `3.13+pgo+lto` or
 `3.13+custom`. Runtime and build variants can be composed, as in `3.13+freethreaded+custom`.
-Unqualified requests continue to select the default artifact from the download metadata.
+Explicit build variant requests match the same set of tags, regardless of order. For example,
+`3.13+custom+pgo+lto` matches a build labeled `lto+pgo+custom`, but `3.13+custom` does not match
+that build. Unqualified requests continue to select the default artifact from the download metadata.
 
 ### Hosting a custom build variant
 
