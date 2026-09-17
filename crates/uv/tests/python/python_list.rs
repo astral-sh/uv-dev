@@ -863,7 +863,7 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Unable to parse the JSON Python download list at http://[LOCALHOST]/versioned-invalid-default
-      cause: invalid type: string "false", expected a boolean at line 53 column 30
+      cause: invalid type: string "false", expected a boolean at line 71 column 30
     "#);
 
     uv_snapshot!(context.filters(), context
@@ -873,7 +873,7 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Unable to parse the JSON Python download list at http://[LOCALHOST]/versioned-invalid-build-variant
-      cause: invalid type: integer `42`, expected a string at line 52 column 31
+      cause: invalid type: integer `42`, expected a string at line 70 column 31
     ");
 
     uv_snapshot!(context.filters(), context
