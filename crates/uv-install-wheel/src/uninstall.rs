@@ -19,6 +19,11 @@ mod egg;
 
 use egg::{EggUninstallAuthority, PathDecision, PathScope};
 
+enum EggFallbackRemoval {
+    Directory(PathBuf),
+    File(PathBuf),
+}
+
 /// Uninstall the wheel represented by the given `.dist-info` directory.
 pub fn uninstall_wheel(
     dist_info: &Path,
@@ -385,6 +390,67 @@ pub fn uninstall_egg(
         }
     }
 
+    // Select and preflight the complete fallback before removing any payload. An existing
+    // directory takes precedence over adjacent module files, including when it later disappears.
+    // Recursive removal needs authority for every entry, not just the package directory itself.
+    let mut fallback_removals = Vec::new();
+    for entry in top_level {
+        if !is_valid_top_level_entry(&entry, &distribution) {
+            continue;
+        }
+
+        let path = dist_location.join(&entry);
+        match authority.check_directory_tree(&path, PathScope::Library)? {
+            Some(PathDecision::Allowed(path)) => {
+                fallback_removals.push(EggFallbackRemoval::Directory(path));
+                continue;
+            }
+            Some(PathDecision::Missing) => continue,
+            None => {}
+            Some(PathDecision::Escapes) => {
+                warn_user!(
+                    "Invalid `top_level.txt` entry in {} that would remove an installation root or leave the selected site-packages directories, skipping: {}",
+                    distribution,
+                    entry
+                );
+                continue;
+            }
+            Some(PathDecision::Protected) => {
+                warn_user!(
+                    "Invalid `top_level.txt` entry in {} that would remove a core Python environment file, skipping: {}",
+                    distribution,
+                    entry
+                );
+                continue;
+            }
+        }
+
+        for extension in ["py", "pyc", "pyo"] {
+            match authority.check(&path.with_extension(extension), PathScope::Library)? {
+                PathDecision::Allowed(path) => {
+                    fallback_removals.push(EggFallbackRemoval::File(path));
+                }
+                PathDecision::Missing => {}
+                PathDecision::Escapes => {
+                    warn_user!(
+                        "Invalid `top_level.txt` entry in {} that would remove an installation root or leave the selected site-packages directories, skipping: {}.{}",
+                        distribution,
+                        entry,
+                        extension
+                    );
+                }
+                PathDecision::Protected => {
+                    warn_user!(
+                        "Invalid `top_level.txt` entry in {} that would remove a core Python environment file, skipping: {}.{}",
+                        distribution,
+                        entry,
+                        extension
+                    );
+                }
+            }
+        }
+    }
+
     // Remove files recorded by legacy installers. Entries are relative to the `.egg-info`
     // directory and may point into any of the installation scheme directories.
     if let Some(installed_files) = installed_files.as_ref() {
@@ -509,36 +575,25 @@ pub fn uninstall_egg(
         }
     }
 
-    // Remove everything in `top_level.txt`.
-    for entry in top_level {
-        if !is_valid_top_level_entry(&entry, &distribution) {
-            continue;
-        }
-
-        let path = dist_location.join(&entry);
-
-        // Remove as a directory.
-        match fs_err::remove_dir_all(&path) {
-            Ok(()) => {
-                trace!("Removed directory: {}", path.display());
-                dir_count += 1;
-                continue;
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => return Err(err.into()),
-        }
-
-        // Remove as a `.py`, `.pyc`, or `.pyo` file.
-        for extension in &["py", "pyc", "pyo"] {
-            let path = path.with_extension(extension);
-            match fs_err::remove_file(&path) {
+    // Remove the preflighted `top_level.txt` fallback.
+    for removal in fallback_removals {
+        match removal {
+            EggFallbackRemoval::Directory(path) => match fs_err::remove_dir_all(&path) {
+                Ok(()) => {
+                    trace!("Removed directory: {}", path.display());
+                    dir_count += 1;
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err.into()),
+            },
+            EggFallbackRemoval::File(path) => match fs_err::remove_file(&path) {
                 Ok(()) => {
                     trace!("Removed file: {}", path.display());
                     file_count += 1;
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
                 Err(err) => return Err(err.into()),
-            }
+            },
         }
     }
 

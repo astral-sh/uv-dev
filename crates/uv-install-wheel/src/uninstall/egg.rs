@@ -230,6 +230,71 @@ impl EggUninstallAuthority {
         Ok(PathDecision::Allowed(absolute))
     }
 
+    /// Check every existing entry that a recursive directory removal could delete. A directory
+    /// symlink is an unlink candidate, not a traversal root. `None` selects the adjacent-module
+    /// fallback; a path that disappears after its initial observation does not select new paths.
+    pub(super) fn check_directory_tree(
+        &self,
+        path: &Path,
+        scope: PathScope,
+    ) -> io::Result<Option<PathDecision>> {
+        let absolute = absolute(path)?;
+        let metadata = match fs_err::symlink_metadata(&absolute) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                return Ok(None);
+            }
+            Err(err) => return Err(err),
+        };
+        let path = match self.check(&absolute, scope)? {
+            PathDecision::Allowed(path) => path,
+            decision => return Ok(Some(decision)),
+        };
+
+        let mut directories = Vec::new();
+        if metadata.is_dir() && !metadata.file_type().is_symlink() {
+            directories.push(path.clone());
+        }
+        while let Some(directory) = directories.pop() {
+            let metadata = match fs_err::symlink_metadata(&directory) {
+                Ok(metadata) => metadata,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+                Err(err) => return Err(err),
+            };
+            if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                continue;
+            }
+            let directory = match self.check(&directory, scope)? {
+                PathDecision::Allowed(directory) => directory,
+                PathDecision::Missing => continue,
+                decision => return Ok(Some(decision)),
+            };
+            let entries = match fs_err::read_dir(&directory) {
+                Ok(entries) => entries,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+                Err(err) => return Err(err),
+            };
+            for entry in entries {
+                let entry = entry?.path();
+                let metadata = match fs_err::symlink_metadata(&entry) {
+                    Ok(metadata) => metadata,
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+                    Err(err) => return Err(err),
+                };
+                let entry = match self.check(&entry, scope)? {
+                    PathDecision::Allowed(entry) => entry,
+                    PathDecision::Missing => continue,
+                    decision => return Ok(Some(decision)),
+                };
+                if metadata.is_dir() && !metadata.file_type().is_symlink() {
+                    directories.push(entry);
+                }
+            }
+        }
+
+        Ok(Some(PathDecision::Allowed(path)))
+    }
+
     /// Check an empty directory before pruning it. A directory link is not a pruning root.
     pub(super) fn prunable_directory(&self, path: &Path) -> io::Result<Option<PathBuf>> {
         let PathDecision::Allowed(path) = self.check(path, PathScope::Installation)? else {
@@ -417,6 +482,18 @@ mod tests {
                 include: root.join("include/python3.13"),
             },
         }
+    }
+
+    fn target_layout(selected: &Layout, root: &Path) -> Layout {
+        let mut layout = selected.clone();
+        layout.scheme = Scheme {
+            purelib: root.to_path_buf(),
+            platlib: root.to_path_buf(),
+            scripts: root.join("bin"),
+            data: root.to_path_buf(),
+            include: root.join("include"),
+        };
+        layout
     }
 
     fn write(path: impl AsRef<Path>, contents: &str) {
@@ -747,6 +824,223 @@ mod tests {
             fs_err::read_to_string(outside.join("sentinel.py")).unwrap(),
             "outside sentinel"
         );
+    }
+
+    #[test]
+    fn fallback_preserves_overlapping_target_roots() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let selected = layout(&temp.join("selected"));
+        initialize(&selected);
+        let targeted = target_layout(&selected, &temp.join("target"));
+        initialize(&targeted);
+        let target = &targeted.scheme.purelib;
+        for name in ["bin", "include"] {
+            write(target.join(name).join("sentinel"), "installation root");
+            write(
+                target.join(format!("{name}.py")),
+                "unselected adjacent module",
+            );
+        }
+        write(target.join("owned/__init__.py"), "owned package");
+        write(target.join("owned.py"), "unselected adjacent module");
+        write(target.join("shared/sibling.py"), "namespace sibling");
+        for extension in ["py", "pyc", "pyo"] {
+            write(target.join(format!("module.{extension}")), "owned module");
+        }
+        let egg_info = target.join("owned-0.1.0.egg-info");
+        write(
+            egg_info.join("top_level.txt"),
+            "bin\ninclude\nowned\nmodule\nshared\n",
+        );
+        write(egg_info.join("namespace_packages.txt"), "shared\n");
+
+        uninstall_egg(&egg_info, "owned 0.1.0", &targeted).unwrap();
+
+        for name in ["bin", "include"] {
+            assert_eq!(
+                fs_err::read_to_string(target.join(name).join("sentinel")).unwrap(),
+                "installation root"
+            );
+            assert!(target.join(format!("{name}.py")).exists());
+        }
+        assert!(!target.join("owned").exists());
+        assert!(target.join("owned.py").exists());
+        assert!(target.join("shared/sibling.py").exists());
+        for extension in ["py", "pyc", "pyo"] {
+            assert!(!target.join(format!("module.{extension}")).exists());
+        }
+        assert!(!egg_info.exists());
+        assert!(selected.sys_executable.exists());
+        assert!(selected.sys_prefix.join("pyvenv.cfg").exists());
+    }
+
+    #[test]
+    fn fallback_missing_target_root_selects_adjacent_modules() {
+        for mask in 0..8 {
+            let temp = assert_fs::TempDir::new().unwrap();
+            let selected = layout(&temp.join("selected"));
+            initialize(&selected);
+            let targeted = target_layout(&selected, &temp.join("target"));
+            initialize(&targeted);
+            fs_err::remove_dir(&targeted.scheme.scripts).unwrap();
+            let mut expected_files = 0;
+            for (index, extension) in ["py", "pyc", "pyo"].into_iter().enumerate() {
+                if mask & (1 << index) != 0 {
+                    write(
+                        targeted.scheme.purelib.join(format!("bin.{extension}")),
+                        "owned module",
+                    );
+                    expected_files += 1;
+                }
+            }
+            let sibling = targeted.scheme.purelib.join("sibling.py");
+            write(&sibling, "unrelated module");
+            let egg_info = targeted.scheme.purelib.join("owned-0.1.0.egg-info");
+            write(egg_info.join("top_level.txt"), "bin\n");
+
+            let removed = uninstall_egg(&egg_info, "owned 0.1.0", &targeted).unwrap();
+
+            assert_eq!(removed.file_count, expected_files, "mask: {mask}");
+            for extension in ["py", "pyc", "pyo"] {
+                assert!(
+                    !targeted
+                        .scheme
+                        .purelib
+                        .join(format!("bin.{extension}"))
+                        .exists()
+                );
+            }
+            assert!(!targeted.scheme.scripts.exists());
+            assert!(targeted.scheme.include.is_dir());
+            assert!(sibling.exists());
+            assert!(!egg_info.exists());
+            assert!(selected.sys_executable.exists());
+        }
+    }
+
+    #[test]
+    fn fallback_duplicate_directories_do_not_select_adjacent_files() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let selected = layout(&temp.join("selected"));
+        initialize(&selected);
+        let library = &selected.scheme.purelib;
+        write(library.join("owned/__init__.py"), "owned package");
+        for extension in ["py", "pyc", "pyo"] {
+            write(
+                library.join(format!("owned.{extension}")),
+                "unselected adjacent module",
+            );
+        }
+        let egg_info = library.join("owned-0.1.0.egg-info");
+        write(egg_info.join("top_level.txt"), "owned\nowned\n");
+
+        let removed = uninstall_egg(&egg_info, "owned 0.1.0", &selected).unwrap();
+
+        assert_eq!(removed.file_count, 0);
+        assert_eq!(removed.dir_count, 2);
+        assert!(!library.join("owned").exists());
+        for extension in ["py", "pyc", "pyo"] {
+            assert!(library.join(format!("owned.{extension}")).exists());
+        }
+        assert!(!egg_info.exists());
+    }
+
+    #[test]
+    fn fallback_recursive_removal_preserves_nested_roots_and_core_aliases() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let selected = layout(&temp.join("selected"));
+        initialize(&selected);
+        let mut targeted = target_layout(&selected, &temp.join("target"));
+        targeted.scheme.include = targeted.scheme.purelib.join("package/inner/include");
+        initialize(&targeted);
+        let target = &targeted.scheme.purelib;
+        write(targeted.scheme.include.join("sentinel"), "nested root");
+        write(target.join("package/payload.py"), "protected subtree");
+        write(target.join("package.py"), "unselected adjacent module");
+        write(target.join("corepackage/payload.py"), "protected subtree");
+        write(target.join("corepackage.py"), "unselected adjacent module");
+        let alias = target.join("corepackage/interpreter-alias");
+        fs_err::hard_link(&selected.sys_executable, &alias).unwrap();
+        write(target.join("ordinary.py"), "owned module");
+        let egg_info = target.join("owned-0.1.0.egg-info");
+        write(
+            egg_info.join("top_level.txt"),
+            "package\ncorepackage\nordinary\n",
+        );
+
+        uninstall_egg(&egg_info, "owned 0.1.0", &targeted).unwrap();
+
+        assert_eq!(
+            fs_err::read_to_string(targeted.scheme.include.join("sentinel")).unwrap(),
+            "nested root"
+        );
+        for path in [
+            "package/payload.py",
+            "package.py",
+            "corepackage/payload.py",
+            "corepackage.py",
+        ] {
+            assert!(target.join(path).exists());
+        }
+        assert!(same_file::is_same_file(&selected.sys_executable, &alias).unwrap());
+        assert!(!target.join("ordinary.py").exists());
+        assert!(!egg_info.exists());
+    }
+
+    #[test]
+    fn fallback_recursive_removal_does_not_follow_child_directory_links() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let selected = layout(&temp.join("selected"));
+        initialize(&selected);
+        let outside = temp.join("outside");
+        write(outside.join("sentinel.py"), "outside sentinel");
+        write(
+            selected.scheme.purelib.join("owned/module.py"),
+            "owned module",
+        );
+        uv_fs::create_symlink(&outside, selected.scheme.purelib.join("owned/alias")).unwrap();
+        let egg_info = selected.scheme.purelib.join("owned-0.1.0.egg-info");
+        write(egg_info.join("top_level.txt"), "owned\n");
+
+        uninstall_egg(&egg_info, "owned 0.1.0", &selected).unwrap();
+
+        assert!(!selected.scheme.purelib.join("owned").exists());
+        assert!(!egg_info.exists());
+        assert_eq!(
+            fs_err::read_to_string(outside.join("sentinel.py")).unwrap(),
+            "outside sentinel"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fallback_preflight_error_precedes_all_payload_removal() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let selected = layout(&temp.join("selected"));
+        initialize(&selected);
+        let earlier = selected.scheme.purelib.join("earlier.py");
+        let later = selected.scheme.purelib.join("later.py");
+        let invalid = selected.scheme.purelib.join("later.pyc");
+        write(&earlier, "earlier payload");
+        write(&later, "later payload");
+        fs_err::os::unix::fs::symlink("later.pyc", &invalid).unwrap();
+        let egg_info = selected.scheme.purelib.join("owned-0.1.0.egg-info");
+        write(egg_info.join("top_level.txt"), "earlier\nlater\n");
+
+        let Err(Error::Io(error)) = uninstall_egg(&egg_info, "owned 0.1.0", &selected) else {
+            panic!("expected the symlink-loop I/O error");
+        };
+
+        assert_ne!(error.kind(), std::io::ErrorKind::NotFound);
+        assert!(earlier.exists());
+        assert!(later.exists());
+        assert!(
+            fs_err::symlink_metadata(&invalid)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(egg_info.exists());
     }
 
     #[test]
