@@ -4,7 +4,7 @@ use tracing::info_span;
 
 use uv_lock::{Lock, LockError, LockParseError};
 use uv_pep508::MarkerTree;
-use uv_preview::{Preview, PreviewFeature};
+use uv_preview::PreviewFeature;
 use uv_resolver::Preference;
 use uv_warnings::warn_user_once;
 
@@ -65,8 +65,8 @@ pub(crate) enum ParentLockError {
 }
 
 /// Warn when nested workspaces are used without enabling the preview feature.
-pub(crate) fn warn_nested_workspaces(preview: Preview) {
-    if !preview.is_enabled(PreviewFeature::NestedWorkspaces) {
+pub(crate) fn warn_nested_workspaces() {
+    if !uv_preview::is_enabled(PreviewFeature::NestedWorkspaces) {
         warn_user_once!(
             "Nested workspaces are experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
             PreviewFeature::NestedWorkspaces
