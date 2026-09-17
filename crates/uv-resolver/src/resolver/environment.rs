@@ -8,7 +8,8 @@ use uv_distribution_types::{RequiresPython, RequiresPythonRange};
 use uv_pep440::VersionSpecifiers;
 use uv_pep508::{MarkerEnvironment, MarkerTree};
 use uv_pypi_types::{
-    ConflictItem, ConflictItemRef, ConflictKind, ConflictKindRef, ResolverMarkerEnvironment,
+    ConflictItem, ConflictItemRef, ConflictKind, ConflictKindRef, Conflicts,
+    ResolverMarkerEnvironment,
 };
 
 use crate::pubgrub::{PubGrubDependency, PubGrubPackage};
@@ -104,13 +105,15 @@ enum Kind {
         markers: MarkerTree,
         /// Conflicting group inclusions.
         ///
-        /// We record inclusions to reject impossible forks: an item cannot
-        /// be both included and excluded, and an included extra requires its
-        /// base project. We also use the inclusion rules to write conflict
-        /// markers after resolution is finished.
+        /// We record inclusions to reject impossible forks and to write conflict
+        /// markers after resolution is finished. An included extra requires its
+        /// base project unless the two are explicitly declared as alternatives.
         include: Arc<crate::FxHashbrownSet<ConflictItem>>,
         /// Conflicting group exclusions.
         exclude: Arc<crate::FxHashbrownSet<ConflictItem>>,
+        /// Extras explicitly declared to conflict with their own project's
+        /// top-level production selection.
+        project_conflicting_extras: Arc<crate::FxHashbrownSet<ConflictItem>>,
     },
 }
 
@@ -151,8 +154,33 @@ impl ResolverEnvironment {
             markers: MarkerTree::TRUE,
             include: Arc::new(crate::FxHashbrownSet::default()),
             exclude: Arc::new(crate::FxHashbrownSet::default()),
+            project_conflicting_extras: Arc::new(crate::FxHashbrownSet::default()),
         };
         Self { kind }
+    }
+
+    /// Record extras declared as alternatives to their own project's production selection.
+    pub(super) fn with_conflicts(mut self, conflicts: &Conflicts) -> Self {
+        if let Kind::Universal {
+            project_conflicting_extras,
+            ..
+        } = &mut self.kind
+        {
+            *project_conflicting_extras = Arc::new(
+                conflicts
+                    .iter()
+                    .flat_map(|set| {
+                        set.iter()
+                            .filter(move |item| {
+                                matches!(item.kind(), ConflictKind::Extra(_))
+                                    && set.contains(item.package(), ConflictKindRef::Project)
+                            })
+                            .cloned()
+                    })
+                    .collect(),
+            );
+        }
+        self
     }
 
     /// Returns the marker environment corresponding to this resolver
@@ -181,7 +209,12 @@ impl ResolverEnvironment {
     pub(crate) fn included_by_group(&self, group: ConflictItemRef<'_>) -> bool {
         match self.kind {
             Kind::Specific { .. } => true,
-            Kind::Universal { ref exclude, .. } => {
+            Kind::Universal {
+                ref include,
+                ref exclude,
+                ref project_conflicting_extras,
+                ..
+            } => {
                 if exclude.contains(&group) {
                     return false;
                 }
@@ -198,7 +231,10 @@ impl ResolverEnvironment {
                 if matches!(group.kind(), ConflictKindRef::Extra(_))
                     && exclude.contains(&ConflictItemRef::from(group.package()))
                 {
-                    return false;
+                    // A conflict between a project and its own extra explicitly
+                    // makes the extra an alternative to the top-level project
+                    // selection. An unrelated conflict set cannot do so.
+                    return include.contains(&group) && project_conflicting_extras.contains(&group);
                 }
                 true
             }
@@ -247,6 +283,7 @@ impl ResolverEnvironment {
                 markers: ref lhs,
                 ref include,
                 ref exclude,
+                ref project_conflicting_extras,
             } => {
                 let mut markers = *lhs;
                 markers = markers.and(rhs);
@@ -255,6 +292,7 @@ impl ResolverEnvironment {
                     markers,
                     include: Arc::clone(include),
                     exclude: Arc::clone(exclude),
+                    project_conflicting_extras: Arc::clone(project_conflicting_extras),
                 };
                 Self { kind }
             }
@@ -271,9 +309,9 @@ impl ResolverEnvironment {
     /// forks in the resolver with this environment.
     ///
     /// If calling this routine results in the same conflict item being both
-    /// included and excluded, or includes an extra while excluding its base
-    /// project, then this returns `None` (since it would otherwise result in a
-    /// fork that can never be satisfied).
+    /// included and excluded, or includes an extra while independently excluding
+    /// its base project, then this returns `None` (since it would otherwise result
+    /// in a fork that can never be satisfied).
     ///
     /// # Panics
     ///
@@ -292,6 +330,7 @@ impl ResolverEnvironment {
                 ref markers,
                 ref include,
                 ref exclude,
+                ref project_conflicting_extras,
             } => {
                 let mut include: crate::FxHashbrownSet<_> = (**include).clone();
                 let mut exclude: crate::FxHashbrownSet<_> = (**exclude).clone();
@@ -314,6 +353,7 @@ impl ResolverEnvironment {
                 if include.iter().any(|item| {
                     matches!(item.kind(), ConflictKind::Extra(_))
                         && exclude.contains(&ConflictItemRef::from(item.package()))
+                        && !project_conflicting_extras.contains(item)
                 }) {
                     return None;
                 }
@@ -322,6 +362,7 @@ impl ResolverEnvironment {
                     markers: *markers,
                     include: Arc::new(include),
                     exclude: Arc::new(exclude),
+                    project_conflicting_extras: Arc::clone(project_conflicting_extras),
                 };
                 Some(Self { kind })
             }
@@ -345,6 +386,7 @@ impl ResolverEnvironment {
             markers: ref _markers,
             include: ref _include,
             exclude: ref _exclude,
+            ..
         } = self.kind
         else {
             return Ok(vec![init]);
@@ -407,6 +449,7 @@ impl ResolverEnvironment {
                 markers,
                 include,
                 exclude,
+                ..
             } => {
                 let format_conflict_item = |conflict_item: &ConflictItem| {
                     format!(
@@ -774,6 +817,41 @@ mod tests {
             .expect("excluded project is valid");
         assert!(!env.included_by_group(extra.as_ref()));
         assert!(env.filter_by_group([Ok(extra)]).is_none());
+    }
+
+    #[test]
+    fn excluded_project_allows_explicitly_conflicting_extra() {
+        let package = "pkg".parse::<PackageName>().expect("valid package name");
+        let project = ConflictItem::from(package.clone());
+        let extra = ConflictItem::from((
+            package,
+            "feature".parse::<ExtraName>().expect("valid extra name"),
+        ));
+        let mut conflicts = Conflicts::empty();
+        conflicts.push(
+            uv_pypi_types::ConflictSet::try_from(vec![project.clone(), extra.clone()])
+                .expect("valid conflict set"),
+        );
+        let env = ResolverEnvironment::universal(vec![]).with_conflicts(&conflicts);
+
+        for rules in [
+            [Ok(extra.clone()), Err(project.clone())],
+            [Err(project.clone()), Ok(extra.clone())],
+        ] {
+            let env = env
+                .filter_by_group(rules)
+                .expect("explicitly conflicting extra is an alternative project selection");
+            assert!(env.included_by_group(extra.as_ref()));
+        }
+
+        let other_extra = ConflictItem::from((
+            project.package().clone(),
+            "other".parse::<ExtraName>().expect("valid extra name"),
+        ));
+        assert!(
+            env.filter_by_group([Ok(other_extra), Err(project)])
+                .is_none()
+        );
     }
 
     #[test]
