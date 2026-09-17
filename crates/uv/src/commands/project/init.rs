@@ -1,4 +1,5 @@
-use std::fmt::Write;
+use std::fmt::Write as _;
+use std::io::Write as _;
 use std::iter;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -104,12 +105,7 @@ pub(crate) async fn init(
 
             // Make sure a project does not already exist in the given directory.
             if path.join("pyproject.toml").exists() {
-                let path =
-                    std::path::absolute(&path).unwrap_or_else(|_| path.simplified().to_path_buf());
-                anyhow::bail!(
-                    "Project is already initialized in `{}` (`pyproject.toml` file exists)",
-                    path.display().cyan()
-                );
+                return Err(initialized_project_error(&path));
             }
 
             // Default to the directory name if a name was not provided.
@@ -740,6 +736,14 @@ pub(crate) enum InitProjectKind {
     BareWithBuildSystem,
 }
 
+fn initialized_project_error(path: &Path) -> anyhow::Error {
+    let path = std::path::absolute(path).unwrap_or_else(|_| path.simplified().to_path_buf());
+    anyhow::anyhow!(
+        "Project is already initialized in `{}` (`pyproject.toml` file exists)",
+        path.display().cyan()
+    )
+}
+
 impl InitProjectKind {
     /// Initialize this project kind at the target path.
     fn init(
@@ -756,6 +760,11 @@ impl InitProjectKind {
         no_readme: bool,
     ) -> Result<()> {
         fs_err::create_dir_all(path)?;
+        // Creating a missing component can make a path containing `..` resolve to an existing
+        // project. Check again before creating its source files or version-control metadata.
+        if path.join("pyproject.toml").try_exists()? {
+            return Err(initialized_project_error(path));
+        }
 
         // Initialize the version control system first so that Git configuration can properly
         // read conditional includes that depend on the repository path.
@@ -832,7 +841,18 @@ impl InitProjectKind {
                 generate_package_scripts(name, path, build_backend, true)?;
             }
         }
-        fs_err::write(path.join("pyproject.toml"), pyproject)?;
+        let mut file = match fs_err::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path.join("pyproject.toml"))
+        {
+            Ok(file) => file,
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(initialized_project_error(path));
+            }
+            Err(err) => return Err(err.into()),
+        };
+        file.write_all(pyproject.as_bytes())?;
         Ok(())
     }
 }
