@@ -369,16 +369,7 @@ impl PypiProxy {
 /// - `/basic-auth/files/…` — authenticated redirect to a local file (public:heron)
 /// - `/basic-auth-heron/files/…` — authenticated redirect to a local file (public:heron)
 /// - `/basic-auth-eagle/files/…` — authenticated redirect to a local file (public:eagle)
-pub async fn start_local() -> PypiProxy {
-    start_with_local_files(true).await
-}
-
-/// Start a proxy whose package files are served by the public registry.
 pub async fn start() -> PypiProxy {
-    start_with_local_files(false).await
-}
-
-async fn start_with_local_files(local_files: bool) -> PypiProxy {
     use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
     let server = MockServer::start().await;
@@ -403,7 +394,7 @@ async fn start_with_local_files(local_files: bool) -> PypiProxy {
                     .as_ref()
                     .is_some_and(|(u, p)| u == "public" && p == "heron")
                 {
-                    return file_redirect(&server_uri, rest, local_files);
+                    return vendored_file_redirect(&server_uri, rest);
                 }
                 return unauthorized_response();
             }
@@ -414,7 +405,7 @@ async fn start_with_local_files(local_files: bool) -> PypiProxy {
                     .as_ref()
                     .is_some_and(|(u, p)| u == "public" && p == "heron")
                 {
-                    return file_redirect(&server_uri, rest, local_files);
+                    return vendored_file_redirect(&server_uri, rest);
                 }
                 return unauthorized_response();
             }
@@ -425,14 +416,14 @@ async fn start_with_local_files(local_files: bool) -> PypiProxy {
                     .as_ref()
                     .is_some_and(|(u, p)| u == "public" && p == "eagle")
                 {
-                    return file_redirect(&server_uri, rest, local_files);
+                    return vendored_file_redirect(&server_uri, rest);
                 }
                 return unauthorized_response();
             }
 
             // Route: /files/...  (unauthenticated)
             if let Some(rest) = path.strip_prefix("/files/") {
-                return file_response(req, rest, &db, local_files);
+                return vendored_file_response(req, rest, &db);
             }
 
             // Route: /basic-auth/relative/simple/{pkg}/
@@ -510,11 +501,7 @@ async fn start_with_local_files(local_files: bool) -> PypiProxy {
             // Route: /no-upload-time/simple/{pkg}/  (unauthenticated)
             if let Some(pkg) = extract_package_name(path, "/no-upload-time/simple/") {
                 if let Some(entries) = db.get(pkg) {
-                    let file_prefix = if local_files {
-                        format!("{server_uri}/files")
-                    } else {
-                        "https://files.pythonhosted.org".to_string()
-                    };
+                    let file_prefix = format!("{server_uri}/files");
                     let body =
                         build_simple_api_response_without_upload_time(pkg, entries, &file_prefix);
                     return simple_api_response(&body);
@@ -525,11 +512,7 @@ async fn start_with_local_files(local_files: bool) -> PypiProxy {
             // Route: /simple/{pkg}/  (unauthenticated)
             if let Some(pkg) = extract_package_name(path, "/simple/") {
                 if let Some(entries) = db.get(pkg) {
-                    let file_prefix = if local_files {
-                        format!("{server_uri}/files")
-                    } else {
-                        "https://files.pythonhosted.org".to_string()
-                    };
+                    let file_prefix = format!("{server_uri}/files");
                     let body = build_simple_api_response(pkg, entries, &file_prefix);
                     return simple_api_response(&body);
                 }
@@ -565,7 +548,7 @@ async fn start_with_local_files(local_files: bool) -> PypiProxy {
                         return ResponseTemplate::new(404);
                     }
                     StatusRouteKind::Files => {
-                        return file_response(req, suffix, &db, local_files);
+                        return vendored_file_response(req, suffix, &db);
                     }
                 }
             }
@@ -617,18 +600,11 @@ fn status_route_prefix(status: &str, reason: Option<&str>) -> String {
     }
 }
 
-fn file_response(
+fn vendored_file_response(
     request: &wiremock::Request,
     suffix: &str,
     database: &HashMap<&str, Vec<PackageEntry>>,
-    local_files: bool,
 ) -> wiremock::ResponseTemplate {
-    if !local_files {
-        return wiremock::ResponseTemplate::new(302).insert_header(
-            "Location",
-            format!("https://files.pythonhosted.org/{suffix}"),
-        );
-    }
     let Some(entry) = database
         .values()
         .flatten()
@@ -650,13 +626,9 @@ fn file_response(
         .insert_header("Cache-Control", "max-age=365000000, immutable, public")
 }
 
-fn file_redirect(server_uri: &str, suffix: &str, local_files: bool) -> wiremock::ResponseTemplate {
-    let location = if local_files {
-        format!("{server_uri}/files/{suffix}")
-    } else {
-        format!("https://files.pythonhosted.org/{suffix}")
-    };
-    wiremock::ResponseTemplate::new(302).insert_header("Location", location)
+fn vendored_file_redirect(server_uri: &str, suffix: &str) -> wiremock::ResponseTemplate {
+    wiremock::ResponseTemplate::new(302)
+        .insert_header("Location", format!("{server_uri}/files/{suffix}"))
 }
 
 /// Extract the package name from a path like `/prefix/{package}/`.
@@ -705,14 +677,17 @@ fn simple_api_response(body: &serde_json::Value) -> wiremock::ResponseTemplate {
         .set_body_raw(body_str, "application/vnd.pypi.simple.v1+json")
 }
 
+/// Start the local authenticated package index.
+pub use start as start_local;
+
 #[cfg(test)]
 mod tests {
-    use super::{package_database, start_local};
+    use super::{package_database, start};
     use sha2::{Digest, Sha256};
 
     #[tokio::test]
     async fn package_files_stay_local_and_match_the_advertised_hashes() -> anyhow::Result<()> {
-        let proxy = start_local().await;
+        let proxy = start().await;
         let client = reqwest::Client::new();
         for entries in package_database().values() {
             for entry in entries {

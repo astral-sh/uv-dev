@@ -1273,16 +1273,22 @@ impl TestContext {
             python_versions,
             uv_bin,
             filters,
-            extra_env: vec![(
-                EnvVars::UV_PYTHON_CACHE_DIR.into(),
-                // Respect `UV_PYTHON_CACHE_DIR` if set, or use the default cache directory.
-                env::var_os(EnvVars::UV_PYTHON_CACHE_DIR).unwrap_or_else(|| {
-                    Cache::from_settings(false, None)
-                        .expect("Failed to determine the shared Python download cache")
-                        .bucket(CacheBucket::Python)
-                        .into()
-                }),
-            )],
+            extra_env: vec![
+                (
+                    EnvVars::UV_PYTHON_CACHE_DIR.into(),
+                    // Respect `UV_PYTHON_CACHE_DIR` if set, or use the default cache directory.
+                    env::var_os(EnvVars::UV_PYTHON_CACHE_DIR).unwrap_or_else(|| {
+                        Cache::from_settings(false, None)
+                            .expect("Failed to determine the shared Python download cache")
+                            .bucket(CacheBucket::Python)
+                            .into()
+                    }),
+                ),
+                (
+                    EnvVars::UV_INTERNAL__TEST_DEFAULT_INDEX.into(),
+                    default_packse_index_url().into(),
+                ),
+            ],
             _root: root,
             _extra_tempdirs: vec![],
             packse_servers: vec![],
@@ -2690,9 +2696,6 @@ pub async fn download_to_disk(url: &str, path: &Path) {
     file.sync_all().await.unwrap();
 }
 
-/// Download a local fixture artifact.
-pub use download_to_disk as download_local_to_disk;
-
 /// A guard that sets a directory to read-only and restores original permissions when dropped.
 ///
 /// This is useful for tests that need to make a directory read-only and ensure
@@ -2817,6 +2820,9 @@ mod process_status_tests {
         insta::assert_snapshot!(snapshot, @"exit_code: 7 (failure)");
     }
 }
+
+/// Download a local fixture artifact.
+pub use download_to_disk as download_local_to_disk;
 
 #[cfg(test)]
 mod cache_directory_tests {

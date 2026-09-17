@@ -3,7 +3,7 @@
 //! Generated with `cargo dev generate-scenario-tests`
 //! Scenarios from <test/scenarios>
 //!
-#![cfg(all(feature = "test-python", feature = "test-pypi"))]
+#![cfg(feature = "test-python")]
 #![expect(clippy::needless_raw_string_hashes)]
 #![expect(clippy::doc_markdown)]
 

@@ -7,10 +7,10 @@ mod pip_compile_scenarios;
 
 mod pip_debug;
 
-#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+#[cfg(feature = "test-python")]
 mod pip_exclude_newer_relative;
 
-#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+#[cfg(feature = "test-python")]
 mod pip_freeze;
 
 mod pip_install_scenarios;
@@ -19,7 +19,7 @@ mod pip_list;
 
 mod pip_show;
 
-#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+#[cfg(feature = "test-python")]
 mod pip_sync;
 
 mod pip_tree;
