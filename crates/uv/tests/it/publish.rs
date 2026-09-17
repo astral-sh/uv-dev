@@ -85,7 +85,7 @@ fn username_password_error() -> ResponseTemplate {
 fn local_publish(context: &TestContext) -> Command {
     let mut command = context.publish();
     command
-        .env(EnvVars::NO_PROXY, "*")
+        .env(EnvVars::NO_PROXY, "localhost,127.0.0.1,::1")
         .env_remove("GH_TOKEN")
         .env_remove("GITHUB_TOKEN")
         .env_remove("GH_ENTERPRISE_TOKEN")
