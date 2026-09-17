@@ -4706,7 +4706,8 @@ foo_bar = ["iniconfig"]
         root.child("child/.venv/pyvenv.cfg")
             .write_str("home = /usr/bin\n")?;
         root.child(".git").create_dir_all()?;
-        root.child(".gitignore").write_str("child/ignored/\n")?;
+        root.child(".gitignore")
+            .write_str("child/ignored/generated.txt\n")?;
         root.child("child/ignored/generated.txt")
             .write_str("generated\n")?;
 
