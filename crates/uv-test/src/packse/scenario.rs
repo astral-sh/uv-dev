@@ -453,7 +453,26 @@ fn default_python() -> PythonVersion {
 
 #[cfg(test)]
 mod tests {
+    use walkdir::WalkDir;
+
     use super::*;
+
+    #[test]
+    fn fixture_scenarios_parse() -> Result<()> {
+        for entry in WalkDir::new(crate::packse::scenarios_dir().join("packages")) {
+            let entry = entry?;
+            if entry.file_type().is_file()
+                && entry
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "toml")
+            {
+                let scenario = Scenario::from_path(entry.path())?;
+                assert!(scenario.testgen.disable, "{}", entry.path().display());
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn parse_package_contents() -> Result<()> {
