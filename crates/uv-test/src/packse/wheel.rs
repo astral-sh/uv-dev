@@ -499,7 +499,15 @@ fn build_hatchling_pyproject_toml(
     } else {
         let mut project_scripts = String::from("\n[project.scripts]\n");
         for (script_name, target) in scripts {
-            let script_name = toml::Value::String(script_name.clone());
+            let script_name = if !script_name.is_empty()
+                && script_name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+            {
+                script_name.clone()
+            } else {
+                toml::Value::String(script_name.clone()).to_string()
+            };
             let target = toml::Value::String(target.clone());
             writeln!(&mut project_scripts, "{script_name} = {target}")
                 .expect("writing project scripts into a string should succeed");
