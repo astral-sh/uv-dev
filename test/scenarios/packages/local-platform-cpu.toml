@@ -1,0 +1,46 @@
+name = "local-platform-cpu"
+description = "Local CPU versions omit platforms supplied by the non-local release."
+
+[root]
+
+[expected]
+satisfiable = true
+
+[packages.platform-engine.versions."2.2.2"]
+requires_python = ">=3.10"
+requires = ["platform-common"]
+sdist = false
+wheel_tags = ["cp310-cp310-manylinux_2_17_aarch64"]
+
+[packages.platform-engine.versions."2.2.2+cpu"]
+requires_python = ">=3.10"
+requires = ["platform-common"]
+sdist = false
+wheel_tags = ["cp310-cp310-linux_x86_64", "cp310-cp310-win_amd64"]
+
+[packages.platform-engine.versions."2.5.1"]
+requires_python = ">=3.12"
+requires = ["platform-common"]
+sdist = false
+wheel_tags = ["py3-none-macosx_11_0_arm64"]
+
+[packages.platform-engine.versions."2.5.1+cpu"]
+requires_python = ">=3.12"
+requires = ["platform-common"]
+sdist = false
+wheel_tags = ["py3-none-linux_x86_64", "py3-none-manylinux_2_17_aarch64", "py3-none-win_amd64"]
+
+[packages.platform-image.versions."0.20.1"]
+requires_python = ">=3.12"
+requires = ["platform-engine==2.5.1", "platform-math"]
+sdist = false
+wheel_tags = ["py3-none-macosx_11_0_arm64"]
+
+[packages.platform-image.versions."0.20.1+cpu"]
+requires_python = ">=3.12"
+requires = ["platform-engine==2.5.1", "platform-math"]
+sdist = false
+wheel_tags = ["py3-none-linux_x86_64", "py3-none-manylinux_2_17_aarch64", "py3-none-win_amd64"]
+
+[testgen]
+disable = true
