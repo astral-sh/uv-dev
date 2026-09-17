@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 19678,
+        "title": "Add initial hidden `uv upgrade` command",
+        "url": "https://github.com/astral-sh/uv/pull/19678",
+        "state": "merged",
+        "reason": "Introduced the project-upgrade resolver path and its CLI/settings wiring. Current code still omits the shared resolver argument group, though the pull request did not discuss authentication."
+      },
+      {
+        "kind": "issue",
+        "number": 14806,
+        "title": "uv tool upgrade does not authenticate against GitLab private pypi package registry",
+        "url": "https://github.com/astral-sh/uv/issues/14806",
+        "state": "closed",
+        "reason": "The closest prior symptom, but it concerns `uv tool upgrade`; maintainers confirmed its credential-transfer mechanism was different."
+      },
+      {
+        "kind": "pull_request",
+        "number": 14858,
+        "title": "Respect credentials from all defined indexes",
+        "url": "https://github.com/astral-sh/uv/pull/14858",
+        "state": "merged",
+        "reason": "Fixed astral-sh/uv#14806 by merging credential-bearing configured indexes with a tool receipt. It does not address project `uv upgrade` resolver arguments."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and all pull request states for `uv upgrade`, `UV_EXTRA_INDEX_URL`, `extra-index-url`, private and explicit indexes, Azure authentication, the exact authentication hint, 401 errors, command-specific credential loss, named-index credentials, and historical fixes. Inspected the upgrade implementation history and candidate discussions. Ruled out astral-sh/uv#16478 because it concerns attaching `authenticate = \"always\"` to CLI-provided indexes; astral-sh/uv#12611 and astral-sh/uv#12631 because they concern authentication-policy construction; astral-sh/uv#13216 because it concerns uv 0.7 security behavior; astral-sh/uv#19817 because it concerns `uv sync`; and astral-sh/uv#21216 because it concerns tool receipts. None tracks this project `uv upgrade` versus sync/lock split."
+  },
+  "type": "bug",
+  "type_reason": "Current source confirms incorrect command-specific behavior. `UpgradeArgs` contains only package selection and exclusion, while `UV_EXTRA_INDEX_URL` and index/authentication flags belong to the shared resolver argument group used by sync and lock. `UpgradeSettings` therefore combines default resolver options with filesystem configuration, retaining the explicit index but omitting URL-supplied credentials. Existing upgrade tests cover an explicit public index but not authentication. No open duplicate tracks this gap.",
+  "summary": "No existing item tracks the same project `uv upgrade` authentication gap. astral-sh/uv#19678 is the relevant implementation history; astral-sh/uv#14806 and astral-sh/uv#14858 are the closest precedent but involve the distinct `uv tool upgrade` receipt path.",
+  "draft_response": "Thanks for the clear reproduction. I confirmed this is a bug in the current command wiring: `uv upgrade` resolves packages but does not include the shared resolver/index argument group, so `UV_EXTRA_INDEX_URL` and the corresponding CLI index and authentication options are not read on this path. `uv sync` and `uv lock` do include that configuration.\n\nNamed-index credentials are looked up directly from the configured index, so `UV_INDEX_PRIVATE_USERNAME` and `UV_INDEX_PRIVATE_PASSWORD` should be a temporary workaround. If those also fail, please share redacted `-vv` output. The code needs to align `uv upgrade` with the other project resolver commands and add authenticated explicit-index integration coverage."
+}
