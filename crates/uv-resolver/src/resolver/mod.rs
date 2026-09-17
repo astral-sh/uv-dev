@@ -94,6 +94,8 @@ use uv_configuration::ForkStrategy;
 mod availability;
 mod batch_prefetch;
 mod coordination;
+#[cfg(test)]
+mod decision_journal_tests;
 mod derivation;
 mod environment;
 mod fork_map;
@@ -523,8 +525,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                 // A successful conflict resolution can retract decisions even if
                                 // the next decision restores the previous solution length.
                                 if !conflicts.is_empty() {
-                                    state.backtrack_generation =
-                                        state.backtrack_generation.wrapping_add(1);
+                                    state.decision_journal = None;
                                 }
                                 for (affected, incompatibility) in conflicts {
                                     // Conflict tracking: If there was a conflict, track affected and
@@ -751,10 +752,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             {
                 // `dep_incompats` are already in `incompatibilities` so we know there are not satisfied
                 // terms and can add the decision directly.
-                state
-                    .pubgrub
-                    .partial_solution
-                    .add_decision(next_id, version);
+                state.add_decision(next_id, version);
                 if yield_decisions {
                     return Ok(ForkOutcome::Pending(state));
                 }
@@ -2651,9 +2649,11 @@ pub(crate) struct ForkState<'index> {
     /// in this state. We also ultimately retrieve the final set of version
     /// assignments (to packages) from this state's "partial solution."
     pubgrub: State<UvDependencyProvider>,
-    /// Changes whenever PubGrub may have retracted a decision. Coordinated forks can append
-    /// observations without scanning their retained decision prefix while this stays unchanged.
-    backtrack_generation: u64,
+    /// Successful decisions appended since the coordinator last observed this fork.
+    ///
+    /// `None` disables recording and requires a full observation scan. A backjump invalidates
+    /// the journal because even an unchanged decision count can hide a replaced prefix.
+    decision_journal: Option<Vec<(Id<PubGrubPackage>, Version)>>,
     /// The first time this fork was scheduled, including time spent suspended.
     started_at: Option<Instant>,
     /// The operation to resume when this fork is next visited.
@@ -2743,7 +2743,7 @@ impl<'index> ForkState<'index> {
             continuation: ForkContinuation::Propagate,
             next: pubgrub.root_package,
             pubgrub,
-            backtrack_generation: 0,
+            decision_journal: None,
             started_at: None,
             pins: FilePins::default(),
             fork_urls: ForkUrls::default(),
@@ -2757,6 +2757,18 @@ impl<'index> ForkState<'index> {
             python_requirement,
             conflict_tracker: ConflictTracker::default(),
             prefetcher,
+        }
+    }
+
+    /// Add a decision whose dependency incompatibilities are already present.
+    fn add_decision(&mut self, package: Id<PubGrubPackage>, version: Version) {
+        if let Some(journal) = &mut self.decision_journal {
+            self.pubgrub
+                .partial_solution
+                .add_decision(package, version.clone());
+            journal.push((package, version));
+        } else {
+            self.pubgrub.partial_solution.add_decision(package, version);
         }
     }
 
@@ -2917,6 +2929,8 @@ impl<'index> ForkState<'index> {
         // and affected.
         if let Some(incompatibility) = conflict {
             self.record_conflict(for_package, Some(for_version), incompatibility);
+        } else if let Some(journal) = &mut self.decision_journal {
+            journal.push((self.next, for_version.clone()));
         }
     }
 
@@ -3033,7 +3047,7 @@ impl<'index> ForkState<'index> {
                 );
                 let backtrack_level = self.pubgrub.backtrack_package(package);
                 if let Some(backtrack_level) = backtrack_level {
-                    self.backtrack_generation = self.backtrack_generation.wrapping_add(1);
+                    self.decision_journal = None;
                     debug!("Backtracked {backtrack_level} decisions");
                 } else {
                     debug!(
@@ -3091,9 +3105,7 @@ impl<'index> ForkState<'index> {
                         Range::from_versions(release_specifiers_to_ranges(requires_python)),
                     ),
                 ));
-            self.pubgrub
-                .partial_solution
-                .add_decision(self.next, version);
+            self.add_decision(self.next, version);
             return;
         }
         self.pubgrub
@@ -3112,6 +3124,7 @@ impl<'index> ForkState<'index> {
     /// Narrow the environment and Python requirement, invalidating candidates from the parent fork.
     fn with_env(mut self, env: ResolverEnvironment) -> Self {
         self.selected_versions.clear();
+        self.decision_journal = None;
         self.started_at = None;
         self.env = env;
         // If the fork contains a narrowed Python requirement, apply it.
