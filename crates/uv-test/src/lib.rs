@@ -242,6 +242,7 @@ impl TestContext {
     #[must_use]
     pub fn with_pypi_access(self) -> Self {
         self.with_default_index("https://pypi.org/simple")
+            .with_env(EnvVars::UV_INTERNAL__TEST_DENY_PYPI, "0")
     }
 
     /// Serve a local Packse scenario as this context's default index.
@@ -1413,6 +1414,7 @@ impl TestContext {
                 EnvVars::UV_INTERNAL__TEST_VIRTUALENV_DISCOVERY_ROOT,
                 self.root.path(),
             )
+            .env(EnvVars::UV_INTERNAL__TEST_DENY_PYPI, "1")
             .env(EnvVars::UV_EXCLUDE_NEWER, TEST_TIMESTAMP)
             .env(EnvVars::UV_TEST_CURRENT_TIMESTAMP, TEST_TIMESTAMP)
             .env(EnvVars::UV_TEST_AVAILABLE_VERSION_CUTOFF, TEST_TIMESTAMP)
@@ -2672,6 +2674,7 @@ pub async fn download_to_disk(url: &str, path: &Path) {
 
     let client = uv_client::BaseClientBuilder::default()
         .allow_insecure_host(trusted_hosts)
+        .deny_pypi_for_tests(true)
         .build()
         .expect("failed to build base client");
     let url = url.parse().unwrap();

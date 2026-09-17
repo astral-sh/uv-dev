@@ -566,6 +566,7 @@ async fn ensure_cached_artifact(artifact: &VendorArtifact, path: &Path) -> Resul
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let client = uv_client::BaseClientBuilder::default()
         .allow_insecure_host(trusted_hosts)
+        .deny_pypi_for_tests(true)
         .build()
         .context("failed to build vendor artifact client")?;
 

@@ -741,6 +741,10 @@ impl EnvVars {
     pub const UV_INTERNAL__TEST_VIRTUALENV_DISCOVERY_ROOT: &'static str =
         "UV_INTERNAL__TEST_VIRTUALENV_DISCOVERY_ROOT";
 
+    /// Reject HTTP requests to the public Python package indexes during tests.
+    #[attr_hidden]
+    pub const UV_INTERNAL__TEST_DENY_PYPI: &'static str = "UV_INTERNAL__TEST_DENY_PYPI";
+
     /// Replace the implicit PyPI index with a local index during tests.
     #[attr_hidden]
     pub const UV_INTERNAL__TEST_DEFAULT_INDEX: &'static str = "UV_INTERNAL__TEST_DEFAULT_INDEX";
