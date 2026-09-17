@@ -50,4 +50,14 @@ impl Indexes {
     pub(crate) fn get(&self, name: &PackageName, env: &ResolverEnvironment) -> Vec<&IndexMetadata> {
         self.0.get(name, env)
     }
+
+    /// Whether the manifest imposes this index throughout the entire universal fork.
+    pub(crate) fn is_fixed(
+        &self,
+        name: &PackageName,
+        env: &ResolverEnvironment,
+        index: &IndexMetadata,
+    ) -> bool {
+        self.0.is_fixed(name, env, index)
+    }
 }

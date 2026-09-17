@@ -696,6 +696,7 @@ impl NoSolutionError {
                     let versions = match &reason {
                         UnavailableReason::Version(_) => narrow_unavailable(&package, versions),
                         UnavailableReason::Package(_) => narrow(&package, versions),
+                        UnavailableReason::Coordinated(_) => versions,
                     };
                     DerivationTree::External(External::Custom(package, versions, reason))
                 }
@@ -978,6 +979,11 @@ fn display_tree_inner(
                         }
                         UnavailableReason::Version(_) => {
                             lines.push(format!("{prefix}{package}{versions} {reason}"));
+                        }
+                        UnavailableReason::Coordinated(version) => {
+                            lines.push(format!(
+                                "{prefix}{package}{versions} temporarily excluded to try {package}=={version} across resolver forks"
+                            ));
                         }
                     },
                     External::NoVersions(package, versions) => {
