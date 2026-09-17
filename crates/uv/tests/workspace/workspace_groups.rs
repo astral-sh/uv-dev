@@ -286,6 +286,86 @@ fn workspace_groups_explicit_project_conflicts() -> Result<()> {
 }
 
 #[test]
+fn workspace_groups_explicit_own_extra_conflict() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = workspace_groups_conflict_fixture(&context, "", None)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [tool.uv]
+            conflicts = [[{ package = "root-a" }, { package = "root-a", extra = "modern" }]]
+            [tool.uv.workspace]
+            members = ["members/*"]
+            [[tool.uv.workspace.groups]]
+            name = "apps"
+            members = ["root-a"]
+        "#})?;
+    context
+        .temp_dir
+        .child("members/root-a/pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "root-a"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["shared-leaf<2"]
+            [project.optional-dependencies]
+            modern = ["shared-leaf>=2"]
+            [tool.uv]
+            package = false
+        "#})?;
+    let failure = context
+        .lock()
+        .args(["--preview-features", "package-conflicts", "--index-url"])
+        .arg(server.index_url())
+        .assert()
+        .failure();
+    let stderr = std::str::from_utf8(&failure.get_output().stderr)?;
+    assert!(stderr.contains("Failed to resolve workspace group `apps`"));
+    assert!(stderr.contains("shared-leaf>=2"));
+    assert!(stderr.contains("shared-leaf<2"));
+
+    // An explicitly conflicting extra is an alternative root, but still depends on its base.
+    context
+        .temp_dir
+        .child("members/root-a/pyproject.toml")
+        .write_str(
+            &context
+                .read("members/root-a/pyproject.toml")
+                .replace("shared-leaf>=2", "shared-leaf<2"),
+        )?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "package-conflicts", "--index-url"]).arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let lock = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "package-conflicts", "--locked", "--index-url"]).arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(lock, context.read("uv.lock"));
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--workspace-group", "apps", "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shared-leaf==1.0.0
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--workspace-group", "apps", "--extra", "modern",
+            "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extra `modern` and package `root-a` are incompatible with the declared conflicts: {`root-a[modern]`, root-a}
+    ");
+    Ok(())
+}
+
+#[test]
 fn workspace_groups_lock_export_sync_run() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     workspace(&context)?;
