@@ -720,9 +720,19 @@ pub struct ToolUv {
     /// for a project, taking into account that certain combinations of extras and
     /// groups are mutually exclusive. In exchange, installation will fail if a
     /// user attempts to activate both conflicting extras.
+    ///
+    /// With explicit workspace roots, an exhaustive set of disjoint version requirements on
+    /// one package permits roots, extras, or groups to resolve separately when they cannot
+    /// use the same declared range. For example, `shared-leaf<2` and `shared-leaf>=2`
+    /// partition all versions, with prereleases of `2` in the upper partition. These
+    /// complementary boundaries apply only to conflict declarations; dependency requirements
+    /// retain their PEP 440 meaning. One environment still cannot install both versions,
+    /// and unrelated conflicts remain errors.
     #[cfg_attr(
         feature = "schemars",
-        schemars(description = "A list of sets of conflicting groups or extras.")
+        schemars(
+            description = "A list of sets of conflicting groups, extras, packages, or dependency requirements."
+        )
     )]
     #[option(
         default = r#"[]"#,
@@ -746,6 +756,13 @@ pub struct ToolUv {
                     { group = "group2" },
                 ]
             ]
+
+            # Permit explicit workspace roots to resolve separately when they
+            # require opposite sides of a dependency version boundary.
+            conflicts = [[
+                { requirement = "shared-leaf<2" },
+                { requirement = "shared-leaf>=2" },
+            ]]
         "#
     )]
     pub(crate) conflicts: Option<SchemaConflicts>,

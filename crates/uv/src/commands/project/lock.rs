@@ -36,7 +36,7 @@ use uv_python::{
 use uv_requirements::ExtrasResolver;
 use uv_resolver::{
     FlatIndex, InMemoryIndex, Options, OptionsBuilder, PythonRequirement, ResolverEnvironment,
-    UniversalMarker,
+    UniversalMarker, WorkspaceRootConflicts,
 };
 use uv_scripts::Pep723Script;
 use uv_settings::PythonInstallMirrors;
@@ -627,6 +627,7 @@ async fn do_lock(
 
     // Collect the conflicts.
     let mut conflicts = target.conflicts()?;
+    let requirement_conflicts = target.requirement_conflicts();
     if let LockTarget::Workspace(workspace) = target {
         if let Some(groups) = &workspace.pyproject_toml().dependency_groups {
             if let Some(project) = &workspace.pyproject_toml().project {
@@ -644,6 +645,13 @@ async fn do_lock(
     {
         warn_user_once!(
             "Declaring conflicts for packages (`package = ...`) is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
+            PreviewFeature::PackageConflicts
+        );
+    }
+
+    if !preview.is_enabled(PreviewFeature::PackageConflicts) && !requirement_conflicts.is_empty() {
+        warn_user_once!(
+            "Declaring conflicts for dependency requirements (`requirement = ...`) is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
             PreviewFeature::PackageConflicts
         );
     }
@@ -978,6 +986,19 @@ async fn do_lock(
         None
     };
 
+    // Learned selection conflicts must be derived again when requirements or version boundaries
+    // change. Retain usable version preferences, but not the previous fork decisions.
+    let existing_lock = if requirement_conflicts.is_empty() {
+        existing_lock
+    } else {
+        existing_lock.map(|lock| match lock {
+            ValidatedLock::Unusable(lock) => ValidatedLock::Unusable(lock),
+            ValidatedLock::Versions(lock)
+            | ValidatedLock::Preferable(lock)
+            | ValidatedLock::Satisfies(lock) => ValidatedLock::Versions(lock),
+        })
+    };
+
     match existing_lock {
         // Resolution from the lockfile succeeded.
         Some(ValidatedLock::Satisfies(lock)) => {
@@ -1076,6 +1097,12 @@ async fn do_lock(
                 // The root is always null in workspaces, it "depends on" the projects
                 None,
                 packages.keys().cloned().collect(),
+                match target {
+                    LockTarget::Workspace(workspace) => workspace.resolution_roots().map(|roots| {
+                        WorkspaceRootConflicts::new(roots.clone(), requirement_conflicts.clone())
+                    }),
+                    LockTarget::Script(_) => None,
+                },
                 &extras,
                 &groups,
                 preferences,
@@ -1126,7 +1153,7 @@ async fn do_lock(
                 index_locations,
                 preview.is_enabled(PreviewFeature::LockWithoutMetadata),
             )?
-            .with_conflicts(conflicts)
+            .with_conflicts(resolution.conflicts.clone())
             .with_required_environments(lock_required_environments.into_markers());
 
             let lock = if preview.is_enabled(PreviewFeature::MissingExcludeNewerPackageLock) {

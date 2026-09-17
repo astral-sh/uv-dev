@@ -557,6 +557,7 @@ pub(crate) async fn pip_install(
             source_trees,
             project,
             BTreeSet::default(),
+            None,
             extras,
             &groups,
             preferences,

@@ -15,7 +15,7 @@ use uv_distribution_types::{
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifier};
 use uv_pep508::{MarkerEnvironment, MarkerTree, MarkerTreeKind};
-use uv_pypi_types::{HashDigests, ParsedUrlError};
+use uv_pypi_types::{Conflicts, HashDigests, ParsedUrlError};
 /// The output of a successful resolution.
 ///
 /// Includes a complete resolution graph in which every node represents a pinned package and every
@@ -29,6 +29,8 @@ pub struct ResolverOutput {
     /// If the resolution had non-identical forks, store the forks in the lockfile so we can
     /// recreate them in subsequent resolutions.
     pub fork_markers: Vec<UniversalMarker>,
+    /// Declared and solver-inferred selection conflicts used by the graph.
+    pub conflicts: Conflicts,
     /// Any diagnostics that were encountered while building the graph.
     pub diagnostics: Vec<ResolutionDiagnostic>,
     /// The requirements that were used to build the graph.

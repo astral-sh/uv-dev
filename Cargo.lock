@@ -7094,6 +7094,7 @@ name = "uv-pypi-types"
 version = "0.0.82"
 dependencies = [
  "anyhow",
+ "astral-version-ranges",
  "hashbrown 0.17.1",
  "indexmap",
  "insta",

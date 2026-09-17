@@ -117,7 +117,7 @@
       ]
     },
     "conflicts": {
-      "description": "A list of sets of conflicting groups or extras.",
+      "description": "A list of sets of conflicting groups, extras, packages, or dependency requirements.",
       "anyOf": [
         {
           "$ref": "#/definitions/SchemaConflicts"
@@ -1942,6 +1942,9 @@
       "description": "A PEP 508 dependency specifier, e.g., `ruff >= 0.6.0`",
       "type": "string"
     },
+    "RequirementConflict": {
+      "type": "string"
+    },
     "ResolutionMode": {
       "oneOf": [
         {
@@ -1997,6 +2000,16 @@
             }
           ],
           "default": null
+        },
+        "requirement": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequirementConflict"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false

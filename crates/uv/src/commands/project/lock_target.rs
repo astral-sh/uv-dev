@@ -19,7 +19,7 @@ use uv_distribution_types::{
 use uv_lock::Lock;
 use uv_normalize::{GroupName, PackageName};
 use uv_pep508::{MarkerTree, RequirementOrigin};
-use uv_pypi_types::{Conflicts, SupportedEnvironments, VerbatimParsedUrl};
+use uv_pypi_types::{Conflicts, RequirementConflict, SupportedEnvironments, VerbatimParsedUrl};
 use uv_scripts::Pep723Script;
 use uv_workspace::dependency_groups::{
     DependencyGroupError, FlatDependencyGroup, FlatDependencyGroups,
@@ -280,6 +280,13 @@ impl<'lock> LockTarget<'lock> {
         match self {
             Self::Workspace(workspace) => Ok(workspace.conflicts()?),
             Self::Script(_) => Ok(Conflicts::empty()),
+        }
+    }
+
+    pub(crate) fn requirement_conflicts(self) -> Vec<Vec<RequirementConflict>> {
+        match self {
+            Self::Workspace(workspace) => workspace.requirement_conflicts(),
+            Self::Script(_) => Vec::new(),
         }
     }
 
