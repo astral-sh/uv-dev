@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86-64 with uv 0.12.13 and CPython 3.12.3, `uv add --script script.py 'iniconfig==2.1.0'`, `uv run script.py`, `uv lock --script script.py`, and `uv run --locked script.py` succeeded. uv added PEP 723 metadata, installed the dependency into a script-specific cached environment, reused that environment, and created `script.py.lock`. A shared `pyproject.toml` fixture also worked with a separate `.venv` and `uv.lock`. The skill must invoke scripts through `uv run`, and uv must be installed; compatibility with `ppt-master` specifically could not be checked because its repository and launcher commands were not supplied."
+}

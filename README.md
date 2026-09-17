@@ -21,6 +21,69 @@ The remaining integration requirement is outside uv's automatic control: the ski
 the scripts through `uv run`, and uv must be available in the execution environment. Replacing a
 requirements file alone will not change a launcher that continues to call pip or plain Python.
 
+## Reproduction
+
+Outcome: `reproducible`. The capability asked about in astral-sh/uv#21772 works in a minimal
+standalone-script fixture.
+
+Environment:
+
+- uv 0.12.13 (`x86_64-unknown-linux-gnu`)
+- CPython 3.12.3 at `/usr/bin/python3`
+- Ubuntu Linux, x86-64
+- All fixture files, caches, managed environments, and lockfiles were placed under a fresh `/tmp`
+  directory. Ambient `UV_LOCKED=1` and `UV_FROZEN` settings were disabled because they were not
+  part of the report; leaving `UV_LOCKED=1` enabled correctly rejects `uv add` before a lockfile
+  exists and is not evidence about the reported question.
+
+Starting with this `script.py`:
+
+```python
+import iniconfig
+
+print(f"script dependency imported from {iniconfig.__file__}")
+```
+
+the targeted commands were:
+
+```console
+$ uv add --script script.py 'iniconfig==2.1.0'
+Resolved 1 package in 138ms
+$ uv run script.py
+Installed 1 package in 2ms
+script dependency imported from /tmp/.../cache/environments-v2/script-.../lib/python3.12/site-packages/iniconfig/__init__.py
+$ uv run script.py
+script dependency imported from /tmp/.../cache/environments-v2/script-.../lib/python3.12/site-packages/iniconfig/__init__.py
+$ uv lock --script script.py
+Resolved 1 package in 2ms
+$ uv run --locked script.py
+script dependency imported from /tmp/.../cache/environments-v2/script-.../lib/python3.12/site-packages/iniconfig/__init__.py
+```
+
+`uv add` inserted a PEP 723 block containing `iniconfig==2.1.0`. The first `uv run` installed the
+package into a script-specific cached environment, and the second reused the same environment with
+no installation output. `uv lock --script` created `script.py.lock`, after which `uv run --locked`
+succeeded.
+
+The shared-project alternative was also observed with a minimal `pyproject.toml` declaring
+`dependencies = ["iniconfig"]`. `uv run --project project project/tool.py` created `project/uv.lock`
+and imported the dependency from `project/.venv`, separate from the script-specific cached
+environment.
+
+Existing integration coverage matches these observations:
+
+- `crates/uv/tests/project/edit.rs`, `add_script`: verifies `uv add --script` adds a dependency to
+  inline script metadata and does not implicitly create a lockfile.
+- `crates/uv/tests/project/run.rs`, `run_pep723_script`: verifies that `uv run` installs inline
+  dependencies into a script environment and reuses that environment on the next invocation.
+- `crates/uv/tests/project/run.rs`, `run_pep723_script_lock`: verifies explicit script locking,
+  successful execution with the lockfile, and successful `uv run --locked`.
+
+This confirms that uv can manage and isolate dependencies for Python scripts shipped in a skill.
+It does not make skill runtimes automatically recognize uv metadata: the skill must invoke the
+script with `uv run`, and uv must be installed in that runtime. The report has no `ppt-master`
+repository or launcher commands, so compatibility with that particular skill was not tested.
+
 ## Draft response
 
 Yes, provided uv is available where the skill runs and the skill invokes its scripts through uv.
