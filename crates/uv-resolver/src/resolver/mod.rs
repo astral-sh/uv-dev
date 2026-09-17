@@ -520,6 +520,12 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                 ));
                             }
                             Ok(conflicts) => {
+                                // A successful conflict resolution can retract decisions even if
+                                // the next decision restores the previous solution length.
+                                if !conflicts.is_empty() {
+                                    state.backtrack_generation =
+                                        state.backtrack_generation.wrapping_add(1);
+                                }
                                 for (affected, incompatibility) in conflicts {
                                     // Conflict tracking: If there was a conflict, track affected and
                                     // culprit for all root cause incompatibilities
@@ -2645,6 +2651,9 @@ pub(crate) struct ForkState<'index> {
     /// in this state. We also ultimately retrieve the final set of version
     /// assignments (to packages) from this state's "partial solution."
     pubgrub: State<UvDependencyProvider>,
+    /// Changes whenever PubGrub may have retracted a decision. Coordinated forks can append
+    /// observations without scanning their retained decision prefix while this stays unchanged.
+    backtrack_generation: u64,
     /// The first time this fork was scheduled, including time spent suspended.
     started_at: Option<Instant>,
     /// The operation to resume when this fork is next visited.
@@ -2734,6 +2743,7 @@ impl<'index> ForkState<'index> {
             continuation: ForkContinuation::Propagate,
             next: pubgrub.root_package,
             pubgrub,
+            backtrack_generation: 0,
             started_at: None,
             pins: FilePins::default(),
             fork_urls: ForkUrls::default(),
@@ -3023,6 +3033,7 @@ impl<'index> ForkState<'index> {
                 );
                 let backtrack_level = self.pubgrub.backtrack_package(package);
                 if let Some(backtrack_level) = backtrack_level {
+                    self.backtrack_generation = self.backtrack_generation.wrapping_add(1);
                     debug!("Backtracked {backtrack_level} decisions");
                 } else {
                     debug!(
