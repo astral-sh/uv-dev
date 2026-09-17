@@ -1269,6 +1269,7 @@ pub(crate) fn centralized_environment_root(
     let interpreter_key = managed_installation
         .as_ref()
         .map(|installation| installation.key().clone())
+        .or_else(|| ManagedPythonInstallation::key_from_interpreter(interpreter))
         .unwrap_or_else(|| interpreter.key());
     // Use the workspace path to isolate projects and the interpreter key to maximize intra-project
     // environment re-use while avoiding clashes with incompatible environments. Ignoring the patch
