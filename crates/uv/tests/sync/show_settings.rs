@@ -3997,6 +3997,7 @@ fn preview_features() {
     +            WorkspaceMetadata,
     +            WorkspaceDir,
     +            WorkspaceList,
+    +            NestedWorkspaces,
     +            SbomExport,
     +            AuthHelper,
     +            TargetWorkspaceDiscovery,
