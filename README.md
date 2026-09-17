@@ -12,7 +12,7 @@ The terminal error chain is `error decoding response body` -> `request or respon
 
 This is the same user-visible behavior already tracked by open issue astral-sh/uv#13717: a source distribution fails at an archive member during streamed extraction because the HTTP response body ends with a transport error. The low-level transport message differs (`broken pipe` there, `connection reset` here), but the command path, artifact type, extraction stage, error chain, and retry/robustness problem match.
 
-As of 2026-09-14, a maintainer was unable to reproduce the wxPython failure and asked whether antivirus software could be involved. The reporter found no antivirus installed by default on MX Linux and also successfully ran `uv add polars --no-binary`, which forced a different registry source distribution through download and build. These observations make a universal sdist extraction failure and default-antivirus explanation less likely, but they do not identify why the wxPython response is repeatedly reset. No maintainer environment details or controlled endpoint-security comparison are available.
+Follow-up testing narrows the failure to the reporter's original network path. A maintainer could not reproduce it; the reporter found no default antivirus or configured proxy, successfully built a different registry sdist with `uv add polars --no-binary`, and successfully ran `uv add wxpython` on another network using the same device and project. The alternate network is a confirmed mitigation. This strongly supports a network-dependent interruption, but it does not establish which device, service, protocol interaction, or policy on the original path sends the reset.
 
 ## Draft response
 
@@ -40,7 +40,7 @@ This is not classified as a regression of astral-sh/uv#14171. That issue concern
 ### Report decomposition
 
 - Command and subsystem: `uv add` resolving a registry package, downloading a `.tar.gz` source distribution, extracting it into the `sdists-v9` cache, and building it.
-- Triggering conditions: wxPython 4.3.1 or 4.2.5 on Linux; the registry download is interrupted by repeated connection resets. The specific failed archive member varies.
+- Triggering conditions: wxPython 4.3.1 or 4.2.5 on MX Linux over the reporter's original network; the registry download is interrupted by repeated connection resets. The specific failed archive member varies. The same device and project succeed on another network.
 - Expected behavior: the registry sdist downloads, extracts, builds, and installs as it does through pip or after being downloaded locally.
 - Actual behavior: four fresh GET attempts fail during streamed extraction, and the final user-facing chain begins with `Invalid tar file` but ends with `connection reset`.
 - Exact identifiers and fragments searched: `wxpython`, `Invalid tar file`, `failed to unpack`, `error decoding response body`, `error reading a body from connection`, `connection reset`, `broken pipe`, `sdist`, `source distribution`, streamed unpacking, retries, interrupted downloads, resumption, partial downloads, and HTTP range requests.
@@ -55,4 +55,6 @@ The reporter-suggested astral-sh/uv#14171 was inspected but ruled out as the can
 
 ### Follow-up investigation status
 
-A maintainer reported that they could not reproduce astral-sh/uv#21641 and asked about antivirus software. The reporter identifies the affected distribution as MX Linux, reports that it does not appear to install antivirus by default, and confirms that `uv add polars --no-binary` downloads and builds another sdist successfully in the same environment. This comparison shows the observed failure is narrower than all registry sdist downloads or builds. It does not rule out package-size, connection-path, proxy, endpoint-security, or other environmental differences, and none of those mechanisms is confirmed.
+A maintainer reported that they could not reproduce astral-sh/uv#21641. The reporter identifies the affected distribution as MX Linux, reports no default antivirus and no proxy, and confirms that `uv add polars --no-binary` downloads and builds another sdist successfully.
+
+The strongest controlled comparison is network-specific: `uv add wxpython` succeeds on another network with the same device and project that fail on the original network. Using the alternate network is therefore a credible mitigation, and the failing path—not tar parsing, the project, or the device alone—is the remaining differentiator. The evidence does not yet identify whether the reset originates from the router, ISP, CDN path, filtering or inspection software, an HTTP/2 interaction, or another network component; those remain hypotheses.
