@@ -64,7 +64,7 @@ pub enum ParentLockError {
 }
 
 /// Warn when nested workspaces are used without enabling the preview feature.
-pub(crate) fn warn_nested_workspaces() {
+pub fn warn_nested_workspaces() {
     if !uv_preview::is_enabled(PreviewFeature::NestedWorkspaces) {
         warn_user_once!(
             "Nested workspaces are experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
