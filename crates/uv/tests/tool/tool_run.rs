@@ -1082,109 +1082,100 @@ fn tool_run_git_lfs() {
 /// Read requirements from a `requirements.txt` file.
 #[test]
 fn tool_run_requirements_txt() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs();
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("iniconfig").unwrap();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--with-requirements")
-        .arg("requirements.txt")
-        .arg("--with")
-        .arg("typing-extensions")
-        .arg("flask")
-        .arg("--version"), @"
+    requirements_txt.write_str("extra-requirement").unwrap();
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--with-requirements")
+            .arg("requirements.txt")
+            .arg("--with")
+            .arg("other-requirement")
+            .arg("web-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.2
-    Werkzeug 3.0.1
+    web-tool 3.0.2
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + iniconfig==2.0.0
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + typing-extensions==4.10.0
-     + werkzeug==3.0.1
-    ");
+     + extra-requirement==2.0.0
+     + other-requirement==4.10.0
+     + web-runtime==3.0.1
+     + web-tool==3.0.2
+    "
+    );
 }
 
 /// Ignore and warn when (e.g.) the `--index-url` argument is a provided `requirements.txt`.
 #[test]
 fn tool_run_requirements_txt_arguments() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
         .write_str(indoc! { r"
         --index-url https://test.pypi.org/simple
-        idna
-        "
-        })
+        no-script-leaf
+        " })
         .unwrap();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--with-requirements")
-        .arg("requirements.txt")
-        .arg("flask")
-        .arg("--version"), @"
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--with-requirements")
+            .arg("requirements.txt")
+            .arg("web-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.2
-    Werkzeug 3.0.1
+    web-tool 3.0.2
 
     ----- stderr -----
     warning: Ignoring `--index-url` from requirements file: `https://test.pypi.org/simple`. Instead, use the `--index-url` command-line argument, or set `index-url` in a `uv.toml` or `pyproject.toml` file.
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + idna==3.6
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
-    ");
+     + no-script-leaf==1.0.0
+     + web-runtime==3.0.1
+     + web-tool==3.0.2
+    "
+    );
 }
 
 /// List installed tools when no command arg is given (e.g. `uv tool run`).
 #[test]
 fn tool_run_list_installed() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    // No tools installed.
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context.with_filtered_exe_suffix().with_tool_dirs(); // No tools installed.
     uv_snapshot!(context.filters(), context.tool_run(), @"
     exit_code: 2 (failure)
     ----- stdout -----
     Provide a command to run with `uv tool run <command>`.
 
     See `uv tool run --help` for more information.
-    ");
-
-    // Install `black`.
+    "); // Install `format-tool`.
     context
         .tool_install()
-        .arg("black==24.2.0")
+        .arg("format-tool==24.2.0")
         .assert()
-        .success();
-
-    // List installed tools.
+        .success(); // List installed tools.
     uv_snapshot!(context.filters(), context.tool_run(), @"
     exit_code: 2 (failure)
     ----- stdout -----
@@ -1192,7 +1183,7 @@ fn tool_run_list_installed() {
 
     The following tools are installed:
 
-    - black v24.2.0
+    - format-tool v24.2.0
 
     See `uv tool run --help` for more information.
     ");
@@ -1201,338 +1192,333 @@ fn tool_run_list_installed() {
 /// By default, omit resolver and installer output.
 #[test]
 fn tool_run_without_output() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
-    // On the first run, only show the summary line.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .env_remove(EnvVars::UV_SHOW_RESOLUTION)
-        .arg("--")
-        .arg("pytest")
-        .arg("--version"), @"
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs(); // On the first run, only show the summary line.
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .env_remove(EnvVars::UV_SHOW_RESOLUTION)
+            .arg("--")
+            .arg("run-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.1.1
+    run-tool 8.1.1
 
     ----- stderr -----
     Installed [N] packages in [TIME]
-    ");
-
-    // Subsequent runs are quiet.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .env_remove(EnvVars::UV_SHOW_RESOLUTION)
-        .arg("--")
-        .arg("pytest")
-        .arg("--version"), @"
+    "
+    ); // Subsequent runs are quiet.
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .env_remove(EnvVars::UV_SHOW_RESOLUTION)
+            .arg("--")
+            .arg("run-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.1.1
-    ");
+    run-tool 8.1.1
+    "
+    );
 }
 
 #[test]
 #[cfg(not(windows))]
 fn tool_run_csv_with_shorthand() -> anyhow::Result<()> {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs();
     let anyio_local = context.temp_dir.child("src").child("anyio_local");
     copy_dir_all(
         context.workspace_root.join("test/packages/anyio_local"),
         &anyio_local,
     )?;
-
     let black_editable = context.temp_dir.child("src").child("black_editable");
     copy_dir_all(
         context.workspace_root.join("test/packages/black_editable"),
         &black_editable,
     )?;
-
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
         [project]
         name = "foo"
         version = "1.0.0"
         requires-python = ">=3.8"
-        dependencies = ["anyio", "sniffio==1.3.1"]
-        "#
-    })?;
-
+        dependencies = ["no-script", "no-script-leaf==1.0.0"]
+        "# })?;
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r"
-        import sniffio
-       "
-    })?;
-
-    // Performs a tool run with a comma-separated `--with` flag.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("-w")
-        .arg("iniconfig,typing-extensions")
-        .arg("pytest")
-        .arg("--version"), @"
+        import no_script_leaf
+       " })?; // Performs a tool run with a comma-separated `--with` flag.
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("-w")
+            .arg("extra-requirement,other-requirement")
+            .arg("run-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.1.1
+    run-tool 8.1.1
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
-     + typing-extensions==4.10.0
-    ");
-
+     + extra-requirement==2.0.0
+     + other-requirement==4.10.0
+     + run-helper==1.4.0
+     + run-tool==8.1.1
+    "
+    );
     Ok(())
 }
 
 #[test]
 #[cfg(not(windows))]
 fn tool_run_csv_with() -> anyhow::Result<()> {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs();
     let anyio_local = context.temp_dir.child("src").child("anyio_local");
     copy_dir_all(
         context.workspace_root.join("test/packages/anyio_local"),
         &anyio_local,
     )?;
-
     let black_editable = context.temp_dir.child("src").child("black_editable");
     copy_dir_all(
         context.workspace_root.join("test/packages/black_editable"),
         &black_editable,
     )?;
-
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
         [project]
         name = "foo"
         version = "1.0.0"
         requires-python = ">=3.8"
-        dependencies = ["anyio", "sniffio==1.3.1"]
-        "#
-    })?;
-
+        dependencies = ["no-script", "no-script-leaf==1.0.0"]
+        "# })?;
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r"
-        import sniffio
-       "
-    })?;
-
-    // Performs a tool run with a comma-separated `--with` flag.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--with")
-        .arg("iniconfig,typing-extensions")
-        .arg("pytest")
-        .arg("--version"), @"
+        import no_script_leaf
+       " })?; // Performs a tool run with a comma-separated `--with` flag.
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--with")
+            .arg("extra-requirement,other-requirement")
+            .arg("run-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.1.1
+    run-tool 8.1.1
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
-     + typing-extensions==4.10.0
-    ");
-
+     + extra-requirement==2.0.0
+     + other-requirement==4.10.0
+     + run-helper==1.4.0
+     + run-tool==8.1.1
+    "
+    );
     Ok(())
 }
 
 #[test]
 #[cfg(windows)]
 fn tool_run_csv_with() -> anyhow::Result<()> {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs();
     let anyio_local = context.temp_dir.child("src").child("anyio_local");
     copy_dir_all(
         context.workspace_root.join("test/packages/anyio_local"),
         &anyio_local,
     )?;
-
     let black_editable = context.temp_dir.child("src").child("black_editable");
     copy_dir_all(
         context.workspace_root.join("test/packages/black_editable"),
         &black_editable,
     )?;
-
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
         [project]
         name = "foo"
         version = "1.0.0"
         requires-python = ">=3.8"
-        dependencies = ["anyio", "sniffio==1.3.1"]
-        "#
-    })?;
-
+        dependencies = ["no-script", "no-script-leaf==1.0.0"]
+        "# })?;
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r"
-        import sniffio
-       "
-    })?;
-
-    // Performs a tool run with a comma-separated `--with` flag.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--with")
-        .arg("iniconfig,typing-extensions")
-        .arg("pytest")
-        .arg("--version"), @r###"
+        import no_script_leaf
+       " })?; // Performs a tool run with a comma-separated `--with` flag.
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--with")
+            .arg("extra-requirement,other-requirement")
+            .arg("run-tool")
+            .arg("--version"),
+        @r#"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.1.1
+    run-tool 8.1.1
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
-     + typing-extensions==4.10.0
-    "###);
-
+     + extra-requirement==2.0.0
+     + other-requirement==4.10.0
+     + run-helper==1.4.0
+     + run-tool==8.1.1
+    "#
+    );
     Ok(())
 }
 
 #[test]
 #[cfg(not(windows))]
 fn tool_run_repeated_with() -> anyhow::Result<()> {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs();
     let anyio_local = context.temp_dir.child("src").child("anyio_local");
     copy_dir_all(
         context.workspace_root.join("test/packages/anyio_local"),
         &anyio_local,
     )?;
-
     let black_editable = context.temp_dir.child("src").child("black_editable");
     copy_dir_all(
         context.workspace_root.join("test/packages/black_editable"),
         &black_editable,
     )?;
-
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
         [project]
         name = "foo"
         version = "1.0.0"
         requires-python = ">=3.8"
-        dependencies = ["anyio", "sniffio==1.3.1"]
-        "#
-    })?;
-
+        dependencies = ["no-script", "no-script-leaf==1.0.0"]
+        "# })?;
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r"
-        import sniffio
-       "
-    })?;
-
-    // Performs a tool run with a repeated `--with` flag.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--with")
-        .arg("iniconfig")
-        .arg("--with")
-        .arg("typing-extensions")
-        .arg("pytest")
-        .arg("--version"), @"
+        import no_script_leaf
+       " })?; // Performs a tool run with a repeated `--with` flag.
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--with")
+            .arg("extra-requirement")
+            .arg("--with")
+            .arg("other-requirement")
+            .arg("run-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.1.1
+    run-tool 8.1.1
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
-     + typing-extensions==4.10.0
-    ");
-
+     + extra-requirement==2.0.0
+     + other-requirement==4.10.0
+     + run-helper==1.4.0
+     + run-tool==8.1.1
+    "
+    );
     Ok(())
 }
 
 #[test]
 #[cfg(windows)]
 fn tool_run_repeated_with() -> anyhow::Result<()> {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs();
     let anyio_local = context.temp_dir.child("src").child("anyio_local");
     copy_dir_all(
         context.workspace_root.join("test/packages/anyio_local"),
         &anyio_local,
     )?;
-
     let black_editable = context.temp_dir.child("src").child("black_editable");
     copy_dir_all(
         context.workspace_root.join("test/packages/black_editable"),
         &black_editable,
     )?;
-
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
         [project]
         name = "foo"
         version = "1.0.0"
         requires-python = ">=3.8"
-        dependencies = ["anyio", "sniffio==1.3.1"]
-        "#
-    })?;
-
+        dependencies = ["no-script", "no-script-leaf==1.0.0"]
+        "# })?;
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r"
-        import sniffio
-       "
-    })?;
-
-    // Performs a tool run with a repeated `--with` flag.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--with")
-        .arg("iniconfig")
-        .arg("--with")
-        .arg("typing-extensions")
-        .arg("pytest")
-        .arg("--version"), @r###"
+        import no_script_leaf
+       " })?; // Performs a tool run with a repeated `--with` flag.
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--with")
+            .arg("extra-requirement")
+            .arg("--with")
+            .arg("other-requirement")
+            .arg("run-tool")
+            .arg("--version"),
+        @r#"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.1.1
+    run-tool 8.1.1
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
-     + typing-extensions==4.10.0
-    "###);
-
+     + extra-requirement==2.0.0
+     + other-requirement==4.10.0
+     + run-helper==1.4.0
+     + run-tool==8.1.1
+    "#
+    );
     Ok(())
 }
 
 #[test]
 fn tool_run_with_editable() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_packse_index("packages/tool-run.toml")
         .with_filtered_counts()
         .with_tool_dirs();
 
@@ -1554,13 +1540,13 @@ fn tool_run_with_editable() -> anyhow::Result<()> {
         name = "foo"
         version = "1.0.0"
         requires-python = ">=3.8"
-        dependencies = ["anyio", "sniffio==1.3.1"]
+        dependencies = ["no-script", "no-script-leaf==1.0.0"]
         "#
     })?;
 
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r"
-        import sniffio
+        import no_script_leaf
        "
     })?;
 
@@ -1568,76 +1554,54 @@ fn tool_run_with_editable() -> anyhow::Result<()> {
         .arg("--with-editable")
         .arg("./src/black_editable")
         .arg("--with")
-        .arg("iniconfig")
-        .arg("flask")
+        .arg("extra-requirement")
+        .arg("web-tool")
         .arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.2
-    Werkzeug 3.0.1
+    web-tool 3.0.2
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
      + black==0.1.0 (from file://[TEMP_DIR]/src/black_editable)
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + iniconfig==2.0.0
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
+     + extra-requirement==2.0.0
+     + web-runtime==3.0.1
+     + web-tool==3.0.2
     ");
 
     // Requesting an editable requirement should install it in a layer, even if it satisfied
-    uv_snapshot!(context.filters(), context.tool_run().arg("--with-editable").arg("./src/anyio_local").arg("flask").arg("--version"),
+    uv_snapshot!(context.filters(), context.tool_run().arg("--with-editable").arg("./src/anyio_local").arg("web-tool").arg("--version"),
     @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.2
-    Werkzeug 3.0.1
+    web-tool 3.0.2
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
      + anyio==4.3.0+foo (from file://[TEMP_DIR]/src/anyio_local)
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
+     + web-runtime==3.0.1
+     + web-tool==3.0.2
     ");
 
     // Requesting the project itself should use a new environment.
-    uv_snapshot!(context.filters(), context.tool_run().arg("--with-editable").arg(".").arg("flask").arg("--version"), @"
+    uv_snapshot!(context.filters(), context.tool_run().arg("--with-editable").arg(".").arg("web-tool").arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.2
-    Werkzeug 3.0.1
+    web-tool 3.0.2
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + anyio==4.3.0
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
      + foo==1.0.0 (from file://[TEMP_DIR]/)
-     + idna==3.6
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + sniffio==1.3.1
-     + werkzeug==3.0.1
+     + no-script==2.31.0
+     + no-script-leaf==1.0.0
+     + web-runtime==3.0.1
+     + web-tool==3.0.2
     ");
 
     Ok(())
@@ -1688,50 +1652,56 @@ fn warn_no_executables_found() {
 /// Warn when a user passes `--upgrade` to `uv tool run`.
 #[test]
 fn tool_run_upgrade_warn() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--upgrade")
-        .arg("pytest")
-        .arg("--version"), @"
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs();
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--upgrade")
+            .arg("run-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.1.1
+    run-tool 8.1.1
 
     ----- stderr -----
     warning: Tools cannot be upgraded via `uv tool run`; use `uv tool upgrade --all` to upgrade all installed tools, or `uv tool run package@latest` to run the latest version of a tool.
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
-    ");
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--upgrade")
-        .arg("--with")
-        .arg("typing-extensions")
-        .arg("pytest")
-        .arg("--version"), @"
+     + run-helper==1.4.0
+     + run-tool==8.1.1
+    "
+    );
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--upgrade")
+            .arg("--with")
+            .arg("other-requirement")
+            .arg("run-tool")
+            .arg("--version"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
-    pytest 8.1.1
+    run-tool 8.1.1
 
     ----- stderr -----
     warning: Tools cannot be upgraded via `uv tool run`; use `uv tool upgrade --all` to upgrade all installed tools, `uv tool run package@latest` to run the latest version of a tool, or `uv tool run --refresh package` to upgrade any `--with` dependencies.
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
-     + typing-extensions==4.10.0
-    ");
+     + other-requirement==4.10.0
+     + run-helper==1.4.0
+     + run-tool==8.1.1
+    "
+    );
 }
 
 /// If we fail to resolve the tool, we should include "tool" in the error message.
@@ -2481,14 +2451,13 @@ fn tool_run_from_directory_ignores_global_pin_outside_requires_python_range() {
 
 #[test]
 fn run_with_env_file() -> anyhow::Result<()> {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_tool_dirs();
-
-    // Create a project with a custom script.
+        .with_local_index()
+        .with_default_index(&_server.index_url());
+    let context = context.with_filtered_counts().with_tool_dirs(); // Create a project with a custom script.
     let foo_dir = context.temp_dir.child("foo");
     let foo_pyproject_toml = foo_dir.child("pyproject.toml");
-
     foo_pyproject_toml.write_str(indoc! { r#"
         [project]
         name = "foo"
@@ -2502,10 +2471,7 @@ fn run_with_env_file() -> anyhow::Result<()> {
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
-        "#
-    })?;
-
-    // Create the `foo` module.
+        "# })?; // Create the `foo` module.
     let foo_project_src = foo_dir.child("src");
     let foo_module = foo_project_src.child("foo");
     foo_module.child("__init__.py").touch()?;
@@ -2520,13 +2486,11 @@ fn run_with_env_file() -> anyhow::Result<()> {
             print(os.environ.get('REBEL_3'))
 
         __name__ == "__main__" and run()
-       "#
-    })?;
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("./foo")
-        .arg("script"), @"
+       "# })?;
+    uv_snapshot!(
+        context.filters(),
+        context.tool_run().arg("--from").arg("./foo").arg("script"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
     None
@@ -2539,21 +2503,24 @@ fn run_with_env_file() -> anyhow::Result<()> {
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
      + foo==1.0.0 (from file://[TEMP_DIR]/foo)
-    ");
-
+    "
+    );
     context.temp_dir.child(".file").write_str(indoc! { "
         THE_EMPIRE_VARIABLE=palpatine
         REBEL_1=leia_organa
         REBEL_2=obi_wan_kenobi
         REBEL_3=C3PO
-       "
-    })?;
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--env-file").arg(".file")
-        .arg("--from")
-        .arg("./foo")
-        .arg("script"), @"
+       " })?;
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--env-file")
+            .arg(".file")
+            .arg("--from")
+            .arg("./foo")
+            .arg("script"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
     palpatine
@@ -2563,8 +2530,8 @@ fn run_with_env_file() -> anyhow::Result<()> {
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    ");
-
+    "
+    );
     let evil_tools = context.temp_dir.child(".evil-tools");
     let evil_tool = evil_tools.child("foo");
     let evil_python = if cfg!(windows) {
@@ -2581,29 +2548,28 @@ fn run_with_env_file() -> anyhow::Result<()> {
         echo queried > queried.txt
         exit 1
     " })?;
-
     #[cfg(unix)]
     {
         let mut permissions = metadata(evil_python.path())?.permissions();
         permissions.set_mode(0o755);
         set_permissions(evil_python.path(), permissions)?;
     }
-
     context.temp_dir.child(".file").write_str(indoc! { "
         UV_TOOL_DIR=.evil-tools
         THE_EMPIRE_VARIABLE=palpatine
         REBEL_1=leia_organa
         REBEL_2=obi_wan_kenobi
         REBEL_3=C3PO
-       "
-    })?;
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("./foo")
-        .arg("script")
-        .env(EnvVars::UV_ENV_FILE, ".file")
-        , @"
+       " })?;
+    uv_snapshot!(
+        context.filters(),
+        context
+            .tool_run()
+            .arg("--from")
+            .arg("./foo")
+            .arg("script")
+            .env(EnvVars::UV_ENV_FILE, ".file"),
+        @"
     exit_code: 0 (success)
     ----- stdout -----
     palpatine
@@ -2613,10 +2579,9 @@ fn run_with_env_file() -> anyhow::Result<()> {
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    ");
-
+    "
+    );
     assert!(!context.temp_dir.child("queried.txt").exists());
-
     Ok(())
 }
 
