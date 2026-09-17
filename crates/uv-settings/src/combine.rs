@@ -53,33 +53,29 @@ impl Combine for Option<FilesystemOptions> {
     }
 }
 
-impl Combine for Option<Options> {
+macro_rules! impl_combine_with {
+    ($(#[$meta:meta])* $name:ident, $method:ident) => {
+        impl Combine for Option<$name> {
+            $(#[$meta])*
+            fn combine(self, other: Self) -> Self {
+                match (self, other) {
+                    (Some(a), Some(b)) => Some(a.$method(b)),
+                    (a, b) => a.or(b),
+                }
+            }
+        }
+    };
+}
+
+impl_combine_with!(
     /// Combine the options used in two [`Options`]s. Retains the root of `self`.
-    fn combine(self, other: Self) -> Self {
-        match (self, other) {
-            (Some(a), Some(b)) => Some(a.combine(b)),
-            (a, b) => a.or(b),
-        }
-    }
-}
+    Options,
+    combine
+);
 
-impl Combine for Option<PipOptions> {
-    fn combine(self, other: Self) -> Self {
-        match (self, other) {
-            (Some(a), Some(b)) => Some(a.combine(b)),
-            (a, b) => a.or(b),
-        }
-    }
-}
+impl_combine_with!(PipOptions, combine);
 
-impl Combine for Option<AuditOptions> {
-    fn combine(self, other: Self) -> Self {
-        match (self, other) {
-            (Some(a), Some(b)) => Some(a.combine(b)),
-            (a, b) => a.or(b),
-        }
-    }
-}
+impl_combine_with!(AuditOptions, combine);
 
 macro_rules! impl_combine_or {
     ($name:ident) => {
@@ -186,64 +182,31 @@ impl Combine for Option<PrereleasePackage> {
     }
 }
 
-impl Combine for Option<ConfigSettings> {
+impl_combine_with!(
     /// Combine two maps by merging the map in `self` with the map in `other`, if they're both
     /// `Some`.
-    fn combine(self, other: Self) -> Self {
-        match (self, other) {
-            (Some(a), Some(b)) => Some(a.merge(b)),
-            (a, b) => a.or(b),
-        }
-    }
-}
+    ConfigSettings,
+    merge
+);
 
-impl Combine for Option<PackageConfigSettings> {
+impl_combine_with!(
     /// Combine two maps by merging the map in `self` with the map in `other`, if they're both
     /// `Some`.
-    fn combine(self, other: Self) -> Self {
-        match (self, other) {
-            (Some(a), Some(b)) => Some(a.merge(b)),
-            (a, b) => a.or(b),
-        }
-    }
-}
+    PackageConfigSettings,
+    merge
+);
 
-impl Combine for Option<NoSources> {
+impl_combine_with!(
     /// Combine two source strategies by using the `combine` method if they're both `Some`.
-    fn combine(self, other: Self) -> Self {
-        match (self, other) {
-            (Some(a), Some(b)) => Some(a.combine(b)),
-            (a, b) => a.or(b),
-        }
-    }
-}
+    NoSources,
+    combine
+);
 
-impl Combine for Option<Upgrade> {
-    fn combine(self, other: Self) -> Self {
-        match (self, other) {
-            (Some(a), Some(b)) => Some(a.combine(b)),
-            (a, b) => a.or(b),
-        }
-    }
-}
+impl_combine_with!(Upgrade, combine);
 
-impl Combine for Option<Reinstall> {
-    fn combine(self, other: Self) -> Self {
-        match (self, other) {
-            (Some(a), Some(b)) => Some(a.combine(b)),
-            (a, b) => a.or(b),
-        }
-    }
-}
+impl_combine_with!(Reinstall, combine);
 
-impl Combine for Option<BuildIsolation> {
-    fn combine(self, other: Self) -> Self {
-        match (self, other) {
-            (Some(a), Some(b)) => Some(a.combine(b)),
-            (a, b) => a.or(b),
-        }
-    }
-}
+impl_combine_with!(BuildIsolation, combine);
 
 impl Combine for serde::de::IgnoredAny {
     fn combine(self, _other: Self) -> Self {
@@ -296,14 +259,7 @@ impl Combine for ExtraBuildDependencies {
     }
 }
 
-impl Combine for Option<ExtraBuildDependencies> {
-    fn combine(self, other: Self) -> Self {
-        match (self, other) {
-            (Some(a), Some(b)) => Some(a.combine(b)),
-            (a, b) => a.or(b),
-        }
-    }
-}
+impl_combine_with!(ExtraBuildDependencies, combine);
 
 impl Combine for ExtraBuildVariables {
     fn combine(mut self, other: Self) -> Self {
@@ -325,11 +281,4 @@ impl Combine for ExtraBuildVariables {
     }
 }
 
-impl Combine for Option<ExtraBuildVariables> {
-    fn combine(self, other: Self) -> Self {
-        match (self, other) {
-            (Some(a), Some(b)) => Some(a.combine(b)),
-            (a, b) => a.or(b),
-        }
-    }
-}
+impl_combine_with!(ExtraBuildVariables, combine);
