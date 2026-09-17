@@ -8,6 +8,59 @@ use reqwest::header::HeaderValue;
 use reqwest::{Request, Response};
 use reqwest_middleware::{Middleware, Next};
 
+/// Reject accidental public-index access from local-scenario tests.
+#[cfg(any(test, feature = "test"))]
+pub(crate) struct DenyPypiMiddleware;
+
+#[cfg(any(test, feature = "test"))]
+#[derive(Debug, thiserror::Error)]
+#[error("Live PyPI access is disabled for this test: `{url}`")]
+pub(crate) struct DenyPypiError {
+    url: DisplaySafeUrl,
+}
+
+#[cfg(any(test, feature = "test"))]
+impl DenyPypiMiddleware {
+    pub(crate) fn check(url: &url::Url) -> Result<(), DenyPypiError> {
+        if let Some(host) = url.host_str() {
+            let host = host.trim_end_matches('.').to_ascii_lowercase();
+            if [
+                "pypi.org",
+                "pythonhosted.org",
+                "pypi.python.org",
+                "pypi-proxy.fly.dev",
+            ]
+            .iter()
+            .any(|domain| {
+                host == *domain
+                    || host
+                        .strip_suffix(domain)
+                        .is_some_and(|prefix| prefix.ends_with('.'))
+            }) {
+                return Err(DenyPypiError {
+                    url: DisplaySafeUrl::from_url(url.clone()),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(any(test, feature = "test"))]
+#[async_trait::async_trait]
+impl Middleware for DenyPypiMiddleware {
+    async fn handle(
+        &self,
+        request: Request,
+        extensions: &mut Extensions,
+        next: Next<'_>,
+    ) -> reqwest_middleware::Result<Response> {
+        Self::check(request.url())
+            .map_err(|error| reqwest_middleware::Error::Middleware(error.into()))?;
+        next.run(request, extensions).await
+    }
+}
+
 pub(crate) struct AzureStorageMiddleware {
     pub(crate) preview: Preview,
 }
