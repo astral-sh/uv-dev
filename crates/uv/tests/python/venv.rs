@@ -22,7 +22,7 @@ use uv_test::{site_packages_path, uv_snapshot};
 
 #[test]
 fn create_venv() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Create a virtual environment at `.venv`.
     uv_snapshot!(context.filters(), context.venv()
@@ -74,7 +74,7 @@ fn create_venv() {
 
 #[test]
 fn create_venv_preview_skips_distutils_patch_on_py310_plus() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     uv_snapshot!(context.filters(), context.venv()
         .arg(context.venv.as_os_str())
@@ -99,7 +99,7 @@ fn create_venv_preview_skips_distutils_patch_on_py310_plus() {
 #[test]
 #[cfg(feature = "test-python-eol")]
 fn create_venv_preview_keeps_distutils_patch_on_py39() {
-    let context = uv_test::test_context_with_versions!(&["3.9"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.9"]);
 
     uv_snapshot!(context.filters(), context.venv()
         .arg(context.venv.as_os_str())
@@ -123,7 +123,7 @@ fn create_venv_preview_keeps_distutils_patch_on_py39() {
 
 #[test]
 fn create_centralized_project_environment_bypasses() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Centralized environments are only enabled for projects.
     uv_snapshot!(context.filters(), context.venv()
@@ -183,7 +183,7 @@ fn create_centralized_project_environment_bypasses() -> Result<()> {
 
 #[test]
 fn create_venv_313() {
-    let context = uv_test::test_context_with_versions!(&["3.13"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.13"]);
 
     uv_snapshot!(context.filters(), context.venv()
         .arg(context.venv.as_os_str())
@@ -202,7 +202,7 @@ fn create_venv_313() {
 
 #[test]
 fn create_venv_project_environment() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // `uv venv` ignores `UV_PROJECT_ENVIRONMENT` when it's not a project
     uv_snapshot!(context.filters(), context.venv().env(EnvVars::UV_PROJECT_ENVIRONMENT, "foo"), @"
@@ -302,7 +302,7 @@ fn create_venv_project_environment() -> Result<()> {
 
 #[tokio::test]
 async fn create_venv_project_environment_lock() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     context.temp_dir.child("pyproject.toml").write_str(
         r#"
@@ -350,7 +350,6 @@ async fn create_venv_project_environment_lock() -> Result<()> {
 #[test]
 fn create_centralized_project_environment() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"])
-        .with_local_index()
         .with_filtered_centralized_environment_hashes();
     context
         .temp_dir
@@ -481,7 +480,6 @@ fn create_centralized_project_environment() -> Result<()> {
 #[test]
 fn create_centralized_project_environment_path_file() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
-        .with_local_index()
         .with_filtered_centralized_environment_hashes();
     context
         .temp_dir
@@ -540,7 +538,6 @@ fn create_centralized_project_environment_path_file() -> Result<()> {
 #[test]
 fn create_centralized_project_environment_link_failure() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"])
-        .with_local_index()
         .with_filtered_centralized_environment_hashes();
     context
         .temp_dir
@@ -589,7 +586,7 @@ fn create_centralized_project_environment_link_failure() -> Result<()> {
 
 #[test]
 fn create_centralized_project_environment_no_cache() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     context
         .temp_dir
         .child("pyproject.toml")
@@ -621,7 +618,6 @@ fn create_centralized_project_environment_no_cache() -> Result<()> {
 #[test]
 fn create_centralized_project_environment_with_seed_packages() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"])
-        .with_local_index()
         .with_filtered_centralized_environment_hashes();
     context
         .temp_dir
@@ -672,7 +668,7 @@ fn create_centralized_project_environment_with_seed_packages() -> Result<()> {
 #[test]
 fn virtual_empty() -> Result<()> {
     // testing how `uv venv` reacts to a pyproject with no `[project]` and nothing useful to it
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -695,7 +691,7 @@ fn virtual_empty() -> Result<()> {
 fn virtual_dependency_group() -> Result<()> {
     // testing basic `uv venv` functionality
     // when the pyproject.toml is fully virtual (no `[project]`, but `[dependency-groups]` defined)
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -718,7 +714,7 @@ fn virtual_dependency_group() -> Result<()> {
 
 #[test]
 fn create_venv_defaults_to_cwd() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     uv_snapshot!(context.filters(), context.venv()
         .arg("--python")
         .arg("3.12"), @"
@@ -735,7 +731,7 @@ fn create_venv_defaults_to_cwd() {
 
 #[test]
 fn create_venv_ignores_virtual_env_variable() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     // We shouldn't care if `VIRTUAL_ENV` is set to an non-existent directory
     // because we ignore virtual environment interpreter sources (we require a system interpreter)
     uv_snapshot!(context.filters(), context.venv()
@@ -751,7 +747,7 @@ fn create_venv_ignores_virtual_env_variable() {
 
 #[test]
 fn create_venv_reads_request_from_python_version_file() {
-    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
 
     // Without the file, we should use the first on the PATH
     uv_snapshot!(context.filters(), context.venv(), @"
@@ -784,7 +780,7 @@ fn create_venv_reads_request_from_python_version_file() {
 
 #[test]
 fn create_venv_reads_request_from_python_versions_file() {
-    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
 
     // Without the file, we should use the first on the PATH
     uv_snapshot!(context.filters(), context.venv(), @"
@@ -817,8 +813,7 @@ fn create_venv_reads_request_from_python_versions_file() {
 
 #[test]
 fn create_venv_respects_pyproject_requires_python() -> Result<()> {
-    let context =
-        uv_test::test_context_with_versions!(&["3.11", "3.9", "3.10", "3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.9", "3.10", "3.12"]);
 
     // Without a Python requirement, we use the first on the PATH
     uv_snapshot!(context.filters(), context.venv(), @"
@@ -979,8 +974,7 @@ fn create_venv_respects_pyproject_requires_python() -> Result<()> {
 
 #[test]
 fn create_venv_respects_group_requires_python() -> Result<()> {
-    let context =
-        uv_test::test_context_with_versions!(&["3.9", "3.10", "3.11", "3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.9", "3.10", "3.11", "3.12"]);
 
     // Without a Python requirement, we use the first on the PATH
     uv_snapshot!(context.filters(), context.venv(), @"
@@ -1140,7 +1134,7 @@ fn create_venv_respects_group_requires_python() -> Result<()> {
 
 #[test]
 fn create_venv_ignores_missing_pyproject_metadata() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r"[tool.no.project.here]" })?;
@@ -1161,7 +1155,7 @@ fn create_venv_ignores_missing_pyproject_metadata() -> Result<()> {
 
 #[test]
 fn create_venv_warns_user_on_requires_python_discovery_error() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r"invalid toml" })?;
@@ -1196,7 +1190,7 @@ fn create_venv_warns_user_on_requires_python_discovery_error() -> Result<()> {
 
 #[test]
 fn create_venv_explicit_request_takes_priority_over_python_version_file() {
-    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
 
     context
         .temp_dir
@@ -1219,9 +1213,8 @@ fn create_venv_explicit_request_takes_priority_over_python_version_file() {
 #[test]
 fn seed() {
     let server = PackseServer::new("packages/venv-seed.toml");
-    let context = uv_test::test_context_with_versions!(&["3.12"])
-        .with_local_index()
-        .with_default_index(&server.index_url());
+    let context =
+        uv_test::test_context_with_versions!(&["3.12"]).with_default_index(&server.index_url());
     uv_snapshot!(context.filters(), context.venv()
         .arg(context.venv.as_os_str())
         .arg("--seed")
@@ -1242,9 +1235,8 @@ fn seed() {
 #[test]
 fn seed_older_python_version() {
     let server = PackseServer::new("packages/venv-seed.toml");
-    let context = uv_test::test_context_with_versions!(&["3.11"])
-        .with_local_index()
-        .with_default_index(&server.index_url());
+    let context =
+        uv_test::test_context_with_versions!(&["3.11"]).with_default_index(&server.index_url());
     uv_snapshot!(context.filters(), context.venv()
         .arg(context.venv.as_os_str())
         .arg("--seed")
@@ -1266,9 +1258,7 @@ fn seed_older_python_version() {
 
 #[test]
 fn create_venv_with_invalid_http_timeout() {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
-        .with_local_index()
-        .with_http_timeout("not_a_number");
+    let context = uv_test::test_context_with_versions!(&["3.12"]).with_http_timeout("not_a_number");
     uv_snapshot!(context.filters(), context.venv()
         .arg(context.venv.as_os_str())
         .arg("--python")
@@ -1281,9 +1271,7 @@ fn create_venv_with_invalid_http_timeout() {
 
 #[test]
 fn create_venv_with_invalid_concurrent_installs() {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
-        .with_local_index()
-        .with_concurrent_installs("0");
+    let context = uv_test::test_context_with_versions!(&["3.12"]).with_concurrent_installs("0");
     uv_snapshot!(context.filters(), context.venv()
         .arg(context.venv.as_os_str())
         .arg("--python")
@@ -1296,7 +1284,7 @@ fn create_venv_with_invalid_concurrent_installs() {
 
 #[test]
 fn create_venv_with_invalid_cuda_driver_version() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     uv_snapshot!(context.filters(), context.venv()
         .arg(context.venv.as_os_str())
         .arg("--python")
@@ -1310,7 +1298,7 @@ fn create_venv_with_invalid_cuda_driver_version() {
 
 #[test]
 fn create_venv_with_invalid_amd_gpu_architecture() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     uv_snapshot!(context.filters(), context.venv()
         .arg(context.venv.as_os_str())
         .arg("--python")
@@ -1324,9 +1312,7 @@ fn create_venv_with_invalid_amd_gpu_architecture() {
 
 #[test]
 fn create_venv_unknown_python_minor() {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
-        .with_local_index()
-        .with_filtered_python_sources();
+    let context = uv_test::test_context_with_versions!(&["3.12"]).with_filtered_python_sources();
 
     let mut command = context.venv();
     command
@@ -1349,9 +1335,7 @@ fn create_venv_unknown_python_minor() {
 
 #[test]
 fn create_venv_unknown_python_patch() {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
-        .with_local_index()
-        .with_filtered_python_sources();
+    let context = uv_test::test_context_with_versions!(&["3.12"]).with_filtered_python_sources();
 
     let mut command = context.venv();
     command
@@ -1375,7 +1359,7 @@ fn create_venv_unknown_python_patch() {
 #[cfg(feature = "test-python-patch")]
 #[test]
 fn create_venv_python_patch() {
-    let context = uv_test::test_context_with_versions!(&["3.12.9"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12.9"]);
 
     uv_snapshot!(context.filters(), context.venv()
         .arg(context.venv.as_os_str())
@@ -1394,7 +1378,7 @@ fn create_venv_python_patch() {
 
 #[test]
 fn file_exists() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Create a file at `.venv`. Creating a virtualenv at the same path should fail.
     context.venv.touch()?;
@@ -1417,7 +1401,7 @@ fn file_exists() -> Result<()> {
 
 #[test]
 fn non_utf8_path() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let path = PathBuf::from(cfg_select! {
         unix => OsStr::from_bytes(b".venv-\xff"),
         windows => OsString::from_wide(&[0x002e, 0x0076, 0x0065, 0x006e, 0x0076, 0x002d, 0xd800]),
@@ -1441,7 +1425,7 @@ fn non_utf8_path() {
 
 #[test]
 fn empty_dir_exists() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Create an empty directory at `.venv`. Creating a virtualenv at the same path should succeed.
     context.venv.create_dir_all()?;
@@ -1464,7 +1448,7 @@ fn empty_dir_exists() -> Result<()> {
 
 #[test]
 fn non_empty_dir_exists() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Create a non-empty directory at `.venv`. Creating a virtualenv at the same path should fail,
     // unless `--clear` is specified.
@@ -1511,7 +1495,7 @@ fn non_empty_dir_exists() -> Result<()> {
 
 #[test]
 fn non_empty_dir_exists_clear_force() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let directory = context.temp_dir.child("not-a-virtualenv");
     directory.create_dir_all()?;
     directory.child("file").touch()?;
@@ -1536,7 +1520,7 @@ fn non_empty_dir_exists_clear_force() -> Result<()> {
 
 #[test]
 fn non_empty_dir_exists_allow_existing() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Create a non-empty directory at `.venv`. Creating a virtualenv at the same path should
     // succeed when `--allow-existing` is specified, but fail when it is not.
@@ -1592,7 +1576,7 @@ fn non_empty_dir_exists_allow_existing() -> Result<()> {
 /// Run `uv venv` followed by `uv venv --allow-existing`.
 #[test]
 fn create_venv_then_allow_existing() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Create a venv
     uv_snapshot!(context.filters(), context.venv(), @"
@@ -1619,7 +1603,7 @@ fn create_venv_then_allow_existing() {
 #[test]
 #[cfg(windows)]
 fn windows_shims() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.10", "3.9"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.10", "3.9"]);
     let shim_path = context.temp_dir.child("shim");
 
     let py39 = context
@@ -1662,7 +1646,7 @@ fn windows_shims() -> Result<()> {
 
 #[test]
 fn verify_pyvenv_cfg() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let pyvenv_cfg = context.venv.child("pyvenv.cfg");
 
     context.venv.assert(predicates::path::is_dir());
@@ -1681,7 +1665,7 @@ fn verify_pyvenv_cfg() {
 
 #[test]
 fn verify_pyvenv_cfg_relocatable() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let prompt = "résumé \"quoted\"\\path\n";
 
     // Create a virtual environment at `.venv`.
@@ -1762,7 +1746,7 @@ fn verify_pyvenv_cfg_relocatable() {
 /// With `UV_VENV_RELOCATABLE=1`, the virtual environment is relocatable.
 #[test]
 fn verify_pyvenv_cfg_relocatable_env_var() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Create a virtual environment at `.venv` with the env var.
     context
@@ -1785,7 +1769,7 @@ fn verify_pyvenv_cfg_relocatable_env_var() {
 /// `--no-relocatable` takes precedence over `UV_VENV_RELOCATABLE=1`.
 #[test]
 fn no_relocatable_overrides_relocatable_env_var() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context
         .venv()
@@ -1806,7 +1790,7 @@ fn no_relocatable_overrides_relocatable_env_var() {
 /// With `relocatable-envs-default` preview feature, venvs are relocatable by default.
 #[test]
 fn relocatable_envs_default_preview() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Create a virtual environment with the preview feature enabled.
     context
@@ -1830,7 +1814,7 @@ fn relocatable_envs_default_preview() {
 /// With `relocatable-envs-default` preview feature, `--no-relocatable` opts out.
 #[test]
 fn relocatable_envs_default_no_relocatable() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Create a virtual environment with the preview feature but opt out.
     context
@@ -1855,7 +1839,7 @@ fn relocatable_envs_default_no_relocatable() {
 /// Ensure that a nested virtual environment uses the same `home` directory as the parent.
 #[test]
 fn verify_nested_pyvenv_cfg() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Create a virtual environment at `.venv`.
     context
@@ -1908,7 +1892,7 @@ fn verify_nested_pyvenv_cfg() -> Result<()> {
 #[test]
 #[cfg(windows)]
 fn path_with_trailing_space_gives_proper_error() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Set a custom cache directory with a trailing space
     let path_with_trailing_slash = format!("{} ", context.cache_dir.path().display());
@@ -1941,9 +1925,8 @@ fn create_venv_powershell_unc() -> Result<()> {
     };
     let temp_dir = assert_fs::TempDir::new_in(smb_fs)?;
     let venv_dir = temp_dir.child("test env");
-    let context = uv_test::test_context_with_versions!(&["3.12"])
-        .with_local_index()
-        .with_filtered_path(temp_dir.path(), "SMB");
+    let context =
+        uv_test::test_context_with_versions!(&["3.12"]).with_filtered_path(temp_dir.path(), "SMB");
 
     context
         .venv()
@@ -1988,7 +1971,7 @@ fn create_venv_apostrophe() {
     use std::process::Command;
     use std::process::Stdio;
 
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     let venv_dir = context.temp_dir.join("Testing's");
 
@@ -2031,9 +2014,8 @@ fn create_venv_apostrophe() {
 
 #[test]
 fn venv_python_preference() {
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
-        .with_local_index()
-        .with_versions_as_managed(&["3.12"]);
+    let context =
+        uv_test::test_context_with_versions!(&["3.12", "3.11"]).with_versions_as_managed(&["3.12"]);
 
     // Create a managed interpreter environment
     uv_snapshot!(context.filters(), context.venv(), @"
@@ -2086,7 +2068,7 @@ fn venv_python_preference() {
 #[test]
 #[cfg(unix)]
 fn create_venv_symlink_clear_preservation() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Create a target directory
     let target_dir = context.temp_dir.child("target");
@@ -2138,7 +2120,7 @@ fn create_venv_symlink_clear_preservation() -> Result<()> {
 #[test]
 #[cfg(unix)]
 fn create_venv_nested_symlink_preservation() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Create a target directory
     let target_dir = context.temp_dir.child("target");
@@ -2198,7 +2180,7 @@ fn create_venv_nested_symlink_preservation() -> Result<()> {
 #[test]
 #[cfg(unix)]
 fn create_venv_current_working_directory() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     uv_snapshot!(context.filters(), context.venv()
         .arg(context.venv.as_os_str())
@@ -2234,7 +2216,7 @@ fn create_venv_current_working_directory() {
 #[test]
 #[cfg(windows)]
 fn create_venv_current_working_directory() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     uv_snapshot!(context.filters(), context.venv()
         .arg(context.venv.as_os_str())
@@ -2266,7 +2248,7 @@ fn create_venv_current_working_directory() {
 
 #[test]
 fn no_clear_with_existing_directory() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Create a virtual environment first
     uv_snapshot!(context.filters(), context.venv()
@@ -2301,7 +2283,7 @@ fn no_clear_with_existing_directory() {
 
 #[test]
 fn no_clear_with_non_existent_directory() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Create with --no-clear on non-existent directory (should succeed)
     uv_snapshot!(context.filters(), context.venv()
@@ -2322,7 +2304,7 @@ fn no_clear_with_non_existent_directory() {
 
 #[test]
 fn no_clear_overrides_clear() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Create a non-empty directory at `.venv`
     context.venv.create_dir_all().unwrap();
@@ -2349,7 +2331,7 @@ fn no_clear_overrides_clear() {
 
 #[test]
 fn no_clear_overrides_clear_env_var() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Create a non-empty directory at `.venv`
     context.venv.create_dir_all().unwrap();
@@ -2376,7 +2358,7 @@ fn no_clear_overrides_clear_env_var() {
 
 #[test]
 fn no_clear_conflicts_with_allow_existing() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Try to use --no-clear with --allow-existing (should fail)
     uv_snapshot!(context.filters(), context.venv()

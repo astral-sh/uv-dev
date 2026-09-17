@@ -222,7 +222,6 @@ fn lock_ecosystem_package_with_args(python_version: &str, name: &str, args: &[&s
     let cache_dir =
         std::path::absolute(Path::new("../../target/ecosystem-test-caches").join(name))?;
     let context = uv_test::test_context!(python_version)
-        .with_local_index()
         .with_pypi_access()
         .with_cache_dir(cache_dir);
     context.copy_ecosystem_project(name);

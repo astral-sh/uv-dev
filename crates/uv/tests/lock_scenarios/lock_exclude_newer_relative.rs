@@ -13,9 +13,7 @@ use uv_test::{apply_filters, uv_snapshot};
 #[test]
 fn lock_exclude_newer_relative() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/exclude-newer-relative.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -209,9 +207,7 @@ fn lock_exclude_newer_relative() -> Result<()> {
 #[test]
 fn lock_exclude_newer_older_vs_newer() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/exclude-newer-relative.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -315,9 +311,7 @@ fn lock_exclude_newer_older_vs_newer() -> Result<()> {
 #[test]
 fn lock_exclude_newer_package_relative() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/exclude-newer-relative.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -496,9 +490,7 @@ fn lock_exclude_newer_package_relative() -> Result<()> {
 #[test]
 fn lock_exclude_newer_relative_pyproject() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/exclude-newer-relative.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -567,9 +559,7 @@ fn lock_exclude_newer_relative_pyproject() -> Result<()> {
 #[test]
 fn lock_exclude_newer_package_relative_pyproject() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/exclude-newer-relative.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -643,9 +633,7 @@ fn lock_exclude_newer_package_relative_pyproject() -> Result<()> {
 #[test]
 fn lock_exclude_newer_relative_global_and_package() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/exclude-newer-relative.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -911,9 +899,7 @@ fn lock_exclude_newer_relative_global_and_package() -> Result<()> {
 #[test]
 fn lock_exclude_newer_relative_values() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/exclude-newer-relative.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -1111,9 +1097,7 @@ fn lock_exclude_newer_relative_values() -> Result<()> {
 #[test]
 fn lock_exclude_newer_relative_no_timestamp_in_lockfile() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/exclude-newer-relative.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -1222,9 +1206,7 @@ fn lock_exclude_newer_relative_no_timestamp_in_lockfile() -> Result<()> {
 #[test]
 fn lock_exclude_newer_package_relative_no_timestamp_in_lockfile() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/exclude-newer-relative.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -1311,9 +1293,7 @@ fn lock_exclude_newer_package_relative_no_timestamp_in_lockfile() -> Result<()> 
 #[test]
 fn lock_exclude_newer_relative_values_pyproject() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/exclude-newer-relative.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -1431,9 +1411,7 @@ fn lock_exclude_newer_relative_values_pyproject() -> Result<()> {
 #[test]
 fn lock_exclude_newer_package_relative_noop_timestamp() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/exclude-newer-relative.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"

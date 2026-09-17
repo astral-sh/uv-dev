@@ -35,7 +35,6 @@ fn find_index_cache_entry(context: &TestContext, filename: &str) -> Result<std::
 fn clean_all() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filtered_file_counts()
         .with_filtered_sizes_and_units();
@@ -66,9 +65,7 @@ fn clean_all() -> Result<()> {
 #[cfg(unix)]
 #[test]
 fn clean_all_hardlinked_file() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_filtered_counts();
+    let context = uv_test::test_context!("3.12").with_filtered_counts();
 
     // Remove unrelated cache entries so the retained hardlink is the only cached data.
     context.clean().assert().success();
@@ -129,7 +126,6 @@ fn clean_all_hardlinked_file() -> Result<()> {
 #[test]
 fn clean_all_physical_space_unsupported_fs() -> Result<()> {
     let Some(context) = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_cache_on_alt_fs()?
     else {
@@ -156,7 +152,6 @@ fn clean_all_physical_space_unsupported_fs() -> Result<()> {
 #[test]
 fn clean_all_cloned_file() -> Result<()> {
     let Some(context) = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_cache_on_cow_fs()?
     else {
@@ -196,7 +191,6 @@ fn clean_all_cloned_file() -> Result<()> {
 #[test]
 fn clean_all_cached_clones() -> Result<()> {
     let Some(context) = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_cache_on_cow_fs()?
     else {
@@ -231,7 +225,6 @@ fn clean_all_cached_clones() -> Result<()> {
 #[test]
 fn clean_all_compressed_file() -> Result<()> {
     let Some(context) = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_cache_on_cow_fs()?
     else {
@@ -273,7 +266,6 @@ fn clean_all_compressed_file() -> Result<()> {
 fn clear_all_alias() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filtered_file_counts()
         .with_filtered_sizes_and_units();
@@ -306,9 +298,7 @@ fn clear_all_alias() -> Result<()> {
 #[tokio::test]
 async fn clean_force() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context
         .with_filtered_counts()
         .with_filtered_sizes_and_units();
@@ -360,7 +350,6 @@ async fn clean_force() -> Result<()> {
 #[test]
 fn clean_package_pypi() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_file_counts()
         .with_filtered_sizes_and_units()
         // The cache entry does not have a stable key, so we filter it out.
@@ -423,7 +412,6 @@ fn clean_package_pypi() -> Result<()> {
 #[test]
 fn clean_package_index() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_packse_index("packages/pip-commands.toml")
         .with_filtered_file_counts()
         .with_filtered_sizes_and_units()
@@ -471,9 +459,7 @@ fn clean_package_index() -> Result<()> {
 #[cfg(unix)]
 #[test]
 fn clean_package_does_not_follow_symlinks() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_filtered_sizes_and_units();
+    let context = uv_test::test_context!("3.12").with_filtered_sizes_and_units();
     let victim_dir = context.temp_dir.child("victim");
     let archive_entry = context.cache_dir.child("archive-v0").child("archive");
     let package_entry = context
@@ -536,7 +522,7 @@ fn clean_package_does_not_follow_symlinks() -> Result<()> {
 #[cfg(target_os = "macos")]
 #[test]
 fn clean_package_empty_shard_without_search_permission() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let shard = context.cache_dir.child("files-v0").child("shard");
     shard.create_dir_all()?;
     fs_err::set_permissions(&shard, Permissions::from_mode(0o600))?;
@@ -554,7 +540,7 @@ fn clean_package_empty_shard_without_search_permission() -> Result<()> {
 
 #[tokio::test]
 async fn cache_timeout() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Simulate another uv process running and locking the cache, e.g., with a source build.
     let _cache = Cache::from_path(context.cache_dir.path())
@@ -573,7 +559,7 @@ async fn cache_timeout() {
 #[cfg(windows)]
 #[test]
 fn clean_handles_verbatim_paths() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Clean slate
     fs_err::remove_dir_all(&context.cache_dir)?;

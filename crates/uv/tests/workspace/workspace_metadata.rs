@@ -72,7 +72,7 @@ fn write_wheel_with_metadata(
 /// Test basic metadata output for a simple workspace with one member.
 #[test]
 fn workspace_metadata_simple() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Initialize a workspace with one member
     context.init().arg("foo").assert().success();
@@ -132,7 +132,7 @@ fn workspace_metadata_simple() {
 
 #[test]
 fn workspace_metadata_quiet() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     context.init().arg("foo").assert().success();
 
     let workspace = context.temp_dir.child("foo");
@@ -182,7 +182,7 @@ fn workspace_metadata_quiet() {
 
 #[test]
 fn workspace_metadata_extra_quiet() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     context.init().arg("foo").assert().success();
 
     let workspace = context.temp_dir.child("foo");
@@ -194,7 +194,7 @@ fn workspace_metadata_extra_quiet() {
 
 #[test]
 fn workspace_metadata_ignores_unusable_environment() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     context.init().arg("foo").assert().success();
 
     let workspace = context.temp_dir.child("foo");
@@ -237,7 +237,6 @@ fn workspace_metadata_ignores_unusable_environment() -> Result<()> {
 #[test]
 fn workspace_metadata_script() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin();
     let script = context.temp_dir.child("script.py");
@@ -343,7 +342,7 @@ import iniconfig
 
 #[test]
 fn workspace_metadata_script_no_dependencies() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let script = context.temp_dir.child("script.py");
     script.write_str(
         r#"# /// script
@@ -400,7 +399,6 @@ print("Hello, world!")
 #[test]
 fn workspace_metadata_script_includes_existing_environment() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin();
     let script = context.temp_dir.child("script.py");
@@ -446,7 +444,7 @@ fn workspace_metadata_script_includes_existing_environment() -> Result<()> {
 
 #[test]
 fn workspace_metadata_script_exact_sync_removes_extraneous_packages() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! {r#"
         # /// script
@@ -515,7 +513,7 @@ fn workspace_metadata_script_exact_sync_removes_extraneous_packages() -> Result<
 
 #[test]
 fn workspace_metadata_script_dependency_edges() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let child = context
         .temp_dir
@@ -637,7 +635,7 @@ fn workspace_metadata_script_dependency_edges() -> Result<()> {
 
 #[test]
 fn workspace_metadata_dependency_edges_include_parent_reachability() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let child = context
         .temp_dir
@@ -703,7 +701,7 @@ dependencies = [
 
 #[test]
 fn workspace_metadata_sync_centralized_environment() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     context.temp_dir.child("pyproject.toml").write_str(
         r#"
@@ -752,7 +750,7 @@ fn workspace_metadata_sync_centralized_environment() -> Result<()> {
 
 #[test]
 fn workspace_metadata_sync_active_environment() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]).with_local_index();
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
 
     context.temp_dir.child("pyproject.toml").write_str(
         r#"
@@ -811,7 +809,7 @@ fn workspace_metadata_sync_active_environment() -> Result<()> {
 
 #[test]
 fn workspace_metadata_exact_requires_sync() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     uv_snapshot!(context.filters(), context.workspace_metadata().arg("--exact"), @r"
     exit_code: 2 (failure)
@@ -827,7 +825,7 @@ fn workspace_metadata_exact_requires_sync() {
 
 #[test]
 fn workspace_metadata_exact_sync_removes_extraneous_packages() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let required = context
         .temp_dir
@@ -954,7 +952,6 @@ fn workspace_metadata_exact_sync_removes_extraneous_packages() -> Result<()> {
 #[test]
 fn workspace_metadata_includes_existing_environment() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin();
 
@@ -1048,7 +1045,6 @@ dependencies = [
 #[test]
 fn workspace_metadata_module_owners_from_locked_wheels() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin();
 
@@ -1249,7 +1245,7 @@ dependencies = [
 
 #[test]
 fn workspace_metadata_module_owners_use_installed_package_id() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let py311_dir = context.temp_dir.child("py311");
     fs_err::create_dir_all(py311_dir.path())?;
@@ -1316,7 +1312,7 @@ dependencies = [
 
 #[test]
 fn workspace_metadata_module_owners_ignore_stale_virtual_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let stale_owner = context
         .temp_dir
@@ -1364,7 +1360,7 @@ package = false
 
 #[test]
 fn workspace_metadata_module_owners_failure_is_error() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let gpu_a = context.temp_dir.child("gpu_a-0.1.0-py3-none-any.whl");
     write_wheel(gpu_a.path(), "gpu-a", "gpu_a-0.1.0", &[("gpu/a.py", "")])?;
@@ -1405,9 +1401,7 @@ dependencies = [
 #[test]
 fn workspace_metadata_root_workspace() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/workspace.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let workspace = context.temp_dir.child("workspace");
 
     copy_dir_ignore(
@@ -1574,9 +1568,7 @@ fn workspace_metadata_root_workspace() -> Result<()> {
 #[test]
 fn workspace_metadata_virtual_workspace() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/workspace.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let workspace = context.temp_dir.child("workspace");
 
     copy_dir_ignore(
@@ -1812,9 +1804,7 @@ fn workspace_metadata_virtual_workspace() -> Result<()> {
 #[test]
 fn workspace_metadata_from_member() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/workspace.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let workspace = context.temp_dir.child("workspace");
 
     copy_dir_ignore(
@@ -1982,7 +1972,7 @@ fn workspace_metadata_from_member() -> Result<()> {
 /// Test metadata for a workspace with multiple packages.
 #[test]
 fn workspace_metadata_multiple_members() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Initialize workspace root
     context.init().arg("pkg-a").assert().success();
@@ -2084,7 +2074,7 @@ fn workspace_metadata_multiple_members() {
 /// Test metadata for a single project (not a workspace).
 #[test]
 fn workspace_metadata_single_project() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context.init().arg("my-project").assert().success();
 
@@ -2143,9 +2133,7 @@ fn workspace_metadata_single_project() {
 #[test]
 fn workspace_metadata_with_excluded() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/workspace.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let workspace = context.temp_dir.child("workspace");
 
     copy_dir_ignore(
@@ -2242,9 +2230,7 @@ fn workspace_metadata_with_excluded() -> Result<()> {
 #[test]
 fn workspace_metadata_group_only() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/workspace.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let workspace = context.temp_dir.child("workspace");
 
     copy_dir_ignore(
@@ -2361,7 +2347,7 @@ fn workspace_metadata_group_only() -> Result<()> {
 /// Test metadata error when not in a project.
 #[test]
 fn workspace_metadata_no_project() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     uv_snapshot!(context.filters(), context.workspace_metadata(), @"
     exit_code: 2 (failure)
@@ -2376,9 +2362,7 @@ fn workspace_metadata_no_project() {
 #[test]
 fn workspace_metadata_various_dependency_rainbow() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/workspace.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let workspace = context.temp_dir.child("workspace");
 
     copy_dir_ignore(

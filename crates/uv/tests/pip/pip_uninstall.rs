@@ -11,9 +11,7 @@ use uv_test::uv_snapshot;
 #[test]
 fn no_arguments() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     uv_snapshot!(context.filters(), context.pip_uninstall(), @"
     exit_code: 2 (failure)
@@ -31,9 +29,7 @@ fn no_arguments() {
 #[test]
 fn invalid_requirement() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     uv_snapshot!(context.filters(), context.pip_uninstall()
         .arg("absent-package==1.0.x"), @"
@@ -49,9 +45,7 @@ fn invalid_requirement() {
 #[test]
 fn missing_requirements_txt() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     uv_snapshot!(context.filters(), context.pip_uninstall()
         .arg("-r")
@@ -66,9 +60,7 @@ fn missing_requirements_txt() {
 #[test]
 fn invalid_requirements_txt_requirement() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("absent-package==1.0.x")?;
@@ -90,9 +82,7 @@ fn invalid_requirements_txt_requirement() -> Result<()> {
 #[test]
 fn uninstall() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package==2.1.3")?;
@@ -122,9 +112,7 @@ fn uninstall() -> Result<()> {
 #[test]
 fn missing_record() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package==2.1.3")?;
@@ -157,9 +145,7 @@ fn missing_record() -> Result<()> {
 #[test]
 fn uninstall_editable_by_name() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -197,9 +183,7 @@ fn uninstall_editable_by_name() -> Result<()> {
 #[test]
 fn uninstall_by_path() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(
@@ -237,9 +221,7 @@ fn uninstall_by_path() -> Result<()> {
 #[test]
 fn uninstall_duplicate_by_path() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(
@@ -282,9 +264,7 @@ fn uninstall_duplicate() -> Result<()> {
 
     // Sync one package version into a virtual environment.
     let _server1 = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context1 = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server1.index_url());
+    let context1 = uv_test::test_context!("3.12").with_default_index(&_server1.index_url());
     let requirements_txt = context1.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package==1.0.0")?;
 
@@ -297,9 +277,7 @@ fn uninstall_duplicate() -> Result<()> {
 
     // Sync a different package version into a virtual environment.
     let _server2 = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context2 = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server2.index_url());
+    let context2 = uv_test::test_context!("3.12").with_default_index(&_server2.index_url());
     let requirements_txt = context2.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package==2.0.0")?;
 
@@ -338,9 +316,7 @@ fn uninstall_duplicate() -> Result<()> {
 #[test]
 fn uninstall_egg_info() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let site_packages = ChildPath::new(context.site_packages());
 
@@ -391,7 +367,7 @@ fn uninstall_egg_info() -> Result<()> {
 /// Refuse to uninstall a versionless `.egg-info` file without the metadata required to do so safely.
 #[test]
 fn uninstall_versionless_egg_info_file() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let egg_info = ChildPath::new(context.site_packages()).child("demo.egg-info");
     egg_info.write_str("Metadata-Version: 1.1\nName: demo\nVersion: 1.0\n")?;
@@ -420,9 +396,7 @@ fn normcase(s: &str) -> String {
 #[test]
 fn uninstall_legacy_editable() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let site_packages = ChildPath::new(context.site_packages());
 
@@ -476,9 +450,7 @@ Version: 0.22.0
 #[test]
 fn dry_run_uninstall_egg_info() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let site_packages = ChildPath::new(context.site_packages());
 
@@ -546,12 +518,10 @@ fn dry_run_uninstall_egg_info() -> Result<()> {
 fn uninstall_record_path_traversal() -> Result<()> {
     // The traversal-depth count differs between Unix (`.venv/lib/pythonX.Y/site-packages`)
     // and Windows (`.venv/Lib/site-packages`), so normalize the `../` sequence in the warning.
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_filter((
-            r"(\.\./)+traversal_target\.txt",
-            "[..]/traversal_target.txt",
-        ));
+    let context = uv_test::test_context!("3.12").with_filter((
+        r"(\.\./)+traversal_target\.txt",
+        "[..]/traversal_target.txt",
+    ));
 
     context
         .init()
@@ -611,7 +581,6 @@ fn uninstall_egg_info_top_level_path_traversal() -> Result<()> {
     // The traversal-depth count differs between Unix (`.venv/lib/pythonX.Y/site-packages`)
     // and Windows (`.venv/Lib/site-packages`), so normalize the `../` sequence in the warning.
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filter((r"(\.\./)+traversal_target", "[..]/traversal_target"));
 
     let site_packages = ChildPath::new(context.site_packages());
@@ -664,7 +633,6 @@ fn uninstall_egg_info_top_level_path_traversal() -> Result<()> {
 #[test]
 fn uninstall_egg_info_top_level_drive_relative() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filter((r"[A-Za-z]:traversal_target", "[DRIVE]:traversal_target"));
     let site_packages = ChildPath::new(context.site_packages());
 
@@ -714,9 +682,7 @@ fn uninstall_egg_info_top_level_drive_relative() -> Result<()> {
 #[test]
 fn yes_flag() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     uv_snapshot!(context.filters(), context.pip_uninstall()
         .arg("--yes")
@@ -734,9 +700,7 @@ fn yes_flag() {
 #[test]
 fn yes_short_flag() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     uv_snapshot!(context.filters(), context.pip_uninstall()
         .arg("-y")

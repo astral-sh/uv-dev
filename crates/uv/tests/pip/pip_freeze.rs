@@ -11,9 +11,7 @@ use uv_test::uv_snapshot;
 #[test]
 fn freeze_many() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package==2.1.3\nother-package==2.0.1")?;
@@ -46,9 +44,7 @@ fn freeze_duplicate() -> Result<()> {
 
     // Sync a version of `simple-package` into a virtual environment.
     let server = PackseServer::new("packages/pip-commands.toml");
-    let context1 = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&server.index_url());
+    let context1 = uv_test::test_context!("3.12").with_default_index(&server.index_url());
     let requirements_txt = context1.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package==1.0.0")?;
 
@@ -60,9 +56,7 @@ fn freeze_duplicate() -> Result<()> {
         .success();
 
     // Sync a different version of `simple-package` into a virtual environment.
-    let context2 = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&server.index_url());
+    let context2 = uv_test::test_context!("3.12").with_default_index(&server.index_url());
     let requirements_txt = context2.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package==2.0.0")?;
 
@@ -104,9 +98,7 @@ fn freeze_duplicate() -> Result<()> {
 #[test]
 fn freeze_url() -> Result<()> {
     let server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -138,7 +130,7 @@ fn freeze_url() -> Result<()> {
 /// requirements keep their artifact verification.
 #[test]
 fn freeze_direct_archive_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let site_packages = ChildPath::new(context.site_packages());
 
     let project = site_packages.child("project-1.0.0.dist-info");
@@ -173,7 +165,7 @@ fn freeze_direct_archive_hashes() -> Result<()> {
 /// when it is consumed as a requirement again.
 #[test]
 fn freeze_direct_archive_hash_roundtrip() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let site_packages = ChildPath::new(context.site_packages());
     let wheel_url = Url::from_file_path(
         context
@@ -239,9 +231,7 @@ fn freeze_direct_archive_hash_roundtrip() -> Result<()> {
 #[test]
 fn freeze_with_editable() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -285,7 +275,7 @@ fn freeze_with_editable() -> Result<()> {
 /// Show an `.egg-info` package in a virtual environment.
 #[test]
 fn freeze_with_egg_info() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let site_packages = ChildPath::new(context.site_packages());
 
@@ -335,7 +325,7 @@ fn freeze_with_egg_info() -> Result<()> {
 /// Python version.
 #[test]
 fn freeze_with_egg_info_no_py() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let site_packages = ChildPath::new(context.site_packages());
 
@@ -384,7 +374,7 @@ fn freeze_with_egg_info_no_py() -> Result<()> {
 /// Show a set of `.egg-info` files in a virtual environment.
 #[test]
 fn freeze_with_egg_info_file() -> Result<()> {
-    let context = uv_test::test_context!("3.11").with_local_index();
+    let context = uv_test::test_context!("3.11");
     let site_packages = ChildPath::new(context.site_packages());
 
     // Manually create a `.egg-info` file with python version.
@@ -417,7 +407,7 @@ fn freeze_with_egg_info_file() -> Result<()> {
 
 #[test]
 fn freeze_with_legacy_editable() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let site_packages = ChildPath::new(context.site_packages());
 
@@ -453,9 +443,7 @@ Version: 0.22.0
 #[test]
 fn freeze_path() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package==2.1.3\nother-package==2.0.1")?;
@@ -487,9 +475,7 @@ fn freeze_path() -> Result<()> {
 #[test]
 fn freeze_multiple_paths() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt1 = context.temp_dir.child("requirements1.txt");
     requirements_txt1.write_str("simple-package==2.1.3\nother-package==2.0.1")?;
@@ -529,7 +515,7 @@ fn freeze_multiple_paths() -> Result<()> {
 // We follow pip in just ignoring nonexistent paths
 #[test]
 fn freeze_nonexistent_path() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let nonexistent_dir = {
         let dir = context.temp_dir.child("blahblah");
@@ -548,9 +534,7 @@ fn freeze_nonexistent_path() {
 #[test]
 fn freeze_with_quiet_flag() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package==2.1.3\nother-package==2.0.1")?;
@@ -577,9 +561,7 @@ fn freeze_with_quiet_flag() -> Result<()> {
 #[test]
 fn freeze_target() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package==2.1.3\nother-package==2.0.1")?;
@@ -619,9 +601,7 @@ fn freeze_target() -> Result<()> {
 #[test]
 fn freeze_prefix() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package==2.1.3\nother-package==2.0.1")?;
@@ -661,9 +641,7 @@ fn freeze_prefix() -> Result<()> {
 #[test]
 fn freeze_exclude() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let prefix = context.temp_dir.child("prefix");
 

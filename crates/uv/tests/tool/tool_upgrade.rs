@@ -21,7 +21,6 @@ use uv_test::{uv_snapshot, venv_bin_path};
 fn tool_upgrade_empty() {
     let server = PackseServer::new("packages/tool-upgrade-current.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&server.index_url())
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -81,7 +80,6 @@ fn tool_upgrade_empty() {
 #[test]
 fn tool_upgrade_all_ignores_invalid_tool_name() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -103,9 +101,7 @@ fn tool_upgrade_all_ignores_invalid_tool_name() -> Result<()> {
 
 #[test]
 fn tool_upgrade_all_unreadable_receipt() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_tool_dirs();
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
 
     tool_dir.child("babel").create_dir_all()?;
@@ -127,7 +123,6 @@ fn tool_upgrade_all_unreadable_receipt() -> Result<()> {
 #[test]
 fn tool_upgrade_preserves_workspace_member_editability() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -239,7 +234,6 @@ fn tool_upgrade_preserves_workspace_member_editability() -> Result<()> {
 #[test]
 fn tool_upgrade_preserves_mixed_workspace_member_editability() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -374,7 +368,6 @@ fn tool_upgrade_preserves_mixed_workspace_member_editability() -> Result<()> {
 #[test]
 fn tool_upgrade_preserves_mixed_workspace_member_non_editability() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -513,7 +506,6 @@ fn tool_upgrade_name() {
     let new_index = new_tool_index();
 
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -554,7 +546,6 @@ fn tool_upgrade_name() {
 #[test]
 fn tool_upgrade_recomputes_relative_exclude_newer() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_packse_index("packages/tool-run.toml")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -609,7 +600,6 @@ fn tool_upgrade_multiple_names() {
     let new_index = new_tool_index();
 
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -673,7 +663,6 @@ fn tool_upgrade_pinned_hint() {
     let new_index = new_tool_index();
 
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -717,7 +706,6 @@ fn tool_upgrade_pinned_hint_with_mixed_constraint() {
     let new_index = new_tool_index();
 
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -762,7 +750,6 @@ fn tool_upgrade_all() -> Result<()> {
     let new_index = new_tool_index();
 
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -829,7 +816,6 @@ fn tool_upgrade_all() -> Result<()> {
 #[test]
 fn tool_upgrade_non_existing_package() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -861,7 +847,6 @@ fn tool_upgrade_not_stop_if_upgrade_fails() -> anyhow::Result<()> {
     let new_index = new_tool_index();
 
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -928,7 +913,6 @@ fn tool_upgrade_not_stop_if_upgrade_fails() -> anyhow::Result<()> {
 #[test]
 fn tool_upgrade_settings() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_packse_index("packages/tool-run.toml")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -976,7 +960,6 @@ fn tool_upgrade_settings() {
 #[test]
 fn tool_upgrade_no_binary_package_env_var() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_packse_index("packages/tool-run.toml")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -1026,7 +1009,6 @@ fn tool_upgrade_respect_constraints() {
     let new_index = new_tool_index();
 
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -1071,7 +1053,6 @@ fn tool_upgrade_constraint() {
     let new_index = new_tool_index();
 
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -1164,7 +1145,6 @@ fn tool_upgrade_with() {
     let new_index = new_tool_index();
 
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -1209,7 +1189,6 @@ fn tool_upgrade_python() {
     let old_index = old_tool_index();
 
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -1262,7 +1241,6 @@ fn tool_upgrade_python_with_all() {
     let old_index = old_tool_index();
 
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -1342,7 +1320,6 @@ fn tool_upgrade_python_with_all() {
 #[test]
 fn test_tool_upgrade_additional_entrypoints() {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
-        .with_local_index()
         .with_packse_index("packages/tool-run.toml")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -1400,7 +1377,6 @@ fn tool_upgrade_excludes() {
     let new_index = new_tool_index();
 
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -1448,7 +1424,7 @@ fn tool_upgrade_excludes() {
 /// See: <https://github.com/astral-sh/uv/issues/21216>
 #[tokio::test]
 async fn tool_upgrade_index_url_keyring_auth() -> Result<()> {
-    let keyring_context = uv_test::test_context!("3.12").with_local_index();
+    let keyring_context = uv_test::test_context!("3.12");
     keyring_context
         .pip_install()
         .arg(
@@ -1466,9 +1442,8 @@ async fn tool_upgrade_index_url_keyring_auth() -> Result<()> {
         .assert()
         .success();
 
-    let proxy = crate::pypi_proxy::start_local().await;
+    let proxy = crate::pypi_proxy::start().await;
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_exclude_newer("2025-01-18T00:00:00Z")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -1548,9 +1523,8 @@ async fn tool_upgrade_index_url_keyring_auth() -> Result<()> {
 /// See: <https://github.com/astral-sh/uv/issues/18120>
 #[tokio::test]
 async fn tool_upgrade_invalid_auth() -> Result<()> {
-    let proxy = crate::pypi_proxy::start_local().await;
+    let proxy = crate::pypi_proxy::start().await;
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_exclude_newer("2025-01-18T00:00:00Z")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -1610,9 +1584,7 @@ async fn tool_upgrade_invalid_auth() -> Result<()> {
 
 #[test]
 fn tool_upgrade_writes_preview_lock() {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_tool_dirs();
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
 
@@ -1708,9 +1680,7 @@ async fn mount_simple_launcher_index(server: &MockServer, hash: &str, wheel: &[u
 
 #[tokio::test]
 async fn tool_upgrade_resolution_hints() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_tool_dirs();
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
     let wheel = fs_err::read(
         context
@@ -1764,9 +1734,7 @@ async fn tool_upgrade_resolution_hints() -> Result<()> {
 /// source preference remains valid, while the index changes the advertised hash before upgrade.
 #[tokio::test]
 async fn tool_upgrade_lock_verifies_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_tool_dirs();
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
     let wheel_filename = "simple_launcher-0.1.0-py3-none-any.whl";
     let wheel = fs_err::read(
@@ -1829,7 +1797,6 @@ async fn tool_upgrade_lock_verifies_hashes() -> Result<()> {
 #[test]
 fn tool_upgrade_lock_uses_requested_python() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
-        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();

@@ -18,7 +18,7 @@ use uv_test::{uv_snapshot, venv_bin_path};
 
 #[test]
 fn get_requires_for_build_returns_error() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     allow_duplicates! {
         for command in [
@@ -58,7 +58,7 @@ fn unpack_tar_gz(source_dist_path: &Path, target: &Path) -> Result<()> {
 /// We can't test end-to-end here including the PEP 517 bridge code since we don't have a uv wheel.
 #[test]
 fn built_by_uv_direct_wheel() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let built_by_uv = Path::new("../../test/packages/built-by-uv");
 
     let temp_dir = TempDir::new()?;
@@ -105,7 +105,7 @@ fn built_by_uv_direct_wheel() -> Result<()> {
 /// so we call the build backend directly.
 #[test]
 fn built_by_uv_direct() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let built_by_uv = Path::new("../../test/packages/built-by-uv");
 
     let sdist_dir = TempDir::new()?;
@@ -170,7 +170,7 @@ fn built_by_uv_direct() -> Result<()> {
 /// so we call the build backend directly.
 #[test]
 fn built_by_uv_editable() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let built_by_uv = Path::new("../../test/packages/built-by-uv");
 
     // Without the wheel, the package cannot be imported.
@@ -221,7 +221,7 @@ fn preserve_executable_bit() -> Result<()> {
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
 
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let project_dir = context.temp_dir.path().join("preserve_executable_bit");
     context
@@ -314,7 +314,7 @@ fn preserve_executable_bit() -> Result<()> {
 /// potential modules.
 #[test]
 fn rename_module() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let temp_dir = TempDir::new()?;
 
     context
@@ -386,7 +386,7 @@ fn rename_module() -> Result<()> {
 /// Test `tool.uv.build-backend.module-name` for editable builds.
 #[test]
 fn rename_module_editable_build() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let temp_dir = TempDir::new()?;
 
     context
@@ -440,7 +440,7 @@ fn rename_module_editable_build() -> Result<()> {
 /// Check that the build succeeds even if the module name mismatches by case.
 #[test]
 fn build_module_name_normalization() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let wheel_dir = context.temp_dir.path().join("dist");
     fs_err::create_dir(&wheel_dir)?;
@@ -539,7 +539,7 @@ fn build_module_name_normalization() -> Result<()> {
 
 #[test]
 fn build_sdist_with_long_path() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let default_dir = TempDir::new()?;
     let temp_dir = TempDir::new()?;
 
@@ -654,7 +654,7 @@ fn build_sdist_with_long_path() -> Result<()> {
 
 #[test]
 fn sdist_error_without_module() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let temp_dir = TempDir::new()?;
 
     context
@@ -695,7 +695,7 @@ fn sdist_error_without_module() -> Result<()> {
 
 #[test]
 fn complex_namespace_packages() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let dist = context.temp_dir.child("dist");
     dist.create_dir_all()?;
 
@@ -820,7 +820,7 @@ fn complex_namespace_packages() -> Result<()> {
 
 #[test]
 fn license_glob_without_matches_errors() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let project = context.temp_dir.child("missing-license");
     context
@@ -862,7 +862,7 @@ fn license_glob_without_matches_errors() -> Result<()> {
 
 #[test]
 fn license_file_must_be_utf8() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let project = context.temp_dir.child("license-utf8");
     context
@@ -904,7 +904,7 @@ fn license_file_must_be_utf8() -> Result<()> {
 #[test]
 #[cfg(unix)]
 fn symlinked_file() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let project = context.temp_dir.child("project");
     context
@@ -984,7 +984,7 @@ fn symlinked_file() -> Result<()> {
 /// They may be from another `uv_build` version that has a different schema.
 #[test]
 fn invalid_build_backend_settings_are_ignored() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -1017,7 +1017,7 @@ fn invalid_build_backend_settings_are_ignored() -> Result<()> {
 /// `tool.uv.build-backend.module-root = ".."`.
 #[test]
 fn error_on_relative_module_root_outside_project_root() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -1059,7 +1059,7 @@ fn error_on_relative_module_root_outside_project_root() -> Result<()> {
 /// `tool.uv.build-backend.data.headers = "../headers"`.
 #[test]
 fn error_on_relative_data_dir_outside_project_root() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let project = context.temp_dir.child("project");
     project.create_dir_all()?;
@@ -1134,7 +1134,7 @@ fn error_on_relative_data_dir_outside_project_root() -> Result<()> {
 /// Files excluded from a source distribution or wheel must not leak through a wheel data root.
 #[test]
 fn wheel_data_respects_excludes() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context
         .temp_dir
@@ -1185,7 +1185,7 @@ fn wheel_data_respects_excludes() -> Result<()> {
 #[test]
 #[cfg(unix)]
 fn wheel_data_symlink_containment() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let project = context.temp_dir.child("project");
     project.child("src/project/__init__.py").touch()?;
@@ -1257,7 +1257,7 @@ fn wheel_data_symlink_containment() -> Result<()> {
 /// Show an explicit error when there is a venv in source tree.
 #[test]
 fn venv_in_source_tree() {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context
         .init()
@@ -1293,7 +1293,7 @@ fn venv_in_source_tree() {
 /// Show a warning when the build backend is passed redundant module names
 #[test]
 fn warn_on_redundant_module_names() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -1354,7 +1354,7 @@ fn warn_on_redundant_module_names() -> Result<()> {
 
 #[test]
 fn invalid_pyproject_toml() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context
         .temp_dir
@@ -1388,7 +1388,7 @@ fn invalid_pyproject_toml() -> Result<()> {
 
 #[test]
 fn build_with_all_metadata() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let temp_dir = TempDir::new()?;
 
     context
@@ -1612,7 +1612,7 @@ fn build_with_all_metadata() -> Result<()> {
 /// entry.
 #[test]
 fn tool_uv_build_backend_without_build_backend() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -1667,9 +1667,7 @@ fn tool_uv_build_backend_without_build_backend() -> Result<()> {
 #[test]
 fn tool_uv_build_backend_wrong_build_backend() -> Result<()> {
     let server = PackseServer::empty();
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
 
     let project = context.temp_dir.child("project");
     let pyproject_toml = project.child("pyproject.toml");
@@ -1719,9 +1717,7 @@ fn tool_uv_build_backend_wrong_build_backend() -> Result<()> {
 /// See <https://github.com/astral-sh/uv/issues/20128>.
 #[test]
 fn tool_uv_build_backend_in_tree_backend() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_uv_build_backend()?;
+    let context = uv_test::test_context!("3.12").with_uv_build_backend()?;
 
     let project = context.temp_dir.child("project");
     let pyproject_toml = project.child("pyproject.toml");
@@ -1758,7 +1754,7 @@ fn tool_uv_build_backend_in_tree_backend() -> Result<()> {
 /// Show a warning when the project uses deprecated `License ::` classifiers.
 #[test]
 fn warn_on_license_classifier() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context
         .temp_dir
@@ -1791,7 +1787,7 @@ fn warn_on_license_classifier() -> Result<()> {
 /// Rewrite TOML 1.1 features in `pyproject.toml` without a preview flag.
 #[test]
 fn rewrite_toml_1_1_by_default() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context
         .temp_dir

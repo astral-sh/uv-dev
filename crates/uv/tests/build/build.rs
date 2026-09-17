@@ -59,11 +59,9 @@ fn build_packse_in_tree_sdist() -> Result<()> {
         build-package = "build_package:main"
     "#})?;
     let server = uv_test::packse::PackseServer::from_scenario(&scenario);
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
     let sdist = context.temp_dir.child("build_package-1.0.0.tar.gz");
-    uv_test::download_local_to_disk(&server.file_url("build_package-1.0.0.tar.gz"), &sdist);
+    uv_test::download_to_disk(&server.file_url("build_package-1.0.0.tar.gz"), &sdist);
 
     for output in ["dist-one", "dist-two"] {
         context
@@ -126,7 +124,6 @@ fn build_packse_in_tree_sdist() -> Result<()> {
 fn build_basic() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter((r"\\\.", ""));
 
@@ -252,7 +249,7 @@ fn build_basic() -> Result<()> {
 /// Regression test for <https://github.com/astral-sh/uv/issues/19878>.
 #[test]
 fn build_hook_invokes_uv() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let project = context.temp_dir.child("project");
 
     project.child("pyproject.toml").write_str(indoc! {r#"
@@ -309,7 +306,7 @@ fn build_hook_invokes_uv() -> Result<()> {
 /// Regression test for <https://github.com/astral-sh/uv/issues/19771>.
 #[test]
 fn build_sdist_missing_backend_path() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let project = context.temp_dir.child("project");
 
     project.child("pyproject.toml").write_str(indoc! {r#"
@@ -344,7 +341,7 @@ fn build_sdist_missing_backend_path() -> Result<()> {
 /// An in-tree build backend must not be able to escape the source tree via `backend-path`.
 #[test]
 fn build_backend_path_outside_source_tree() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let project = context.temp_dir.child("project");
 
     project.child("pyproject.toml").write_str(indoc! {r#"
@@ -378,7 +375,7 @@ fn build_backend_path_outside_source_tree() -> Result<()> {
 #[cfg(unix)]
 #[test]
 fn build_backend_path_absolute_inside_source_tree() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let project = context.temp_dir.child("project");
     let backend = project.child("backend");
 
@@ -412,7 +409,7 @@ fn build_backend_path_absolute_inside_source_tree() -> Result<()> {
 #[cfg(unix)]
 #[test]
 fn build_backend_path_symlink_outside_source_tree() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let project = context.temp_dir.child("project");
 
     project.child("pyproject.toml").write_str(indoc! {r#"
@@ -447,7 +444,6 @@ fn build_backend_path_symlink_outside_source_tree() -> Result<()> {
 fn build_sdist() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter((r"\\\.", ""));
 
@@ -499,7 +495,6 @@ fn build_sdist() -> Result<()> {
 fn build_wheel() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter((r"\\\.", ""));
 
@@ -551,7 +546,6 @@ fn build_wheel() -> Result<()> {
 fn build_sdist_wheel() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter((r"\\\.", ""));
 
@@ -605,7 +599,6 @@ fn build_sdist_wheel() -> Result<()> {
 fn build_wheel_from_sdist() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter((r"\\\.", ""));
 
@@ -698,7 +691,6 @@ fn build_wheel_from_sdist() -> Result<()> {
 fn build_fail() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter((r"\\\.", ""));
 
@@ -770,7 +762,6 @@ fn build_fail() -> Result<()> {
 fn build_workspace() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter((r"\\\.", ""))
         .with_filter((r"\[project\]", "[PKG]"))
@@ -951,7 +942,6 @@ fn build_workspace() -> Result<()> {
 fn build_all_with_failure() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter((r"\\\.", ""))
         .with_filter((r"\[project\]", "[PKG]"))
@@ -1092,7 +1082,6 @@ fn build_all_with_failure() -> Result<()> {
 fn build_constraints() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter((r"\\\.", ""));
 
@@ -1153,7 +1142,6 @@ fn build_constraints() -> Result<()> {
 fn build_all_respects_workspace_build_constraint_dependencies() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter((r"\\\.", ""))
         .with_filter((r"\[member\]", "[PKG]"));
@@ -1253,7 +1241,6 @@ fn build_all_respects_workspace_build_constraint_dependencies() -> Result<()> {
 fn build_source_path_ignores_workspace_build_constraint_dependencies() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter((r"\\\.", ""))
         .with_filter((r"\[member\]", "[PKG]"));
@@ -1333,7 +1320,6 @@ fn build_source_path_ignores_workspace_build_constraint_dependencies() -> Result
 fn build_workspace_transitive_build_dependency() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter((r"\\\.", ""))
         .with_filter((r"\[my-util\]", "[PKG]"))
@@ -1455,9 +1441,7 @@ fn build_workspace_transitive_build_dependency() -> Result<()> {
 
 #[test]
 fn build_sha() -> Result<()> {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION)
-        .with_local_index()
-        .with_filter((r"\\\.", ""));
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_filter((r"\\\.", ""));
 
     let project = context.temp_dir.child("project");
 
@@ -1656,7 +1640,6 @@ fn build_sha() -> Result<()> {
 async fn build_transitive_url_build_requirement_hashes() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter((r"\\\.", ""));
 
@@ -1756,9 +1739,7 @@ async fn build_transitive_url_build_requirement_hashes() -> Result<()> {
 #[test]
 fn build_quiet() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let project = context.temp_dir.child("project");
 
@@ -1794,9 +1775,7 @@ fn build_quiet() -> Result<()> {
 #[test]
 fn build_no_build_logs() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let project = context.temp_dir.child("project");
 
@@ -1838,9 +1817,7 @@ fn build_no_build_logs() -> Result<()> {
 #[test]
 fn build_hide_build_output_env_var() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let project = context.temp_dir.child("project");
 
@@ -1883,7 +1860,6 @@ fn build_hide_build_output_env_var() -> Result<()> {
 fn build_hide_build_output_on_failure() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter((r"\\\.", ""));
 
@@ -1931,7 +1907,6 @@ fn build_hide_build_output_on_failure() -> Result<()> {
 fn build_tool_uv_sources() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter((r"\\\.", ""));
 
@@ -2049,7 +2024,7 @@ fn build_tool_uv_sources() -> Result<()> {
 
 #[test]
 fn build_named_index_config_file_hint() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let project = context.temp_dir.child("project");
     project.child("pyproject.toml").write_str(
@@ -2095,9 +2070,7 @@ fn build_named_index_config_file_hint() -> Result<()> {
 #[test]
 fn build_git_boundary_in_dist_build() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let project = context.temp_dir.child("demo");
     project.child("pyproject.toml").write_str(
@@ -2144,7 +2117,6 @@ fn build_git_boundary_in_dist_build() -> Result<()> {
 fn build_non_package() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter((r"\\\.", ""))
         .with_filter((r"\[project\]", "[PKG]"))
@@ -2238,9 +2210,7 @@ fn build_non_package() -> Result<()> {
 #[test]
 fn build_fast_path() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let built_by_uv = current_dir()?.join("../../test/packages/built-by-uv");
 
@@ -2328,7 +2298,7 @@ fn build_fast_path() -> Result<()> {
 /// Warn about an unbounded build backend only when producing a source distribution.
 #[test]
 fn build_fast_path_unbounded_backend() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let filters = context
         .filters()
         .into_iter()
@@ -2369,7 +2339,7 @@ fn build_fast_path_unbounded_backend() -> Result<()> {
 /// Only mention the bundled build backend when verbose logging is enabled.
 #[test]
 fn build_fast_path_verbose() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let project = context.temp_dir.child("project");
 
     project.child("pyproject.toml").write_str(indoc! {r#"
@@ -2420,7 +2390,7 @@ fn build_fast_path_verbose() -> Result<()> {
 /// Exact backend pins must match the running uv version; compatible ranges can use the fast path.
 #[test]
 fn build_fast_path_exact_pin() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let project = context.temp_dir.child("project");
     let pyproject_toml = project.child("pyproject.toml");
 
@@ -2483,7 +2453,7 @@ fn build_fast_path_exact_pin() -> Result<()> {
 /// Active exact build constraints must match the running uv version to use the fast path.
 #[test]
 fn build_fast_path_constraint_exact_pin() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let project = context.temp_dir.child("project");
 
     project.child("pyproject.toml").write_str(indoc! {r#"
@@ -2575,7 +2545,7 @@ fn build_fast_path_constraint_exact_pin() -> Result<()> {
 /// Reject path-shaped script entry point names before writing wheel metadata.
 #[test]
 fn build_unsafe_script_entry_point_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context.init().assert().success();
 
@@ -2616,7 +2586,7 @@ fn build_unsafe_script_entry_point_name() -> Result<()> {
 /// Reject dot-only script entry point names that do not resolve below the scripts directory.
 #[test]
 fn build_dot_script_entry_point_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context.init().assert().success();
 
@@ -2657,7 +2627,7 @@ fn build_dot_script_entry_point_name() -> Result<()> {
 /// Reject script entry point names that PyPI rejects in uploaded wheels.
 #[test]
 fn build_nested_script_entry_point_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context.init().assert().success();
 
@@ -2699,9 +2669,7 @@ fn build_nested_script_entry_point_name() -> Result<()> {
 #[test]
 fn build_list_files() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let built_by_uv = current_dir()?.join("../../test/packages/built-by-uv");
 
@@ -2822,7 +2790,6 @@ fn build_list_files() -> Result<()> {
 #[test]
 fn build_list_files_errors() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         // In CI, we run with link mode settings.
         .with_filter(("--link-mode <LINK_MODE> ", ""))
         // Normalize Windows workspace paths.
@@ -2863,9 +2830,7 @@ fn build_list_files_errors() -> Result<()> {
 #[test]
 fn build_version_mismatch() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let anyio_local = current_dir()?.join("../../test/packages/anyio_local");
     context
         .build()
@@ -2897,7 +2862,7 @@ fn build_version_mismatch() -> Result<()> {
 /// A backend must not return an sdist and wheel for different projects.
 #[test]
 fn build_name_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let project = context.temp_dir.child("project");
     project.child("pyproject.toml").write_str(indoc! {r#"
         [build-system]
@@ -2935,9 +2900,7 @@ fn build_name_mismatch() -> Result<()> {
 #[test]
 fn build_with_symlink() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     context
         .temp_dir
         .child("pyproject.toml.real")
@@ -2976,9 +2939,7 @@ fn build_with_symlink() -> Result<()> {
 #[test]
 fn build_unconfigured_setuptools() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     context
         .temp_dir
         .child("pyproject.toml")
@@ -3016,9 +2977,7 @@ fn build_unconfigured_setuptools() -> Result<()> {
 #[test]
 fn build_workspace_virtual_root() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     context
         .temp_dir
         .child("pyproject.toml")
@@ -3044,9 +3003,7 @@ fn build_workspace_virtual_root() -> Result<()> {
 #[test]
 fn build_pyproject_toml_not_a_project() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     context
         .temp_dir
         .child("pyproject.toml")
@@ -3072,7 +3029,6 @@ fn build_pyproject_toml_not_a_project() -> Result<()> {
 fn build_with_nonnormalized_name() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter((r"\\\.", ""));
 
@@ -3127,9 +3083,7 @@ fn build_with_nonnormalized_name() -> Result<()> {
 /// The error messages for a broken project are different for direct builds vs. PEP 517.
 #[test]
 fn force_pep517() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_uv_build_backend()?;
+    let context = uv_test::test_context!("3.12").with_uv_build_backend()?;
 
     context.init().assert().success();
 
@@ -3182,7 +3136,6 @@ fn force_pep517() -> Result<()> {
 fn venv_included_in_sdist() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter((r"at byte \d+", "at byte [OFFSET]"));
 
@@ -3275,9 +3228,7 @@ fn venv_included_in_sdist() -> Result<()> {
 #[test]
 fn test_workspace_trailing_slash() {
     let _server = uv_test::packse::PackseServer::empty();
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     // Create a workspace with a root and a member.
     context.init().arg("--lib").assert().success();
@@ -3326,9 +3277,7 @@ fn test_workspace_trailing_slash() {
 #[test]
 fn build_clear() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let project = context.temp_dir.child("project");
 
@@ -3390,9 +3339,7 @@ fn build_clear() -> Result<()> {
 #[test]
 fn build_no_gitignore() -> Result<()> {
     let _server = uv_test::packse::PackseServer::empty();
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let project = context.temp_dir.child("project");
 
@@ -3435,7 +3382,7 @@ fn build_no_gitignore() -> Result<()> {
 
 #[test]
 fn build_workspace_constraint_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
     let mut build_hash = String::new();
     for (name, version) in [("build-dependency", "1.0.0"), ("project", "0.1.0")] {
         let (filename, wheel) = generate_wheel(

@@ -677,9 +677,6 @@ fn simple_api_response(body: &serde_json::Value) -> wiremock::ResponseTemplate {
         .set_body_raw(body_str, "application/vnd.pypi.simple.v1+json")
 }
 
-/// Start the local authenticated package index.
-pub use start as start_local;
-
 #[cfg(test)]
 mod tests {
     use super::{package_database, start};

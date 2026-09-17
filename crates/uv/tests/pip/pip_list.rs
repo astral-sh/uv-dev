@@ -11,9 +11,7 @@ use uv_test::uv_snapshot;
 #[test]
 fn list_empty_columns() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     uv_snapshot!(context.pip_list()
         .arg("--format")
@@ -26,9 +24,7 @@ fn list_empty_columns() {
 #[test]
 fn list_empty_freeze() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     uv_snapshot!(context.pip_list()
         .arg("--format")
@@ -41,9 +37,7 @@ fn list_empty_freeze() {
 #[test]
 fn list_empty_json() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     uv_snapshot!(context.pip_list()
         .arg("--format")
@@ -57,7 +51,7 @@ fn list_empty_json() {
 
 #[test]
 fn list_editable_non_file_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let dist_info = ChildPath::new(context.site_packages()).child("project-1.0.0.dist-info");
     dist_info.create_dir_all()?;
@@ -88,9 +82,7 @@ fn list_editable_non_file_url() -> Result<()> {
 #[test]
 fn list_single_no_editable() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package==2.1.3")?;
@@ -125,9 +117,7 @@ fn list_single_no_editable() -> Result<()> {
 #[test]
 fn list_outdated_columns() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("outdated-package==3.0.0")?;
@@ -160,9 +150,7 @@ fn list_outdated_columns() -> Result<()> {
 #[test]
 fn list_outdated_json() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("outdated-package==3.0.0")?;
@@ -192,7 +180,7 @@ fn list_outdated_json() -> Result<()> {
 
 #[test]
 fn list_outdated_find_links() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let links_dir = context.workspace_root.join("test/links");
     let first_links_dir = context.temp_dir.child("first-links");
@@ -249,9 +237,7 @@ fn list_outdated_find_links() -> Result<()> {
 #[test]
 fn list_outdated_freeze() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     uv_snapshot!(context.pip_list().arg("--outdated").arg("--format").arg("freeze"), @"
     exit_code: 2 (failure)
@@ -264,7 +250,7 @@ fn list_outdated_freeze() {
 #[test]
 #[cfg(feature = "test-git")]
 fn list_outdated_git() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc::indoc! {r"
@@ -301,9 +287,7 @@ fn list_outdated_git() -> Result<()> {
 #[test]
 fn list_outdated_index() -> Result<()> {
     let server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("outdated-package==3.0.0")?;
@@ -340,7 +324,6 @@ fn list_outdated_index() -> Result<()> {
 fn list_editable() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter((r"\-\-\-\-\-\-+.*", "[UNDERLINE]"))
         .with_filter(("  +", " "));
@@ -372,7 +355,6 @@ fn list_editable() {
 fn list_editable_only() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter((r"\-\-\-\-\-\-+.*", "[UNDERLINE]"))
         .with_filter(("  +", " "));
@@ -422,7 +404,6 @@ fn list_editable_only() {
 fn list_exclude() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter((r"\-\-\-\-\-\-+.*", "[UNDERLINE]"))
         .with_filter(("  +", " "));
@@ -468,9 +449,7 @@ fn list_exclude() {
 #[cfg(not(windows))]
 fn list_format_json() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     // Install the editable package.
     uv_snapshot!(context.filters(), context.pip_install()
@@ -515,9 +494,7 @@ fn list_format_json() {
 #[test]
 fn list_format_freeze() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     // Install the editable package.
     uv_snapshot!(context.filters(), context
@@ -560,7 +537,6 @@ fn list_format_freeze() {
 fn list_legacy_editable() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter((r"\-\-\-\-\-\-+.*", "[UNDERLINE]"))
         .with_filter(("  +", " "));
@@ -608,7 +584,6 @@ Version: 0.22.0
 fn list_legacy_editable_invalid_version() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filter(("  +", " "));
 
@@ -644,9 +619,7 @@ Version: 0.1-bulbasaur
 #[test]
 fn list_ignores_quiet_flag_format_freeze() {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     // Install the editable package.
     uv_snapshot!(context.filters(), context
@@ -691,9 +664,7 @@ fn list_ignores_quiet_flag_format_freeze() {
 #[test]
 fn list_target() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package==2.1.3\nother-package==2.0.1")?;
@@ -735,9 +706,7 @@ fn list_target() -> Result<()> {
 #[test]
 fn list_prefix() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package==2.1.3\nother-package==2.0.1")?;

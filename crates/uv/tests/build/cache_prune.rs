@@ -11,9 +11,7 @@ use uv_test::uv_snapshot;
 #[test]
 fn prune_no_op() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package")?;
@@ -41,7 +39,7 @@ fn prune_no_op() -> Result<()> {
 #[cfg(unix)]
 #[test]
 fn prune_hardlinked_file() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     // Keep both hardlinks on the selected filesystem.
     let retained = context.cache_dir.path().with_file_name("retained.bin");
@@ -82,10 +80,7 @@ fn prune_hardlinked_file() -> Result<()> {
 #[cfg(unix)]
 #[test]
 fn prune_physical_space_unsupported_fs() -> Result<()> {
-    let Some(context) = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_cache_on_alt_fs()?
-    else {
+    let Some(context) = uv_test::test_context!("3.12").with_cache_on_alt_fs()? else {
         return Ok(());
     };
 
@@ -109,9 +104,7 @@ fn prune_physical_space_unsupported_fs() -> Result<()> {
 #[test]
 fn prune_stale_directory() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("simple-package")?;
@@ -143,7 +136,7 @@ fn prune_stale_directory() -> Result<()> {
 /// `cache prune` should preserve cached Python downloads.
 #[test]
 fn prune_python_downloads() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     let python_cache = context.cache_dir.child("python-v0");
     python_cache.create_dir_all()?;
@@ -166,7 +159,6 @@ fn prune_python_downloads() -> Result<()> {
 #[test]
 fn prune_cached_env() {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_packse_index("packages/tool-run.toml")
         .with_filtered_counts()
         .with_filtered_sizes_and_units()
@@ -212,7 +204,6 @@ fn prune_cached_env() {
 fn prune_stale_symlink() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_default_index(&_server.index_url())
         .with_filtered_sizes_and_units();
 
@@ -260,9 +251,7 @@ fn prune_stale_symlink() -> Result<()> {
 #[tokio::test]
 async fn prune_force() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context.with_filtered_counts();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
@@ -311,7 +300,7 @@ async fn prune_force() -> Result<()> {
 /// `cache prune --ci` should be a no-op if the cache does not contain any buckets.
 #[test]
 fn prune_ci_empty_cache() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12");
 
     context.cache_dir.create_dir_all()?;
 
@@ -329,9 +318,7 @@ fn prune_ci_empty_cache() -> Result<()> {
 #[test]
 fn prune_unzipped() -> Result<()> {
     let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_local_index()
-        .with_default_index(&_server.index_url());
+    let context = uv_test::test_context!("3.12").with_default_index(&_server.index_url());
     let context = context
         .with_exclude_newer("2025-01-01T00:00Z")
         .with_filtered_file_counts()
@@ -415,7 +402,6 @@ fn prune_unzipped() -> Result<()> {
 #[test]
 fn prune_stale_revision() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_file_counts()
         .with_filtered_sizes_and_units()
         // The cache entry does not have a stable key, so we filter it out.
@@ -516,7 +502,6 @@ fn prune_stale_revision() -> Result<()> {
 #[test]
 fn prune_stale_revision_content_addressed_cache() -> Result<()> {
     let context = uv_test::test_context!("3.12")
-        .with_local_index()
         .with_filtered_file_counts()
         .with_filtered_sizes_and_units()
         // The cache entry does not have a stable key, so we filter it out.
