@@ -219,7 +219,6 @@ struct ObservedDecision {
 struct ForkObservations {
     decisions: Vec<ObservedDecision>,
     observations: Observations,
-    backtrack_generation: u64,
     has_missing_pins: bool,
     marker: UniversalMarker,
     source_sizes: (usize, usize),
@@ -227,14 +226,13 @@ struct ForkObservations {
 
 impl ForkObservations {
     fn new(
-        state: &ForkState,
+        state: &mut ForkState,
         ledger: &mut ObservationLedger,
         identities: &mut SourceIdentities,
     ) -> Self {
         let mut observations = Self {
             decisions: Vec::new(),
             observations: Observations::new(),
-            backtrack_generation: state.backtrack_generation,
             has_missing_pins: false,
             marker: UniversalMarker::TRUE,
             source_sizes: (0, 0),
@@ -245,7 +243,7 @@ impl ForkObservations {
 
     fn refresh(
         &mut self,
-        state: &ForkState,
+        state: &mut ForkState,
         ledger: &mut ObservationLedger,
         identities: &mut SourceIdentities,
     ) {
@@ -257,32 +255,37 @@ impl ForkObservations {
         // File pins and successful source mappings are immutable within a fork. A newly recorded
         // source can change an earlier decision's identity, even when that decision is retained.
         let sources_changed = self.source_sizes != source_sizes || self.marker != marker;
-        let decisions = state.pubgrub.partial_solution.extract_solution();
+        let mut journal = state.decision_journal.take();
         if !sources_changed
-            && self.backtrack_generation == state.backtrack_generation
             && !self.has_missing_pins
-            && decisions.size_hint().0 >= self.decisions.len()
+            && journal.as_ref().is_some_and(|journal| {
+                let expected = self.decisions.len() + journal.len();
+                state
+                    .pubgrub
+                    .partial_solution
+                    .extract_solution()
+                    .size_hint()
+                    == (expected, Some(expected))
+            })
         {
-            // Without a backjump, PubGrub's ordered decision prefix can only grow. `skip` also
-            // avoids cloning the retained versions from its indexed solution iterator.
+            // A valid journal contains only successful decisions, in PubGrub order. Iterating
+            // the journal avoids cloning every retained version in the solution iterator.
+            let journal = journal.as_mut().expect("the decision journal is valid");
             debug_assert!(
                 self.decisions
                     .iter()
                     .map(|decision| (decision.package, decision.version.clone()))
-                    .eq(state
-                        .pubgrub
-                        .partial_solution
-                        .extract_solution()
-                        .take(self.decisions.len())),
-                "the retained decision prefix changed without a backjump",
+                    .chain(journal.iter().cloned())
+                    .eq(state.pubgrub.partial_solution.extract_solution()),
+                "the decision journal does not match the current solution",
             );
-            for (package, version) in decisions.skip(self.decisions.len()) {
+            for (package, version) in journal.drain(..) {
                 self.push_decision(state, package, version, marker, ledger, identities);
             }
         } else {
             self.has_missing_pins = false;
             let mut retained = 0;
-            for (package, version) in decisions {
+            for (package, version) in state.pubgrub.partial_solution.extract_solution() {
                 if self.decisions.get(retained).is_some_and(|previous| {
                     previous.package == package && previous.version == version
                 }) {
@@ -300,8 +303,11 @@ impl ForkObservations {
                 retained += 1;
             }
             self.truncate(retained, ledger);
+            if let Some(journal) = &mut journal {
+                journal.clear();
+            }
         }
-        self.backtrack_generation = state.backtrack_generation;
+        state.decision_journal = Some(journal.unwrap_or_default());
         self.marker = marker;
         self.source_sizes = source_sizes;
     }
@@ -442,11 +448,14 @@ struct LiveFork {
 
 impl LiveFork {
     fn new(
-        state: ForkState,
+        mut state: ForkState,
         ledger: &mut ObservationLedger,
         identities: &mut SourceIdentities,
     ) -> Self {
-        let observations = ForkObservations::new(&state, ledger, identities);
+        // Split children may inherit a parent's pending entries. The new owner must observe the
+        // complete solution under its own environment before it can consume appended decisions.
+        state.decision_journal = None;
+        let observations = ForkObservations::new(&mut state, ledger, identities);
         Self {
             state,
             observations,
@@ -465,7 +474,8 @@ struct CompletedFork {
 }
 
 impl CompletedFork {
-    fn new(state: ForkState, observations: Observations) -> Self {
+    fn new(mut state: ForkState, observations: Observations) -> Self {
+        state.decision_journal = None;
         Self {
             checkpoint: state.clone(),
             states: vec![state],
@@ -532,9 +542,13 @@ pub(super) fn solve<InstalledPackages: InstalledPackagesProvider>(
         // preferences apply. The normal candidate cache does not include either in its key.
         state.selected_versions.clear();
         let yield_decisions = !live.is_empty() || !completed.is_empty();
+        if !yield_decisions {
+            // No other owner can observe intermediate decisions until this fork splits or ends.
+            state.decision_journal = None;
+        }
         match resolver.solve_fork(state, preferences, visited, requests, yield_decisions, None)? {
-            ForkOutcome::Pending(state) => {
-                observations.refresh(&state, &mut ledger, &mut identities);
+            ForkOutcome::Pending(mut state) => {
+                observations.refresh(&mut state, &mut ledger, &mut identities);
                 live.push_back(LiveFork {
                     state,
                     observations,
@@ -551,8 +565,8 @@ pub(super) fn solve<InstalledPackages: InstalledPackagesProvider>(
                         .map(|state| LiveFork::new(state, &mut ledger, &mut identities)),
                 );
             }
-            ForkOutcome::Complete(state) => {
-                observations.refresh(&state, &mut ledger, &mut identities);
+            ForkOutcome::Complete(mut state) => {
+                observations.refresh(&mut state, &mut ledger, &mut identities);
                 completed.push(CompletedFork::new(state, observations.observations));
             }
         }
@@ -1101,6 +1115,7 @@ fn prepare_trial(
     remaining_steps: &mut usize,
 ) -> Option<ForkState> {
     let mut state = checkpoint.clone();
+    state.decision_journal = None;
     let packages: Vec<_> = agreements
         .iter()
         .map(|(package, version)| {
@@ -1133,7 +1148,7 @@ fn prepare_trial(
     if let Some(package) = backtrack
         && state.pubgrub.backtrack_package(package).is_some()
     {
-        state.backtrack_generation = state.backtrack_generation.wrapping_add(1);
+        state.decision_journal = None;
     }
     for (package, version) in &packages {
         state
@@ -1160,7 +1175,7 @@ fn prepare_trial(
             state.next = *package;
             let conflicts = state.pubgrub.unit_propagation(*package).ok()?;
             if !conflicts.is_empty() {
-                state.backtrack_generation = state.backtrack_generation.wrapping_add(1);
+                state.decision_journal = None;
             }
             for (affected, incompatibility) in conflicts {
                 state.record_conflict(affected, None, incompatibility);
