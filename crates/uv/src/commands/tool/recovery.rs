@@ -556,7 +556,10 @@ fn compare_entrypoint_location(
                 if left.kind() == io::ErrorKind::NotFound
                     && right.kind() == io::ErrorKind::NotFound =>
             {
-                if !missing_are_distinct && uv_windows::names_equal_ordinal(left_name, right_name)?
+                if !missing_are_distinct
+                    && (uv_windows::names_equal_ordinal(left_name, right_name)?
+                        || uv_windows::could_be_dos_short_name(left_name)?
+                        || uv_windows::could_be_dos_short_name(right_name)?)
                 {
                     bail!(
                         "Cannot compare missing executable directories `{}` and `{}`",
@@ -597,7 +600,8 @@ fn compare_entrypoint_location(
         if actual_names.contains(left_name) && actual_names.contains(right_name) {
             return Ok(false);
         }
-        if !case_sensitive && uv_windows::names_equal_ordinal(left_name, right_name)? {
+        let case_equal = uv_windows::names_equal_ordinal(left_name, right_name)?;
+        if !case_sensitive && case_equal {
             return Ok(true);
         }
         // Non-case aliases (for example short names) need an exact directory-entry identity,
@@ -607,8 +611,24 @@ fn compare_entrypoint_location(
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
             Err(err) => Err(err),
         };
-        if exists(left)?
-            && exists(right)?
+        let left_exists = exists(left)?;
+        let right_exists = exists(right)?;
+        if case_sensitive && case_equal && (!left_exists || !right_exists) {
+            return Ok(false);
+        }
+        if (!left_exists || !right_exists)
+            && !missing_are_distinct
+            && (uv_windows::could_be_dos_short_name(left_name)?
+                || uv_windows::could_be_dos_short_name(right_name)?)
+        {
+            bail!(
+                "Cannot compare executable directory entries `{}` and `{}` while a possible short-name alias is missing",
+                left.user_display(),
+                right.user_display()
+            );
+        }
+        if left_exists
+            && right_exists
             && uv_windows::FileIdentity::from_file(&open_entry(left)?)?
                 == uv_windows::FileIdentity::from_file(&open_entry(right)?)?
         {
@@ -626,7 +646,38 @@ fn compare_entrypoint_location(
 mod tests {
     use super::ExportFingerprint;
     #[cfg(windows)]
-    use super::same_entrypoint_location;
+    use super::{same_entrypoint_location, same_existing_entrypoint_location};
+
+    #[cfg(windows)]
+    #[test]
+    fn missing_short_names_require_admission() -> anyhow::Result<()> {
+        use std::ffi::OsStr;
+        assert!(uv_windows::could_be_dos_short_name(OsStr::new(
+            "CUSTOM.EXE"
+        ))?);
+        assert!(uv_windows::could_be_dos_short_name(OsStr::new(
+            "LONGFI~1.EXE"
+        ))?);
+        assert!(!uv_windows::could_be_dos_short_name(OsStr::new(
+            "unambiguously-long.exe"
+        ))?);
+        let directory = tempfile::tempdir()?;
+        let long = directory.path().join("unambiguously-long.exe");
+        let short = directory.path().join("CUSTOM.EXE");
+        assert!(same_entrypoint_location(&long, &short).is_err());
+        assert!(!same_existing_entrypoint_location(&long, &short)?);
+        let missing_long = directory
+            .path()
+            .join("missing")
+            .join("unambiguously-long.exe");
+        let missing_short = directory.path().join("missing").join("CUSTOM.EXE");
+        assert!(same_entrypoint_location(&missing_long, &missing_short).is_err());
+        assert!(!same_existing_entrypoint_location(
+            &missing_long,
+            &missing_short
+        )?);
+        Ok(())
+    }
 
     #[cfg(unix)]
     #[test]

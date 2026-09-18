@@ -12,10 +12,12 @@ use std::path::Path;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
 use windows::Win32::Storage::FileSystem::{
-    FILE_CASE_SENSITIVE_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_ID_INFO, FileCaseSensitiveInfo, FileIdInfo, GetFileInformationByHandleEx,
+    CheckNameLegalDOS8Dot3W, FILE_CASE_SENSITIVE_INFO, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FileCaseSensitiveInfo, FileIdInfo,
+    GetFileInformationByHandleEx,
 };
 use windows::Win32::System::SystemServices::FILE_CS_FLAG_CASE_SENSITIVE_DIR;
+use windows::core::{BOOL, PCWSTR};
 
 /// A volume serial number and the complete 128-bit file identifier.
 ///
@@ -96,4 +98,32 @@ pub fn names_equal_ordinal(left: &OsStr, right: &OsStr) -> io::Result<bool> {
         return Err(io::Error::last_os_error());
     }
     Ok(result == CSTR_EQUAL)
+}
+
+/// Whether a missing filename could be a historical DOS short spelling.
+///
+/// DOS-name legality does not predict which alias a filesystem assigns. The length fallback
+/// deliberately also covers short names whose original OEM code page is no longer available.
+#[expect(unsafe_code)]
+pub fn could_be_dos_short_name(name: &OsStr) -> io::Result<bool> {
+    let mut name = name.encode_wide().collect::<Vec<_>>();
+    if name.contains(&0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "NUL in filename",
+        ));
+    }
+    // GetLongPathName documents that a component longer than 12 characters, or with an
+    // extension longer than three characters, cannot require short-name expansion.
+    let bounded = name.len() <= 12
+        && name
+            .iter()
+            .rposition(|unit| *unit == u16::from(b'.'))
+            .is_none_or(|dot| name.len() - dot - 1 <= 3);
+    name.push(0);
+    let mut legal = BOOL::default();
+    // SAFETY: `name` is NUL-terminated with no embedded NUL, and `legal` is a live output.
+    unsafe { CheckNameLegalDOS8Dot3W(PCWSTR(name.as_ptr()), None, None, &raw mut legal) }
+        .map_err(io::Error::other)?;
+    Ok(legal.as_bool() || bounded)
 }

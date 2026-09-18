@@ -20,7 +20,8 @@ pub use ctrl_handler::{CtrlHandlerError, install_ctrl_handler};
 pub use exception::install_unhandled_exception_handler;
 #[cfg(feature = "std")]
 pub use file_identity::{
-    FileIdentity, directory_is_case_sensitive, names_equal_ordinal, open_directory, open_file_entry,
+    FileIdentity, could_be_dos_short_name, directory_is_case_sensitive, names_equal_ordinal,
+    open_directory, open_file_entry,
 };
 pub use job::{Job, JobError};
 #[cfg(feature = "std")]

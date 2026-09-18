@@ -7,7 +7,7 @@ use std::io::{Read, Seek};
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 #[cfg(windows)]
-use std::os::windows::ffi::OsStringExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -3694,6 +3694,265 @@ fn native_system_directory() -> Result<PathBuf> {
         "Native system directory exceeds the fixture bound"
     );
     Ok(PathBuf::from(OsString::from_wide(&buffer[..length])))
+}
+
+#[cfg(windows)]
+#[expect(unsafe_code)]
+fn observed_short_path(path: &Path, assigned_name: Option<&str>) -> Result<PathBuf> {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        #[link_name = "GetShortPathNameW"]
+        fn get_short_path_name(path: *const u16, buffer: *mut u16, size: u32) -> u32;
+    }
+    let parent = path.parent().expect("test export parent");
+    anyhow::ensure!(
+        !uv_windows::directory_is_case_sensitive(&uv_windows::open_directory(parent)?)?,
+        "The short-name fixture requires a case-insensitive directory"
+    );
+    // Provision only this owned file. A failed short-name precondition is a failed native gate.
+    if let Some(assigned_name) = assigned_name {
+        Command::new(native_system_directory()?.join("fsutil.exe"))
+            .args(["file", "setshortname"])
+            .arg(path)
+            .arg(assigned_name)
+            .assert()
+            .success();
+    }
+    let mut wide = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    anyhow::ensure!(!wide.contains(&0), "NUL in short-name fixture path");
+    wide.push(0);
+    let mut buffer = vec![0_u16; 32768];
+    // SAFETY: The input is NUL-terminated, and the output has the declared initialized length.
+    let length = unsafe {
+        get_short_path_name(
+            wide.as_ptr(),
+            buffer.as_mut_ptr(),
+            u32::try_from(buffer.len())?,
+        )
+    };
+    if length == 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let length = usize::try_from(length)?;
+    anyhow::ensure!(
+        length < buffer.len(),
+        "Short-name fixture exceeds its bound"
+    );
+    let observed = PathBuf::from(OsString::from_wide(&buffer[..length]));
+    let filename = observed.file_name().expect("observed short filename");
+    let alias = parent.join(filename);
+    anyhow::ensure!(
+        filename != path.file_name().expect("long filename")
+            && uv_windows::could_be_dos_short_name(filename)?,
+        "The native fixture did not establish the requested distinct short spelling"
+    );
+    if let Some(assigned_name) = assigned_name {
+        anyhow::ensure!(
+            uv_windows::names_equal_ordinal(filename, std::ffi::OsStr::new(assigned_name))?,
+            "The native fixture did not observe the assigned short spelling"
+        );
+    }
+    anyhow::ensure!(
+        uv_windows::FileIdentity::from_file(&uv_windows::open_file_entry(path)?)?
+            == uv_windows::FileIdentity::from_file(&uv_windows::open_file_entry(&alias)?)?,
+        "Observed short spelling does not identify the owned export"
+    );
+    let actual_names = fs_err::read_dir(parent)?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    anyhow::ensure!(
+        actual_names
+            .iter()
+            .any(|name| name == path.file_name().expect("long filename"))
+            && !actual_names.iter().any(|name| name == filename),
+        "The long and short spellings did not identify one enumerated entry"
+    );
+    Ok(alias)
+}
+
+/// A missing historical short spelling cannot release another receipt's export claim.
+#[cfg(windows)]
+#[test]
+fn tool_install_recovery_rejects_missing_short_name_claims() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    let bin = context.temp_dir.child("bin");
+    let tools = context.temp_dir.child("tools");
+    links.create_dir_all()?;
+    for (name, commands) in [
+        (
+            "short-alias-root",
+            vec![("owned-long-recovery-command", "root")],
+        ),
+        (
+            "short-alias-peer",
+            vec![
+                ("owned-long-recovery-command", "peer"),
+                ("unrelated-long-peer-command", "unrelated"),
+            ],
+        ),
+    ] {
+        write_recovery_wheel(links.path(), name, "1.0.0", &[], &commands)?;
+        context
+            .tool_install()
+            .arg(name)
+            .args(["--no-index", "--find-links"])
+            .arg(links.path())
+            .arg("--force")
+            .assert()
+            .success();
+    }
+    let long = bin.child("owned-long-recovery-command.exe");
+    let peer_export = bin.child("unrelated-long-peer-command.exe");
+    let peer_export_bytes = fs_err::read(peer_export.path())?;
+    let alias = observed_short_path(long.path(), Some("UVALIAS.EXE"))?;
+    let peer_source = venv_bin_path(tools.child("short-alias-peer").path())
+        .join("owned-long-recovery-command.exe");
+    let peer_source_alias = observed_short_path(&peer_source, Some("UVALIAS.EXE"))?;
+    assert_eq!(alias.file_name(), peer_source_alias.file_name());
+    let peer_receipt = tools.child("short-alias-peer").child("uv-receipt.toml");
+    let mut document =
+        fs_err::read_to_string(peer_receipt.path())?.parse::<toml_edit::DocumentMut>()?;
+    let entries = document["tool"]["entrypoints"]
+        .as_array_mut()
+        .expect("entrypoints");
+    assert_eq!(entries.len(), 2);
+    entries
+        .iter_mut()
+        .find(|entry| {
+            entry
+                .as_inline_table()
+                .and_then(|entry| entry.get("name"))
+                .and_then(toml_edit::Value::as_str)
+                == Some("owned-long-recovery-command")
+        })
+        .expect("peer shared entry")
+        .as_inline_table_mut()
+        .expect("entry table")
+        .insert(
+            "install-path",
+            toml_edit::Value::from(alias.to_str().expect("UTF-8 alias")),
+        );
+    peer_receipt.write_str(&document.to_string())?;
+    let receipts = [
+        tools.child("short-alias-root").child("uv-receipt.toml"),
+        peer_receipt,
+    ];
+    let receipt_bytes = receipts
+        .iter()
+        .map(|path| fs_err::read(path.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let package_paths = ["short-alias-root", "short-alias-peer"]
+        .map(|name| site_packages_path(tools.child(name).path(), "python3.13"));
+    let packages = package_paths
+        .iter()
+        .map(|path| dirhash_path(path))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    fs_err::remove_file(long.path())?;
+    anyhow::ensure!(!alias.exists(), "Observed alias survived removal");
+    for force in [false, true] {
+        let mut command = context.tool_install();
+        command
+            .args(["short-alias-root", "--no-index", "--find-links"])
+            .arg(links.path());
+        if force {
+            command.arg("--force");
+        }
+        command.assert().code(2).stderr(predicate::str::contains(
+            "possible short-name alias is missing",
+        ));
+    }
+    context
+        .tool_upgrade()
+        .args(["short-alias-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "possible short-name alias is missing",
+        ));
+    long.assert(predicate::path::missing());
+    assert!(!alias.exists());
+    assert_eq!(fs_err::read(peer_export.path())?, peer_export_bytes);
+    for (path, bytes) in receipts.iter().zip(&receipt_bytes) {
+        assert_eq!(fs_err::read(path.path())?, *bytes);
+    }
+    for (path, bytes) in package_paths.iter().zip(&packages) {
+        assert_eq!(dirhash_path(path)?, *bytes);
+    }
+    Ok(())
+}
+
+/// Two absent planned names cannot be admitted using a short spelling observed before deletion.
+#[cfg(windows)]
+#[test]
+fn tool_install_recovery_rejects_planned_short_name_aliases() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    let bin = context.temp_dir.child("bin");
+    let environment = context.temp_dir.child("tools").child("planned-alias-root");
+    links.create_dir_all()?;
+    write_recovery_wheel(
+        links.path(),
+        "planned-alias-root",
+        "1.0.0",
+        &[],
+        &[("existing-long-recovery-command", "existing-1")],
+    )?;
+    context
+        .tool_install()
+        .args(["planned-alias-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .success();
+    let existing = bin.child("existing-long-recovery-command.exe");
+    let existing_bytes = fs_err::read(existing.path())?;
+    let receipt = environment.child("uv-receipt.toml");
+    let receipt_bytes = fs_err::read(receipt.path())?;
+    let long = bin.child("planned-long-recovery-command.exe");
+    long.write_str("owned alias calibration")?;
+    let alias = observed_short_path(long.path(), None)?;
+    let alias_command = alias
+        .file_stem()
+        .expect("short command")
+        .to_str()
+        .expect("UTF-8 command");
+    fs_err::remove_file(long.path())?;
+    assert!(!alias.exists());
+    long.write_str("owned alias recreation")?;
+    assert_eq!(observed_short_path(long.path(), None)?, alias);
+    fs_err::remove_file(long.path())?;
+    assert!(!alias.exists());
+    write_recovery_wheel(
+        links.path(),
+        "planned-alias-root",
+        "2.0.0",
+        &[],
+        &[
+            ("planned-long-recovery-command", "long-2"),
+            (alias_command, "short-2"),
+        ],
+    )?;
+    context
+        .tool_upgrade()
+        .args(["planned-alias-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "possible short-name alias is missing",
+        ));
+    assert_eq!(fs_err::read(existing.path())?, existing_bytes);
+    assert_eq!(fs_err::read(receipt.path())?, receipt_bytes);
+    long.assert(predicate::path::missing());
+    assert!(!alias.exists());
+    // Package replacement precedes discovery of new names; export admission is not rollback.
+    assert!(
+        site_packages_path(environment.path(), "python3.13")
+            .join("planned_alias_root-2.0.0.dist-info")
+            .is_dir()
+    );
+    Ok(())
 }
 
 #[cfg(windows)]
