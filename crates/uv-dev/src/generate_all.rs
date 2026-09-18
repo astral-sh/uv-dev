@@ -38,6 +38,7 @@ pub(crate) async fn main(args: &Args) -> Result<()> {
         generate_json_schema::Target::Version,
         generate_json_schema::Target::SelfVersion,
         generate_json_schema::Target::PythonList,
+        generate_json_schema::Target::Audit,
         generate_json_schema::Target::JsonlProgress,
         generate_json_schema::Target::WorkspaceMetadataJsonl,
         generate_json_schema::Target::ToolListJsonl,
@@ -47,6 +48,7 @@ pub(crate) async fn main(args: &Args) -> Result<()> {
         generate_json_schema::Target::VersionJsonl,
         generate_json_schema::Target::SelfVersionJsonl,
         generate_json_schema::Target::PythonListJsonl,
+        generate_json_schema::Target::AuditJsonl,
     ] {
         generate_json_schema::main(&generate_json_schema::Args {
             mode: args.mode,

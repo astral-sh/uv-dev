@@ -1,14 +1,76 @@
-use anyhow::Result;
+use std::process::{Command, Output};
+use std::sync::LazyLock;
+
+use anyhow::{Context, Result, anyhow};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
-use serde_json::json;
+use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_static::EnvVars;
+use uv_test::json_schema::JsonSchema;
+use uv_test::jsonl::{JsonlOutput, JsonlResultExpectation};
 use uv_test::packse::PackseServer;
 use uv_test::uv_snapshot;
+
+static AUDIT_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> = LazyLock::new(|| {
+    JsonSchema::new(include_str!(
+        "../../../../docs/reference/internals/audit.schema.json"
+    ))
+    .map_err(|error| error.to_string())
+});
+
+static AUDIT_JSONL_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> =
+    LazyLock::new(|| {
+        JsonSchema::new(include_str!(
+            "../../../../docs/reference/internals/audit-jsonl.schema.json"
+        ))
+        .map_err(|error| error.to_string())
+    });
+
+fn parse_audit_report(contents: &[u8]) -> Result<Value> {
+    AUDIT_SCHEMA
+        .as_ref()
+        .map_err(|error| anyhow!("invalid audit schema: {error}"))?
+        .parse(contents)
+        .context("audit schema mismatch")
+}
+
+fn jsonl_audit(context: &uv_test::TestContext, service_url: &str) -> Command {
+    let mut command = context.audit();
+    command.env_remove(EnvVars::RUST_LOG).args([
+        "--preview-features",
+        "audit,jsonl",
+        "--output-format",
+        "jsonl",
+        "--frozen",
+        "--service-url",
+        service_url,
+    ]);
+    command
+}
+
+fn parse_audit_jsonl(output: &Output, expectation: JsonlResultExpectation) -> Result<JsonlOutput> {
+    let schema = AUDIT_JSONL_SCHEMA
+        .as_ref()
+        .map_err(|error| anyhow!("invalid JSONL audit schema: {error}"))?;
+    JsonlOutput::parse(schema, output, expectation)
+}
+
+fn parse_audit_jsonl_report(output: &Output) -> Result<(Vec<Value>, Value)> {
+    let parsed = parse_audit_jsonl(output, JsonlResultExpectation::Required)?;
+    let mut result = parsed.result.context("missing JSONL audit result")?;
+    result
+        .as_object_mut()
+        .context("expected an object-valued audit result")?
+        .remove("type");
+    Ok((
+        parsed.progress,
+        parse_audit_report(&serde_json::to_vec(&result)?)?,
+    ))
+}
 
 #[test]
 fn audit_invalid_service_url() {
@@ -163,7 +225,7 @@ async fn audit_no_vulnerabilities() {
 
 /// Audit a project with no vulnerabilities found, emitting JSON output.
 #[tokio::test]
-async fn audit_json_no_vulnerabilities() {
+async fn audit_json_no_vulnerabilities() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let proxy = crate::pypi_proxy::start().await;
     write_audit_output_project(&context.temp_dir, &proxy.url("/simple"));
@@ -178,7 +240,7 @@ async fn audit_json_no_vulnerabilities() {
         .mount(&server)
         .await;
 
-    uv_snapshot!(context.filters(), context
+    let output = uv_snapshot!(context.filters(), context
         .audit()
         .arg("--preview-features")
         .arg("audit,json-output")
@@ -202,10 +264,43 @@ async fn audit_json_no_vulnerabilities() {
       "adverse_statuses": []
     }
     "#);
+    let expected = parse_audit_report(&output.stdout)?;
+    assert_eq!(expected["summary"]["audited_packages"], 1);
+    let quiet = context
+        .audit()
+        .args([
+            "--preview-features",
+            "audit,json-output",
+            "--output-format",
+            "json",
+            "--frozen",
+            "--service-url",
+            &server.uri(),
+            "-q",
+        ])
+        .output()?;
+    assert!(quiet.status.success());
+    assert_eq!(parse_audit_report(&quiet.stdout)?, expected);
+    let silent = context
+        .audit()
+        .args([
+            "--preview-features",
+            "audit,json-output",
+            "--output-format",
+            "json",
+            "--frozen",
+            "--service-url",
+            &server.uri(),
+            "-qq",
+        ])
+        .output()?;
+    assert!(silent.status.success());
+    assert!(silent.stdout.is_empty());
+    Ok(())
 }
 
 #[tokio::test]
-async fn audit_jsonl_no_vulnerabilities() {
+async fn audit_jsonl_no_vulnerabilities() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let proxy = crate::pypi_proxy::start().await;
     write_audit_output_project(&context.temp_dir, &proxy.url("/simple"));
@@ -220,7 +315,7 @@ async fn audit_jsonl_no_vulnerabilities() {
         .mount(&server)
         .await;
 
-    uv_snapshot!(context.filters(), context
+    let output = uv_snapshot!(context.filters(), context
         .audit()
         .arg("--preview-features")
         .arg("audit,jsonl")
@@ -237,11 +332,25 @@ async fn audit_jsonl_no_vulnerabilities() {
     {"type":"result","schema":{"version":"preview"},"summary":{"audited_packages":1,"vulnerabilities":0,"adverse_statuses":0},"vulnerabilities":[],"adverse_statuses":[]}
     "#
     );
+    let (progress, expected) = parse_audit_jsonl_report(&output)?;
+    assert_eq!(progress.len(), 3);
+    for mode in ["-q", "--no-progress"] {
+        let output = jsonl_audit(&context, &server.uri()).arg(mode).output()?;
+        assert!(output.status.success());
+        let (progress, report) = parse_audit_jsonl_report(&output)?;
+        assert!(progress.is_empty());
+        assert_eq!(report, expected);
+    }
+    let silent = jsonl_audit(&context, &server.uri()).arg("-qq").output()?;
+    assert!(silent.status.success());
+    assert!(silent.stdout.is_empty());
+    parse_audit_jsonl(&silent, JsonlResultExpectation::Forbidden)?;
+    Ok(())
 }
 
 /// Requesting JSON output warns unless the JSON preview feature is enabled.
 #[tokio::test]
-async fn audit_json_preview_warning() {
+async fn audit_json_preview_warning() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let proxy = crate::pypi_proxy::start().await;
     write_audit_output_project(&context.temp_dir, &proxy.url("/simple"));
@@ -256,7 +365,7 @@ async fn audit_json_preview_warning() {
         .mount(&server)
         .await;
 
-    uv_snapshot!(context.filters(), context
+    let output = uv_snapshot!(context.filters(), context
         .audit()
         .arg("--preview-features")
         .arg("audit")
@@ -283,6 +392,8 @@ async fn audit_json_preview_warning() {
     ----- stderr -----
     warning: The `--output-format json` option is experimental and the schema may change without warning. Pass `--preview-features json-output` to disable this warning.
     "#);
+    parse_audit_report(&output.stdout)?;
+    Ok(())
 }
 
 /// Audit a project and find a single vulnerability with summary, fix version, and advisory link.
@@ -1913,12 +2024,11 @@ async fn audit_script_no_dependencies() {
 
 /// Audit a PEP 723 script with --frozen but no lockfile should error.
 #[tokio::test]
-async fn audit_script_frozen_missing_lockfile() {
+async fn audit_script_frozen_missing_lockfile() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let script = context.temp_dir.child("script.py");
-    script
-        .write_str(indoc! {r#"
+    script.write_str(indoc! {r#"
         # /// script
         # requires-python = ">=3.12"
         # dependencies = [
@@ -1926,8 +2036,7 @@ async fn audit_script_frozen_missing_lockfile() {
         # ]
         # ///
         import iniconfig
-    "#})
-        .unwrap();
+    "#})?;
 
     // No lockfile written — --frozen should fail.
     let server = MockServer::start().await;
@@ -1945,6 +2054,41 @@ async fn audit_script_frozen_missing_lockfile() {
     ----- stderr -----
     error: Unable to find lockfile at `script.py.lock`, but `--frozen` was provided. To create a lockfile, run `uv lock` or `uv sync` without the flag.
     ");
+
+    for format in ["json", "jsonl"] {
+        for mode in [None, Some("-q"), Some("--no-progress"), Some("-qq")] {
+            let mut command = context.audit();
+            command.env_remove(EnvVars::RUST_LOG).args([
+                "--frozen",
+                "--preview-features",
+                "audit,json-output,jsonl",
+                "--output-format",
+                format,
+                "--script",
+                "script.py",
+                "--service-url",
+                &server.uri(),
+            ]);
+            if let Some(mode) = mode {
+                command.arg(mode);
+            }
+            let output = command.output()?;
+            assert_eq!(output.status.code(), Some(1));
+            assert!(output.stdout.is_empty());
+            if format == "jsonl" {
+                let parsed = parse_audit_jsonl(&output, JsonlResultExpectation::Forbidden)?;
+                assert!(parsed.progress.is_empty());
+            }
+        }
+    }
+    assert!(
+        server
+            .received_requests()
+            .await
+            .context("audit service request recording is disabled")?
+            .is_empty()
+    );
+    Ok(())
 }
 
 /// Audit a PEP 723 script with multiple dependencies.
@@ -2402,7 +2546,7 @@ async fn audit_vulnerability_and_project_status() {
 /// JSON output includes vulnerabilities and adverse project statuses in the
 /// same audit report.
 #[tokio::test]
-async fn audit_json_vulnerability_and_project_status() {
+async fn audit_json_vulnerability_and_project_status() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let proxy = crate::pypi_proxy::start().await;
     write_audit_output_project(&context.temp_dir, &proxy.url("/status/archived/simple"));
@@ -2443,7 +2587,7 @@ async fn audit_json_vulnerability_and_project_status() {
         .mount(&server)
         .await;
 
-    uv_snapshot!(context.filters(), context
+    let output = uv_snapshot!(context.filters(), context
         .audit()
         .arg("--preview-features")
         .arg("audit,json-output")
@@ -2491,6 +2635,27 @@ async fn audit_json_vulnerability_and_project_status() {
       ]
     }
     "#);
+    let expected = parse_audit_report(&output.stdout)?;
+    assert_eq!(expected["summary"]["vulnerabilities"], 1);
+    assert_eq!(expected["summary"]["adverse_statuses"], 1);
+    for mode in [None, Some("-q"), Some("--no-progress")] {
+        let mut command = jsonl_audit(&context, &server.uri());
+        if let Some(mode) = mode {
+            command.arg(mode);
+        }
+        let output = command.output()?;
+        assert_eq!(output.status.code(), Some(1));
+        let (progress, report) = parse_audit_jsonl_report(&output)?;
+        if mode.is_some() {
+            assert!(progress.is_empty());
+        }
+        assert_eq!(report, expected);
+    }
+    let silent = jsonl_audit(&context, &server.uri()).arg("-qq").output()?;
+    assert_eq!(silent.status.code(), Some(1));
+    assert!(silent.stdout.is_empty());
+    parse_audit_jsonl(&silent, JsonlResultExpectation::Forbidden)?;
+    Ok(())
 }
 
 /// SARIF output includes vulnerabilities and adverse project statuses in the

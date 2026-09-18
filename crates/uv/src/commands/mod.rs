@@ -37,6 +37,10 @@ pub(crate) use pip::uninstall::pip_uninstall;
 pub(crate) use project::ProjectError;
 pub(crate) use project::add::add;
 pub(crate) use project::audit::audit;
+#[cfg(feature = "schemars")]
+pub use project::audit::json::project_json_schema as audit_json_schema;
+#[cfg(feature = "schemars")]
+pub use project::audit::json::project_jsonl_schema as audit_jsonl_schema;
 pub(crate) use project::check::check;
 pub(crate) use project::export::export;
 pub(crate) use project::format::format;

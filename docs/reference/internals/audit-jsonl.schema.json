@@ -1,0 +1,267 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "uv audit JSONL (preview)",
+  "description": "A single record in a command's preview JSONL stream.",
+  "anyOf": [
+    {
+      "$ref": "#/definitions/JsonlProgressEvent"
+    },
+    {
+      "$ref": "#/definitions/JsonlResult"
+    }
+  ],
+  "definitions": {
+    "AdverseStatus": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "reason": {
+          "type": ["string", "null"]
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": ["name", "status", "reason"]
+    },
+    "Dependency": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": ["name", "version"]
+    },
+    "JsonlProgressEvent": {
+      "title": "uv JSONL progress (preview)",
+      "description": "A progress update emitted before a command's final JSONL result.\n\nConcurrent operations are correlated using their process-wide `id`. Top-level\nphases omit `id`, since only one instance of each phase is active at a time.\nOperations can complete without an intermediate update.",
+      "type": "object",
+      "properties": {
+        "completed": {
+          "description": "Completed bytes for transfers, or completed packages for package phases.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "id": {
+          "description": "A process-wide identifier shared by all events for one concurrent operation.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "name": {
+          "description": "The package, distribution, or source currently being processed.",
+          "type": "string"
+        },
+        "phase": {
+          "description": "The operation being reported, such as `download`, `build`, or `install`.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProgressPhase"
+            }
+          ]
+        },
+        "revision": {
+          "description": "The Git revision associated with a checkout operation.",
+          "type": "string"
+        },
+        "status": {
+          "description": "The operation's current lifecycle state.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProgressStatus"
+            }
+          ]
+        },
+        "total": {
+          "description": "The fixed total bytes or packages for this operation, when known.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "type": {
+          "description": "Distinguishes progress updates from the final command result.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProgressType"
+            }
+          ]
+        },
+        "url": {
+          "description": "The source URL associated with a resolution or checkout operation.",
+          "type": "string"
+        },
+        "version": {
+          "description": "The selected package version, when available.",
+          "type": "string"
+        }
+      },
+      "required": ["type", "phase", "status"]
+    },
+    "JsonlResult": {
+      "description": "An object-valued command result with the JSONL discriminator.",
+      "type": "object",
+      "properties": {
+        "adverse_statuses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AdverseStatus"
+          }
+        },
+        "schema": {
+          "$ref": "#/definitions/Schema"
+        },
+        "summary": {
+          "$ref": "#/definitions/Summary"
+        },
+        "type": {
+          "description": "Distinguishes the final command result from progress updates.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResultType"
+            }
+          ]
+        },
+        "vulnerabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Vulnerability"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "schema",
+        "summary",
+        "vulnerabilities",
+        "adverse_statuses"
+      ]
+    },
+    "ProgressPhase": {
+      "description": "An operation reported by the preview JSONL interface.",
+      "type": "string",
+      "enum": [
+        "audit",
+        "build",
+        "checkout",
+        "download",
+        "extract",
+        "hash",
+        "install",
+        "latest_version",
+        "prepare",
+        "resolve",
+        "upload"
+      ]
+    },
+    "ProgressStatus": {
+      "description": "The lifecycle of an operation: started, optionally updated, then completed.",
+      "type": "string",
+      "enum": ["started", "updated", "completed"]
+    },
+    "ProgressType": {
+      "type": "string",
+      "enum": ["progress"]
+    },
+    "ResultType": {
+      "type": "string",
+      "enum": ["result"]
+    },
+    "Schema": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "$ref": "#/definitions/SchemaVersion"
+        }
+      },
+      "required": ["version"]
+    },
+    "SchemaVersion": {
+      "type": "string",
+      "enum": ["preview"]
+    },
+    "Summary": {
+      "type": "object",
+      "properties": {
+        "adverse_statuses": {
+          "type": "integer",
+          "format": "uint",
+          "maximum": 18446744073709551615,
+          "minimum": 0
+        },
+        "audited_packages": {
+          "type": "integer",
+          "format": "uint",
+          "maximum": 18446744073709551615,
+          "minimum": 0
+        },
+        "vulnerabilities": {
+          "type": "integer",
+          "format": "uint",
+          "maximum": 18446744073709551615,
+          "minimum": 0
+        }
+      },
+      "required": ["audited_packages", "vulnerabilities", "adverse_statuses"]
+    },
+    "Vulnerability": {
+      "type": "object",
+      "properties": {
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dependency": {
+          "$ref": "#/definitions/Dependency"
+        },
+        "description": {
+          "type": ["string", "null"]
+        },
+        "display_id": {
+          "type": "string"
+        },
+        "fix_versions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "link": {
+          "type": ["string", "null"]
+        },
+        "modified": {
+          "type": ["string", "null"]
+        },
+        "published": {
+          "type": ["string", "null"]
+        },
+        "summary": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": [
+        "dependency",
+        "id",
+        "display_id",
+        "aliases",
+        "summary",
+        "description",
+        "link",
+        "fix_versions",
+        "published",
+        "modified"
+      ]
+    }
+  }
+}
