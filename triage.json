@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 6568,
+        "title": "Race condition when two libraries update the same __init__.py",
+        "url": "https://github.com/astral-sh/uv/issues/6568",
+        "state": "open",
+        "reason": "Primary duplicate: it reports uv pip repeatedly producing different jwt/__init__.py contents when two distributions overwrite the same path, and its discussion explicitly considers deterministic installation order."
+      },
+      {
+        "kind": "issue",
+        "number": 13435,
+        "title": "Nondeterministic behavior of `uv pip`",
+        "url": "https://github.com/astral-sh/uv/issues/13435",
+        "state": "open",
+        "reason": "Independent reproduction of overlapping z3 distributions producing different environment contents across identical runs; the thread specifically requests deterministic ordering."
+      },
+      {
+        "kind": "pull_request",
+        "number": 13437,
+        "title": "Warn when two packages write to the same module",
+        "url": "https://github.com/astral-sh/uv/pull/13437",
+        "state": "merged",
+        "reason": "Added detection for this non-deterministic install race, but not deterministic arbitration. The warning was subsequently placed behind a preview feature and refined."
+      },
+      {
+        "kind": "issue",
+        "number": 15813,
+        "title": "Better support for conflicting transitive dependencies",
+        "url": "https://github.com/astral-sh/uv/issues/15813",
+        "state": "closed",
+        "reason": "Reports random results from concurrently installed distributions sharing namespaces. Maintainers explicitly identified arbitrary selection across repeated uv operations as problematic, though this issue focused on avoiding hybrid modules."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests. Literal searches covered same paths, install order, nondeterministic installs, Databricks and __init__.py, UV_CONCURRENT_INSTALLS, FuturesUnordered, sort_unstable_by_key, and DetectModuleConflicts. Conceptual and fix-oriented searches covered overlapping files/modules, package overrides, shared namespaces, install races, parallel wheel installation, reproducibility, deterministic ordering, and conflict warnings. Exact internal identifiers appeared only in astral-sh/uv#21819. astral-sh/uv#15357 and astral-sh/uv#16546 were inspected but ruled out as canonical because they track warning stabilization and optional errors, while astral-sh/uv#15238 and astral-sh/uv#17645 concern corruption during uninstallation."
+  },
+  "type": "duplicate",
+  "type_reason": "The behavior is incorrect, but duplicate takes precedence because open astral-sh/uv#6568 already tracks the same uv pip race involving different contents for one __init__.py and explicitly discusses defined install order. Open astral-sh/uv#13435 independently tracks the same repeated-run nondeterminism.",
+  "summary": "astral-sh/uv#6568 is the closest canonical match, astral-sh/uv#13435 confirms the same behavior, and astral-sh/uv#13437 provides preview-only detection rather than deterministic resolution.",
+  "draft_response": "Thanks for the detailed reproduction. This is the same underlying install race tracked in astral-sh/uv#6568: when distributions write different contents to the same path in one operation, the resulting file can depend on processing and write order, so identical installs are not deterministic. astral-sh/uv#13435 contains another confirmed reproduction, while astral-sh/uv#13437 added conflict detection rather than deterministic arbitration. We’ll centralize this in astral-sh/uv#6568, so I’m closing this as a duplicate."
+}
