@@ -23050,7 +23050,7 @@ fn lock_exclude_unnecessary_python_forks() -> Result<()> {
     Ok(())
 }
 
-/// A dependency outside the Python/fork intersection can cause a false version conflict.
+/// A requirement must be reachable within both `requires-python` and the current fork.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_requires_python_fork_marker_intersection() -> Result<()> {
@@ -23071,23 +23071,10 @@ fn lock_requires_python_fork_marker_intersection() -> Result<()> {
             environments = ["sys_platform == 'linux'"]
         "#})?;
 
-    let filters: Vec<_> = context
-        .filters()
-        .into_iter()
-        .chain([(
-            // This hint is only shown when the current platform doesn't match the target.
-            r"\nhint: The resolution failed for an environment that is not the current one[^\n]*\n",
-            "",
-        )])
-        .collect();
-
-    uv_snapshot!(filters, context.lock().arg("--no-index"), @"
-    exit_code: 1 (failure)
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @"
+    exit_code: 0 (success)
     ----- stderr -----
-    error: No solution found when resolving dependencies for split (markers: sys_platform == 'linux')
-      cause: Because your project depends on itself at an incompatible version (project{sys_platform == 'win32'}>1), we can conclude that your project's requirements are unsatisfiable.
-
-    hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
+    Resolved 1 package in [TIME]
     ");
 
     Ok(())
