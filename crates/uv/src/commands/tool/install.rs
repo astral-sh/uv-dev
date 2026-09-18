@@ -1074,23 +1074,25 @@ pub(crate) async fn install(
         }
         let prepared = if let (Some(preflight), Some(current)) = (&preflight, &current_environment)
         {
-            preflight
-                .prepare_replacement(
-                    current.environment(),
-                    &interpreter,
-                    &resolution,
-                    hash_strategy.clone(),
-                    Constraints::from_requirements(receipt_build_constraints.iter().cloned()),
-                    (&settings).into(),
-                    &client_builder,
-                    &state,
-                    Box::new(DefaultInstallLogger),
-                    &concurrency,
-                    &cache,
-                    printer,
-                    preview,
-                )
-                .await?
+            Some(
+                preflight
+                    .prepare_replacement(
+                        current.environment(),
+                        &interpreter,
+                        &resolution,
+                        hash_strategy.clone(),
+                        Constraints::from_requirements(receipt_build_constraints.iter().cloned()),
+                        (&settings).into(),
+                        &client_builder,
+                        &state,
+                        Box::new(DefaultInstallLogger),
+                        &concurrency,
+                        &cache,
+                        printer,
+                        preview,
+                    )
+                    .await?,
+            )
         } else {
             None
         };

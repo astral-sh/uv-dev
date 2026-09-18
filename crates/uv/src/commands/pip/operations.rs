@@ -577,7 +577,29 @@ pub(crate) enum BytecodeCompilation {
 /// An installation plan and the time required to create it.
 pub(crate) struct InstallationPlan {
     plan: Plan,
+    prepared: BTreeMap<PackageName, CachedDist>,
     elapsed: Duration,
+}
+
+/// The selected wheel inventories that are known before an installation is applied.
+#[derive(Clone, Copy)]
+pub(crate) struct PreparedWheels<'a> {
+    cached: &'a [CachedDist],
+    prepared: &'a BTreeMap<PackageName, CachedDist>,
+    remote: &'a [Arc<Dist>],
+}
+
+impl PreparedWheels<'_> {
+    pub(crate) fn get(&self, name: &PackageName) -> Option<&CachedDist> {
+        self.prepared
+            .get(name)
+            .or_else(|| self.cached.iter().find(|wheel| wheel.name() == name))
+    }
+
+    /// Whether the selected distribution still needs a wheel built in the target environment.
+    pub(crate) fn is_pending(&self, name: &PackageName) -> bool {
+        !self.prepared.contains_key(name) && self.remote.iter().any(|dist| dist.name() == name)
+    }
 }
 
 /// Which environment an early preparation must match.
@@ -590,33 +612,11 @@ pub(crate) enum PreparationMode {
 }
 
 impl InstallationPlan {
-    /// Construct an installation for a new, empty environment from an exact resolution.
-    pub(crate) fn for_new_environment(resolution: &Resolution) -> Result<Self, Error> {
-        let remote = resolution
-            .distributions()
-            .map(|dist| match dist {
-                uv_distribution_types::ResolvedDist::Installable { dist, .. } => {
-                    Ok(Arc::clone(dist))
-                }
-                uv_distribution_types::ResolvedDist::Installed { .. } => {
-                    Err(anyhow!("A new environment requires installable distributions").into())
-                }
-            })
-            .collect::<Result<Vec<_>, Error>>()?;
-        Ok(Self {
-            plan: Plan {
-                cached: Vec::new(),
-                remote,
-                reinstalls: Vec::new(),
-                extraneous: Vec::new(),
-            },
-            elapsed: Duration::ZERO,
-        })
-    }
-
-    /// Prepare a complete plan before the installer modifies its environment, when the real build
-    /// environment is already available. Shared builds that require an earlier isolated install,
-    /// or a replacement environment, continue through the normal two-phase execution path.
+    /// Prepare every wheel that does not require earlier changes to the target environment.
+    ///
+    /// Prepared remote wheels remain associated with their original installation phase. A shared
+    /// source that needs an isolated install or a replacement environment remains pending until
+    /// the normal two-phase execution reaches its real build environment.
     pub(crate) async fn prepare_before_mutation(
         &mut self,
         mode: PreparationMode,
@@ -631,31 +631,41 @@ impl InstallationPlan {
         cache: &Cache,
         logger: &dyn InstallLogger,
         printer: Printer,
-    ) -> Result<bool, Error> {
-        let has_shared_source = self.plan.remote.iter().any(|dist| {
-            matches!(dist.as_ref(), Dist::Source(_))
+    ) -> Result<(), Error> {
+        let is_shared_source = |dist: &Dist| {
+            matches!(dist, Dist::Source(_))
                 && !build_dispatch
                     .build_isolation()
                     .is_isolated(Some(dist.name()))
-        });
-        if has_shared_source {
-            match mode {
-                PreparationMode::ReplacementEnvironment => return Ok(false),
+        };
+        let has_shared_source = self
+            .plan
+            .remote
+            .iter()
+            .any(|dist| !self.prepared.contains_key(dist.name()) && is_shared_source(dist));
+        let shared_environment_ready = !has_shared_source
+            || match mode {
+                PreparationMode::ReplacementEnvironment => false,
                 PreparationMode::CurrentEnvironment => {
-                    // Use the execution partition itself: cached wheels and unrelated reinstalls
-                    // can require mutations even when every remote source has shared isolation.
+                    // Cached wheels and unrelated reinstalls can require mutations even when every
+                    // remote source has shared isolation. Use the execution partition itself.
                     let (isolated, _) = self
                         .plan
                         .clone()
                         .partition(|name| build_dispatch.build_isolation().is_isolated(Some(name)));
-                    if !isolated.is_empty() {
-                        return Ok(false);
-                    }
+                    isolated.is_empty()
                 }
-            }
-        }
+            };
+        let remote = self
+            .plan
+            .remote
+            .iter()
+            .filter(|dist| !self.prepared.contains_key(dist.name()))
+            .filter(|dist| shared_environment_ready || !is_shared_source(dist))
+            .cloned()
+            .collect();
         let wheels = prepare_wheels(
-            std::mem::take(&mut self.plan.remote),
+            remote,
             None,
             resolution,
             build_options,
@@ -670,14 +680,21 @@ impl InstallationPlan {
             printer,
         )
         .await?;
-        self.plan.cached.splice(0..0, wheels);
-        Ok(true)
+        self.prepared.extend(
+            wheels
+                .into_iter()
+                .map(|wheel| (wheel.name().clone(), wheel)),
+        );
+        Ok(())
     }
 
-    /// The wheels that will be installed, after `prepare_before_mutation` returns `true`.
-    pub(crate) fn prepared(&self) -> &[CachedDist] {
-        debug_assert!(self.plan.remote.is_empty());
-        &self.plan.cached
+    /// The known wheel inventory, including any sources whose preparation is still pending.
+    pub(crate) fn prepared(&self) -> PreparedWheels<'_> {
+        PreparedWheels {
+            cached: &self.plan.cached,
+            prepared: &self.prepared,
+            remote: &self.plan.remote,
+        }
     }
 
     /// Determine the changes required to make an environment satisfy a resolution.
@@ -718,6 +735,7 @@ impl InstallationPlan {
 
         Ok(Self {
             plan,
+            prepared: BTreeMap::new(),
             elapsed: start.elapsed(),
         })
     }
@@ -749,7 +767,7 @@ impl InstallationPlan {
     ) -> Result<Changelog, Error> {
         debug_assert!(self.is_noop(modifications, compile, dry_run));
 
-        let (plan, start) = self.into_parts();
+        let (plan, _, start) = self.into_parts();
         if dry_run.enabled() {
             report_dry_run(
                 dry_run,
@@ -766,10 +784,10 @@ impl InstallationPlan {
         }
     }
 
-    fn into_parts(self) -> (Plan, Instant) {
+    fn into_parts(self) -> (Plan, BTreeMap<PackageName, CachedDist>, Instant) {
         let now = Instant::now();
         let start = now.checked_sub(self.elapsed).unwrap_or(now);
-        (self.plan, start)
+        (self.plan, self.prepared, start)
     }
 }
 
@@ -862,7 +880,7 @@ impl InstallationPlan {
         printer: Printer,
         preview: Preview,
     ) -> Result<Changelog, Error> {
-        let (plan, start) = self.into_parts();
+        let (plan, mut prepared, start) = self.into_parts();
 
         if dry_run.enabled() {
             return report_dry_run(
@@ -921,6 +939,7 @@ impl InstallationPlan {
         if has_isolated_phase {
             let (isolated_installs, isolated_uninstalls) = execute_plan(
                 isolated_phase,
+                &mut prepared,
                 None,
                 resolution,
                 build_options,
@@ -946,6 +965,7 @@ impl InstallationPlan {
         if has_shared_phase {
             let (shared_installs, shared_uninstalls) = execute_plan(
                 shared_phase,
+                &mut prepared,
                 if has_isolated_phase {
                     Some(InstallPhase::Shared)
                 } else {
@@ -971,6 +991,7 @@ impl InstallationPlan {
             installs.extend(shared_installs);
             uninstalls.extend(shared_uninstalls);
         }
+        debug_assert!(prepared.is_empty());
 
         if let Some(compile) = compile {
             match compile {
@@ -1177,6 +1198,7 @@ async fn prepare_wheels(
 /// Execute a [`Plan`] to install distributions into a Python environment.
 async fn execute_plan(
     plan: Plan,
+    prepared: &mut BTreeMap<PackageName, CachedDist>,
     phase: Option<InstallPhase>,
     resolution: &Resolution,
     build_options: &BuildOptions,
@@ -1201,6 +1223,18 @@ async fn execute_plan(
         extraneous,
     } = plan;
 
+    let mut ready = Vec::new();
+    let remote = remote
+        .into_iter()
+        .filter_map(|dist| {
+            if let Some(wheel) = prepared.remove(dist.name()) {
+                ready.push(wheel);
+                None
+            } else {
+                Some(dist)
+            }
+        })
+        .collect();
     let wheels = prepare_wheels(
         remote,
         phase,
@@ -1260,7 +1294,11 @@ async fn execute_plan(
     }
 
     // Install the resolved distributions.
-    let mut installs = wheels.into_iter().chain(cached).collect::<Vec<_>>();
+    let mut installs = ready
+        .into_iter()
+        .chain(wheels)
+        .chain(cached)
+        .collect::<Vec<_>>();
     if !installs.is_empty() {
         let start = std::time::Instant::now();
         installs = uv_installer::Installer::new(venv, preview)
