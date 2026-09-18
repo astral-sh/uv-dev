@@ -334,6 +334,8 @@ impl CachedEnvironment {
 
         sync_environment(
             venv,
+            None,
+            None,
             resolution,
             hash_strategy,
             Modifications::Exact,

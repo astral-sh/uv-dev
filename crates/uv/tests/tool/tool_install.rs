@@ -15,7 +15,7 @@ use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
 #[cfg(feature = "test-git")]
 use assert_fs::fixture::ChildPath;
@@ -3658,6 +3658,60 @@ fn tool_install_recovery_removes_empty_root_owned_exports() -> Result<()> {
     Ok(())
 }
 
+fn write_recovery_source(
+    directory: &Path,
+    name: &str,
+    version: &str,
+    requirements: &[&str],
+    commands: &[(&str, &str)],
+    build_imports: &str,
+) -> Result<()> {
+    fs_err::create_dir_all(directory)?;
+    let wheel = write_recovery_wheel(directory, name, version, requirements, commands)?;
+    let filename = wheel
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("Invalid wheel filename")?;
+    let dist_info = format!("{}-{version}.dist-info", name.replace('-', "_"));
+    let requirements = serde_json::to_string(requirements)?;
+    fs_err::write(
+        directory.join("pyproject.toml"),
+        format!(
+            "[project]\nname = {name:?}\nversion = {version:?}\nrequires-python = \">=3.12\"\ndependencies = {requirements}\n\n[build-system]\nrequires = []\nbuild-backend = \"backend\"\nbackend-path = [\".\"]\n"
+        ),
+    )?;
+    let backend = indoc! {r#"
+        import shutil
+        import zipfile
+        from pathlib import Path
+
+        ROOT = Path(__file__).parent
+
+        def get_requires_for_build_wheel(config_settings=None):
+            return []
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            with zipfile.ZipFile(ROOT / WHEEL) as wheel:
+                for name in ("METADATA", "WHEEL"):
+                    wheel.extract(f"{DIST_INFO}/{name}", metadata_directory)
+            return DIST_INFO
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            exec(BUILD_IMPORTS)
+            with (ROOT / "build-count").open("a", newline="\n") as counter:
+                counter.write("build\n")
+            shutil.copyfile(ROOT / WHEEL, Path(wheel_directory) / WHEEL)
+            return WHEEL
+    "#};
+    fs_err::write(
+        directory.join("backend.py"),
+        format!(
+            "WHEEL = {filename:?}\nDIST_INFO = {dist_info:?}\nBUILD_IMPORTS = {build_imports:?}\n{backend}"
+        ),
+    )?;
+    Ok(())
+}
+
 /// Changed dependencies, root versions, and interpreters all use the original export authority.
 #[test]
 fn tool_install_recovery_survives_environment_updates() -> Result<()> {
@@ -3950,7 +4004,7 @@ fn tool_install_recovery_rejects_case_only_competing_claims() -> Result<()> {
     Ok(())
 }
 
-/// A newly introduced command is checked before any export is changed.
+/// A newly introduced command is checked before an isolated update changes the environment.
 #[test]
 fn tool_install_recovery_preflights_new_commands() -> Result<()> {
     let context = uv_test::test_context!("3.13").with_tool_dirs();
@@ -4001,6 +4055,8 @@ fn tool_install_recovery_preflights_new_commands() -> Result<()> {
         .collect::<std::io::Result<Vec<_>>>()?;
     let foreign_packages = site_packages_path(tools.child("simple-launcher").path(), "python3.13");
     let foreign_package_bytes = dirhash_path(&foreign_packages)?;
+    let root_packages = site_packages_path(tools.child("recovery-root").path(), "python3.13");
+    let root_package_bytes = dirhash_path(&root_packages)?;
     write_recovery_wheel(
         links.path(),
         "recovery-root",
@@ -4043,12 +4099,386 @@ fn tool_install_recovery_preflights_new_commands() -> Result<()> {
         .assert()
         .success()
         .stdout(predicate::str::diff("Hi from the simple launcher!\n").normalize());
-    // Package mutation is not rolled back by the export preflight.
+    assert_eq!(dirhash_path(&root_packages)?, root_package_bytes);
     assert!(
-        site_packages_path(tools.child("recovery-root").path(), "python3.13")
+        root_packages
+            .join("recovery_root-1.0.0.dist-info/METADATA")
+            .exists()
+    );
+    Ok(())
+}
+
+#[test]
+fn tool_install_conflict_preserves_reused_and_recreated_environments() -> Result<()> {
+    for preview in [None, Some("tool-install-locks")] {
+        for arguments in [
+            vec![],
+            vec!["--reinstall"],
+            vec!["--force"],
+            vec!["--python", "3.12"],
+        ] {
+            let context = uv_test::test_context_with_versions!(&["3.13", "3.12"]).with_tool_dirs();
+            let context = if let Some(preview) = preview {
+                context.with_env(EnvVars::UV_PREVIEW_FEATURES, preview)
+            } else {
+                context
+            };
+            let links = context.temp_dir.child("links");
+            links.create_dir_all()?;
+            let tool = context.temp_dir.child("tools").child("recovery-root");
+            let foreign = context.temp_dir.child("tools").child("recovery-foreign");
+            let bin = context.temp_dir.child("bin");
+            write_recovery_wheel(
+                links.path(),
+                "recovery-foreign",
+                "1.0.0",
+                &[],
+                &[("claimed-command", "foreign")],
+            )?;
+            write_recovery_wheel(
+                links.path(),
+                "recovery-root",
+                "1.0.0",
+                &[],
+                &[("recovery-root", "root-1")],
+            )?;
+            for name in ["recovery-foreign", "recovery-root"] {
+                context
+                    .tool_install()
+                    .args([name, "--python", "3.13", "--no-index", "--find-links"])
+                    .arg(links.path())
+                    .assert()
+                    .success();
+            }
+            let before = dirhash_path(tool.path())?;
+            let foreign_before = dirhash_path(foreign.path())?;
+            write_recovery_wheel(
+                links.path(),
+                "recovery-root",
+                "2.0.0",
+                &[],
+                &[
+                    ("recovery-root", "root-2"),
+                    ("claimed-command", "not the owner"),
+                ],
+            )?;
+            context
+                .tool_install()
+                .args(["recovery-root==2", "--no-index", "--find-links"])
+                .arg(links.path())
+                .args(&arguments)
+                .assert()
+                .code(2)
+                .stderr(predicate::str::contains(
+                    "because it is also recorded for `recovery-foreign`",
+                ));
+            assert_eq!(
+                dirhash_path(tool.path())?,
+                before,
+                "{preview:?} {arguments:?}"
+            );
+            assert_eq!(dirhash_path(foreign.path())?, foreign_before);
+            Command::new(
+                bin.child(format!("recovery-root{}", std::env::consts::EXE_SUFFIX))
+                    .path(),
+            )
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .assert()
+            .success()
+            .stdout(predicate::str::diff("root-1\n").normalize());
+            Command::new(
+                bin.child(format!("claimed-command{}", std::env::consts::EXE_SUFFIX))
+                    .path(),
+            )
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .assert()
+            .success()
+            .stdout(predicate::str::diff("foreign\n").normalize());
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn tool_install_conflict_force_only_replaces_unowned_commands() -> Result<()> {
+    for preview in [None, Some("tool-install-locks")] {
+        let context = uv_test::test_context!("3.13").with_tool_dirs();
+        let context = if let Some(preview) = preview {
+            context.with_env(EnvVars::UV_PREVIEW_FEATURES, preview)
+        } else {
+            context
+        };
+        let links = context.temp_dir.child("links");
+        links.create_dir_all()?;
+        let tool = context.temp_dir.child("tools").child("recovery-root");
+        let conflict = context
+            .temp_dir
+            .child("bin")
+            .child(format!("new-command{}", std::env::consts::EXE_SUFFIX));
+        write_recovery_wheel(
+            links.path(),
+            "recovery-root",
+            "1.0.0",
+            &[],
+            &[("recovery-root", "root-1")],
+        )?;
+        context
+            .tool_install()
+            .args(["recovery-root", "--no-index", "--find-links"])
+            .arg(links.path())
+            .assert()
+            .success();
+        conflict.write_str("external command")?;
+        let before = dirhash_path(tool.path())?;
+        write_recovery_wheel(
+            links.path(),
+            "recovery-root",
+            "2.0.0",
+            &[],
+            &[("recovery-root", "root-2"), ("new-command", "new")],
+        )?;
+        context
+            .tool_install()
+            .args(["recovery-root==2", "--no-index", "--find-links"])
+            .arg(links.path())
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains("Executable already exists:"));
+        assert_eq!(dirhash_path(tool.path())?, before);
+        conflict.assert("external command");
+        context
+            .tool_install()
+            .args(["recovery-root==2", "--force", "--no-index", "--find-links"])
+            .arg(links.path())
+            .assert()
+            .success();
+        Command::new(conflict.path())
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .assert()
+            .success()
+            .stdout(predicate::str::diff("new\n").normalize());
+    }
+    Ok(())
+}
+
+#[test]
+fn tool_install_preflight_uses_installed_version_preferences() -> Result<()> {
+    for preview in [None, Some("tool-install-locks")] {
+        let context = uv_test::test_context!("3.13").with_tool_dirs();
+        let context = if let Some(preview) = preview {
+            context.with_env(EnvVars::UV_PREVIEW_FEATURES, preview)
+        } else {
+            context
+        };
+        let links = context.temp_dir.child("links");
+        links.create_dir_all()?;
+        let tool = context.temp_dir.child("tools").child("recovery-root");
+        let conflict = context
+            .temp_dir
+            .child("bin")
+            .child(format!("new-command{}", std::env::consts::EXE_SUFFIX));
+        write_recovery_wheel(
+            links.path(),
+            "recovery-dep",
+            "1.0.0",
+            &[],
+            &[("recovery-dep", "dep-1")],
+        )?;
+        write_recovery_wheel(
+            links.path(),
+            "recovery-root",
+            "1.0.0",
+            &["recovery-dep>=1"],
+            &[("recovery-root", "root-1")],
+        )?;
+        context
+            .tool_install()
+            .args([
+                "recovery-root",
+                "--with-executables-from",
+                "recovery-dep",
+                "--no-index",
+                "--find-links",
+            ])
+            .arg(links.path())
+            .assert()
+            .success();
+        conflict.write_str("external command")?;
+        write_recovery_wheel(
+            links.path(),
+            "recovery-dep",
+            "2.0.0",
+            &[],
+            &[("recovery-dep", "dep-2"), ("new-command", "unselected")],
+        )?;
+        write_recovery_wheel(
+            links.path(),
+            "recovery-root",
+            "2.0.0",
+            &["recovery-dep>=1"],
+            &[("recovery-root", "root-2")],
+        )?;
+        context
+            .tool_install()
+            .args([
+                "recovery-root==2",
+                "--with-executables-from",
+                "recovery-dep",
+                "--no-index",
+                "--find-links",
+            ])
+            .arg(links.path())
+            .assert()
+            .success();
+        let packages = site_packages_path(tool.path(), "python3.13");
+        assert!(
+            packages
+                .join("recovery_dep-1.0.0.dist-info/METADATA")
+                .exists()
+        );
+        assert!(
+            !packages
+                .join("recovery_dep-2.0.0.dist-info/METADATA")
+                .exists()
+        );
+        conflict.assert("external command");
+    }
+    Ok(())
+}
+
+#[test]
+fn tool_install_preflight_reuses_prepared_source_wheels() -> Result<()> {
+    for force in [false, true] {
+        let context = uv_test::test_context!("3.13").with_tool_dirs();
+        let links = context.temp_dir.child("links");
+        links.create_dir_all()?;
+        write_recovery_wheel(
+            links.path(),
+            "recovery-root",
+            "1.0.0",
+            &[],
+            &[("recovery-root", "root-1")],
+        )?;
+        context
+            .tool_install()
+            .args(["recovery-root", "--no-index", "--find-links"])
+            .arg(links.path())
+            .assert()
+            .success();
+        let source = context.temp_dir.child("source");
+        write_recovery_source(
+            source.path(),
+            "recovery-root",
+            "2.0.0",
+            &[],
+            &[("recovery-root", "root-2")],
+            "",
+        )?;
+        let mut command = context.tool_install();
+        command.arg(source.path()).arg("--no-index");
+        if force {
+            command.arg("--force");
+        }
+        command.assert().success();
+        source.child("build-count").assert("build\n");
+        Command::new(
+            context
+                .temp_dir
+                .child("bin")
+                .child(format!("recovery-root{}", std::env::consts::EXE_SUFFIX))
+                .path(),
+        )
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::diff("root-2\n").normalize());
+    }
+    Ok(())
+}
+
+/// Shared source builds still see the installed isolated phase and the old extraneous packages.
+/// Their new commands cannot be admitted until that same-environment build has completed.
+#[test]
+fn tool_install_preflight_retains_shared_build_order() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    write_recovery_wheel(
+        links.path(),
+        "recovery-old-build",
+        "1.0.0",
+        &[],
+        &[("old-build", "old")],
+    )?;
+    write_recovery_wheel(
+        links.path(),
+        "recovery-root",
+        "1.0.0",
+        &["recovery-old-build==1"],
+        &[("recovery-root", "root-1")],
+    )?;
+    context
+        .tool_install()
+        .args(["recovery-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .success();
+    let tool = context.temp_dir.child("tools").child("recovery-root");
+    let receipt = tool.child("uv-receipt.toml");
+    let receipt_before = fs_err::read(receipt.path())?;
+    let conflict = context
+        .temp_dir
+        .child("bin")
+        .child(format!("new-command{}", std::env::consts::EXE_SUFFIX));
+    conflict.write_str("external command")?;
+    write_recovery_wheel(
+        links.path(),
+        "recovery-new-build",
+        "1.0.0",
+        &[],
+        &[("new-build", "new")],
+    )?;
+    let source = context.temp_dir.child("source");
+    write_recovery_source(
+        source.path(),
+        "recovery-root",
+        "2.0.0",
+        &["recovery-new-build==1"],
+        &[("recovery-root", "root-2"), ("new-command", "new")],
+        "import recovery_old_build.commands\nimport recovery_new_build.commands",
+    )?;
+    context
+        .tool_install()
+        .arg(source.path())
+        .args([
+            "--no-build-isolation-package",
+            "recovery-root",
+            "--no-index",
+            "--find-links",
+        ])
+        .arg(links.path())
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("Executable already exists:"));
+    source.child("build-count").assert("build\n");
+    let packages = site_packages_path(tool.path(), "python3.13");
+    assert!(
+        packages
             .join("recovery_root-2.0.0.dist-info/METADATA")
             .exists()
     );
+    assert!(
+        packages
+            .join("recovery_new_build-1.0.0.dist-info/METADATA")
+            .exists()
+    );
+    assert!(
+        !packages
+            .join("recovery_old_build-1.0.0.dist-info/METADATA")
+            .exists()
+    );
+    assert_eq!(fs_err::read(receipt.path())?, receipt_before);
+    conflict.assert("external command");
     Ok(())
 }
 

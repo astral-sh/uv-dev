@@ -41,14 +41,14 @@ use crate::commands::pip::loggers::{
 use crate::commands::pip::operations::{self, Modifications};
 use crate::commands::pip::{resolution_markers, resolution_tags};
 use crate::commands::project::{
-    EnvironmentResolution, EnvironmentSpecification, PlatformState, ProjectError,
-    resolve_environment, resolve_names, sync_environment, update_environment,
+    EnvironmentPreflight, EnvironmentResolution, EnvironmentSpecification, PlatformState,
+    ProjectError, resolve_environment, resolve_names, sync_environment, update_environment,
 };
 use crate::commands::tool::common::{
     ToolLock, ToolPython, finalize_tool_install, refine_interpreter, repair_tool_entrypoints,
     tool_environment_spec,
 };
-use crate::commands::tool::recovery::ToolEntrypointSnapshot;
+use crate::commands::tool::recovery::{ToolEntrypointPreflight, ToolEntrypointSnapshot};
 use crate::commands::tool::{Target, ToolRequest};
 use crate::commands::{UvError, reporters::PythonDownloadReporter};
 use crate::printer::Printer;
@@ -527,19 +527,30 @@ pub(crate) async fn install(
     let existing_environment = if force {
         None
     } else {
-        current_environment.filter(|environment| {
-            existing_environment_usable(
-                environment.environment(),
-                &interpreter,
-                package_name,
-                explicit_python_request,
-                &settings,
-                existing_tool_receipt.as_ref(),
-                printer,
-            )
-        })
+        current_environment
+            .as_ref()
+            .filter(|environment| {
+                existing_environment_usable(
+                    environment.environment(),
+                    &interpreter,
+                    package_name,
+                    explicit_python_request,
+                    &settings,
+                    existing_tool_receipt.as_ref(),
+                    printer,
+                )
+            })
+            .cloned()
     };
 
+    let preflight = entrypoint_snapshot
+        .as_ref()
+        .map(|snapshot| ToolEntrypointPreflight {
+            snapshot,
+            name: package_name,
+            providers: entrypoints,
+            force,
+        });
     let validation_interpreter = existing_environment
         .as_ref()
         .map_or(&interpreter, |environment| {
@@ -863,6 +874,10 @@ pub(crate) async fn install(
             } else {
                 sync_environment(
                     environment,
+                    preflight
+                        .as_ref()
+                        .map(|preflight| preflight as &dyn EnvironmentPreflight),
+                    None,
                     &resolution,
                     hash_strategy,
                     Modifications::Exact,
@@ -886,6 +901,9 @@ pub(crate) async fn install(
             }
             let update = match update_environment(
                 environment,
+                preflight
+                    .as_ref()
+                    .map(|preflight| preflight as &dyn EnvironmentPreflight),
                 spec,
                 Modifications::Exact,
                 python_platform.as_ref(),
@@ -1054,11 +1072,35 @@ pub(crate) async fn install(
         if let Some(snapshot) = &entrypoint_snapshot {
             snapshot.admit_mutation(package_name, force)?;
         }
+        let prepared = if let (Some(preflight), Some(current)) = (&preflight, &current_environment)
+        {
+            preflight
+                .prepare_replacement(
+                    current.environment(),
+                    &interpreter,
+                    &resolution,
+                    hash_strategy.clone(),
+                    Constraints::from_requirements(receipt_build_constraints.iter().cloned()),
+                    (&settings).into(),
+                    &client_builder,
+                    &state,
+                    Box::new(DefaultInstallLogger),
+                    &concurrency,
+                    &cache,
+                    printer,
+                    preview,
+                )
+                .await?
+        } else {
+            None
+        };
         let environment = installed_tools.create_environment(package_name, interpreter)?;
 
         // Sync the environment with the resolved requirements.
         match sync_environment(
             environment,
+            None,
+            prepared,
             &resolution,
             hash_strategy,
             Modifications::Exact,
