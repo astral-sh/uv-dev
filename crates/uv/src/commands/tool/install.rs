@@ -45,9 +45,10 @@ use crate::commands::project::{
     resolve_environment, resolve_names, sync_environment, update_environment,
 };
 use crate::commands::tool::common::{
-    ToolLock, ToolPython, finalize_tool_install, refine_interpreter, remove_entrypoints,
-    repair_tool_entrypoints, tool_environment_spec,
+    ToolLock, ToolPython, finalize_tool_install, refine_interpreter, repair_tool_entrypoints,
+    tool_environment_spec,
 };
+use crate::commands::tool::recovery::ToolEntrypointSnapshot;
 use crate::commands::tool::{Target, ToolRequest};
 use crate::commands::{UvError, reporters::PythonDownloadReporter};
 use crate::printer::Printer;
@@ -502,22 +503,41 @@ pub(crate) async fn install(
             }
         };
 
+    let current_environment = match installed_tools.get_environment(package_name, &cache) {
+        Ok(environment) => environment,
+        Err(_) if force => None,
+        Err(err) => return Err(err.into()),
+    };
+    let entrypoint_snapshot = existing_tool_receipt
+        .as_ref()
+        .map(|receipt| {
+            ToolEntrypointSnapshot::capture(
+                current_environment
+                    .as_ref()
+                    .map(|environment| environment.environment()),
+                package_name,
+                receipt,
+                &installed_tools,
+            )
+        })
+        .transpose()?;
+    if let Some(snapshot) = entrypoint_snapshot.as_ref().filter(|_| force) {
+        snapshot.admit_mutation(package_name, true)?;
+    }
     let existing_environment = if force {
         None
     } else {
-        installed_tools
-            .get_environment(package_name, &cache)?
-            .filter(|environment| {
-                existing_environment_usable(
-                    environment.environment(),
-                    &interpreter,
-                    package_name,
-                    explicit_python_request,
-                    &settings,
-                    existing_tool_receipt.as_ref(),
-                    printer,
-                )
-            })
+        current_environment.filter(|environment| {
+            existing_environment_usable(
+                environment.environment(),
+                &interpreter,
+                package_name,
+                explicit_python_request,
+                &settings,
+                existing_tool_receipt.as_ref(),
+                printer,
+            )
+        })
     };
 
     let validation_interpreter = existing_environment
@@ -834,6 +854,9 @@ pub(crate) async fn install(
                 )?;
                 return Ok(ExitStatus::Success);
             }
+            if let Some(snapshot) = &entrypoint_snapshot {
+                snapshot.admit_mutation(package_name, force)?;
+            }
             let environment = if plan.is_empty() && !settings.compile_bytecode {
                 environment
             } else {
@@ -857,6 +880,9 @@ pub(crate) async fn install(
             };
             (environment, Some(tool_lock))
         } else {
+            if let Some(snapshot) = &entrypoint_snapshot {
+                snapshot.admit_mutation(package_name, force)?;
+            }
             let update = match update_environment(
                 environment,
                 spec,
@@ -885,12 +911,6 @@ pub(crate) async fn install(
             };
             (update.environment, None)
         };
-
-        // At this point, we updated the existing environment, so we should remove any of its
-        // existing executables.
-        if let Some(existing_receipt) = existing_tool_receipt.as_ref() {
-            remove_entrypoints(existing_receipt);
-        }
 
         (environment, tool_lock)
     } else {
@@ -1029,13 +1049,10 @@ pub(crate) async fn install(
         } else {
             HashStrategy::default()
         };
-        let environment = installed_tools.create_environment(package_name, interpreter)?;
-
-        // At this point, we removed any existing environment, so we should remove any of its
-        // executables.
-        if let Some(existing_receipt) = existing_tool_receipt {
-            remove_entrypoints(&existing_receipt);
+        if let Some(snapshot) = &entrypoint_snapshot {
+            snapshot.admit_mutation(package_name, force)?;
         }
+        let environment = installed_tools.create_environment(package_name, interpreter)?;
 
         // Sync the environment with the resolved requirements.
         match sync_environment(
@@ -1071,7 +1088,9 @@ pub(crate) async fn install(
         entrypoints,
         &installed_tools,
         &options,
+        entrypoint_snapshot.as_ref(),
         force || invalid_tool_receipt,
+        true,
         // Only persist the Python request if it was explicitly provided
         if explicit_python_request {
             python_request

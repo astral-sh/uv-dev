@@ -36,9 +36,8 @@ use crate::commands::project::{
     update_environment,
 };
 use crate::commands::reporters::PythonDownloadReporter;
-use crate::commands::tool::common::{
-    ToolLock, remove_entrypoints, repair_tool_entrypoints, tool_environment_spec,
-};
+use crate::commands::tool::common::{ToolLock, repair_tool_entrypoints, tool_environment_spec};
+use crate::commands::tool::recovery::ToolEntrypointSnapshot;
 use crate::commands::{ExitStatus, conjunction, tool::common::finalize_tool_install};
 use crate::printer::Printer;
 use crate::settings::ResolverInstallerSettings;
@@ -323,6 +322,13 @@ async fn upgrade_tool(
         }
     };
 
+    let entrypoint_snapshot = ToolEntrypointSnapshot::capture(
+        Some(environment.environment()),
+        name,
+        &existing_tool_receipt,
+        installed_tools,
+    )?;
+
     // Restore credentials from user configuration when the receipt refers to the same index.
     // Receipts intentionally omit credentials, including usernames needed for keyring lookups.
     let mut receipt = ResolverInstallerOptions::from(existing_tool_receipt.options().clone());
@@ -382,6 +388,7 @@ async fn upgrade_tool(
     let requested_interpreter =
         interpreter.filter(|interpreter| !environment.environment().uses(interpreter));
     let tool_dir = installed_tools.tool_dir(name);
+    entrypoint_snapshot.admit_mutation(name, false)?;
     // TODO(zanieb): When updating an existing environment, build it in the cache directory then
     // copy it into the tool directory.
     let (environment, outcome, tool_lock) = if tool_locks {
@@ -593,14 +600,7 @@ async fn upgrade_tool(
         (environment, outcome, None)
     };
 
-    if matches!(
-        outcome,
-        UpgradeOutcome::UpgradeEnvironment | UpgradeOutcome::UpgradeTool
-    ) {
-        // At this point, we updated the existing environment, so we should remove any of its
-        // existing executables.
-        remove_entrypoints(&existing_tool_receipt);
-
+    if !matches!(outcome, UpgradeOutcome::NoOp) {
         let entrypoints: Vec<_> = existing_tool_receipt
             .entrypoints()
             .iter()
@@ -614,7 +614,9 @@ async fn upgrade_tool(
             &entrypoints,
             installed_tools,
             &ToolOptions::from(options),
-            true,
+            Some(&entrypoint_snapshot),
+            false,
+            !matches!(outcome, UpgradeOutcome::UpgradeDependencies),
             existing_tool_receipt.python().to_owned(),
             existing_tool_receipt.requirements().to_vec(),
             existing_tool_receipt.constraints().to_vec(),
@@ -625,18 +627,14 @@ async fn upgrade_tool(
             printer,
         )?;
     } else {
-        let repaired = if matches!(outcome, UpgradeOutcome::NoOp) {
-            repair_tool_entrypoints(
-                &environment,
-                name,
-                &existing_tool_receipt,
-                installed_tools,
-                false,
-                printer,
-            )?
-        } else {
-            None
-        };
+        let repaired = repair_tool_entrypoints(
+            &environment,
+            name,
+            &existing_tool_receipt,
+            installed_tools,
+            false,
+            printer,
+        )?;
         if tool_locks || repaired.is_some() {
             if tool_locks {
                 ToolLock::write(&tool_dir, tool_lock.as_ref())?;

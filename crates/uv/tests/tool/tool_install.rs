@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::Result;
@@ -25,6 +25,7 @@ use uv_fs::Simplified;
 use uv_fs::copy_dir_all;
 use uv_static::EnvVars;
 
+use uv_test::packse::generate_wheel_with_files;
 use uv_test::{site_packages_path, uv_snapshot, venv_bin_path};
 
 #[cfg(feature = "test-git")]
@@ -3141,6 +3142,517 @@ fn tool_install_recovery_handles_bin_directory_aliases() -> Result<()> {
     bin_dir.assert(predicate::path::missing());
     for (receipt, contents) in receipts.iter().zip(&receipt_contents) {
         assert_eq!(fs_err::read(receipt.path())?, *contents);
+    }
+    Ok(())
+}
+
+fn write_recovery_wheel(
+    directory: &Path,
+    name: &str,
+    version: &str,
+    requirements: &[&str],
+    commands: &[(&str, &str)],
+) -> Result<PathBuf> {
+    let normalized = name.replace('-', "_");
+    let entrypoints_path = format!("{normalized}-{version}.dist-info/entry_points.txt");
+    let module_path = format!("{normalized}/commands.py");
+    let mut entrypoints = String::from("[console_scripts]\n");
+    let mut module = String::new();
+    for (index, (command, output)) in commands.iter().enumerate() {
+        entrypoints.push_str(&format!(
+            "{command} = {normalized}.commands:command_{index}\n"
+        ));
+        module.push_str(&format!("def command_{index}():\n    print({output:?})\n"));
+    }
+    let requirements = requirements
+        .iter()
+        .map(|requirement| requirement.parse())
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name.parse()?,
+        &version.parse()?,
+        &requirements,
+        &Default::default(),
+        None,
+        "py3-none-any",
+        &[(&entrypoints_path, &entrypoints), (&module_path, &module)],
+    );
+    let path = directory.join(filename);
+    fs_err::write(&path, wheel)?;
+    Ok(path)
+}
+
+/// Changed dependencies, root versions, and interpreters all use the original export authority.
+#[test]
+fn tool_install_recovery_survives_environment_updates() -> Result<()> {
+    for preview in ["", "tool-install-locks"] {
+        let context = uv_test::test_context_with_versions!(&["3.13", "3.12"]).with_tool_dirs();
+        let links = context.temp_dir.child("links");
+        links.create_dir_all()?;
+        let bins = (0..6)
+            .map(|index| context.temp_dir.child(format!("bin-{index}")))
+            .collect::<Vec<_>>();
+        let environment = context.temp_dir.child("tools").child("recovery-root");
+        let receipt = environment.child("uv-receipt.toml");
+        write_recovery_wheel(
+            links.path(),
+            "recovery-dep",
+            "1.0.0",
+            &[],
+            &[("recovery-dep", "dep-1")],
+        )?;
+        write_recovery_wheel(
+            links.path(),
+            "recovery-root",
+            "1.0.0",
+            &["recovery-dep>=1"],
+            &[("recovery-root", "root-1"), ("recovery-old", "old-1")],
+        )?;
+        let install = |bin: &Path| {
+            let mut command = context.tool_install();
+            command
+                .arg("recovery-root")
+                .args([
+                    "--with-executables-from",
+                    "recovery-dep",
+                    "--no-index",
+                    "--find-links",
+                ])
+                .arg(links.path())
+                .env(EnvVars::UV_PREVIEW_FEATURES, preview)
+                .env(EnvVars::UV_TOOL_BIN_DIR, bin)
+                .env(EnvVars::PATH, bin);
+            command
+        };
+        let upgrade = |bin: &Path| {
+            let mut command = context.tool_upgrade();
+            command
+                .arg("recovery-root")
+                .args(["--no-index", "--find-links"])
+                .arg(links.path())
+                .env(EnvVars::UV_PREVIEW_FEATURES, preview)
+                .env(EnvVars::UV_TOOL_BIN_DIR, bin)
+                .env(EnvVars::PATH, bin);
+            command
+        };
+        let exported =
+            |bin: &Path, name: &str| bin.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+        let run = |bin: &Path, name: &str, output: &str| {
+            Command::new(exported(bin, name))
+                .env("PYTHONDONTWRITEBYTECODE", "1")
+                .assert()
+                .success()
+                .stdout(format!("{output}\n"));
+        };
+        let assert_receipt = |bin: &Path, names: &[&str]| -> Result<()> {
+            let document =
+                fs_err::read_to_string(receipt.path())?.parse::<toml_edit::DocumentMut>()?;
+            let entries = document["tool"]["entrypoints"]
+                .as_array()
+                .expect("entrypoint array");
+            assert_eq!(entries.len(), names.len());
+            for name in names {
+                let target = exported(bin, name);
+                assert!(
+                    entries
+                        .iter()
+                        .any(|entry| entry.as_inline_table().is_some_and(|entry| {
+                            entry.get("install-path").and_then(toml_edit::Value::as_str)
+                                == target.to_str()
+                        }))
+                );
+            }
+            Ok(())
+        };
+
+        install(bins[0].path())
+            .args(["--python", "3.13"])
+            .assert()
+            .success();
+        let sentinel = environment.child("preserve-unless-replaced");
+        sentinel.write_str("retained environment")?;
+        let root_metadata = site_packages_path(environment.path(), "python3.13")
+            .join("recovery_root-1.0.0.dist-info/METADATA");
+        let root_metadata_before = fs_err::read(&root_metadata)?;
+        fs_err::remove_file(exported(bins[0].path(), "recovery-dep"))?;
+        write_recovery_wheel(
+            links.path(),
+            "recovery-dep",
+            "2.0.0",
+            &[],
+            &[("recovery-dep", "dep-2")],
+        )?;
+        upgrade(bins[1].path()).assert().success();
+        assert_eq!(fs_err::read(&root_metadata)?, root_metadata_before);
+        sentinel.assert("retained environment");
+        run(bins[1].path(), "recovery-dep", "dep-2");
+        run(bins[1].path(), "recovery-root", "root-1");
+        assert!(!exported(bins[0].path(), "recovery-root").exists());
+        assert_receipt(
+            bins[1].path(),
+            &["recovery-dep", "recovery-root", "recovery-old"],
+        )?;
+
+        write_recovery_wheel(
+            links.path(),
+            "recovery-root",
+            "2.0.0",
+            &["recovery-dep>=1"],
+            &[("recovery-root", "root-2"), ("recovery-new", "new-2")],
+        )?;
+        upgrade(bins[2].path()).assert().success();
+        sentinel.assert("retained environment");
+        run(bins[2].path(), "recovery-root", "root-2");
+        run(bins[2].path(), "recovery-new", "new-2");
+        assert!(!exported(bins[1].path(), "recovery-old").exists());
+        assert!(!exported(bins[2].path(), "recovery-old").exists());
+        assert_receipt(
+            bins[2].path(),
+            &["recovery-dep", "recovery-root", "recovery-new"],
+        )?;
+
+        install(bins[3].path())
+            .arg("--reinstall")
+            .assert()
+            .success();
+        sentinel.assert("retained environment");
+        run(bins[3].path(), "recovery-root", "root-2");
+        assert!(!exported(bins[2].path(), "recovery-root").exists());
+        assert_receipt(
+            bins[3].path(),
+            &["recovery-dep", "recovery-root", "recovery-new"],
+        )?;
+
+        install(bins[4].path()).arg("--force").assert().success();
+        sentinel.assert(predicate::path::missing());
+        run(bins[4].path(), "recovery-root", "root-2");
+        assert!(!exported(bins[3].path(), "recovery-root").exists());
+        assert_receipt(
+            bins[4].path(),
+            &["recovery-dep", "recovery-root", "recovery-new"],
+        )?;
+
+        sentinel.write_str("replace interpreter")?;
+        upgrade(bins[5].path())
+            .args(["--python", "3.12"])
+            .assert()
+            .success();
+        sentinel.assert(predicate::path::missing());
+        run(bins[5].path(), "recovery-root", "root-2");
+        run(bins[5].path(), "recovery-dep", "dep-2");
+        assert!(!exported(bins[4].path(), "recovery-root").exists());
+        assert_receipt(
+            bins[5].path(),
+            &["recovery-dep", "recovery-root", "recovery-new"],
+        )?;
+        Command::new(
+            venv_bin_path(environment.path())
+                .join(format!("python{}", std::env::consts::EXE_SUFFIX)),
+        )
+        .args([
+            "-c",
+            "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+        ])
+        .assert()
+        .success()
+        .stdout("3.12\n");
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn tool_install_recovery_rejects_case_only_competing_claims() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let tools = context.temp_dir.child("tools");
+    let bin = context.temp_dir.child("bin");
+    let links = context.workspace_root.join("test/links");
+    let install = || {
+        let mut command = context.tool_install();
+        command
+            .args(["simple-launcher==0.1.0", "--no-index", "--find-links"])
+            .arg(&links)
+            .env(EnvVars::PATH, bin.as_os_str());
+        command
+    };
+    install().assert().success();
+    context
+        .tool_install()
+        .args([
+            "basic-app==0.1.0",
+            "--with-executables-from",
+            "simple-launcher==0.1.0",
+            "--force",
+            "--no-index",
+            "--find-links",
+        ])
+        .arg(&links)
+        .env(EnvVars::PATH, bin.as_os_str())
+        .assert()
+        .success();
+    let launcher = bin.child("simple_launcher.exe");
+    let upper = bin.child("SIMPLE_LAUNCHER.exe");
+    assert_eq!(
+        uv_fs::is_same_file_allow_missing(launcher.path(), upper.path()),
+        Some(true)
+    );
+    let owner_receipt = tools.child("basic-app").child("uv-receipt.toml");
+    let mut document =
+        fs_err::read_to_string(owner_receipt.path())?.parse::<toml_edit::DocumentMut>()?;
+    let mut changed = 0;
+    for entry in document["tool"]["entrypoints"]
+        .as_array_mut()
+        .expect("entrypoint array")
+        .iter_mut()
+    {
+        let entry = entry.as_inline_table_mut().expect("entrypoint table");
+        if entry.get("name").and_then(toml_edit::Value::as_str) == Some("simple_launcher") {
+            changed += 1;
+            entry.insert(
+                "install-path",
+                toml_edit::Value::from(upper.path().to_str().expect("UTF-8 test path")),
+            );
+        }
+    }
+    assert_eq!(changed, 1);
+    owner_receipt.write_str(&document.to_string())?;
+    let receipts = [
+        tools.child("simple-launcher").child("uv-receipt.toml"),
+        owner_receipt,
+    ];
+    let before = receipts
+        .iter()
+        .map(|receipt| fs_err::read(receipt.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let environments = [tools.child("simple-launcher"), tools.child("basic-app")];
+    let package_paths = environments
+        .iter()
+        .map(|path| site_packages_path(path.path(), "python3.13"))
+        .collect::<Vec<_>>();
+    let packages = package_paths
+        .iter()
+        .map(|path| dirhash_path(path))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    for present in [true, false] {
+        if !present {
+            fs_err::remove_file(launcher.path())?;
+        }
+        install()
+            .arg("--force")
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains(
+                "because it is also recorded for `basic-app`",
+            ));
+        if !present {
+            install().assert().code(2).stderr(predicate::str::contains(
+                "because it is also recorded for `basic-app`",
+            ));
+            context
+                .tool_upgrade()
+                .args(["simple-launcher", "--offline"])
+                .assert()
+                .code(1)
+                .stderr(predicate::str::contains(
+                    "because it is also recorded for `basic-app`",
+                ));
+        }
+        for (receipt, contents) in receipts.iter().zip(&before) {
+            assert_eq!(fs_err::read(receipt.path())?, *contents);
+        }
+        for (path, contents) in package_paths.iter().zip(&packages) {
+            assert_eq!(dirhash_path(path)?, *contents);
+        }
+    }
+    launcher.assert(predicate::path::missing());
+    Ok(())
+}
+
+/// A newly introduced command is checked before any export is changed.
+#[test]
+fn tool_install_recovery_preflights_new_commands() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    let bin = context.temp_dir.child("bin");
+    let tools = context.temp_dir.child("tools");
+    let original_wheel = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(original_wheel)
+        .arg("--offline")
+        .assert()
+        .success();
+    write_recovery_wheel(
+        links.path(),
+        "recovery-root",
+        "1.0.0",
+        &[],
+        &[("recovery-root", "root-1")],
+    )?;
+    context
+        .tool_install()
+        .args(["recovery-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .success();
+    let root_export = bin.child(format!("recovery-root{}", std::env::consts::EXE_SUFFIX));
+    let foreign_export = bin.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
+    let root_bytes = fs_err::read(root_export.path())?;
+    let foreign_bytes = fs_err::read(foreign_export.path())?;
+    #[cfg(unix)]
+    let root_identity = {
+        let metadata = fs_err::symlink_metadata(root_export.path())?;
+        (
+            metadata.dev(),
+            metadata.ino(),
+            fs_err::read_link(root_export.path())?,
+        )
+    };
+    let receipts =
+        ["recovery-root", "simple-launcher"].map(|name| tools.child(name).child("uv-receipt.toml"));
+    let receipt_bytes = receipts
+        .iter()
+        .map(|path| fs_err::read(path.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let foreign_packages = site_packages_path(tools.child("simple-launcher").path(), "python3.13");
+    let foreign_package_bytes = dirhash_path(&foreign_packages)?;
+    write_recovery_wheel(
+        links.path(),
+        "recovery-root",
+        "2.0.0",
+        &[],
+        &[
+            ("recovery-root", "root-2"),
+            ("simple_launcher", "not the owner"),
+        ],
+    )?;
+    context
+        .tool_upgrade()
+        .args(["recovery-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "because it is also recorded for `simple-launcher`",
+        ));
+    assert_eq!(fs_err::read(root_export.path())?, root_bytes);
+    assert_eq!(fs_err::read(foreign_export.path())?, foreign_bytes);
+    #[cfg(unix)]
+    {
+        let metadata = fs_err::symlink_metadata(root_export.path())?;
+        assert_eq!(
+            (
+                metadata.dev(),
+                metadata.ino(),
+                fs_err::read_link(root_export.path())?
+            ),
+            root_identity
+        );
+    }
+    for (receipt, bytes) in receipts.iter().zip(&receipt_bytes) {
+        assert_eq!(fs_err::read(receipt.path())?, *bytes);
+    }
+    assert_eq!(dirhash_path(&foreign_packages)?, foreign_package_bytes);
+    Command::new(foreign_export.path())
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .assert()
+        .success()
+        .stdout("Hi from the simple launcher!\n");
+    // Package mutation is not rolled back by the export preflight.
+    assert!(
+        site_packages_path(tools.child("recovery-root").path(), "python3.13")
+            .join("recovery_root-2.0.0.dist-info/METADATA")
+            .exists()
+    );
+    Ok(())
+}
+
+#[test]
+fn tool_install_recovery_does_not_reacquire_pruned_commands() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    let bin = context.temp_dir.child("bin");
+    let environment = context.temp_dir.child("tools").child("recovery-root");
+    let receipt = environment.child("uv-receipt.toml");
+    write_recovery_wheel(
+        links.path(),
+        "recovery-root",
+        "1.0.0",
+        &[],
+        &[("recovery-root", "root-1"), ("recovery-pruned", "pruned-1")],
+    )?;
+    let install = || {
+        let mut command = context.tool_install();
+        command
+            .args(["recovery-root", "--no-index", "--find-links"])
+            .arg(links.path());
+        command
+    };
+    install().assert().success();
+    let pruned = bin.child(format!("recovery-pruned{}", std::env::consts::EXE_SUFFIX));
+    let mut document = fs_err::read_to_string(receipt.path())?.parse::<toml_edit::DocumentMut>()?;
+    let entries = document["tool"]["entrypoints"]
+        .as_array_mut()
+        .expect("entrypoint array");
+    let index = entries
+        .iter()
+        .position(|entry| {
+            entry
+                .as_inline_table()
+                .and_then(|entry| entry.get("name"))
+                .and_then(toml_edit::Value::as_str)
+                == Some("recovery-pruned")
+        })
+        .expect("pruned command");
+    entries.remove(index);
+    receipt.write_str(&document.to_string())?;
+    fs_err::remove_file(pruned.path())?;
+    write_recovery_wheel(
+        links.path(),
+        "recovery-root",
+        "2.0.0",
+        &[],
+        &[
+            ("recovery-root", "root-2"),
+            ("recovery-pruned", "pruned-2"),
+            ("recovery-new", "new-2"),
+        ],
+    )?;
+    context
+        .tool_upgrade()
+        .args(["recovery-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .success();
+    for argument in ["--reinstall", "--force"] {
+        install().arg(argument).assert().success();
+    }
+    pruned.assert(predicate::path::missing());
+    let document = fs_err::read_to_string(receipt.path())?.parse::<toml_edit::DocumentMut>()?;
+    let entries = document["tool"]["entrypoints"]
+        .as_array()
+        .expect("entrypoint array");
+    assert_eq!(entries.len(), 2);
+    assert!(!entries.iter().any(|entry| {
+        entry
+            .as_inline_table()
+            .and_then(|entry| entry.get("name"))
+            .and_then(toml_edit::Value::as_str)
+            == Some("recovery-pruned")
+    }));
+    for (name, output) in [("recovery-root", "root-2\n"), ("recovery-new", "new-2\n")] {
+        Command::new(
+            bin.child(format!("{name}{}", std::env::consts::EXE_SUFFIX))
+                .path(),
+        )
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .assert()
+        .success()
+        .stdout(output);
     }
     Ok(())
 }

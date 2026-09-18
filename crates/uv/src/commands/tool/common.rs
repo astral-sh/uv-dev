@@ -52,7 +52,10 @@ use uv_warnings::warn_user_once;
 use uv_workspace::WorkspaceCache;
 
 use crate::commands::pip;
-use crate::commands::tool::uninstall::owned_entrypoints;
+use crate::commands::tool::recovery::{
+    ToolEntrypointSnapshot, same_entrypoint_location, same_existing_entrypoint_location,
+};
+use crate::commands::tool::uninstall::owned_entrypoints_by;
 
 /// An error raised when a tool package provides no executables.
 #[derive(Debug, Error)]
@@ -142,15 +145,6 @@ pub(super) fn matching_packages(name: &str, site_packages: &SitePackages) -> Vec
         .collect()
 }
 
-/// Remove any entrypoints attached to the [`Tool`].
-pub(crate) fn remove_entrypoints(tool: &Tool) {
-    remove_entrypoint_paths(
-        tool.entrypoints()
-            .iter()
-            .map(|entrypoint| entrypoint.install_path.as_path()),
-    );
-}
-
 /// Return whether all executables recorded for a [`Tool`] exist in the configured bin directory.
 fn tool_entrypoints_are_fresh(tool: &Tool) -> bool {
     let Ok(executable_directory) = uv_tool::tool_executable_dir() else {
@@ -184,7 +178,13 @@ pub(super) fn repair_tool_entrypoints(
         receipts.push((name, receipt?));
     }
     receipts.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
-    let owned = owned_entrypoints(name, tool, &receipts, installed_tools)?;
+    let owned = owned_entrypoints_by(
+        name,
+        tool,
+        &receipts,
+        installed_tools,
+        same_existing_entrypoint_location,
+    )?;
     let executable_directory = uv_tool::tool_executable_dir()?;
     let environment_root = fs_err::canonicalize(environment.root())?;
     let mut replacements = BTreeMap::new();
@@ -221,7 +221,7 @@ pub(super) fn repair_tool_entrypoints(
                 target.user_display()
             );
         }
-        let same_location = same_entrypoint_location(&entrypoint.install_path, &target)?;
+        let same_location = same_existing_entrypoint_location(&entrypoint.install_path, &target)?;
         let is_owned = owned.contains(entrypoint);
         let exists = match fs_err::symlink_metadata(&target) {
             Ok(metadata) if metadata.is_dir() => {
@@ -249,20 +249,6 @@ pub(super) fn repair_tool_entrypoints(
                         bail!(
                             "Cannot restore executable `{}` because it is also recorded for `{other_name}`",
                             target.user_display()
-                        );
-                    }
-                    // If both directory names are absent, Windows cannot resolve aliases such
-                    // as differently cased paths to an existing directory identity.
-                    #[cfg(windows)]
-                    if other.install_path.file_name() == target.file_name()
-                        && other
-                            .install_path
-                            .parent()
-                            .is_some_and(|path| !path.exists())
-                        && target.parent().is_some_and(|path| !path.exists())
-                    {
-                        bail!(
-                            "Cannot compare missing executable directories for `{name}` and `{other_name}`"
                         );
                     }
                 }
@@ -324,34 +310,6 @@ pub(super) fn repair_tool_entrypoints(
     )?;
     warn_out_of_path(&executable_directory);
     Ok(Some(tool.clone().with_entrypoints(entrypoints)))
-}
-
-/// Compare directory entries, not file objects: two hardlinks can have different owners.
-fn same_entrypoint_location(left: &Path, right: &Path) -> anyhow::Result<bool> {
-    if left == right {
-        return Ok(true);
-    }
-    let (Some(left_parent), Some(right_parent)) = (left.parent(), right.parent()) else {
-        return Ok(false);
-    };
-    if left.file_name() != right.file_name() {
-        return Ok(false);
-    }
-    for parent in [left_parent, right_parent] {
-        match fs_err::metadata(parent) {
-            Ok(metadata) if metadata.is_dir() => {}
-            Ok(_) => return Ok(false),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
-            Err(err) => return Err(err.into()),
-        }
-    }
-    uv_fs::is_same_file_allow_missing(left_parent, right_parent).ok_or_else(|| {
-        anyhow::anyhow!(
-            "Cannot compare executable directories `{}` and `{}`",
-            left_parent.user_display(),
-            right_parent.user_display()
-        )
-    })
 }
 
 /// Remove the entrypoints at the given paths.
@@ -933,13 +891,15 @@ pub(crate) async fn refine_interpreter(
 /// Installs tool executables for a given package, handling any conflicts.
 ///
 /// Adds a receipt for the tool.
-pub(crate) fn finalize_tool_install(
+pub(super) fn finalize_tool_install(
     environment: &PythonEnvironment,
     name: &PackageName,
     entrypoints: &[PackageName],
     installed_tools: &InstalledTools,
     options: &ToolOptions,
+    previous: Option<&ToolEntrypointSnapshot>,
     force: bool,
+    report_unchanged: bool,
     python: Option<PythonRequest>,
     requirements: Vec<Requirement>,
     constraints: Vec<Requirement>,
@@ -949,6 +909,30 @@ pub(crate) fn finalize_tool_install(
     lock: Option<&ToolLock>,
     printer: Printer,
 ) -> anyhow::Result<()> {
+    if let Some(previous) = previous {
+        let installed_entrypoints = previous.install(
+            environment,
+            name,
+            entrypoints,
+            force,
+            report_unchanged,
+            printer,
+        )?;
+        let tool = Tool::new(
+            requirements,
+            constraints,
+            overrides,
+            excludes,
+            build_constraints,
+            python,
+            installed_entrypoints,
+            options.clone(),
+        );
+        ToolLock::write(&installed_tools.tool_dir(name), lock)?;
+        installed_tools.add_tool_receipt(name, tool)?;
+        warn_out_of_path(&uv_tool::tool_executable_dir()?);
+        return Ok(());
+    }
     let executable_directory = uv_tool::tool_executable_dir()?;
     fs_err::create_dir_all(&executable_directory)
         .context("Failed to create executable directory")?;

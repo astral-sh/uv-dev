@@ -247,13 +247,24 @@ pub(super) fn owned_entrypoints(
     receipts: &[(PackageName, Tool)],
     tools: &InstalledTools,
 ) -> Result<Vec<ToolEntrypoint>> {
+    owned_entrypoints_by(name, receipt, receipts, tools, same_install_path)
+}
+
+/// Apply the same source/receipt classifier with the caller's export-identity relation.
+pub(super) fn owned_entrypoints_by(
+    name: &PackageName,
+    receipt: &Tool,
+    receipts: &[(PackageName, Tool)],
+    tools: &InstalledTools,
+    same_export: impl Fn(&Path, &Path) -> Result<bool>,
+) -> Result<Vec<ToolEntrypoint>> {
     let mut owned = Vec::new();
     for entrypoint in receipt.entrypoints() {
         let mut owner = None;
         for (tool_name, other_receipt) in receipts {
             let mut matches_export = false;
             for other in other_receipt.entrypoints() {
-                if same_install_path(&other.install_path, &entrypoint.install_path)?
+                if same_export(&other.install_path, &entrypoint.install_path)?
                     && entrypoint_matches(other, &tools.tool_dir(tool_name))?
                 {
                     matches_export = true;
