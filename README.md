@@ -11,6 +11,14 @@ measured, and deleted without purging useful artifacts and downloading them agai
 operations are an inventory of cached package/version combinations, selective removal of one such
 combination, and a per-combination disk-usage breakdown.
 
+The reporter later identified Windows 11 as the affected environment and made the desired selection
+semantics concrete: remove one exact distribution, such as `torch==2.14.0+cu132`, while retaining
+another, such as `torch==2.14.0+cu130`. They also clarified that the goal is control over cache
+contents, not removal of package files from environments that still use them. With hardlinks,
+clearing a cache entry does not reclaim the links that remain materialized in those environments;
+that is expected filesystem behavior, but it makes cache inventory and exact cache-entry selection
+distinct from total disk reclamation.
+
 The closest open discussions collectively cover these capabilities. astral-sh/uv#1655 requests a
 cache listing containing distribution identities and sizes. astral-sh/uv#11239 requests finer-grained
 selection for cache removal. astral-sh/uv#9790 tracks the same motivating problem of old versions
@@ -29,7 +37,8 @@ default, so sharing package data between environments does not require symlink m
 `uv cache prune` already provides cleanup short of a full cache purge. This clarification does not
 resolve the requested granularity: the documented prune operation removes dangling or outdated
 cache entries and cached environments, while package/version inventory, per-version sizing, and
-version-selective removal remain unavailable.
+version-selective removal remain unavailable. On the reported Windows 11 system, uv's documented
+default link mode is hardlink rather than reflink.
 
 ## Draft response
 
