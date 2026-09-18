@@ -741,6 +741,7 @@ pub(crate) async fn install(
                             .as_ref()
                             .and_then(|lock| lock.preference()),
                         Some(&site_packages),
+                        &settings.resolver.upgrade,
                     ),
                     resolution_scope,
                     environment.interpreter(),
@@ -937,6 +938,7 @@ pub(crate) async fn install(
                         .as_ref()
                         .and_then(|lock| lock.preference()),
                     None,
+                    &settings.resolver.upgrade,
                 )
             } else {
                 EnvironmentSpecification::from(spec)

@@ -396,7 +396,7 @@ async fn upgrade_tool(
             requested_interpreter.unwrap_or_else(|| environment.environment().interpreter());
         let site_packages = SitePackages::from_environment(environment.environment())?;
         let universal_resolution = resolve_environment(
-            tool_environment_spec(spec, None, Some(&site_packages)),
+            tool_environment_spec(spec, None, Some(&site_packages), &settings.resolver.upgrade),
             EnvironmentResolution::Universal,
             target_interpreter,
             python_platform,
