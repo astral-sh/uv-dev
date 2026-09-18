@@ -2164,7 +2164,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                         .simplify_extras(slice::from_ref(&extra))
                         .simplify_not_extras_with(|candidate| candidate != &extra);
                     if python_marker.is_disjoint(applicable_marker)
-                        || !env.included_by_marker(applicable_marker)
+                        || !env.included_by_marker(python_marker.and(applicable_marker))
                     {
                         continue;
                     }
@@ -2318,9 +2318,8 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             return false;
         }
 
-        // If we're in a fork in universal mode, ignore any dependency that isn't part of
-        // this fork (but will be part of another fork).
-        if !env.included_by_marker(requirement.marker) {
+        // In universal mode, the dependency must overlap the Python requirement within this fork.
+        if !env.included_by_marker(python_marker.and(requirement.marker)) {
             trace!("Skipping {requirement} because of {env}");
             return false;
         }
@@ -2415,9 +2414,9 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     }
                 };
 
-                // If we're in a fork in universal mode, ignore any dependency that isn't part of
-                // this fork (but will be part of another fork).
-                if !env.included_by_marker(constraint.marker) {
+                // In universal mode, the constraint must overlap the Python requirement within
+                // this fork.
+                if !env.included_by_marker(python_marker.and(constraint.marker)) {
                     trace!("Skipping {constraint} because of {env}");
                     return None;
                 }
@@ -4024,7 +4023,7 @@ impl ForkedDependencies {
                     let dep = deps.pop().unwrap();
                     let marker = dep.package.marker();
                     for fork in &mut forks {
-                        if fork.env.included_by_marker(marker) {
+                        if fork.env.included_by_marker(python_marker.and(marker)) {
                             fork.add_dependency(dep.clone());
                         }
                     }
@@ -4043,7 +4042,7 @@ impl ForkedDependencies {
                         {
                             for dep in deps {
                                 for fork in &mut forks {
-                                    if fork.env.included_by_marker(marker) {
+                                    if fork.env.included_by_marker(python_marker.and(marker)) {
                                         fork.add_dependency(dep.clone());
                                     }
                                 }
@@ -4083,12 +4082,12 @@ impl ForkedDependencies {
 
                     for fork_env in envs {
                         let mut new_fork = fork.clone();
-                        new_fork.set_env(fork_env);
+                        new_fork.set_env(fork_env, python_marker);
                         // We only add the dependency to this fork if it
                         // satisfies the fork's markers. Some forks are
                         // specifically created to exclude this dependency,
                         // so this isn't always true!
-                        if forker.included(&new_fork.env) {
+                        if forker.included(&new_fork.env, python_marker) {
                             new_fork.add_dependency(dep.clone());
                         }
                         // Filter out any forks we created that are disjoint with our
@@ -4276,13 +4275,13 @@ impl Fork {
 
     /// Sets the resolver environment to the one given.
     ///
-    /// Any dependency in this fork that does not satisfy the given environment
+    /// Any dependency that cannot satisfy both the given environment and the Python requirement
     /// is removed.
-    fn set_env(&mut self, env: ResolverEnvironment) {
+    fn set_env(&mut self, env: ResolverEnvironment, python_marker: MarkerTree) {
         self.env = env;
         self.dependencies.retain(|dep| {
             let marker = dep.package.marker();
-            if self.env.included_by_marker(marker) {
+            if self.env.included_by_marker(python_marker.and(marker)) {
                 return true;
             }
             if let Some(conflicting_item) = dep.conflicting_item() {
@@ -4515,6 +4514,32 @@ struct ConflictTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn narrowing_a_fork_filters_dependencies_with_requires_python() {
+        let python_marker = "python_version >= '3.12'".parse().expect("valid marker");
+        let linux = "sys_platform == 'linux'".parse().expect("valid marker");
+        let marker = "(python_version < '3.12' and sys_platform == 'linux') or \
+                      (python_version >= '3.12' and sys_platform == 'win32')"
+            .parse()
+            .expect("valid marker");
+        let env = ResolverEnvironment::universal(vec![]);
+        let (linux_env, _) = fork_version_by_marker(&env, linux).expect("distinct forks");
+        let mut fork = Fork::new(env);
+        fork.add_dependency(PubGrubDependency {
+            package: PubGrubPackageInner::Marker {
+                name: "a".parse().expect("valid package name"),
+                marker,
+            }
+            .into(),
+            version: Range::full(),
+            parent: None,
+            source: DependencySource::Unspecified,
+        });
+
+        fork.set_env(linux_env, python_marker);
+        assert!(fork.dependencies.is_empty());
+    }
 
     fn versions(versions: &[&str]) -> Vec<Version> {
         versions

@@ -608,10 +608,10 @@ impl Forker<'_> {
     }
 
     /// Returns true if the dependency represented by this forker may be
-    /// included in the given resolver environment.
-    pub(crate) fn included(&self, env: &ResolverEnvironment) -> bool {
+    /// included in the given resolver environment and Python requirement.
+    pub(crate) fn included(&self, env: &ResolverEnvironment, python_marker: MarkerTree) -> bool {
         let marker = self.package.marker();
-        env.included_by_marker(marker)
+        env.included_by_marker(python_marker.and(marker))
     }
 }
 
