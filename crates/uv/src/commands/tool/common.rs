@@ -16,6 +16,7 @@ use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
     BuildOptions, Concurrency, Constraints, DependencyGroupsWithDefaults, ExcludeDependency,
     ExtrasSpecification, GitLfsSetting, HashCheckingMode, InstallOptions, Override, TargetTriple,
+    Upgrade,
 };
 use uv_dispatch::BuildDispatch;
 use uv_distribution::{
@@ -43,7 +44,7 @@ use uv_python::{
     VersionFileDiscoveryOptions, VersionRequest,
 };
 use uv_requirements::RequirementsSpecification;
-use uv_resolver::{FlatIndex, OptionsBuilder, Preference, ResolverOutput};
+use uv_resolver::{FlatIndex, OptionsBuilder, Preference, ResolverOutput, UpgradePackages};
 use uv_settings::{PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
 use uv_shell::Shell;
 use uv_tool::{InstalledTools, Tool, ToolEntrypoint, entrypoint_paths};
@@ -744,11 +745,12 @@ impl ToolLock {
 }
 
 /// Build an environment specification for a tool, preferring versions from its existing lock when
-/// available, then falling back to the installed environment.
+/// available, then falling back to installed packages that are not selected for upgrade.
 pub(crate) fn tool_environment_spec<'lock>(
     requirements: RequirementsSpecification,
     lock: Option<&'lock ToolLock>,
     site_packages: Option<&SitePackages>,
+    upgrade: &Upgrade,
 ) -> EnvironmentSpecification<'lock> {
     let specification = EnvironmentSpecification::from(requirements);
     if let Some(lock) = lock {
@@ -758,9 +760,11 @@ pub(crate) fn tool_environment_spec<'lock>(
         });
     }
 
+    let upgrade_packages = UpgradePackages::for_non_project(upgrade);
     let preferences = site_packages
         .into_iter()
         .flat_map(|site_packages| site_packages.iter().filter_map(Preference::from_installed))
+        .filter(|preference| !upgrade_packages.contains(preference.name()))
         .collect::<Vec<_>>();
     if preferences.is_empty() {
         return specification;
