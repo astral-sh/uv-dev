@@ -1,0 +1,161 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "uv tool audit (preview)",
+  "description": "JSON report containing separate findings for each audited tool.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "$ref": "#/definitions/Schema"
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ToolReport"
+      }
+    }
+  },
+  "required": ["schema", "tools"],
+  "definitions": {
+    "AdverseStatus": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "reason": {
+          "type": ["string", "null"]
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": ["name", "status", "reason"]
+    },
+    "Dependency": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": ["name", "version"]
+    },
+    "Schema": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "$ref": "#/definitions/SchemaVersion"
+        }
+      },
+      "required": ["version"]
+    },
+    "SchemaVersion": {
+      "type": "string",
+      "enum": ["preview"]
+    },
+    "Summary": {
+      "type": "object",
+      "properties": {
+        "adverse_statuses": {
+          "type": "integer",
+          "format": "uint",
+          "maximum": 18446744073709551615,
+          "minimum": 0
+        },
+        "audited_packages": {
+          "type": "integer",
+          "format": "uint",
+          "maximum": 18446744073709551615,
+          "minimum": 0
+        },
+        "vulnerabilities": {
+          "type": "integer",
+          "format": "uint",
+          "maximum": 18446744073709551615,
+          "minimum": 0
+        }
+      },
+      "required": ["audited_packages", "vulnerabilities", "adverse_statuses"]
+    },
+    "ToolReport": {
+      "type": "object",
+      "properties": {
+        "adverse_statuses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AdverseStatus"
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "summary": {
+          "$ref": "#/definitions/Summary"
+        },
+        "vulnerabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Vulnerability"
+          }
+        }
+      },
+      "required": ["name", "summary", "vulnerabilities", "adverse_statuses"]
+    },
+    "Vulnerability": {
+      "type": "object",
+      "properties": {
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dependency": {
+          "$ref": "#/definitions/Dependency"
+        },
+        "description": {
+          "type": ["string", "null"]
+        },
+        "display_id": {
+          "type": "string"
+        },
+        "fix_versions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "link": {
+          "type": ["string", "null"]
+        },
+        "modified": {
+          "type": ["string", "null"]
+        },
+        "published": {
+          "type": ["string", "null"]
+        },
+        "summary": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": [
+        "dependency",
+        "id",
+        "display_id",
+        "aliases",
+        "summary",
+        "description",
+        "link",
+        "fix_versions",
+        "published",
+        "modified"
+      ]
+    }
+  }
+}
