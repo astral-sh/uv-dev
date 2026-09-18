@@ -1633,7 +1633,6 @@ fn check_tool_upgrade_lock_preferences(arguments: &[&str], kept_version: &str) -
             &BTreeMap::new(),
             None,
             "py3-none-any",
-            &[],
         );
         wheels.child(filename).write_binary(&wheel)?;
         Ok(())
