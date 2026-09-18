@@ -40,6 +40,7 @@ owo-colors = { workspace = true }
 pathdiff = { workspace = true }
 regex = { workspace = true }
 rustc-hash = { workspace = true }
+same-file = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
@@ -48,7 +49,6 @@ tracing = { workspace = true }
 walkdir = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-same-file = { workspace = true }
 self-replace = { workspace = true }
 
 [features]

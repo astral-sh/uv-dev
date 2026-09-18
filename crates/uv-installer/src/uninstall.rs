@@ -13,9 +13,11 @@ pub async fn uninstall(
             InstalledDistKind::Registry(_) | InstalledDistKind::Url(_) => Ok(
                 uv_install_wheel::uninstall_wheel(dist.install_path(), &dist, &layout)?,
             ),
-            InstalledDistKind::EggInfoDirectory(_) => {
-                Ok(uv_install_wheel::uninstall_egg(dist.install_path(), &dist)?)
-            }
+            InstalledDistKind::EggInfoDirectory(_) => Ok(uv_install_wheel::uninstall_egg(
+                dist.install_path(),
+                &dist,
+                &layout,
+            )?),
             InstalledDistKind::LegacyEditable(dist) => {
                 Ok(uv_install_wheel::uninstall_legacy_editable(&dist.egg_link)?)
             }

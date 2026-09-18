@@ -381,13 +381,13 @@ fn validate_data_script_destination(target: &Path, scripts: &Path) -> Result<(),
 
 /// A form of [`Script`] guaranteed by [`ValidatedScript::try_from_script`] to be constrained to
 /// the scripts directory.
-struct ValidatedScript<'script> {
+pub(crate) struct ValidatedScript<'script> {
     path: PathBuf,
     script: &'script Script,
 }
 
 impl<'script> ValidatedScript<'script> {
-    fn try_from_script(script: &'script Script, layout: &Layout) -> Result<Self, Error> {
+    pub(crate) fn try_from_script(script: &'script Script, layout: &Layout) -> Result<Self, Error> {
         let Some(path) = normalize_path_under(
             layout.scheme.scripts.join(&script.name),
             &layout.scheme.scripts,
@@ -433,7 +433,7 @@ impl<'script> ValidatedScript<'script> {
         Ok(Self { path, script })
     }
 
-    fn as_path(&self) -> &Path {
+    pub(crate) fn as_path(&self) -> &Path {
         &self.path
     }
 

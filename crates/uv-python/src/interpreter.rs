@@ -592,6 +592,10 @@ impl Interpreter {
         Layout {
             python_version: self.python_tuple(),
             sys_executable: self.sys_executable().to_path_buf(),
+            sys_prefix: self.sys_prefix().to_path_buf(),
+            sys_base_executable: self.sys_base_executable().map(Path::to_path_buf),
+            real_executable: self.real_executable().to_path_buf(),
+            interpreter_scripts: self.scripts().to_path_buf(),
             os_name: self.markers.os_name().to_string(),
             scheme: if let Some(target) = self.target.as_ref() {
                 target.scheme()

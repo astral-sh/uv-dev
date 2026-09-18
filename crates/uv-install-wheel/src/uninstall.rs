@@ -6,12 +6,23 @@ use std::sync::{LazyLock, Mutex, OnceLock};
 
 use tracing::trace;
 
-use uv_fs::write_atomic_sync;
+use uv_fs::{normalize_path_under, write_atomic_sync};
 use uv_pypi_types::Identifier;
 use uv_warnings::warn_user;
 
-use crate::wheel::read_record;
+use crate::installed_files::InstalledFiles;
+use crate::script::{EntryPointNames, Script};
+use crate::wheel::{ValidatedScript, read_record};
 use crate::{Error, Layout};
+
+mod egg;
+
+use egg::{EggUninstallAuthority, PathDecision, PathScope};
+
+enum EggFallbackRemoval {
+    Directory(PathBuf),
+    File(PathBuf),
+}
 
 /// Uninstall the wheel represented by the given `.dist-info` directory.
 pub fn uninstall_wheel(
@@ -241,39 +252,49 @@ fn is_valid_top_level_entry(entry: &str, distribution: impl Display) -> bool {
 /// Uninstall the egg represented by the `.egg-info` directory.
 ///
 /// See: <https://github.com/pypa/pip/blob/41587f5e0017bcd849f42b314dc8a34a7db75621/src/pip/_internal/req/req_uninstall.py#L483>
-pub fn uninstall_egg(egg_info: &Path, distribution: impl Display) -> Result<Uninstall, Error> {
+pub fn uninstall_egg(
+    egg_info: &Path,
+    distribution: impl Display,
+    layout: &Layout,
+) -> Result<Uninstall, Error> {
     let mut file_count = 0usize;
     let mut dir_count = 0usize;
 
-    let dist_location = egg_info
-        .parent()
-        .expect("egg-info directory is not in a site-packages directory");
+    if egg_info.parent().is_none() {
+        return Err(Error::BrokenVenv(
+            "egg-info directory is not in a site-packages directory".to_string(),
+        ));
+    }
 
-    // Read the `namespace_packages.txt` file, skipping empty or whitespace-only entries.
-    let namespace_packages = {
-        let namespace_packages_path = egg_info.join("namespace_packages.txt");
-        match fs_err::read_to_string(namespace_packages_path) {
-            Ok(namespace_packages) => namespace_packages
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .map(ToString::to_string)
-                .collect::<Vec<_>>(),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                vec![]
-            }
-            Err(err) => return Err(err.into()),
-        }
-    };
+    let installed_files = InstalledFiles::read(egg_info.join("installed-files.txt"))?;
 
-    // Read the `top_level.txt` file, ignoring anything in `namespace_packages.txt`.
+    // Fall back to `top_level.txt` only when no installed-files record is available, ignoring
+    // anything in `namespace_packages.txt`. A shared top-level package may contain sibling-owned
+    // files that are intentionally absent from the record.
     //
     // Empty or whitespace-only entries are skipped: legacy setuptools writes `top_level.txt`
     // with a trailing newline even when the package has no top-level modules, which
     // `str::lines` yields as an empty string. Joining that onto `dist_location` would
     // resolve back to `dist_location` itself (site-packages), and a subsequent
     // `remove_dir_all` would wipe out every installed package.
-    let top_level = {
+    let top_level = if installed_files.is_some() {
+        Vec::new()
+    } else {
+        // Read the `namespace_packages.txt` file, skipping empty or whitespace-only entries.
+        let namespace_packages = {
+            let namespace_packages_path = egg_info.join("namespace_packages.txt");
+            match fs_err::read_to_string(namespace_packages_path) {
+                Ok(namespace_packages) => namespace_packages
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(err) => return Err(err.into()),
+            }
+        };
+
         let top_level_path = egg_info.join("top_level.txt");
         match fs_err::read_to_string(&top_level_path) {
             Ok(top_level) => top_level
@@ -290,41 +311,309 @@ pub fn uninstall_egg(egg_info: &Path, distribution: impl Display) -> Result<Unin
         }
     };
 
-    // Remove everything in `top_level.txt`.
+    // Validate every generated launcher before removing any installed files. Invalid legacy
+    // entry-point metadata must not leave a partially uninstalled distribution behind.
+    let EntryPointNames {
+        console_scripts,
+        gui_scripts,
+    } = EntryPointNames::read(egg_info.join("entry_points.txt"))?;
+    let mut script_paths = Vec::new();
+    for (name, is_gui) in console_scripts
+        .into_iter()
+        .map(|name| (name, false))
+        .chain(gui_scripts.into_iter().map(|name| (name, true)))
+    {
+        // The target is never imported during uninstall; only the script name is needed to
+        // validate and remove the generated launcher.
+        let script = Script {
+            name,
+            module: String::new(),
+            function: String::new(),
+        };
+        let validated = ValidatedScript::try_from_script(&script, layout)?;
+        script_paths.push((script.name.clone(), validated.as_path().to_path_buf()));
+
+        if layout.os_name == "nt" {
+            let Some(path) = normalize_path_under(
+                layout.scheme.scripts.join(&script.name),
+                &layout.scheme.scripts,
+            ) else {
+                return Err(Error::InvalidWheel(format!(
+                    "Script path must resolve to a file within the scripts directory: `{}`",
+                    script.name
+                )));
+            };
+            script_paths.push((script.name.clone(), path.clone()));
+
+            let mut manifest = path.as_os_str().to_owned();
+            manifest.push(".exe.manifest");
+            script_paths.push((script.name.clone(), PathBuf::from(manifest)));
+
+            let mut script_path = path.into_os_string();
+            script_path.push(if is_gui { "-script.pyw" } else { "-script.py" });
+            script_paths.push((script.name.clone(), PathBuf::from(script_path)));
+        }
+    }
+
+    let authority = EggUninstallAuthority::new(layout)?;
+    // The known metadata directory is removed recursively, so every existing entry must be
+    // authorized before any recorded payload, fallback package, or launcher is removed.
+    let egg_info = match authority.check_directory_tree(egg_info, PathScope::Library)? {
+        Some(PathDecision::Allowed(path)) => path,
+        None | Some(PathDecision::Missing) => return Ok(Uninstall::default()),
+        Some(PathDecision::Escapes) => {
+            return Err(Error::BrokenVenv(
+                "egg-info directory would remove an installation root or a path outside the selected site-packages directories"
+                    .to_string(),
+            ));
+        }
+        Some(PathDecision::Protected) => {
+            return Err(Error::BrokenVenv(
+                "egg-info directory would remove a core Python environment file".to_string(),
+            ));
+        }
+    };
+    let dist_location = egg_info
+        .parent()
+        .expect("validated egg-info directory has a parent");
+
+    // Check the actual raw and generated launcher paths, including Windows copies, before any
+    // recorded payload is removed. A child directory alias cannot introduce a new scripts root.
+    let mut validated_script_paths = Vec::with_capacity(script_paths.len());
+    for (declared, path) in script_paths {
+        match authority.check(&path, PathScope::Scripts)? {
+            PathDecision::Allowed(path) => validated_script_paths.push(path),
+            PathDecision::Missing => {}
+            PathDecision::Escapes => {
+                return Err(Error::InvalidWheel(format!(
+                    "Script path must resolve to a file within the scripts directory: `{declared}`"
+                )));
+            }
+            PathDecision::Protected => {
+                return Err(Error::InvalidWheel(format!(
+                    "Script path targets a core Python environment file: `{declared}`"
+                )));
+            }
+        }
+    }
+
+    // Select and preflight the complete fallback before removing any payload. An existing
+    // directory takes precedence over adjacent module files, including when it later disappears.
+    // Recursive removal needs authority for every entry, not just the package directory itself.
+    let mut fallback_removals = Vec::new();
     for entry in top_level {
         if !is_valid_top_level_entry(&entry, &distribution) {
             continue;
         }
 
         let path = dist_location.join(&entry);
-
-        // Remove as a directory.
-        match fs_err::remove_dir_all(&path) {
-            Ok(()) => {
-                trace!("Removed directory: {}", path.display());
-                dir_count += 1;
+        match authority.check_directory_tree(&path, PathScope::Library)? {
+            Some(PathDecision::Allowed(path)) => {
+                fallback_removals.push(EggFallbackRemoval::Directory(path));
                 continue;
             }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => return Err(err.into()),
+            Some(PathDecision::Missing) => continue,
+            None => {}
+            Some(PathDecision::Escapes) => {
+                warn_user!(
+                    "Invalid `top_level.txt` entry in {} that would remove an installation root or leave the selected site-packages directories, skipping: {}",
+                    distribution,
+                    entry
+                );
+                continue;
+            }
+            Some(PathDecision::Protected) => {
+                warn_user!(
+                    "Invalid `top_level.txt` entry in {} that would remove a core Python environment file, skipping: {}",
+                    distribution,
+                    entry
+                );
+                continue;
+            }
         }
 
-        // Remove as a `.py`, `.pyc`, or `.pyo` file.
-        for extension in &["py", "pyc", "pyo"] {
-            let path = path.with_extension(extension);
+        for extension in ["py", "pyc", "pyo"] {
+            match authority.check(&path.with_extension(extension), PathScope::Library)? {
+                PathDecision::Allowed(path) => {
+                    fallback_removals.push(EggFallbackRemoval::File(path));
+                }
+                PathDecision::Missing => {}
+                PathDecision::Escapes => {
+                    warn_user!(
+                        "Invalid `top_level.txt` entry in {} that would remove an installation root or leave the selected site-packages directories, skipping: {}.{}",
+                        distribution,
+                        entry,
+                        extension
+                    );
+                }
+                PathDecision::Protected => {
+                    warn_user!(
+                        "Invalid `top_level.txt` entry in {} that would remove a core Python environment file, skipping: {}.{}",
+                        distribution,
+                        entry,
+                        extension
+                    );
+                }
+            }
+        }
+    }
+
+    // Remove files recorded by legacy installers. Entries are relative to the `.egg-info`
+    // directory and may point into any of the installation scheme directories.
+    if let Some(installed_files) = installed_files.as_ref() {
+        let mut recorded_paths = Vec::new();
+
+        for entry in &installed_files.paths {
+            let path = egg_info.join(entry);
+            match authority.check(&path, PathScope::Installation)? {
+                PathDecision::Allowed(path) => recorded_paths.push(path),
+                PathDecision::Missing => {}
+                PathDecision::Escapes => {
+                    warn_user!(
+                        "Invalid `installed-files.txt` entry in {} that escapes the Python environment, skipping: {}",
+                        distribution,
+                        entry
+                    );
+                }
+                PathDecision::Protected => {
+                    warn_user!(
+                        "Invalid `installed-files.txt` entry in {} that targets a core environment file, skipping: {}",
+                        distribution,
+                        entry
+                    );
+                }
+            }
+        }
+
+        let mut visited = BTreeSet::new();
+        for path in recorded_paths {
             match fs_err::remove_file(&path) {
+                Ok(()) => {
+                    trace!("Removed file: {}", path.display());
+                    file_count += 1;
+                    if let Some(parent) = path.parent() {
+                        visited.insert(parent.to_path_buf());
+                    }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err.into()),
+            }
+
+            if path.extension().is_some_and(|extension| extension == "py") {
+                let Some(parent) = path.parent() else {
+                    continue;
+                };
+                let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                    continue;
+                };
+                let pycache = parent.join("__pycache__");
+                let metadata = match fs_err::symlink_metadata(&pycache) {
+                    Ok(metadata) => metadata,
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(err) => return Err(err.into()),
+                };
+                if metadata.file_type().is_symlink() {
+                    continue;
+                }
+                let PathDecision::Allowed(pycache) =
+                    authority.check(&pycache, PathScope::Installation)?
+                else {
+                    continue;
+                };
+                let entries = match fs_err::read_dir(&pycache) {
+                    Ok(entries) => entries,
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(err) => return Err(err.into()),
+                };
+                let prefix = format!("{stem}.");
+                for entry in entries {
+                    let entry = entry?;
+                    let name = entry.file_name();
+                    if name.to_str().is_some_and(|name| {
+                        name.starts_with(&prefix)
+                            && Path::new(name)
+                                .extension()
+                                .is_some_and(|extension| extension.eq_ignore_ascii_case("pyc"))
+                    }) {
+                        let PathDecision::Allowed(path) =
+                            authority.check(&entry.path(), PathScope::Installation)?
+                        else {
+                            continue;
+                        };
+                        match fs_err::remove_file(path) {
+                            Ok(()) => file_count += 1,
+                            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                            Err(err) => return Err(err.into()),
+                        }
+                    }
+                }
+                visited.insert(pycache);
+            }
+        }
+
+        // Remove directories left empty by recorded files and their corresponding bytecode.
+        for path in visited.iter().rev() {
+            let mut path = path.as_path();
+            while let Some(approved) = authority.prunable_directory(path)? {
+                let mut entries = match fs_err::read_dir(&approved) {
+                    Ok(entries) => entries,
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => break,
+                    Err(err) => return Err(err.into()),
+                };
+                if entries.next().transpose()?.is_some() {
+                    break;
+                }
+
+                match fs_err::remove_dir(&approved) {
+                    Ok(()) => {}
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => break,
+                    Err(err) => return Err(err.into()),
+                }
+                dir_count += 1;
+                let Some(parent) = path.parent() else {
+                    break;
+                };
+                path = parent;
+            }
+        }
+    }
+
+    // Remove the preflighted `top_level.txt` fallback.
+    for removal in fallback_removals {
+        match removal {
+            EggFallbackRemoval::Directory(path) => match fs_err::remove_dir_all(&path) {
+                Ok(()) => {
+                    trace!("Removed directory: {}", path.display());
+                    dir_count += 1;
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err.into()),
+            },
+            EggFallbackRemoval::File(path) => match fs_err::remove_file(&path) {
                 Ok(()) => {
                     trace!("Removed file: {}", path.display());
                     file_count += 1;
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
                 Err(err) => return Err(err.into()),
+            },
+        }
+    }
+
+    // Remove generated console and GUI launchers declared by `entry_points.txt`.
+    for path in validated_script_paths {
+        match fs_err::remove_file(&path) {
+            Ok(()) => {
+                trace!("Removed file: {}", path.display());
+                file_count += 1;
             }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
         }
     }
 
     // Remove the `.egg-info` directory.
-    match fs_err::remove_dir_all(egg_info) {
+    match fs_err::remove_dir_all(&egg_info) {
         Ok(()) => {
             trace!("Removed directory: {}", egg_info.display());
             dir_count += 1;
@@ -453,12 +742,33 @@ fn normalize_path(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use assert_fs::prelude::*;
 
     use uv_pypi_types::Scheme;
 
     use crate::Layout;
     use crate::uninstall::{is_valid_top_level_entry, uninstall_egg, uninstall_wheel};
+
+    fn layout(venv: &Path, site_packages: &Path) -> Layout {
+        Layout {
+            sys_executable: venv.join("bin/python"),
+            sys_prefix: venv.to_path_buf(),
+            sys_base_executable: None,
+            real_executable: venv.join("bin/python"),
+            interpreter_scripts: venv.join("bin"),
+            python_version: (3, 13),
+            os_name: "posix".to_string(),
+            scheme: Scheme {
+                purelib: site_packages.to_path_buf(),
+                platlib: site_packages.to_path_buf(),
+                scripts: venv.join("bin"),
+                data: venv.to_path_buf(),
+                include: venv.join("include/python3.12"),
+            },
+        }
+    }
 
     #[test]
     fn test_uninstall_egg_info_adjacent_module_files() {
@@ -492,7 +802,12 @@ mod tests {
                     .unwrap();
             }
 
-            let removed = uninstall_egg(egg_info.path(), "adjacent-bytecode 0.1.0").unwrap();
+            let removed = uninstall_egg(
+                egg_info.path(),
+                "adjacent-bytecode 0.1.0",
+                &layout(venv.path(), site_packages.path()),
+            )
+            .unwrap();
             assert_eq!(removed.file_count, expected_files, "mask: {mask}");
             assert_eq!(removed.dir_count, 1, "mask: {mask}");
             assert!(!egg_info.exists());
@@ -535,7 +850,12 @@ mod tests {
                 .unwrap();
         }
 
-        let removed = uninstall_egg(egg_info.path(), "adjacent-bytecode 0.1.0").unwrap();
+        let removed = uninstall_egg(
+            egg_info.path(),
+            "adjacent-bytecode 0.1.0",
+            &layout(venv.path(), site_packages.path()),
+        )
+        .unwrap();
         assert_eq!(removed.file_count, 0);
         assert_eq!(removed.dir_count, 2);
         assert!(!package.exists());
@@ -567,7 +887,11 @@ mod tests {
         later_bytecode.write_str("later sentinel").unwrap();
 
         assert!(matches!(
-            uninstall_egg(egg_info.path(), "adjacent-bytecode 0.1.0"),
+            uninstall_egg(
+                egg_info.path(),
+                "adjacent-bytecode 0.1.0",
+                &layout(venv.path(), site_packages.path()),
+            ),
             Err(crate::Error::Io(_))
         ));
         assert!(!source.exists());
@@ -636,6 +960,10 @@ mod tests {
         // Something that looks sufficiently like a Unix environment.
         let layout = Layout {
             sys_executable: venv.path().join("bin/python"),
+            sys_prefix: venv.path().to_path_buf(),
+            sys_base_executable: None,
+            real_executable: venv.path().join("bin/python"),
+            interpreter_scripts: venv.path().join("bin"),
             python_version: (3, 13),
             os_name: "posix".to_string(),
             scheme: Scheme {
@@ -683,13 +1011,91 @@ mod tests {
         let init_py = site_packages.child("evilpkg").child("__init__.py");
         init_py.touch().unwrap();
 
-        uninstall_egg(egg_info.path(), "evilpkg 0.1.0").unwrap();
+        uninstall_egg(
+            egg_info.path(),
+            "evilpkg 0.1.0",
+            &layout(venv.path(), site_packages.path()),
+        )
+        .unwrap();
 
         // The regular package directory has been removed, while the directory outside
         // site-packages still exists.
         assert!(target_dir.exists());
         assert!(target_file.exists());
         assert!(!init_py.exists());
+        assert!(!egg_info.exists());
+    }
+
+    /// Legacy recorded files must not remove the configuration or interpreter of the environment.
+    #[test]
+    fn test_uninstall_egg_info_core_environment_files() {
+        let venv = assert_fs::TempDir::new().unwrap();
+        let site_packages = venv.child("lib/python3.12/site-packages");
+        let egg_info = site_packages.child("evilpkg-0.1.0.egg-info");
+        egg_info.create_dir_all().unwrap();
+
+        let pyvenv_cfg = venv.child("pyvenv.cfg");
+        pyvenv_cfg.write_str("home = /python\n").unwrap();
+        let python = venv.child("bin/python");
+        python.write_str("interpreter").unwrap();
+        let module = site_packages.child("evilpkg/__init__.py");
+        module.write_str("").unwrap();
+
+        let pyvenv_cfg_path = pathdiff::diff_paths(pyvenv_cfg.path(), egg_info.path()).unwrap();
+        let python_path = pathdiff::diff_paths(python.path(), egg_info.path()).unwrap();
+        egg_info
+            .child("installed-files.txt")
+            .write_str(&format!(
+                "../evilpkg/__init__.py\n{}\n{}\n",
+                pyvenv_cfg_path.display(),
+                python_path.display()
+            ))
+            .unwrap();
+
+        uninstall_egg(
+            egg_info.path(),
+            "evilpkg 0.1.0",
+            &layout(venv.path(), site_packages.path()),
+        )
+        .unwrap();
+
+        assert!(pyvenv_cfg.exists());
+        assert!(python.exists());
+        assert!(!module.exists());
+        assert!(!egg_info.exists());
+    }
+
+    /// Legacy records must not follow an environment directory symlink to an external file.
+    #[cfg(unix)]
+    #[test]
+    fn test_uninstall_egg_info_recorded_path_traversal() {
+        let venv = assert_fs::TempDir::new().unwrap();
+        let site_packages = venv.child("lib/python3.12/site-packages");
+        let egg_info = site_packages.child("evilpkg-0.1.0.egg-info");
+        egg_info.create_dir_all().unwrap();
+
+        let outside = assert_fs::TempDir::new().unwrap();
+        let target = outside.child("target.txt");
+        target.write_str("I should not be deleted").unwrap();
+        let escaped = site_packages.child("escaped");
+        fs_err::os::unix::fs::symlink(outside.path(), escaped.path()).unwrap();
+
+        let module = site_packages.child("evilpkg/__init__.py");
+        module.write_str("").unwrap();
+        egg_info
+            .child("installed-files.txt")
+            .write_str("../evilpkg/__init__.py\n../escaped/target.txt\n")
+            .unwrap();
+
+        uninstall_egg(
+            egg_info.path(),
+            "evilpkg 0.1.0",
+            &layout(venv.path(), site_packages.path()),
+        )
+        .unwrap();
+
+        assert!(target.exists());
+        assert!(!module.exists());
         assert!(!egg_info.exists());
     }
 
@@ -718,7 +1124,12 @@ mod tests {
         egg_info.create_dir_all().unwrap();
         egg_info.child("top_level.txt").write_str("\n").unwrap();
 
-        uninstall_egg(egg_info.path(), "emptypkg 0.1.0").unwrap();
+        uninstall_egg(
+            egg_info.path(),
+            "emptypkg 0.1.0",
+            &layout(venv.path(), site_packages.path()),
+        )
+        .unwrap();
 
         // The egg-info is gone, but the rest of site-packages (including the sibling
         // package) survives.
@@ -762,7 +1173,12 @@ mod tests {
             .write_str("\npkg_a\n   \r\npkg_b\n\n")
             .unwrap();
 
-        uninstall_egg(egg_info.path(), "mixedpkg 0.1.0").unwrap();
+        uninstall_egg(
+            egg_info.path(),
+            "mixedpkg 0.1.0",
+            &layout(venv.path(), site_packages.path()),
+        )
+        .unwrap();
 
         // The two named packages are gone, the egg-info is gone, and site-packages plus
         // the sibling survive.

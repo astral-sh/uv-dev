@@ -33,6 +33,14 @@ mod wheel;
 pub struct Layout {
     /// The Python interpreter, as returned by `sys.executable`.
     pub sys_executable: PathBuf,
+    /// The selected Python environment, as returned by `sys.prefix`.
+    pub sys_prefix: PathBuf,
+    /// The base interpreter, as returned by `sys._base_executable`, when available.
+    pub sys_base_executable: Option<PathBuf>,
+    /// The executable path used to query the selected interpreter.
+    pub real_executable: PathBuf,
+    /// The selected interpreter's scripts directory, before `--target` or `--prefix` redirection.
+    pub interpreter_scripts: PathBuf,
     /// The Python version, as returned by `sys.version_info`.
     pub python_version: (u8, u8),
     /// The `os.name` value for the current platform.

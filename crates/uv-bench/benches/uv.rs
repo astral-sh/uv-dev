@@ -294,6 +294,10 @@ fn layout(root: &Path) -> Layout {
     let site_packages = root.join("site-packages");
     Layout {
         sys_executable: root.join("bin/python"),
+        sys_prefix: root.to_path_buf(),
+        sys_base_executable: None,
+        real_executable: root.join("bin/python"),
+        interpreter_scripts: root.join("bin"),
         python_version: (3, 11),
         os_name: "posix".to_string(),
         scheme: Scheme {

@@ -420,6 +420,229 @@ fn uninstall_egg_info_adjacent_module_files() -> Result<()> {
     Ok(())
 }
 
+/// Uninstall files and generated scripts recorded by a legacy `.egg-info` installation.
+#[test]
+fn uninstall_egg_info_recorded_files() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let site_packages = ChildPath::new(context.site_packages());
+    let egg_info = site_packages.child("zstandard-0.22.0-py3.12.egg-info");
+    egg_info.create_dir_all()?;
+    egg_info
+        .child("PKG-INFO")
+        .write_str("Metadata-Version: 2.1\nName: zstandard\nVersion: 0.22.0\n")?;
+    egg_info
+        .child("entry_points.txt")
+        .write_str("[console_scripts]\nzstd = zstd:main\n")?;
+    egg_info.child("top_level.txt").write_str("zstd\nowned\n")?;
+
+    let module = site_packages.child("zstd/__init__.py");
+    module.write_str("def main(): pass\n")?;
+    let sibling = site_packages.child("zstd/sibling.py");
+    sibling.write_str("VALUE = 'sibling'\n")?;
+    let bytecode = site_packages.child("zstd/__pycache__/__init__.cpython-312.pyc");
+    bytecode.write_str("bytecode")?;
+    let sibling_bytecode = site_packages.child("zstd/__pycache__/sibling.cpython-312.pyc");
+    sibling_bytecode.write_str("sibling bytecode")?;
+    let owned = site_packages.child("owned/module.py");
+    owned.write_str("VALUE = 'owned'\n")?;
+    let owned_bytecode = site_packages.child("owned/__pycache__/module.cpython-312.opt-1.pyc");
+    owned_bytecode.write_str("owned bytecode")?;
+    let data = context.venv.child("share/zstandard/data.txt");
+    data.write_str("data")?;
+    let depth = egg_info
+        .path()
+        .strip_prefix(context.venv.canonicalize()?)?
+        .components()
+        .count();
+    let data_path = format!("{}share/zstandard/data.txt", "../".repeat(depth));
+    egg_info.child("installed-files.txt").write_str(&format!(
+        "../zstd/__init__.py\n../owned/module.py\n{data_path}\n"
+    ))?;
+
+    let script = if cfg!(windows) {
+        context.venv.child("Scripts/zstd.exe")
+    } else {
+        context.venv.child("bin/zstd")
+    };
+    script.write_str("launcher")?;
+
+    uv_snapshot!(context.pip_uninstall()
+        .arg("--python")
+        .arg(context.interpreter())
+        .arg("zstandard"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+     - zstandard==0.22.0
+    ");
+
+    assert!(!module.exists());
+    assert!(sibling.exists());
+    assert!(!bytecode.exists());
+    assert!(sibling_bytecode.exists());
+    assert!(!owned.exists());
+    assert!(!owned_bytecode.exists());
+    assert!(!site_packages.child("owned").exists());
+    assert!(!data.exists());
+    assert!(!script.exists());
+    assert!(!egg_info.exists());
+
+    Ok(())
+}
+
+/// Remove legacy launchers without validating the entry-point targets, which are never imported.
+#[test]
+fn uninstall_egg_info_invalid_entry_point_targets() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let site_packages = ChildPath::new(context.site_packages());
+    let egg_info = site_packages.child("zstandard-0.22.0-py3.12.egg-info");
+    egg_info.create_dir_all()?;
+    egg_info
+        .child("PKG-INFO")
+        .write_str("Metadata-Version: 2.1\nName: zstandard\nVersion: 0.22.0\n")?;
+    egg_info
+        .child("entry_points.txt")
+        .write_str("[console_scripts]\nzstd = invalid-entry-point\n")?;
+    egg_info
+        .child("installed-files.txt")
+        .write_str("../zstd/__init__.py\n")?;
+
+    let module = site_packages.child("zstd/__init__.py");
+    module.write_str("def main(): pass\n")?;
+    let script = if cfg!(windows) {
+        context.venv.child("Scripts/zstd.exe")
+    } else {
+        context.venv.child("bin/zstd")
+    };
+    script.write_str("launcher")?;
+
+    uv_snapshot!(context.pip_uninstall()
+        .arg("--python")
+        .arg(context.interpreter())
+        .arg("zstandard"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+     - zstandard==0.22.0
+    ");
+
+    assert!(!module.exists());
+    assert!(!script.exists());
+    assert!(!egg_info.exists());
+
+    Ok(())
+}
+
+/// A nested directory link cannot give legacy entry-point metadata authority outside `scripts`.
+#[test]
+fn uninstall_egg_info_script_directory_alias() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let site_packages = ChildPath::new(context.site_packages());
+    let egg_info = site_packages.child("legacy_authority-0.1.0.egg-info");
+    egg_info.create_dir_all()?;
+    egg_info
+        .child("PKG-INFO")
+        .write_str("Metadata-Version: 2.1\nName: legacy-authority\nVersion: 0.1.0\n")?;
+    egg_info
+        .child("installed-files.txt")
+        .write_str("../legacy_authority.py\n")?;
+    egg_info
+        .child("entry_points.txt")
+        .write_str("[console_scripts]\nnested/tool = missing:main\n")?;
+    let payload = site_packages.child("legacy_authority.py");
+    payload.write_str("VALUE = 'owned'\n")?;
+
+    let outside = context.temp_dir.child("outside-launchers");
+    for name in ["tool", "tool.exe", "tool.exe.manifest", "tool-script.py"] {
+        outside.child(name).write_str("outside launcher")?;
+    }
+    let scripts = context
+        .venv
+        .child(if cfg!(windows) { "Scripts" } else { "bin" });
+    uv_fs::create_symlink(outside.path(), scripts.child("nested").path())?;
+
+    uv_snapshot!(context.pip_uninstall()
+        .arg("--python")
+        .arg(context.interpreter())
+        .arg("legacy-authority"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The wheel is invalid: Script path must resolve to a file within the scripts directory: `nested/tool`
+    ");
+
+    assert_eq!(fs_err::read_to_string(&payload)?, "VALUE = 'owned'\n");
+    assert!(egg_info.exists());
+    for name in ["tool", "tool.exe", "tool.exe.manifest", "tool-script.py"] {
+        assert_eq!(
+            fs_err::read_to_string(outside.child(name))?,
+            "outside launcher"
+        );
+    }
+    context
+        .assert_command("import sys; assert sys.prefix != sys.base_prefix")
+        .success();
+
+    Ok(())
+}
+
+/// The raw Windows launcher candidate must not remove the selected interpreter.
+#[test]
+#[cfg(windows)]
+fn uninstall_egg_info_raw_python_exe() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let interpreter = context.interpreter();
+    assert!(interpreter.starts_with(context.venv.path()));
+    assert!(fs_err::symlink_metadata(&interpreter)?.is_file());
+    let identity = context
+        .python_command()
+        .arg("-c")
+        .arg("import os, sys; print(os.path.abspath(sys._base_executable)); raise SystemExit(1 if os.path.samefile(sys.argv[1], sys._base_executable) else 0)")
+        .arg(&interpreter)
+        .output()?;
+    assert!(
+        identity.status.success(),
+        "the fixture interpreter must be a private launcher copy: {}",
+        String::from_utf8_lossy(&identity.stderr),
+    );
+    let interpreter_bytes = fs_err::read(&interpreter)?;
+    let configuration = context.venv.child("pyvenv.cfg");
+    let configuration_bytes = fs_err::read(&configuration)?;
+
+    let site_packages = ChildPath::new(context.site_packages());
+    let egg_info = site_packages.child("legacy_authority-0.1.0.egg-info");
+    egg_info.create_dir_all()?;
+    egg_info
+        .child("PKG-INFO")
+        .write_str("Metadata-Version: 2.1\nName: legacy-authority\nVersion: 0.1.0\n")?;
+    egg_info
+        .child("installed-files.txt")
+        .write_str("../legacy_authority.py\n")?;
+    egg_info
+        .child("entry_points.txt")
+        .write_str("[console_scripts]\npython.exe = missing:main\n")?;
+    let payload = site_packages.child("legacy_authority.py");
+    payload.write_str("VALUE = 'owned'\n")?;
+
+    uv_snapshot!(context.pip_uninstall()
+        .arg("--python")
+        .arg(&interpreter)
+        .arg("legacy-authority"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The wheel is invalid: Script path targets a core Python environment file: `python.exe`
+    ");
+
+    assert_eq!(fs_err::read_to_string(&payload)?, "VALUE = 'owned'\n");
+    assert!(egg_info.exists());
+    assert_eq!(fs_err::read(&interpreter)?, interpreter_bytes);
+    assert_eq!(fs_err::read(&configuration)?, configuration_bytes);
+    context
+        .assert_command("import sys; assert sys.prefix != sys.base_prefix")
+        .success();
+
+    Ok(())
+}
+
 /// Refuse to uninstall a versionless `.egg-info` file without the metadata required to do so safely.
 #[test]
 fn uninstall_versionless_egg_info_file() -> Result<()> {
