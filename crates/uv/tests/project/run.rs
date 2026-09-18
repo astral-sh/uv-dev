@@ -18,7 +18,7 @@ use uv_test::{TestContext, packse::PackseServer, uv_snapshot};
 
 #[test]
 fn run_with_python_version() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.11", "3.9"]);
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11", "3.9"]).with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -145,6 +145,7 @@ fn run_with_python_version() -> Result<()> {
 #[test]
 fn run_args() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filter((
             r"Usage: uv(?:\.exe)? run \[OPTIONS\] (?s:.*?)(\n----- stderr -----|$)",
             "[UV RUN HELP]$1",
@@ -213,7 +214,7 @@ fn run_args() -> Result<()> {
 /// This should list the available scripts.
 #[test]
 fn run_no_args() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -285,7 +286,7 @@ fn run_no_args() -> Result<()> {
 /// dependencies.
 #[test]
 fn run_pep723_script() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -434,7 +435,7 @@ fn run_pep723_script() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving script dependencies
-      cause: Because there are no versions of add and you require add, we can conclude that your requirements are unsatisfiable.
+      cause: Because add was not found in the package registry and you require add, we can conclude that your requirements are unsatisfiable.
     ");
 
     // If the script can't be resolved, we should reference the script.
@@ -453,7 +454,7 @@ fn run_pep723_script() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving script dependencies
-      cause: Because there are no versions of add and you require add, we can conclude that your requirements are unsatisfiable.
+      cause: Because add was not found in the package registry and you require add, we can conclude that your requirements are unsatisfiable.
     ");
 
     // If the script contains an unclosed PEP 723 tag, we should error.
@@ -503,7 +504,7 @@ fn run_pep723_script() -> Result<()> {
 
 #[test]
 fn run_pep723_script_empty_dependency() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let test_script = context.temp_dir.child("script.py");
     test_script.write_str(indoc! { r#"
@@ -533,7 +534,7 @@ fn run_pep723_script_empty_dependency() -> Result<()> {
 /// Windows.
 #[test]
 fn run_pep723_script_long_filename() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // The cache environment entry path, which is derived from the script's name, would exceed many
     // common path component length limits if it was not truncated first.
@@ -568,7 +569,7 @@ fn run_pep723_script_long_filename() -> Result<()> {
 
 #[test]
 fn run_pep723_script_requires_python() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]).with_local_index();
 
     // If we have a `.python-version` that's incompatible with the script, we should use the
     // script's `requires-python` for Python discovery instead.
@@ -610,7 +611,7 @@ fn run_pep723_script_requires_python() -> Result<()> {
 /// should be used.
 #[test]
 fn run_pep723_script_requires_python_compatible() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]).with_local_index();
 
     let python_version = context.temp_dir.child(PYTHON_VERSION_FILENAME);
     python_version.write_str("3.11")?;
@@ -641,7 +642,7 @@ fn run_pep723_script_requires_python_compatible() -> Result<()> {
 /// for discovery.
 #[test]
 fn run_pep723_script_requires_python_incompatible_range() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]).with_local_index();
 
     let python_version = context.temp_dir.child(PYTHON_VERSION_FILENAME);
     python_version.write_str(">3.8,<3.12")?;
@@ -669,7 +670,7 @@ fn run_pep723_script_requires_python_incompatible_range() -> Result<()> {
 /// Run a `.pyw` script. The script should be executed with `pythonw.exe`.
 #[test]
 fn run_pythonw_script() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -716,7 +717,7 @@ fn run_pythonw_script() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn run_pep723_script_metadata() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // If the script contains a PEP 723 tag, we should install its requirements.
     let test_script = context.temp_dir.child("main.py");
@@ -818,7 +819,7 @@ fn run_pep723_script_index() -> Result<()> {
 /// Run a PEP 723-compatible script with a relative index and pinned and unpinned dependencies.
 #[test]
 fn run_pep723_script_relative_index() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let scripts = context.temp_dir.child("scripts");
     let links = scripts.child("links");
@@ -875,7 +876,7 @@ fn run_pep723_script_relative_index() -> Result<()> {
 /// Package-scoped source disabling must not discard unrelated script sources or indexes.
 #[test]
 fn run_pep723_script_no_sources_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let explicit = PackseServer::new("simple/single-package.toml");
     let default = PackseServer::new("extras/missing-extra.toml");
 
@@ -927,7 +928,7 @@ fn run_pep723_script_no_sources_package() -> Result<()> {
 /// Run a PEP 723-compatible script with `tool.uv` constraints.
 #[test]
 fn run_pep723_script_constraints() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r#"
@@ -962,7 +963,7 @@ fn run_pep723_script_constraints() -> Result<()> {
 /// Run a PEP 723-compatible script with `tool.uv` overrides.
 #[test]
 fn run_pep723_script_overrides() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r#"
@@ -987,7 +988,7 @@ fn run_pep723_script_overrides() -> Result<()> {
     Prepared 3 packages in [TIME]
     Installed 3 packages in [TIME]
      + anyio==4.3.0
-     + idna==2.0
+     + idna==1.0
      + sniffio==1.3.1
     ");
 
@@ -997,7 +998,7 @@ fn run_pep723_script_overrides() -> Result<()> {
 /// Run a PEP 723-compatible script with `tool.uv` excludes.
 #[test]
 fn run_pep723_script_excludes() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r#"
@@ -1031,7 +1032,7 @@ fn run_pep723_script_excludes() -> Result<()> {
 /// Run a PEP 723-compatible script with `tool.uv` build constraints.
 #[test]
 fn run_pep723_script_build_constraints() -> Result<()> {
-    let context = uv_test::test_context!("3.9");
+    let context = uv_test::test_context!("3.9").with_local_index();
 
     let test_script = context.temp_dir.child("main.py");
 
@@ -1098,7 +1099,7 @@ fn run_pep723_script_build_constraints() -> Result<()> {
 /// Run a PEP 723-compatible script with a lockfile.
 #[test]
 fn run_pep723_script_lock() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r#"
@@ -1149,10 +1150,10 @@ fn run_pep723_script_lock() -> Result<()> {
         [[package]]
         name = "iniconfig"
         version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/iniconfig-2.0.0.tar.gz", hash = "sha256:48c42a08c0ec1a24f2fe45f4efdefc9c19ac8e0aa8e82284503ccba80398bec3", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
+            { url = "http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c", upload-time = "2024-03-24T00:00:00Z" },
         ]
         "#
         );
@@ -1253,32 +1254,32 @@ fn run_pep723_script_lock() -> Result<()> {
         [[package]]
         name = "anyio"
         version = "4.3.0"
-        source = { registry = "https://pypi.org/simple" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
         dependencies = [
             { name = "idna" },
             { name = "sniffio" },
         ]
-        sdist = { url = "https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz", hash = "sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6", size = 159642, upload-time = "2024-02-19T08:36:28.641Z" }
+        sdist = { url = "http://[LOCALHOST]/files/anyio-4.3.0.tar.gz", hash = "sha256:13a6d97fa30ec110d85e3949a30c92306f0178135048329f54a335c3dade753a", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl", hash = "sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8", size = 85584, upload-time = "2024-02-19T08:36:26.842Z" },
+            { url = "http://[LOCALHOST]/files/anyio-4.3.0-py3-none-any.whl", hash = "sha256:c4f443e7e5a2c003b1534688207e85dbd11960efb66d4d6a4e7693fdfc6f5b33", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
         name = "idna"
         version = "3.6"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426, upload-time = "2023-11-25T15:40:54.902Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/idna-3.6.tar.gz", hash = "sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567, upload-time = "2023-11-25T15:40:52.604Z" },
+            { url = "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl", hash = "sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
         name = "sniffio"
         version = "1.3.1"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/sniffio-1.3.1.tar.gz", hash = "sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
+            { url = "http://[LOCALHOST]/files/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05", upload-time = "2024-03-24T00:00:00Z" },
         ]
         "#
         );
@@ -1290,7 +1291,7 @@ fn run_pep723_script_lock() -> Result<()> {
 /// With `managed = false`, we should avoid installing the project itself.
 #[test]
 fn run_managed_false() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -1320,7 +1321,7 @@ fn run_managed_false() -> Result<()> {
 
 #[test]
 fn run_exact() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -1380,7 +1381,7 @@ fn run_exact() -> Result<()> {
 
 #[test]
 fn run_with() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -1443,7 +1444,7 @@ fn run_with() -> Result<()> {
     uv_snapshot!(context.filters(), context.run().arg("--with").arg("sniffio<1.3.0").arg("main.py"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    1.2.0
+    1.1.0
 
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -1451,7 +1452,7 @@ fn run_with() -> Result<()> {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + sniffio==1.2.0
+     + sniffio==1.1.0
     ");
 
     // If we request a dependency that isn't in the base environment, we should still respect any
@@ -1495,7 +1496,7 @@ fn run_with() -> Result<()> {
     Resolved 2 packages in [TIME]
     Checked 2 packages in [TIME]
     error: No solution found when resolving `--with` dependencies
-      cause: Because there are no versions of add and you require add, we can conclude that your requirements are unsatisfiable.
+      cause: Because add was not found in the package registry and you require add, we can conclude that your requirements are unsatisfiable.
     ");
 
     Ok(())
@@ -1503,7 +1504,7 @@ fn run_with() -> Result<()> {
 
 #[test]
 fn run_with_local_wheel_refreshes_rebuilt_wheel() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
 
     let package = context.temp_dir.child("foo");
     package.child("pyproject.toml").write_str(indoc! { r#"
@@ -1631,7 +1632,9 @@ fn run_with_local_wheel_refreshes_rebuilt_wheel() -> Result<()> {
 /// search paths are available in these ephemeral environments.
 #[test]
 fn run_with_pyvenv_cfg_file() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_pyvenv_cfg_filters();
+    let context = uv_test::test_context_with_versions!(&["3.12"])
+        .with_local_index()
+        .with_pyvenv_cfg_filters();
 
     // This sets up to test for a regression where we escaped double quotes and backslashes.
     // Windows paths don't allow double quotes and use backslash as a path separator so the path has
@@ -1709,6 +1712,7 @@ fn run_with_pyvenv_cfg_file() -> Result<()> {
 #[test]
 fn run_with_overlay_interpreter() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix();
 
@@ -1951,7 +1955,7 @@ fn run_with_overlay_interpreter() -> Result<()> {
 
 #[test]
 fn run_with_build_constraints() -> Result<()> {
-    let context = uv_test::test_context!("3.9");
+    let context = uv_test::test_context!("3.9").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -2020,7 +2024,7 @@ fn run_with_build_constraints() -> Result<()> {
 /// Sync all members in a workspace.
 #[test]
 fn run_in_workspace() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2167,7 +2171,7 @@ fn run_in_workspace() -> Result<()> {
 
 #[test]
 fn run_with_editable() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let anyio_local = context.temp_dir.child("src").child("anyio_local");
     copy_dir_all(
@@ -2297,7 +2301,7 @@ fn run_with_editable() -> Result<()> {
 
 #[test]
 fn run_group() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2479,7 +2483,7 @@ fn run_group() -> Result<()> {
 
 #[test]
 fn run_dev_overrides_uv_no_dev() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2519,7 +2523,7 @@ fn run_dev_overrides_uv_no_dev() -> Result<()> {
 
 #[test]
 fn run_locked() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2569,23 +2573,23 @@ fn run_locked() -> Result<()> {
         [[package]]
         name = "anyio"
         version = "3.7.0"
-        source = { registry = "https://pypi.org/simple" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
         dependencies = [
             { name = "idna" },
             { name = "sniffio" },
         ]
-        sdist = { url = "https://files.pythonhosted.org/packages/c6/b3/fefbf7e78ab3b805dec67d698dc18dd505af7a18a8dd08868c9b4fa736b5/anyio-3.7.0.tar.gz", hash = "sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce", size = 142737, upload-time = "2023-05-27T11:12:46.688Z" }
+        sdist = { url = "http://[LOCALHOST]/files/anyio-3.7.0.tar.gz", hash = "sha256:c8f99c47f03aec932b6cee4178beb10ce5b0aaf6d3e1ff52cc5e49fc3186af0a", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/68/fe/7ce1926952c8a403b35029e194555558514b365ad77d75125f521a2bec62/anyio-3.7.0-py3-none-any.whl", hash = "sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0", size = 80873, upload-time = "2023-05-27T11:12:44.474Z" },
+            { url = "http://[LOCALHOST]/files/anyio-3.7.0-py3-none-any.whl", hash = "sha256:ea75fecadcfa9b11a8bfa2ff25ea52a2904950d4925ba758c97d97e32c314556", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
         name = "idna"
         version = "3.6"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426, upload-time = "2023-11-25T15:40:54.902Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/idna-3.6.tar.gz", hash = "sha256:9aae8f72192b28db0d56fcef130afe490d1538a8d1bf1700e6d219521421525f", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567, upload-time = "2023-11-25T15:40:52.604Z" },
+            { url = "http://[LOCALHOST]/files/idna-3.6-py3-none-any.whl", hash = "sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
         [[package]]
@@ -2602,10 +2606,10 @@ fn run_locked() -> Result<()> {
         [[package]]
         name = "sniffio"
         version = "1.3.1"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/sniffio-1.3.1.tar.gz", hash = "sha256:ce520d2eb3c2be02f0c148dab5ba304e8705e1c7e7b4bec8a9146c464a597a6a", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
+            { url = "http://[LOCALHOST]/files/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2743fa2a853c508a2310882c0b4104631e0b0fcb855e00a912b7e3f27e6b3f05", upload-time = "2024-03-24T00:00:00Z" },
         ]
         "#);
         }
@@ -2678,7 +2682,7 @@ fn run_locked() -> Result<()> {
 
 #[test]
 fn run_frozen() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2745,7 +2749,7 @@ fn run_frozen() -> Result<()> {
 
 #[test]
 fn run_no_sync() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2801,7 +2805,7 @@ fn run_no_sync() -> Result<()> {
 /// See: <https://github.com/astral-sh/uv/issues/17390>
 #[test]
 fn run_no_sync_env_var() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2854,7 +2858,7 @@ fn run_no_sync_env_var() -> Result<()> {
 
 #[test]
 fn run_empty_requirements_txt() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -2914,7 +2918,7 @@ fn run_empty_requirements_txt() -> Result<()> {
 
 #[test]
 fn run_requirements_txt() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -3049,7 +3053,7 @@ fn run_requirements_txt() -> Result<()> {
 /// Ignore and warn when (e.g.) the `--index-url` argument is a provided `requirements.txt`.
 #[test]
 fn run_requirements_txt_arguments() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -3106,7 +3110,7 @@ fn run_requirements_txt_arguments() -> Result<()> {
 /// Ensure that we can import from the root project when layering `--with` requirements.
 #[test]
 fn run_editable() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -3172,6 +3176,7 @@ fn run_editable() -> Result<()> {
 fn run_from_directory() -> Result<()> {
     // Default to 3.11 so that the `.python-version` is meaningful.
     let context = uv_test::test_context_with_versions!(&["3.10", "3.11", "3.12"])
+        .with_local_index()
         .with_filtered_missing_file_error();
 
     let project_dir = context.temp_dir.child("project");
@@ -3337,7 +3342,7 @@ fn run_from_directory() -> Result<()> {
 /// By default, omit resolver and installer output.
 #[test]
 fn run_without_output() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -3384,7 +3389,7 @@ fn run_without_output() -> Result<()> {
 /// Ensure that we can import from the root project when layering `--with` requirements.
 #[test]
 fn run_isolated_python_version() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.9", "3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.9", "3.12"]).with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -3476,6 +3481,7 @@ fn run_isolated_python_version() -> Result<()> {
 #[test]
 fn run_no_project() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix();
@@ -3554,7 +3560,7 @@ fn run_no_project() -> Result<()> {
 
 #[test]
 fn run_stdin() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r#"
@@ -3575,7 +3581,7 @@ fn run_stdin() -> Result<()> {
 
 #[test]
 fn run_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let main_script = context.temp_dir.child("__main__.py");
     main_script.write_str(indoc! { r#"
@@ -3594,7 +3600,7 @@ fn run_package() -> Result<()> {
 
 #[test]
 fn run_zipapp() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Create a zipapp.
     let child = context.temp_dir.child("app");
@@ -3630,7 +3636,7 @@ fn run_zipapp() -> Result<()> {
 
 #[test]
 fn run_stdin_args() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.run().arg("python").arg("-c").arg("import sys; print(sys.argv)").arg("foo").arg("bar"), @"
     exit_code: 0 (success)
@@ -3642,7 +3648,7 @@ fn run_stdin_args() {
 /// Run a module equivalent to `python -m foo`.
 #[test]
 fn run_module() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.run().arg("-m").arg("__hello__"), @"
     exit_code: 0 (success)
@@ -3672,7 +3678,7 @@ fn run_module() {
 
 #[test]
 fn run_module_stdin() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.run().arg("-m").arg("-"), @"
     exit_code: 2 (failure)
@@ -3685,6 +3691,7 @@ fn run_module_stdin() {
 #[test]
 fn virtual_empty() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix();
@@ -3723,7 +3730,7 @@ fn virtual_empty() -> Result<()> {
 
 #[test]
 fn run_isolated_incompatible_python() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.9", "3.11"]);
+    let context = uv_test::test_context_with_versions!(&["3.9", "3.11"]).with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -3773,7 +3780,7 @@ fn run_isolated_incompatible_python() -> Result<()> {
 
 #[test]
 fn run_isolated_does_not_modify_lock() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -3879,7 +3886,7 @@ fn run_isolated_does_not_modify_lock() -> Result<()> {
 
 #[test]
 fn run_isolated_with_frozen() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -3951,7 +3958,7 @@ fn run_isolated_with_frozen() -> Result<()> {
 
 #[test]
 fn run_compiled_python_file() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Write a non-PEP 723 script.
     let test_non_script = context.temp_dir.child("main.py");
@@ -4040,7 +4047,7 @@ fn run_compiled_python_file() -> Result<()> {
 
 #[test]
 fn run_exit_code() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let test_script = context.temp_dir.child("script.py");
     test_script.write_str(indoc! { r#"
@@ -4059,7 +4066,7 @@ fn run_exit_code() -> Result<()> {
 
 #[test]
 fn run_invalid_project_table() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -4095,7 +4102,7 @@ fn run_invalid_project_table() -> Result<()> {
 #[test]
 #[cfg(target_family = "unix")]
 fn run_script_without_build_system() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -4133,7 +4140,7 @@ fn run_script_without_build_system() -> Result<()> {
 
 #[test]
 fn run_script_module_conflict() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -4147,8 +4154,8 @@ fn run_script_module_conflict() -> Result<()> {
         foo = "foo:app"
 
         [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
         "#
     })?;
 
@@ -4215,7 +4222,7 @@ fn run_script_module_conflict() -> Result<()> {
 
 #[test]
 fn run_script_explicit() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let test_script = context.temp_dir.child("script");
     test_script.write_str(indoc! { r#"
@@ -4247,7 +4254,7 @@ fn run_script_explicit() -> Result<()> {
 
 #[test]
 fn run_script_explicit_stdin() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let test_script = context.temp_dir.child("script");
     test_script.write_str(indoc! { r#"
@@ -4279,7 +4286,7 @@ fn run_script_explicit_stdin() -> Result<()> {
 
 #[test]
 fn run_script_explicit_no_file() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     context
         .run()
         .arg("--script")
@@ -4292,7 +4299,7 @@ fn run_script_explicit_no_file() {
 #[cfg(target_family = "unix")]
 #[test]
 fn run_script_explicit_directory() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     fs_err::create_dir(context.temp_dir.child("script"))?;
 
@@ -4308,7 +4315,7 @@ fn run_script_explicit_directory() -> Result<()> {
 #[test]
 #[cfg(windows)]
 fn run_gui_script_explicit_windows() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let test_script = context.temp_dir.child("script");
     test_script.write_str(indoc! { r#"
@@ -4339,7 +4346,7 @@ fn run_gui_script_explicit_windows() -> Result<()> {
 #[test]
 #[cfg(windows)]
 fn run_gui_script_explicit_stdin_windows() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let test_script = context.temp_dir.child("script");
     test_script.write_str(indoc! { r#"
@@ -4372,7 +4379,7 @@ fn run_gui_script_explicit_stdin_windows() -> Result<()> {
 #[test]
 #[cfg(not(windows))]
 fn run_gui_script_explicit_unix() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let test_script = context.temp_dir.child("script");
     test_script.write_str(indoc! { r#"
         # /// script
@@ -4473,6 +4480,7 @@ fn run_linked_environment_path() -> Result<()> {
 #[test]
 fn run_active_project_environment() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+        .with_local_index()
         .with_filtered_virtualenv_bin()
         .with_filtered_python_names();
 
@@ -4576,6 +4584,7 @@ fn run_active_project_environment() -> Result<()> {
 #[test]
 fn run_active_script_environment() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+        .with_local_index()
         .with_filtered_virtualenv_bin()
         .with_filtered_python_names();
 
@@ -4670,7 +4679,7 @@ fn run_active_script_environment() -> Result<()> {
 /// Regression test for <https://github.com/astral-sh/uv/issues/21364>.
 #[test]
 fn run_active_script_environment_non_virtualenv() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r#"
@@ -4710,7 +4719,7 @@ fn run_active_script_environment_non_virtualenv() -> Result<()> {
 #[test]
 #[cfg(not(windows))]
 fn run_gui_script_explicit_stdin_unix() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let test_script = context.temp_dir.child("script");
     test_script.write_str(indoc! { r#"
@@ -4740,33 +4749,49 @@ fn run_gui_script_explicit_stdin_unix() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn run_remote_pep723_script() {
+#[tokio::test]
+async fn run_remote_pep723_script() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_python_names()
         .with_filter((
             r"(?m)^Downloaded remote script to:.*\.py$",
             "Downloaded remote script to: [TEMP_PATH].py",
         ));
-    uv_snapshot!(context.filters(), context.run().arg("https://raw.githubusercontent.com/astral-sh/uv/df45b9ac2584824309ff29a6a09421055ad730f6/scripts/uv-run-remote-script-test.py").arg(EnvVars::CI), @"
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/uv-run-remote-script-test.py"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(indoc! {r#"
+            # /// script
+            # requires-python = ">=3.12"
+            # dependencies = ["iniconfig"]
+            # ///
+
+            import sys
+            import iniconfig
+
+            print(f"Hello {sys.argv[1]}, from uv!")
+        "#}))
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.run().arg(format!("{}/uv-run-remote-script-test.py", server.uri())).arg(EnvVars::CI), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     Hello CI, from uv!
 
     ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + markdown-it-py==3.0.0
-     + mdurl==0.1.2
-     + pygments==2.17.2
-     + rich==13.7.1
-    ");
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    "#);
 }
 
 #[test]
 fn run_remote_pep723_script_with_nonexistent_ssl_cert_file() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.run()
         .arg("https://raw.githubusercontent.com/astral-sh/uv/df45b9ac2584824309ff29a6a09421055ad730f6/scripts/uv-run-remote-script-test.py")
@@ -4787,7 +4812,7 @@ fn run_remote_pep723_script_with_nonexistent_ssl_cert_file() {
 
 #[test]
 fn run_remote_requirements_offline_redacts_credentials() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let script = context.temp_dir.child("main.py");
     script.write_str("print('hello')")?;
@@ -4807,10 +4832,12 @@ fn run_remote_requirements_offline_redacts_credentials() -> Result<()> {
 
 #[test]
 fn run_remote_pep723_requirements_fetch_error_does_not_leak_credentials() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filter((
-        r"(?m)^  cause: .*(Connection refused|No connection could be made).*$",
-        "  cause: [CONNECTION_REFUSED]",
-    ));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((
+            r"(?m)^  cause: .*(Connection refused|No connection could be made).*$",
+            "  cause: [CONNECTION_REFUSED]",
+        ));
 
     let script = context.temp_dir.child("main.py");
     script.write_str("print('hello')")?;
@@ -4840,7 +4867,7 @@ fn run_remote_pep723_requirements_fetch_error_does_not_leak_credentials() -> Res
 #[cfg(unix)] // A URL could be a valid filepath on Unix but not on Windows
 #[test]
 fn run_url_like_with_local_file_priority() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let url = "https://example.com/path/to/main.py";
     let local_path: std::path::PathBuf = ["https:", "", "example.com", "path", "to", "main.py"]
@@ -4865,7 +4892,7 @@ fn run_url_like_with_local_file_priority() -> Result<()> {
 
 #[test]
 fn run_stdin_with_pep723() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r#"
@@ -4897,7 +4924,7 @@ fn run_stdin_with_pep723() -> Result<()> {
 
 #[test]
 fn run_with_env() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context.temp_dir.child("test.py").write_str(indoc! { "
         import os
@@ -4939,7 +4966,7 @@ fn run_with_env() -> Result<()> {
 
 #[test]
 fn run_with_env_file() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context.temp_dir.child("test.py").write_str(indoc! { "
         import os
@@ -4998,7 +5025,7 @@ fn run_with_env_file() -> Result<()> {
 
 #[test]
 fn run_with_multiple_env_files() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context.temp_dir.child("test.py").write_str(indoc! { "
         import os
@@ -5042,7 +5069,7 @@ fn run_with_multiple_env_files() -> Result<()> {
 
 #[test]
 fn run_with_env_omitted() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context.temp_dir.child("test.py").write_str(indoc! { "
         import os
@@ -5066,7 +5093,7 @@ fn run_with_env_omitted() -> Result<()> {
 
 #[test]
 fn run_with_malformed_env() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context.temp_dir.child("test.py").write_str(indoc! { "
         import os
@@ -5093,10 +5120,12 @@ fn run_with_malformed_env() -> Result<()> {
 
 #[test]
 fn run_with_not_existing_env_file() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filter((
-        r"(?m)^error: Failed to read environment file `.env.development`: .*$",
-        "error: Failed to read environment file `.env.development`: [ERR]",
-    ));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((
+            r"(?m)^error: Failed to read environment file `.env.development`: .*$",
+            "error: Failed to read environment file `.env.development`: [ERR]",
+        ));
 
     context.temp_dir.child("test.py").write_str(indoc! { "
         import os
@@ -5125,7 +5154,7 @@ fn run_with_not_existing_env_file() -> Result<()> {
 
 #[test]
 fn run_with_extra_conflict() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -5168,7 +5197,7 @@ fn run_with_extra_conflict() -> Result<()> {
 
 #[test]
 fn run_with_group_conflict() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -5211,7 +5240,7 @@ fn run_with_group_conflict() -> Result<()> {
 
 #[test]
 fn run_default_groups() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -5414,7 +5443,7 @@ fn run_default_groups() -> Result<()> {
 /// Ensures default dependency groups participate in automatic Python selection.
 #[test]
 fn run_groups_requires_python() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]).with_local_index();
     context.temp_dir.child("pyproject.toml").write_str(
         r#"
         [project]
@@ -5471,7 +5500,7 @@ fn run_groups_requires_python() -> Result<()> {
 /// request can downgrade it.
 #[test]
 fn run_groups_requires_python_environment() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]).with_local_index();
     context.temp_dir.child("pyproject.toml").write_str(
         r#"
         [project]
@@ -5551,8 +5580,9 @@ fn run_groups_requires_python_environment() -> Result<()> {
 /// that no available interpreter satisfies.
 #[test]
 fn run_groups_requires_python_errors() -> Result<()> {
-    let context =
-        uv_test::test_context_with_versions!(&["3.12", "3.13"]).with_filtered_python_sources();
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"])
+        .with_local_index()
+        .with_filtered_python_sources();
     context.temp_dir.child("pyproject.toml").write_str(
         r#"
         [project]
@@ -5595,7 +5625,8 @@ fn run_groups_requires_python_errors() -> Result<()> {
 
 #[test]
 fn run_groups_include_requires_python() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.11", "3.12", "3.13"]);
+    let context =
+        uv_test::test_context_with_versions!(&["3.11", "3.12", "3.13"]).with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -5683,7 +5714,7 @@ fn run_groups_include_requires_python() -> Result<()> {
 #[cfg(unix)]
 #[test]
 fn exit_status_signal() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let script = context.temp_dir.child("segfault.py");
     script.write_str(indoc! {r"
@@ -5697,7 +5728,7 @@ fn exit_status_signal() -> Result<()> {
 
 #[test]
 fn run_repeated() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.13", "3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.13", "3.12"]).with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -5758,7 +5789,7 @@ fn run_repeated() -> Result<()> {
 /// See: <https://github.com/astral-sh/uv/issues/11117>
 #[test]
 fn run_without_overlay() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.13"]);
+    let context = uv_test::test_context_with_versions!(&["3.13"]).with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -5824,7 +5855,7 @@ fn detect_infinite_recursion() -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     use uv_test::get_bin;
 
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let test_script = context.temp_dir.child("main");
     test_script.write_str(&formatdoc! { r#"
@@ -5853,7 +5884,7 @@ fn detect_infinite_recursion() -> Result<()> {
 
 #[test]
 fn run_uv_variable() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Display the `UV` variable
     uv_snapshot!(
@@ -5871,7 +5902,7 @@ fn run_uv_variable() {
 #[cfg(windows)]
 #[test]
 fn run_windows_legacy_scripts() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
 
@@ -6097,7 +6128,7 @@ fn run_windows_legacy_scripts() -> Result<()> {
 /// See: <https://github.com/astral-sh/uv/issues/13173>
 #[test]
 fn run_pep723_script_with_constraints_lock() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r#"
@@ -6141,10 +6172,10 @@ fn run_pep723_script_with_constraints_lock() -> Result<()> {
         [[package]]
         name = "iniconfig"
         version = "1.1.1"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/23/a2/97899f6bd0e873fed3a7e67ae8d3a08b21799430fb4da15cfedf10d6e2c2/iniconfig-1.1.1.tar.gz", hash = "sha256:bc3af051d7d14b2ee5ef9969666def0cd1a000e121eaea580d4a313df4b37f32", size = 8104, upload-time = "2020-10-14T10:20:18.572Z" }
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/iniconfig-1.1.1.tar.gz", hash = "sha256:4f511134392ee75a8077a69be0d19cd4e5abb3a99ca54c7ab4a8e09ba0bc6991", upload-time = "2020-10-14T10:20:18.572Z" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl", hash = "sha256:011e24c64b7f47f6ebd835bb12a743f2fbe9a26d4cecaa7f53bc4f35ee9da8b3", size = 4990, upload-time = "2020-10-16T17:37:23.05Z" },
+            { url = "http://[LOCALHOST]/files/iniconfig-1.1.1-py3-none-any.whl", hash = "sha256:7832a237a8357e11d0a6e6a909bff9806c6f378393862998cd328fcf9d54d509", upload-time = "2020-10-14T10:20:18.572Z" },
         ]
         "#
         );
@@ -6188,7 +6219,7 @@ fn run_pep723_script_with_constraints_lock() -> Result<()> {
 /// See: <https://github.com/astral-sh/uv/issues/13173>
 #[test]
 fn run_pep723_script_with_constraints() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r#"
@@ -6239,7 +6270,7 @@ fn run_pep723_script_with_constraints() -> Result<()> {
 
 #[test]
 fn run_no_sync_incompatible_python() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.11", "3.9"]);
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11", "3.9"]).with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -6288,8 +6319,9 @@ fn run_no_sync_incompatible_python() -> Result<()> {
 
 #[test]
 fn run_python_preference_no_project() {
-    let context =
-        uv_test::test_context_with_versions!(&["3.12", "3.11"]).with_versions_as_managed(&["3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+        .with_local_index()
+        .with_versions_as_managed(&["3.12"]);
 
     context.venv().assert().success();
 
@@ -6323,7 +6355,7 @@ fn run_python_preference_no_project() {
 /// Regression test for: <https://github.com/astral-sh/uv/issues/15518>
 #[test]
 fn isolate_child_environment() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -6394,7 +6426,7 @@ fn isolate_child_environment() -> Result<()> {
 
 #[test]
 fn run_only_group_and_extra_conflict() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -6439,7 +6471,7 @@ fn run_only_group_and_extra_conflict() -> Result<()> {
 }
 
 fn setup_target_workspace_discovery_context() -> Result<TestContext> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Create a workspace in a subdirectory.
     let workspace = context.temp_dir.child("project");
@@ -6507,7 +6539,7 @@ fn run_target_workspace_discovery() -> Result<()> {
 /// Regression test for <https://github.com/astral-sh/uv/issues/8851#issuecomment-5123317996>.
 #[test]
 fn run_target_workspace_discovery_workspace_root_group() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context
         .temp_dir
@@ -6581,7 +6613,7 @@ fn run_target_workspace_discovery_workspace_root_group() -> Result<()> {
 /// Excluded inherited groups must still be recognized during group validation.
 #[test]
 fn run_target_workspace_discovery_excluded_workspace_root_group() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context
         .temp_dir
@@ -6636,7 +6668,7 @@ fn run_target_workspace_discovery_excluded_workspace_root_group() -> Result<()> 
 /// Workspace defaults and member-defined groups remain distinct when a member is selected.
 #[test]
 fn run_target_workspace_discovery_workspace_group_defaults() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context
         .temp_dir
@@ -6794,7 +6826,7 @@ fn run_target_workspace_discovery_workspace_group_defaults() -> Result<()> {
 /// Member-defined groups override inherited groups from a project-backed workspace root.
 #[test]
 fn run_target_workspace_discovery_workspace_project_groups() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context
         .temp_dir
@@ -6923,7 +6955,7 @@ fn run_target_workspace_discovery_workspace_project_groups() -> Result<()> {
     Resolved 8 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + six==1.16.0
+     + six==1.17.0
     ");
 
     uv_snapshot!(context.filters(), context.run()
@@ -6941,7 +6973,7 @@ fn run_target_workspace_discovery_workspace_project_groups() -> Result<()> {
     Prepared 1 package in [TIME]
     Installed 2 packages in [TIME]
      + idna==3.6
-     + six==1.16.0
+     + six==1.17.0
     ");
 
     uv_snapshot!(context.filters(), context.run()
@@ -6956,7 +6988,7 @@ fn run_target_workspace_discovery_workspace_project_groups() -> Result<()> {
     Resolved 8 packages in [TIME]
     Installed 4 packages in [TIME]
      + packaging==24.0
-     + six==1.16.0
+     + six==1.17.0
      + sniffio==1.3.1
      + typing-extensions==4.10.0
     ");
@@ -7037,7 +7069,7 @@ fn run_target_workspace_discovery_workspace_project_groups() -> Result<()> {
 /// Non-project workspace roots retain manifest-level groups even for selected members.
 #[test]
 fn run_target_workspace_discovery_virtual_workspace_groups() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context
         .temp_dir
@@ -7171,7 +7203,7 @@ fn run_target_workspace_discovery_virtual_workspace_groups() -> Result<()> {
     Resolved 6 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + six==1.16.0
+     + six==1.17.0
     ");
 
     uv_snapshot!(context.filters(), context.run()
@@ -7187,7 +7219,7 @@ fn run_target_workspace_discovery_virtual_workspace_groups() -> Result<()> {
     Prepared 1 package in [TIME]
     Installed 4 packages in [TIME]
      + packaging==24.0
-     + six==1.16.0
+     + six==1.17.0
      + sniffio==1.3.1
      + typing-extensions==4.10.0
     ");
@@ -7242,7 +7274,7 @@ fn run_target_workspace_discovery_virtual_workspace_groups() -> Result<()> {
     ----- stderr -----
     Resolved 6 packages in [TIME]
     Installed 1 package in [TIME]
-     + six==1.16.0
+     + six==1.17.0
     ");
 
     uv_snapshot!(context.filters(), context.run()
@@ -7260,7 +7292,7 @@ fn run_target_workspace_discovery_virtual_workspace_groups() -> Result<()> {
     Prepared 1 package in [TIME]
     Installed 2 packages in [TIME]
      + idna==3.6
-     + six==1.16.0
+     + six==1.17.0
     ");
 
     Ok(())
@@ -7269,7 +7301,7 @@ fn run_target_workspace_discovery_virtual_workspace_groups() -> Result<()> {
 /// Workspace group selection should be consistent across run, sync, and export.
 #[test]
 fn run_target_workspace_discovery_workspace_project_group_commands() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context
         .temp_dir
@@ -7337,7 +7369,7 @@ fn run_target_workspace_discovery_workspace_project_group_commands() -> Result<(
     Prepared 1 package in [TIME]
     Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
-     + six==1.16.0
+     + six==1.17.0
      - sniffio==1.3.1
     ");
 
@@ -7377,7 +7409,7 @@ fn run_target_workspace_discovery_workspace_project_group_commands() -> Result<(
         .arg("shared"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    six==1.16.0
+    six==1.17.0
 
     ----- stderr -----
     Resolved 8 packages in [TIME]
@@ -7391,7 +7423,7 @@ fn run_target_workspace_discovery_workspace_project_group_commands() -> Result<(
     exit_code: 0 (success)
     ----- stdout -----
     packaging==24.0
-    six==1.16.0
+    six==1.17.0
     sniffio==1.3.1
     typing-extensions==4.10.0
 
@@ -7405,7 +7437,7 @@ fn run_target_workspace_discovery_workspace_project_group_commands() -> Result<(
 /// Projectless root groups should also behave consistently across commands.
 #[test]
 fn run_target_workspace_discovery_virtual_workspace_group_commands() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context
         .temp_dir
@@ -7467,7 +7499,7 @@ fn run_target_workspace_discovery_virtual_workspace_group_commands() -> Result<(
     Prepared 1 package in [TIME]
     Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
-     + six==1.16.0
+     + six==1.17.0
      - sniffio==1.3.1
     ");
 
@@ -7493,7 +7525,7 @@ fn run_target_workspace_discovery_virtual_workspace_group_commands() -> Result<(
         .arg("shared"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    six==1.16.0
+    six==1.17.0
 
     ----- stderr -----
     Resolved 6 packages in [TIME]
@@ -7506,7 +7538,7 @@ fn run_target_workspace_discovery_virtual_workspace_group_commands() -> Result<(
 /// would otherwise cause `Path::parent()` to return an empty path.
 #[test]
 fn run_target_workspace_discovery_bare_script() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context
         .temp_dir
@@ -7545,7 +7577,7 @@ fn run_project_precedes_target_workspace_discovery() -> Result<()> {
 /// Using `--project` with a non-existent directory should error.
 #[test]
 fn run_project_not_found() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.run().arg("--project").arg("/tmp/does-not-exist-uv-test").arg("python").arg("-c").arg("print('hello')"), @"
     exit_code: 2 (failure)
@@ -7557,7 +7589,7 @@ fn run_project_not_found() {
 /// Using `--project` with a non-existent directory should error with `UV_PREVIEW=1`.
 #[test]
 fn run_project_not_found_uv_preview_env() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.run().env("UV_PREVIEW", "1").arg("--project").arg("/tmp/does-not-exist-uv-test").arg("python").arg("-c").arg("print('hello')"), @"
     exit_code: 2 (failure)
@@ -7572,7 +7604,7 @@ fn run_project_not_found_uv_preview_env() {
 /// See: <https://github.com/astral-sh/uv/issues/18508>
 #[test]
 fn run_project_pyproject_toml_file() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let project_dir = context.temp_dir.child("project");
     project_dir.create_dir_all()?;
@@ -7612,7 +7644,7 @@ fn run_project_pyproject_toml_file() -> Result<()> {
 /// Using `--project` with a non-`pyproject.toml` file should error.
 #[test]
 fn run_project_non_pyproject_file() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let project_dir = context.temp_dir.child("project");
     project_dir.create_dir_all()?;
@@ -7648,7 +7680,7 @@ fn run_project_non_pyproject_file() -> Result<()> {
 /// Using `--project` with a nested non-`pyproject.toml` file should error.
 #[test]
 fn run_project_nested_file() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let project_dir = context.temp_dir.child("project");
     project_dir.create_dir_all()?;
@@ -7687,7 +7719,7 @@ fn run_project_nested_file() -> Result<()> {
 #[test]
 #[cfg(unix)]
 fn run_project_file_no_ancestor_project() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let isolated_dir = context.temp_dir.child("isolated");
     isolated_dir.create_dir_all()?;
@@ -7710,21 +7742,20 @@ fn run_project_file_no_ancestor_project() -> Result<()> {
 
 /// Ensure that `uv run` aborts when malware is detected in a dependency.
 #[tokio::test]
-async fn run_malware_detected() {
-    let context = uv_test::test_context!("3.12");
+async fn run_malware_detected() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml
-        .write_str(indoc! {r#"
+    pyproject_toml.write_str(indoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = ["iniconfig==2.0.0"]
-    "#})
-        .unwrap();
+    "#})?;
 
     context.lock().assert().success();
+    context.rewrite_lock_registry_sources("https://pypi.org/simple")?;
 
     let server = MockServer::start().await;
 
@@ -7747,6 +7778,7 @@ async fn run_malware_detected() {
 
     uv_snapshot!(context.filters(), context
         .run()
+        .arg("--frozen")
         .arg("--preview-features").arg("malware-check")
         .arg("python")
         .arg("--version")
@@ -7754,16 +7786,18 @@ async fn run_malware_detected() {
         .env(EnvVars::UV_MALWARE_CHECK_URL, server.uri()), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Resolved 2 packages in [TIME]
     warning: Malware detected in locked dependencies:
       - `iniconfig==2.0.0`: MAL-2026-1234 (https://osv.dev/vulnerability/MAL-2026-1234)
     error: Malware detected in one or more dependencies that would be installed; aborting sync. Set `UV_MALWARE_CHECK=0` to bypass this check.
     ");
+
+    Ok(())
 }
 
 #[test]
 fn run_centralized_environment_no_sync_uses_incompatible_python() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+        .with_local_index()
         .with_filtered_centralized_environment_hashes();
     context
         .temp_dir
@@ -7807,6 +7841,7 @@ fn run_centralized_environment_no_sync_uses_incompatible_python() -> Result<()> 
 #[test]
 fn run_centralized_environment_path_file() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+        .with_local_index()
         .with_filtered_centralized_environment_hashes();
     context
         .temp_dir
