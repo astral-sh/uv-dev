@@ -28,7 +28,7 @@ use uv_python::{
 };
 use uv_requirements::{RequirementsSource, RequirementsSpecification};
 use uv_settings::{PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
-use uv_tool::{InstalledTools, Tool};
+use uv_tool::{InstalledTools, Tool, ToolEnvironment};
 use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::WorkspaceCache;
@@ -45,9 +45,10 @@ use crate::commands::project::{
     resolve_environment, resolve_names, sync_environment, update_environment,
 };
 use crate::commands::tool::common::{
-    ToolLock, ToolPython, finalize_tool_install, refine_interpreter, remove_entrypoints,
+    ToolLock, ToolPython, finalize_tool_install, refine_interpreter, repair_tool_entrypoints,
     tool_environment_spec,
 };
+use crate::commands::tool::recovery::ToolEntrypointSnapshot;
 use crate::commands::tool::{Target, ToolRequest};
 use crate::commands::{UvError, reporters::PythonDownloadReporter};
 use crate::printer::Printer;
@@ -502,22 +503,41 @@ pub(crate) async fn install(
             }
         };
 
+    let current_environment = match installed_tools.get_environment(package_name, &cache) {
+        Ok(environment) => environment,
+        Err(_) if force => None,
+        Err(err) => return Err(err.into()),
+    };
+    let entrypoint_snapshot = existing_tool_receipt
+        .as_ref()
+        .map(|receipt| {
+            ToolEntrypointSnapshot::capture(
+                current_environment
+                    .as_ref()
+                    .map(ToolEnvironment::environment),
+                package_name,
+                receipt,
+                &installed_tools,
+            )
+        })
+        .transpose()?;
+    if let Some(snapshot) = entrypoint_snapshot.as_ref().filter(|_| force) {
+        snapshot.admit_mutation(package_name, true)?;
+    }
     let existing_environment = if force {
         None
     } else {
-        installed_tools
-            .get_environment(package_name, &cache)?
-            .filter(|environment| {
-                existing_environment_usable(
-                    environment.environment(),
-                    &interpreter,
-                    package_name,
-                    explicit_python_request,
-                    &settings,
-                    existing_tool_receipt.as_ref(),
-                    printer,
-                )
-            })
+        current_environment.filter(|environment| {
+            existing_environment_usable(
+                environment.environment(),
+                &interpreter,
+                package_name,
+                explicit_python_request,
+                &settings,
+                existing_tool_receipt.as_ref(),
+                printer,
+            )
+        })
     };
 
     let validation_interpreter = existing_environment
@@ -633,11 +653,20 @@ pub(crate) async fn install(
                     Ok(SatisfiesResult::Fresh { .. })
                 );
                 if already_installed {
-                    // Then we're done! Though we might need to update the receipt.
-                    if *tool_receipt.options() != options {
+                    let repaired = repair_tool_entrypoints(
+                        environment.environment(),
+                        package_name,
+                        tool_receipt,
+                        &installed_tools,
+                        force,
+                        printer,
+                    )?;
+                    if repaired.is_some() || *tool_receipt.options() != options {
                         installed_tools.add_tool_receipt(
                             package_name,
-                            tool_receipt.clone().with_options(options),
+                            repaired
+                                .unwrap_or_else(|| tool_receipt.clone())
+                                .with_options(options),
                         )?;
                     }
 
@@ -712,6 +741,7 @@ pub(crate) async fn install(
                             .as_ref()
                             .and_then(|lock| lock.preference()),
                         Some(&site_packages),
+                        &settings.resolver.upgrade,
                     ),
                     resolution_scope,
                     environment.interpreter(),
@@ -785,10 +815,20 @@ pub(crate) async fn install(
                 && !request.is_latest()
                 && settings.reinstall.is_none()
                 && settings.resolver.upgrade.is_none()
+                && existing_tool_receipt.is_some()
             {
                 let Some(existing_tool_receipt) = existing_tool_receipt.as_ref() else {
                     bail!("Expected an existing tool receipt");
                 };
+                let repaired = repair_tool_entrypoints(
+                    &environment,
+                    package_name,
+                    existing_tool_receipt,
+                    &installed_tools,
+                    force,
+                    printer,
+                )?;
+                let tool_receipt = repaired.as_ref().unwrap_or(existing_tool_receipt);
                 let python = if explicit_python_request {
                     python_request.clone()
                 } else {
@@ -804,7 +844,7 @@ pub(crate) async fn install(
                         receipt_excludes.clone(),
                         receipt_build_constraints.clone(),
                         python,
-                        existing_tool_receipt.entrypoints().iter().cloned(),
+                        tool_receipt.entrypoints().iter().cloned(),
                         options.clone(),
                     ),
                 )?;
@@ -814,6 +854,9 @@ pub(crate) async fn install(
                     requirement.cyan()
                 )?;
                 return Ok(ExitStatus::Success);
+            }
+            if let Some(snapshot) = &entrypoint_snapshot {
+                snapshot.admit_mutation(package_name, force)?;
             }
             let environment = if plan.is_empty() && !settings.compile_bytecode {
                 environment
@@ -838,6 +881,9 @@ pub(crate) async fn install(
             };
             (environment, Some(tool_lock))
         } else {
+            if let Some(snapshot) = &entrypoint_snapshot {
+                snapshot.admit_mutation(package_name, force)?;
+            }
             let update = match update_environment(
                 environment,
                 spec,
@@ -867,12 +913,6 @@ pub(crate) async fn install(
             (update.environment, None)
         };
 
-        // At this point, we updated the existing environment, so we should remove any of its
-        // existing executables.
-        if let Some(existing_receipt) = existing_tool_receipt.as_ref() {
-            remove_entrypoints(existing_receipt);
-        }
-
         (environment, tool_lock)
     } else {
         let satisfied_tool_lock = match existing_tool_lock.take() {
@@ -898,6 +938,7 @@ pub(crate) async fn install(
                         .as_ref()
                         .and_then(|lock| lock.preference()),
                     None,
+                    &settings.resolver.upgrade,
                 )
             } else {
                 EnvironmentSpecification::from(spec)
@@ -1010,13 +1051,10 @@ pub(crate) async fn install(
         } else {
             HashStrategy::default()
         };
-        let environment = installed_tools.create_environment(package_name, interpreter)?;
-
-        // At this point, we removed any existing environment, so we should remove any of its
-        // executables.
-        if let Some(existing_receipt) = existing_tool_receipt {
-            remove_entrypoints(&existing_receipt);
+        if let Some(snapshot) = &entrypoint_snapshot {
+            snapshot.admit_mutation(package_name, force)?;
         }
+        let environment = installed_tools.create_environment(package_name, interpreter)?;
 
         // Sync the environment with the resolved requirements.
         match sync_environment(
@@ -1052,7 +1090,9 @@ pub(crate) async fn install(
         entrypoints,
         &installed_tools,
         &options,
+        entrypoint_snapshot.as_ref(),
         force || invalid_tool_receipt,
+        true,
         // Only persist the Python request if it was explicitly provided
         if explicit_python_request {
             python_request

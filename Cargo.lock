@@ -7674,6 +7674,7 @@ name = "uv-windows"
 version = "0.0.80"
 dependencies = [
  "arrayvec",
+ "fs-err",
  "windows",
 ]
 

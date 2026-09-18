@@ -15,7 +15,7 @@ use uv_cache::{Cache, Refresh};
 use uv_client::{BaseClientBuilder, FlatIndexClient, RegistryClientBuilder};
 use uv_configuration::{
     BuildOptions, Concurrency, Constraints, DependencyGroupsWithDefaults, ExcludeDependency,
-    ExtrasSpecification, GitLfsSetting, InstallOptions, Override, TargetTriple,
+    ExtrasSpecification, GitLfsSetting, InstallOptions, Override, TargetTriple, Upgrade,
 };
 use uv_dispatch::BuildDispatch;
 use uv_distribution::{
@@ -43,6 +43,7 @@ use uv_python::{
 use uv_requirements::RequirementsSpecification;
 use uv_resolver::{
     FlatIndex, Installable, Lock, OptionsBuilder, Preference, ResolverManifest, ResolverOutput,
+    UpgradePackages,
 };
 use uv_settings::{PythonInstallMirrors, ToolOptions};
 use uv_shell::Shell;
@@ -52,6 +53,13 @@ use uv_warnings::warn_user_once;
 use uv_workspace::WorkspaceCache;
 
 use crate::commands::pip;
+#[cfg(windows)]
+use crate::commands::tool::recovery::copy_executable;
+use crate::commands::tool::recovery::{
+    ToolEntrypointClaims, ToolEntrypointSnapshot, same_entrypoint_location,
+    same_existing_entrypoint_location, same_planned_entrypoint_location,
+};
+use crate::commands::tool::uninstall::owned_entrypoints_by;
 
 /// An error raised when a tool package provides no executables.
 #[derive(Debug, Error)]
@@ -141,13 +149,161 @@ pub(super) fn matching_packages(name: &str, site_packages: &SitePackages) -> Vec
         .collect()
 }
 
-/// Remove any entrypoints attached to the [`Tool`].
-pub(crate) fn remove_entrypoints(tool: &Tool) {
-    remove_entrypoint_paths(
-        tool.entrypoints()
-            .iter()
-            .map(|entrypoint| entrypoint.install_path.as_path()),
-    );
+/// Return whether all executables recorded for a [`Tool`] exist in the configured bin directory.
+fn tool_entrypoints_are_fresh(tool: &Tool) -> bool {
+    let Ok(executable_directory) = uv_tool::tool_executable_dir() else {
+        return false;
+    };
+
+    tool.entrypoints().iter().all(|entrypoint| {
+        entrypoint.install_path.parent() == Some(executable_directory.as_path())
+            && entrypoint.install_path.exists()
+    })
+}
+
+/// Repair exports of an otherwise unchanged tool without reinstalling its packages.
+///
+/// A receipt records where an executable was installed, not whether a later installation has
+/// replaced it. Check every source, destination, and old export before changing any executable.
+pub(super) fn repair_tool_entrypoints(
+    environment: &PythonEnvironment,
+    name: &PackageName,
+    tool: &Tool,
+    installed_tools: &InstalledTools,
+    force: bool,
+    printer: Printer,
+) -> anyhow::Result<Option<Tool>> {
+    if tool_entrypoints_are_fresh(tool) {
+        return Ok(None);
+    }
+
+    let claims = ToolEntrypointClaims::capture(installed_tools)?;
+    let owned = owned_entrypoints_by(
+        name,
+        tool,
+        claims.receipts(),
+        installed_tools,
+        same_existing_entrypoint_location,
+    )?;
+    let executable_directory = uv_tool::tool_executable_dir()?;
+    let environment_root = fs_err::canonicalize(environment.root())?;
+    let mut replacements = BTreeMap::new();
+    let mut removals = BTreeSet::new();
+    let mut entrypoints: Vec<ToolEntrypoint> = Vec::new();
+
+    for entrypoint in tool.entrypoints() {
+        let Some(filename) = entrypoint.install_path.file_name() else {
+            bail!(
+                "Invalid executable path `{}`",
+                entrypoint.install_path.user_display()
+            );
+        };
+        let source = environment.scripts().join(filename);
+        let canonical_source = fs_err::canonicalize(&source)
+            .with_context(|| format!("Failed to locate executable `{}`", source.user_display()))?;
+        if !canonical_source.starts_with(&environment_root)
+            || !fs_err::metadata(&canonical_source)?.is_file()
+        {
+            bail!(
+                "Executable `{}` is not a file in the tool environment",
+                source.user_display()
+            );
+        }
+        #[cfg(windows)]
+        if fs_err::symlink_metadata(&source)?.is_symlink() {
+            bail!("Executable `{}` is a symbolic link", source.user_display());
+        }
+
+        let target = executable_directory.join(filename);
+        // Admit the complete final target set, including unchanged entries, before the first
+        // export write. Equal entries belong to this same receipt; exact duplicate map keys
+        // retain their last replacement, while an unresolved alias aborts the whole repair.
+        for previous in &entrypoints {
+            same_planned_entrypoint_location(&previous.install_path, &target)?;
+        }
+        if same_entrypoint_location(&source, &target)? {
+            bail!(
+                "Cannot export executable `{}` into its tool environment",
+                target.user_display()
+            );
+        }
+        let same_location = same_existing_entrypoint_location(&entrypoint.install_path, &target)?;
+        let is_owned = owned.contains(entrypoint);
+        let exists = match fs_err::symlink_metadata(&target) {
+            Ok(metadata) if metadata.is_dir() => {
+                bail!("Executable path `{}` is a directory", target.user_display());
+            }
+            Ok(_) => true,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => false,
+            Err(err) => return Err(err.into()),
+        };
+        if !exists || !same_location || !is_owned {
+            // Replacing another recorded owner requires an installation-time transfer. An
+            // export-only repair cannot make that ownership change durable, even with `--force`.
+            claims.check_other_claims(name, &target)?;
+            if exists && !force {
+                bail!(
+                    "Executable already exists: {} (use `--force` to overwrite)",
+                    target.user_display().bold()
+                );
+            }
+            replacements.insert(target.clone(), source);
+        }
+        if is_owned && !same_location {
+            removals.insert(entrypoint.install_path.clone());
+        }
+        entrypoints.push(ToolEntrypoint {
+            install_path: target,
+            ..entrypoint.clone()
+        });
+    }
+
+    fs_err::create_dir_all(&executable_directory)
+        .context("Failed to create executable directory")?;
+    #[cfg(windows)]
+    let itself = std::env::current_exe().ok();
+    for (target, source) in replacements {
+        debug!("Restoring executable: `{}`", target.user_display());
+        #[cfg(unix)]
+        replace_symlink(source, &target).context("Failed to restore executable")?;
+        #[cfg(windows)]
+        if itself.as_ref().is_some_and(|itself| {
+            std::path::absolute(&target).is_ok_and(|target| *itself == target)
+        }) {
+            self_replace::self_replace(source).context("Failed to restore executable")?;
+        } else {
+            copy_executable(&source, &target).context("Failed to restore executable")?;
+        }
+    }
+    for old in removals {
+        #[cfg(windows)]
+        if itself
+            .as_ref()
+            .is_some_and(|itself| std::path::absolute(&old).is_ok_and(|target| *itself == target))
+        {
+            self_replace::self_delete().context("Failed to remove old executable")?;
+            continue;
+        }
+        match fs_err::remove_file(&old) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+    }
+
+    let names = entrypoints
+        .iter()
+        .map(|entrypoint| &entrypoint.name)
+        .collect::<BTreeSet<_>>();
+    let s = if names.len() == 1 { "" } else { "s" };
+    writeln!(
+        printer.stderr(),
+        "Restored {} executable{s}: {}",
+        names.len(),
+        names.iter().map(|name| name.bold()).join(", ")
+    )?;
+    warn_out_of_path(&executable_directory);
+    Ok(Some(tool.clone().with_entrypoints(entrypoints)))
 }
 
 /// Remove the entrypoints at the given paths.
@@ -610,11 +766,12 @@ impl ToolLock {
 }
 
 /// Build an environment specification for a tool, preferring versions from its existing lock when
-/// available, then falling back to the installed environment.
+/// available, then falling back to installed packages that are not selected for upgrade.
 pub(crate) fn tool_environment_spec<'lock>(
     requirements: RequirementsSpecification,
     lock: Option<&'lock ToolLock>,
     site_packages: Option<&SitePackages>,
+    upgrade: &Upgrade,
 ) -> EnvironmentSpecification<'lock> {
     let specification = EnvironmentSpecification::from(requirements);
     if let Some(lock) = lock {
@@ -624,9 +781,11 @@ pub(crate) fn tool_environment_spec<'lock>(
         });
     }
 
+    let upgrade_packages = UpgradePackages::for_non_project(upgrade);
     let preferences = site_packages
         .into_iter()
         .flat_map(|site_packages| site_packages.iter().filter_map(Preference::from_installed))
+        .filter(|preference| !upgrade_packages.contains(preference.name()))
         .collect::<Vec<_>>();
     if preferences.is_empty() {
         return specification;
@@ -729,13 +888,15 @@ pub(crate) async fn refine_interpreter(
 /// Installs tool executables for a given package, handling any conflicts.
 ///
 /// Adds a receipt for the tool.
-pub(crate) fn finalize_tool_install(
+pub(super) fn finalize_tool_install(
     environment: &PythonEnvironment,
     name: &PackageName,
     entrypoints: &[PackageName],
     installed_tools: &InstalledTools,
     options: &ToolOptions,
+    previous: Option<&ToolEntrypointSnapshot>,
     force: bool,
+    report_unchanged: bool,
     python: Option<PythonRequest>,
     requirements: Vec<Requirement>,
     constraints: Vec<Requirement>,
@@ -745,6 +906,47 @@ pub(crate) fn finalize_tool_install(
     lock: Option<&ToolLock>,
     printer: Printer,
 ) -> anyhow::Result<()> {
+    if let Some(previous) = previous {
+        let installed_entrypoints = match previous.install(
+            environment,
+            name,
+            entrypoints,
+            force,
+            report_unchanged,
+            printer,
+        ) {
+            Ok(entrypoints) => entrypoints,
+            Err(err) => {
+                if matches!(
+                    err.downcast_ref::<NoExecutablesError>(),
+                    Some(NoExecutablesError::Root { .. })
+                ) {
+                    writeln!(
+                        printer.stdout(),
+                        "No executables are provided by package `{}`; removing tool",
+                        name.cyan()
+                    )?;
+                    previous.remove_owned_exports()?;
+                    installed_tools.remove_environment(name)?;
+                }
+                return Err(err);
+            }
+        };
+        let tool = Tool::new(
+            requirements,
+            constraints,
+            overrides,
+            excludes,
+            build_constraints,
+            python,
+            installed_entrypoints,
+            options.clone(),
+        );
+        ToolLock::write(&installed_tools.tool_dir(name), lock)?;
+        installed_tools.add_tool_receipt(name, tool)?;
+        warn_out_of_path(&uv_tool::tool_executable_dir()?);
+        return Ok(());
+    }
     let executable_directory = uv_tool::tool_executable_dir()?;
     fs_err::create_dir_all(&executable_directory)
         .context("Failed to create executable directory")?;

@@ -1,9 +1,18 @@
+use std::collections::BTreeMap;
 #[cfg(any(feature = "test-git", feature = "test-git-lfs"))]
 use std::collections::BTreeSet;
-#[cfg(feature = "test-git")]
+#[cfg(any(windows, feature = "test-git"))]
 use std::ffi::OsString;
+use std::fmt::Write as _;
+#[cfg(windows)]
+use std::io::{Read, Seek, Write as _};
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
+#[cfg(windows)]
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::Result;
@@ -15,14 +24,20 @@ use assert_fs::{
     fixture::{FileTouch, FileWriteStr, PathChild, PathCreateDir},
 };
 use indoc::indoc;
-use insta::assert_snapshot;
-use predicates::prelude::predicate;
+use insta::{allow_duplicates, assert_snapshot};
+use predicates::prelude::{PredicateStrExt, predicate};
+#[cfg(windows)]
+use sha2::{Digest, Sha256};
+use url::Url;
 use uv_extract::dirhash::dirhash_path;
 #[cfg(windows)]
 use uv_fs::Simplified;
 use uv_fs::copy_dir_all;
 use uv_static::EnvVars;
 
+#[cfg(windows)]
+use uv_test::packse::generate_wheel_with_binary_files;
+use uv_test::packse::generate_wheel_with_files;
 use uv_test::{site_packages_path, uv_snapshot, venv_bin_path};
 
 #[cfg(feature = "test-git")]
@@ -2600,6 +2615,2347 @@ fn tool_install_already_installed() {
      ~ click==8.1.7
     Installed 2 executables: black, blackd
     ");
+}
+
+#[test]
+fn tool_install_restores_missing_executables() -> Result<()> {
+    for preview in [None, Some("tool-install-locks")] {
+        let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
+        let context = if let Some(preview) = preview {
+            context.with_env(EnvVars::UV_PREVIEW_FEATURES, preview)
+        } else {
+            context
+        };
+        let tool_dir = context.temp_dir.child("tools");
+        let first_bin_dir = context.temp_dir.child("first-bin");
+        let second_bin_dir = context.temp_dir.child("second-bin");
+        let third_bin_dir = context.temp_dir.child("third-bin");
+        let launcher = context
+            .workspace_root
+            .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+        let app = context
+            .workspace_root
+            .join("test/links/basic_app-0.1.0-py3-none-any.whl");
+        let app_requirement = format!(
+            "basic-app @ {}",
+            Url::from_file_path(&app).expect("Failed to convert app path to file URL")
+        );
+
+        context
+            .tool_install()
+            .arg(&launcher)
+            .arg("--with-executables-from")
+            .arg(&app_requirement)
+            .arg("--offline")
+            .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+            .env(EnvVars::UV_TOOL_BIN_DIR, first_bin_dir.as_os_str())
+            .env(EnvVars::PATH, first_bin_dir.as_os_str())
+            .assert()
+            .success();
+
+        let environment = tool_dir.child("simple-launcher");
+        let receipt = environment.child("uv-receipt.toml");
+        let original_receipt = fs_err::read(receipt.path())?;
+        let original_config = fs_err::read(environment.child("pyvenv.cfg"))?;
+        let site_packages = site_packages_path(environment.path(), "python3.13");
+        let original_packages = dirhash_path(&site_packages)?;
+        let source_paths = ["simple_launcher", "basic-app"].map(|name| {
+            venv_bin_path(environment.path())
+                .join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
+        });
+        let source_contents = source_paths
+            .iter()
+            .map(fs_err::read)
+            .collect::<std::io::Result<Vec<_>>>()?;
+        let source_modified = source_paths
+            .iter()
+            .map(|path| fs_err::metadata(path)?.modified())
+            .collect::<std::io::Result<Vec<_>>>()?;
+        #[cfg(unix)]
+        let source_identity = source_paths
+            .iter()
+            .map(|path| fs_err::metadata(path).map(|metadata| (metadata.dev(), metadata.ino())))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        environment
+            .child("recovery-sentinel")
+            .write_str("existing environment")?;
+        let check = |bin: &Path| -> Result<()> {
+            for ((name, expected), source) in [
+                ("simple_launcher", "Hi from the simple launcher!\n"),
+                ("basic-app", "Hello from basic-app!\n"),
+            ]
+            .into_iter()
+            .zip(&source_paths)
+            {
+                let executable = bin.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+                Command::new(&executable)
+                    .env("PYTHONDONTWRITEBYTECODE", "1")
+                    .assert()
+                    .success()
+                    .stdout(predicate::str::diff(expected).normalize());
+                assert_eq!(fs_err::read(&executable)?, fs_err::read(source)?);
+                #[cfg(unix)]
+                {
+                    assert!(fs_err::symlink_metadata(&executable)?.is_symlink());
+                    assert_eq!(
+                        fs_err::canonicalize(&executable)?,
+                        fs_err::canonicalize(source)?
+                    );
+                }
+                #[cfg(windows)]
+                assert!(!fs_err::symlink_metadata(&executable)?.is_symlink());
+            }
+            assert_eq!(
+                fs_err::read(environment.child("pyvenv.cfg"))?,
+                original_config
+            );
+            assert_eq!(dirhash_path(&site_packages)?, original_packages);
+            assert_eq!(
+                fs_err::read_to_string(environment.child("recovery-sentinel"))?,
+                "existing environment"
+            );
+            for ((source, contents), modified) in source_paths
+                .iter()
+                .zip(&source_contents)
+                .zip(&source_modified)
+            {
+                assert_eq!(fs_err::read(source)?, *contents);
+                assert_eq!(fs_err::metadata(source)?.modified()?, *modified);
+            }
+            #[cfg(unix)]
+            for (source, identity) in source_paths.iter().zip(&source_identity) {
+                let metadata = fs_err::metadata(source)?;
+                assert_eq!((metadata.dev(), metadata.ino()), *identity);
+            }
+            let mut current: toml::Value =
+                toml::from_str(&fs_err::read_to_string(receipt.path())?)?;
+            let mut original: toml::Value =
+                toml::from_str(std::str::from_utf8(&original_receipt)?)?;
+            let current_entrypoints = current["tool"]
+                .as_table_mut()
+                .expect("tool table")
+                .remove("entrypoints")
+                .expect("entrypoints");
+            let original_entrypoints = original["tool"]
+                .as_table_mut()
+                .expect("tool table")
+                .remove("entrypoints")
+                .expect("entrypoints");
+            assert_eq!(current, original);
+            assert_eq!(
+                current_entrypoints
+                    .as_array()
+                    .expect("entrypoint array")
+                    .len(),
+                2
+            );
+            assert_eq!(
+                original_entrypoints
+                    .as_array()
+                    .expect("entrypoint array")
+                    .len(),
+                2
+            );
+            for (current, original) in current_entrypoints
+                .as_array()
+                .expect("entrypoint array")
+                .iter()
+                .zip(original_entrypoints.as_array().expect("entrypoint array"))
+            {
+                let mut current = current.as_table().expect("entrypoint table").clone();
+                let mut original = original.as_table().expect("entrypoint table").clone();
+                let path = current.remove("install-path").expect("install path");
+                original.remove("install-path");
+                assert_eq!(
+                    Path::new(path.as_str().expect("path string")).parent(),
+                    Some(bin)
+                );
+                assert_eq!(current, original);
+            }
+            Ok(())
+        };
+        check(first_bin_dir.path())?;
+
+        let launcher_executable =
+            first_bin_dir.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
+        let app_executable =
+            first_bin_dir.child(format!("basic-app{}", std::env::consts::EXE_SUFFIX));
+        fs_err::remove_file(&launcher_executable)?;
+        fs_err::remove_file(&app_executable)?;
+
+        context
+            .tool_install()
+            .arg(&launcher)
+            .arg("--with-executables-from")
+            .arg(&app_requirement)
+            .arg("--offline")
+            .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+            .env(EnvVars::UV_TOOL_BIN_DIR, first_bin_dir.as_os_str())
+            .env(EnvVars::PATH, first_bin_dir.as_os_str())
+            .assert()
+            .success()
+            .stderr(predicate::str::contains(
+                "Restored 2 executables: basic-app, simple_launcher",
+            ));
+
+        check(first_bin_dir.path())?;
+        assert_eq!(fs_err::read(receipt.path())?, original_receipt);
+        fs_err::remove_dir_all(first_bin_dir.path())?;
+
+        context
+            .tool_upgrade()
+            .arg("simple-launcher")
+            .arg("--offline")
+            .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+            .env(EnvVars::UV_TOOL_BIN_DIR, first_bin_dir.as_os_str())
+            .env(EnvVars::PATH, first_bin_dir.as_os_str())
+            .assert()
+            .success()
+            .stderr(predicate::str::contains(
+                "Restored 2 executables: basic-app, simple_launcher",
+            ));
+
+        check(first_bin_dir.path())?;
+
+        context
+            .tool_install()
+            .arg(&launcher)
+            .arg("--with-executables-from")
+            .arg(&app_requirement)
+            .arg("--offline")
+            .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+            .env(EnvVars::UV_TOOL_BIN_DIR, second_bin_dir.as_os_str())
+            .env(EnvVars::PATH, second_bin_dir.as_os_str())
+            .assert()
+            .success()
+            .stderr(predicate::str::contains(
+                "Restored 2 executables: basic-app, simple_launcher",
+            ));
+
+        check(second_bin_dir.path())?;
+        launcher_executable.assert(predicate::path::missing());
+        app_executable.assert(predicate::path::missing());
+
+        context
+            .tool_upgrade()
+            .arg("simple-launcher")
+            .arg("--offline")
+            .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+            .env(EnvVars::UV_TOOL_BIN_DIR, third_bin_dir.as_os_str())
+            .env(EnvVars::PATH, third_bin_dir.as_os_str())
+            .assert()
+            .success()
+            .stderr(predicate::str::contains(
+                "Restored 2 executables: basic-app, simple_launcher",
+            ));
+        check(third_bin_dir.path())?;
+        for name in ["simple_launcher", "basic-app"] {
+            second_bin_dir
+                .child(format!("{name}{}", std::env::consts::EXE_SUFFIX))
+                .assert(predicate::path::missing());
+        }
+    }
+
+    Ok(())
+}
+
+/// Recovery must check all destinations before replacing an unrelated executable.
+#[test]
+fn tool_install_recovery_preflights_existing_executables() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let links = context.workspace_root.join("test/links");
+    let install = || {
+        let mut command = context.tool_install();
+        command
+            .arg("simple-launcher==0.1.0")
+            .arg("--with-executables-from")
+            .arg("basic-app==0.1.0")
+            .arg("--no-index")
+            .arg("--find-links")
+            .arg(&links)
+            .env(EnvVars::PATH, bin_dir.as_os_str());
+        command
+    };
+    install().assert().success();
+    let environment = tool_dir.child("simple-launcher");
+    let receipt = environment.child("uv-receipt.toml");
+    let receipt_contents = fs_err::read(receipt.path())?;
+    let site_packages = site_packages_path(environment.path(), "python3.13");
+    let installed_contents = dirhash_path(&site_packages)?;
+    let app = bin_dir.child(format!("basic-app{}", std::env::consts::EXE_SUFFIX));
+    let launcher = bin_dir.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
+    fs_err::remove_file(app.path())?;
+    fs_err::remove_file(launcher.path())?;
+    launcher.write_str("unrelated executable bytes")?;
+    install()
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("Executable already exists:"));
+    app.assert(predicate::path::missing());
+    assert_eq!(
+        fs_err::read_to_string(launcher.path())?,
+        "unrelated executable bytes"
+    );
+    assert_eq!(fs_err::read(receipt.path())?, receipt_contents);
+    assert_eq!(dirhash_path(&site_packages)?, installed_contents);
+
+    install().arg("--force").assert().success();
+    Command::new(launcher.path())
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::diff("Hi from the simple launcher!\n").normalize());
+    Command::new(app.path())
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::diff("Hello from basic-app!\n").normalize());
+    assert_eq!(fs_err::read(receipt.path())?, receipt_contents);
+    assert_eq!(dirhash_path(&site_packages)?, installed_contents);
+    Ok(())
+}
+
+/// A present competing receipt must be diagnosed before suggesting a forced overwrite.
+#[test]
+fn tool_install_recovery_preflights_present_competing_receipts() -> Result<()> {
+    let context = uv_test::test_context!("3.13")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    write_recovery_wheel(
+        links.path(),
+        "recovery-root",
+        "1.0.0",
+        &[],
+        &[("recovery-old", "old"), ("recovery-root", "root")],
+    )?;
+    write_recovery_wheel(
+        links.path(),
+        "recovery-peer",
+        "1.0.0",
+        &[],
+        &[("recovery-root", "peer")],
+    )?;
+    let install = || {
+        let mut command = context.tool_install();
+        command
+            .args(["recovery-root==1.0.0", "--no-index", "--find-links"])
+            .arg(links.path())
+            .env(EnvVars::PATH, bin_dir.as_os_str());
+        command
+    };
+    install().assert().success();
+    context
+        .tool_install()
+        .args([
+            "recovery-peer==1.0.0",
+            "--force",
+            "--no-index",
+            "--find-links",
+        ])
+        .arg(links.path())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let old = bin_dir.child(format!("recovery-old{}", std::env::consts::EXE_SUFFIX));
+    let shared = bin_dir.child(format!("recovery-root{}", std::env::consts::EXE_SUFFIX));
+    let receipts = ["recovery-root", "recovery-peer"]
+        .map(|name| tool_dir.child(name).child("uv-receipt.toml"));
+    let receipt_contents = receipts
+        .iter()
+        .map(|path| fs_err::read(path.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let root: toml::Value = toml::from_str(std::str::from_utf8(&receipt_contents[0])?)?;
+    let peer: toml::Value = toml::from_str(std::str::from_utf8(&receipt_contents[1])?)?;
+    assert_eq!(
+        root["tool"]["entrypoints"][0]["install-path"]
+            .as_str()
+            .map(Path::new),
+        Some(old.path())
+    );
+    assert_eq!(
+        root["tool"]["entrypoints"][1]["install-path"]
+            .as_str()
+            .map(Path::new),
+        Some(shared.path())
+    );
+    assert_eq!(
+        peer["tool"]["entrypoints"][0]["install-path"]
+            .as_str()
+            .map(Path::new),
+        Some(shared.path())
+    );
+    let package_paths = ["recovery-root", "recovery-peer"]
+        .map(|name| site_packages_path(tool_dir.child(name).path(), "python3.13"));
+    let packages = package_paths
+        .iter()
+        .map(|path| dirhash_path(path))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let peer_source = venv_bin_path(tool_dir.child("recovery-peer").path())
+        .join(format!("recovery-root{}", std::env::consts::EXE_SUFFIX));
+    let shared_contents = fs_err::read(shared.path())?;
+    assert_eq!(shared_contents, fs_err::read(&peer_source)?);
+    #[cfg(unix)]
+    let shared_identity = {
+        let metadata = fs_err::symlink_metadata(shared.path())?;
+        assert!(metadata.is_symlink());
+        assert_eq!(
+            fs_err::canonicalize(shared.path())?,
+            fs_err::canonicalize(&peer_source)?
+        );
+        (metadata.dev(), metadata.ino())
+    };
+    Command::new(shared.path())
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::diff("peer\n").normalize());
+
+    // This earlier destination is eligible for repair, but the later recorded conflict must
+    // abort the complete plan before any export or receipt is changed.
+    fs_err::remove_file(old.path())?;
+    for force in [false, true] {
+        let mut command = install();
+        if force {
+            command.arg("--force");
+        }
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), command, @r"
+            exit_code: 2 (failure)
+            ----- stderr -----
+            error: Cannot restore executable `bin/recovery-root` because it is also recorded for `recovery-peer`
+            ");
+        }
+        old.assert(predicate::path::missing());
+        assert_eq!(fs_err::read(shared.path())?, shared_contents);
+        #[cfg(unix)]
+        {
+            let metadata = fs_err::symlink_metadata(shared.path())?;
+            assert_eq!((metadata.dev(), metadata.ino()), shared_identity);
+            assert_eq!(
+                fs_err::canonicalize(shared.path())?,
+                fs_err::canonicalize(&peer_source)?
+            );
+        }
+        for (receipt, contents) in receipts.iter().zip(&receipt_contents) {
+            assert_eq!(fs_err::read(receipt.path())?, *contents);
+        }
+        for (path, contents) in package_paths.iter().zip(&packages) {
+            assert_eq!(dirhash_path(path)?, *contents);
+        }
+        Command::new(shared.path())
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .assert()
+            .success()
+            .stdout(predicate::str::diff("peer\n").normalize());
+    }
+    Ok(())
+}
+
+/// A stale receipt does not give recovery authority over another tool's exported command.
+#[test]
+fn tool_install_recovery_preserves_transferred_executables() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let second_bin_dir = context.temp_dir.child("second-bin");
+    let links = context.workspace_root.join("test/links");
+    let install = || {
+        let mut command = context.tool_install();
+        command
+            .arg("simple-launcher==0.1.0")
+            .arg("--with-executables-from")
+            .arg("basic-app==0.1.0")
+            .arg("--no-index")
+            .arg("--find-links")
+            .arg(&links)
+            .env(EnvVars::PATH, bin_dir.as_os_str());
+        command
+    };
+    install().assert().success();
+    context
+        .tool_install()
+        .arg("basic-app==0.1.0")
+        .arg("--with-executables-from")
+        .arg("simple-launcher==0.1.0")
+        .arg("--force")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(&links)
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+    let launcher = bin_dir.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
+    let app = bin_dir.child(format!("basic-app{}", std::env::consts::EXE_SUFFIX));
+    let owner_source = venv_bin_path(tool_dir.child("basic-app").path())
+        .join(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
+    assert_eq!(fs_err::read(launcher.path())?, fs_err::read(&owner_source)?);
+    #[cfg(unix)]
+    assert_eq!(
+        fs_err::canonicalize(launcher.path())?,
+        fs_err::canonicalize(&owner_source)?
+    );
+    let launcher_contents = fs_err::read(launcher.path())?;
+    let receipts =
+        ["simple-launcher", "basic-app"].map(|name| tool_dir.child(name).child("uv-receipt.toml"));
+    let receipt_contents = receipts
+        .iter()
+        .map(|path| fs_err::read(path.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let package_paths = ["simple-launcher", "basic-app"]
+        .map(|name| site_packages_path(tool_dir.child(name).path(), "python3.13"));
+    let packages = package_paths
+        .iter()
+        .map(|path| dirhash_path(path))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    // An otherwise-fresh install does not reclaim the command from its current owner.
+    install().assert().success();
+    assert_eq!(fs_err::read(launcher.path())?, launcher_contents);
+    fs_err::remove_file(app.path())?;
+    for force in [false, true] {
+        let mut command = install();
+        if force {
+            command.arg("--force");
+        }
+        command.assert().code(2).stderr(predicate::str::contains(
+            "because it is also recorded for `basic-app`",
+        ));
+    }
+    context
+        .tool_upgrade()
+        .arg("simple-launcher")
+        .arg("--offline")
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "because it is also recorded for `basic-app`",
+        ));
+    app.assert(predicate::path::missing());
+    assert_eq!(fs_err::read(launcher.path())?, launcher_contents);
+    for (receipt, contents) in receipts.iter().zip(&receipt_contents) {
+        assert_eq!(fs_err::read(receipt.path())?, *contents);
+    }
+    for (path, contents) in package_paths.iter().zip(&packages) {
+        assert_eq!(dirhash_path(path)?, *contents);
+    }
+
+    // A distinct bin directory is a new destination; the old current owner is left alone.
+    install()
+        .env(EnvVars::UV_TOOL_BIN_DIR, second_bin_dir.as_os_str())
+        .env(EnvVars::PATH, second_bin_dir.as_os_str())
+        .assert()
+        .success();
+    assert_eq!(fs_err::read(launcher.path())?, launcher_contents);
+    app.assert(predicate::path::missing());
+    assert_eq!(fs_err::read(receipts[1].path())?, receipt_contents[1]);
+    for (name, expected) in [
+        ("simple_launcher", "Hi from the simple launcher!\n"),
+        ("basic-app", "Hello from basic-app!\n"),
+    ] {
+        let executable = second_bin_dir.child(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+        Command::new(executable.path())
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .assert()
+            .success()
+            .stdout(predicate::str::diff(expected).normalize());
+    }
+    Command::new(launcher.path())
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::diff("Hi from the simple launcher!\n").normalize());
+    for (path, contents) in package_paths.iter().zip(&packages) {
+        assert_eq!(dirhash_path(path)?, *contents);
+    }
+    Ok(())
+}
+
+/// A tool without recorded exports must not reacquire commands during no-op recovery.
+#[test]
+fn tool_install_recovery_preserves_empty_entrypoints() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    let second_bin_dir = context.temp_dir.child("second-bin");
+    let environment = context.temp_dir.child("tools").child("simple-launcher");
+    let wheel = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(&wheel)
+        .arg("--offline")
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+    let receipt = environment.child("uv-receipt.toml");
+    let mut document = fs_err::read_to_string(receipt.path())?.parse::<toml_edit::DocumentMut>()?;
+    document["tool"]["entrypoints"] = toml_edit::value(toml_edit::Array::new());
+    receipt.write_str(&document.to_string())?;
+    let contents = fs_err::read(receipt.path())?;
+    fs_err::remove_file(bin_dir.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX)))?;
+    let site_packages = site_packages_path(environment.path(), "python3.13");
+    let installed = dirhash_path(&site_packages)?;
+    context
+        .tool_install()
+        .arg(&wheel)
+        .arg("--offline")
+        .env(EnvVars::UV_TOOL_BIN_DIR, second_bin_dir.as_os_str())
+        .assert()
+        .success();
+    context
+        .tool_upgrade()
+        .arg("simple-launcher")
+        .arg("--offline")
+        .env(EnvVars::UV_TOOL_BIN_DIR, second_bin_dir.as_os_str())
+        .assert()
+        .success();
+    second_bin_dir.assert(predicate::path::missing());
+    assert_eq!(fs_err::read(receipt.path())?, contents);
+    let source = venv_bin_path(environment.path())
+        .join(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
+    Command::new(source)
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::diff("Hi from the simple launcher!\n").normalize());
+    assert_eq!(dirhash_path(&site_packages)?, installed);
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn tool_install_recovery_handles_bin_directory_aliases() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    let alias = context.temp_dir.child("BIN");
+    let links = context.workspace_root.join("test/links");
+    let install = || {
+        let mut command = context.tool_install();
+        command
+            .arg("simple-launcher==0.1.0")
+            .arg("--no-index")
+            .arg("--find-links")
+            .arg(&links)
+            .env(EnvVars::PATH, bin_dir.as_os_str());
+        command
+    };
+    install().assert().success();
+    assert_eq!(
+        uv_fs::is_same_file_allow_missing(bin_dir.path(), alias.path()),
+        Some(true)
+    );
+    let executable = bin_dir.child("simple_launcher.exe");
+    let contents = fs_err::read(executable.path())?;
+    install()
+        .env(EnvVars::UV_TOOL_BIN_DIR, alias.as_os_str())
+        .assert()
+        .success();
+    assert_eq!(fs_err::read(executable.path())?, contents);
+    Command::new(executable.path())
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::diff("Hi from the simple launcher!\n").normalize());
+
+    context
+        .tool_install()
+        .arg("basic-app==0.1.0")
+        .arg("--with-executables-from")
+        .arg("simple-launcher==0.1.0")
+        .arg("--force")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(&links)
+        .env(EnvVars::UV_TOOL_BIN_DIR, alias.as_os_str())
+        .assert()
+        .success();
+    let receipts = ["simple-launcher", "basic-app"].map(|name| {
+        context
+            .temp_dir
+            .child("tools")
+            .child(name)
+            .child("uv-receipt.toml")
+    });
+    let receipt_contents = receipts
+        .iter()
+        .map(|path| fs_err::read(path.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    fs_err::remove_dir_all(bin_dir.path())?;
+    install().assert().code(2).stderr(predicate::str::contains(
+        "Cannot compare missing executable directories",
+    ));
+    bin_dir.assert(predicate::path::missing());
+    for (receipt, contents) in receipts.iter().zip(&receipt_contents) {
+        assert_eq!(fs_err::read(receipt.path())?, *contents);
+    }
+    Ok(())
+}
+
+fn write_recovery_wheel(
+    directory: &Path,
+    name: &str,
+    version: &str,
+    requirements: &[&str],
+    commands: &[(&str, &str)],
+) -> Result<PathBuf> {
+    let normalized = name.replace('-', "_");
+    let entrypoints_path = format!("{normalized}-{version}.dist-info/entry_points.txt");
+    let module_path = format!("{normalized}/commands.py");
+    let mut entrypoints = String::from("[console_scripts]\n");
+    let mut module = String::new();
+    for (index, (command, output)) in commands.iter().enumerate() {
+        writeln!(
+            entrypoints,
+            "{command} = {normalized}.commands:command_{index}"
+        )?;
+        writeln!(module, "def command_{index}():\n    print({output:?})")?;
+    }
+    let requirements = requirements
+        .iter()
+        .map(|requirement| requirement.parse())
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name.parse()?,
+        &version.parse()?,
+        &requirements,
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[(&entrypoints_path, &entrypoints), (&module_path, &module)],
+    );
+    let path = directory.join(filename);
+    fs_err::write(&path, wheel)?;
+    Ok(path)
+}
+
+/// A malformed receipt for an unrelated, inspectable tool does not block recovery.
+#[test]
+fn tool_install_recovery_allows_unrelated_invalid_receipts() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    let tools = context.temp_dir.child("tools");
+    let bin = context.temp_dir.child("bin");
+    links.create_dir_all()?;
+    for (name, command) in [
+        ("valid-recovery-root", "valid-recovery-command"),
+        ("invalid-recovery-peer", "unrelated-recovery-command"),
+    ] {
+        write_recovery_wheel(links.path(), name, "1.0.0", &[], &[(command, "1")])?;
+        context
+            .tool_install()
+            .arg(name)
+            .args(["--no-index", "--find-links"])
+            .arg(links.path())
+            .assert()
+            .success();
+    }
+    let peer = tools.child("invalid-recovery-peer");
+    let peer_receipt = peer.child("uv-receipt.toml");
+    peer_receipt.write_str("Invalid receipt")?;
+    let peer_export = bin.child(format!(
+        "unrelated-recovery-command{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    let peer_bytes = fs_err::read(peer_export.path())?;
+    let peer_packages = site_packages_path(peer.path(), "python3.13");
+    let peer_package_hash = dirhash_path(&peer_packages)?;
+    let root_export = bin.child(format!(
+        "valid-recovery-command{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    fs_err::remove_file(root_export.path())?;
+
+    // The unchanged-environment path restores the missing export too.
+    context
+        .tool_install()
+        .args(["valid-recovery-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .success();
+    root_export.assert(predicate::path::exists());
+
+    write_recovery_wheel(
+        links.path(),
+        "valid-recovery-root",
+        "2.0.0",
+        &[],
+        &[("valid-recovery-command", "2")],
+    )?;
+    context
+        .tool_upgrade()
+        .args(["valid-recovery-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .success();
+    Command::new(root_export.path())
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::diff("2\n").normalize());
+    assert_eq!(
+        fs_err::read_to_string(peer_receipt.path())?,
+        "Invalid receipt"
+    );
+    assert_eq!(fs_err::read(peer_export.path())?, peer_bytes);
+    assert_eq!(dirhash_path(&peer_packages)?, peer_package_hash);
+    Ok(())
+}
+
+/// An invalid receipt cannot release a plausible competing claim, including under `--force`.
+#[test]
+fn tool_install_recovery_rejects_invalid_competing_receipts() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    let tools = context.temp_dir.child("tools");
+    let bin = context.temp_dir.child("bin");
+    links.create_dir_all()?;
+    for name in ["invalid-claim-peer", "invalid-claim-root"] {
+        let command = if cfg!(windows) && name == "invalid-claim-peer" {
+            "INVALID-CLAIM-COMMAND"
+        } else {
+            "invalid-claim-command"
+        };
+        write_recovery_wheel(links.path(), name, "1.0.0", &[], &[(command, name)])?;
+        context
+            .tool_install()
+            .arg(name)
+            .args(["--force", "--no-index", "--find-links"])
+            .arg(links.path())
+            .assert()
+            .success();
+    }
+    let peer_receipt = tools.child("invalid-claim-peer").child("uv-receipt.toml");
+    peer_receipt.write_str("Invalid receipt")?;
+    let receipts = [
+        peer_receipt,
+        tools.child("invalid-claim-root").child("uv-receipt.toml"),
+    ];
+    let receipt_bytes = receipts
+        .iter()
+        .map(|path| fs_err::read(path.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let package_paths = ["invalid-claim-peer", "invalid-claim-root"]
+        .map(|name| site_packages_path(tools.child(name).path(), "python3.13"));
+    let packages = package_paths
+        .iter()
+        .map(|path| dirhash_path(path))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let export = bin.child(format!(
+        "invalid-claim-command{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    let export_bytes = fs_err::read(export.path())?;
+    write_recovery_wheel(
+        links.path(),
+        "invalid-claim-root",
+        "2.0.0",
+        &[],
+        &[("invalid-claim-command", "2")],
+    )?;
+
+    for force in [false, true] {
+        let mut command = context.tool_install();
+        command
+            .args(["invalid-claim-root", "--no-index", "--find-links"])
+            .arg(links.path());
+        if force {
+            command.arg("--force");
+        }
+        command.assert().code(2).stderr(predicate::str::contains(
+            "`invalid-claim-peer` has a missing or invalid receipt and may provide the same executable",
+        ));
+    }
+    context
+        .tool_upgrade()
+        .args(["invalid-claim-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "`invalid-claim-peer` has a missing or invalid receipt and may provide the same executable",
+        ));
+    assert_eq!(fs_err::read(export.path())?, export_bytes);
+    for (path, bytes) in receipts.iter().zip(&receipt_bytes) {
+        assert_eq!(fs_err::read(path.path())?, *bytes);
+    }
+    for (path, bytes) in package_paths.iter().zip(&packages) {
+        assert_eq!(dirhash_path(path)?, *bytes);
+    }
+    Ok(())
+}
+
+/// A missing scripts directory is not evidence that an invalid tool has no competing export.
+#[test]
+fn tool_install_recovery_rejects_uninspectable_claims() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    let tools = context.temp_dir.child("tools");
+    let bin = context.temp_dir.child("bin");
+    links.create_dir_all()?;
+    write_recovery_wheel(
+        links.path(),
+        "inspectable-root",
+        "1.0.0",
+        &[],
+        &[("inspectable-command", "1")],
+    )?;
+    context
+        .tool_install()
+        .args(["inspectable-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .success();
+    let uninspectable = tools.child("uninspectable-peer");
+    uninspectable.create_dir_all()?;
+    uninspectable
+        .child("uv-receipt.toml")
+        .write_str("Invalid receipt")?;
+    let root = tools.child("inspectable-root");
+    let receipt = root.child("uv-receipt.toml");
+    let receipt_bytes = fs_err::read(receipt.path())?;
+    let package_path = site_packages_path(root.path(), "python3.13");
+    let packages = dirhash_path(&package_path)?;
+    let export = bin.child(format!(
+        "inspectable-command{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    let export_bytes = fs_err::read(export.path())?;
+    write_recovery_wheel(
+        links.path(),
+        "inspectable-root",
+        "2.0.0",
+        &[],
+        &[("inspectable-command", "2")],
+    )?;
+    context
+        .tool_upgrade()
+        .args(["inspectable-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("cannot be inspected"));
+    assert_eq!(fs_err::read(receipt.path())?, receipt_bytes);
+    assert_eq!(fs_err::read(export.path())?, export_bytes);
+    assert_eq!(dirhash_path(&package_path)?, packages);
+    assert_eq!(
+        fs_err::read_to_string(uninspectable.child("uv-receipt.toml").path())?,
+        "Invalid receipt"
+    );
+    Ok(())
+}
+
+/// Losing all root commands removes the environment without deleting foreign replacements.
+#[test]
+fn tool_install_recovery_removes_empty_root_owned_exports() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    let tools = context.temp_dir.child("tools");
+    let bin = context.temp_dir.child("bin");
+    links.create_dir_all()?;
+    write_recovery_wheel(
+        links.path(),
+        "empty-recovery-root",
+        "1.0.0",
+        &[],
+        &[
+            ("empty-recovery-owned", "owned"),
+            ("empty-recovery-replaced", "replaced"),
+            ("empty-recovery-transferred", "root"),
+        ],
+    )?;
+    context
+        .tool_install()
+        .args(["empty-recovery-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .success();
+    write_recovery_wheel(
+        links.path(),
+        "empty-recovery-peer",
+        "1.0.0",
+        &[],
+        &[("empty-recovery-transferred", "peer")],
+    )?;
+    context
+        .tool_install()
+        .args([
+            "empty-recovery-peer",
+            "--force",
+            "--no-index",
+            "--find-links",
+        ])
+        .arg(links.path())
+        .assert()
+        .success();
+    let owned = bin.child(format!(
+        "empty-recovery-owned{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    let replaced = bin.child(format!(
+        "empty-recovery-replaced{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    let transferred = bin.child(format!(
+        "empty-recovery-transferred{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    fs_err::remove_file(replaced.path())?;
+    replaced.write_str("foreign executable")?;
+    let transferred_bytes = fs_err::read(transferred.path())?;
+    let peer_receipt = tools.child("empty-recovery-peer").child("uv-receipt.toml");
+    let peer_receipt_bytes = fs_err::read(peer_receipt.path())?;
+    // Both receipts retain their original claim after an overwrite. Record the completed
+    // transfer before testing cleanup; a competing valid receipt must still block recovery.
+    let root_receipt = tools.child("empty-recovery-root").child("uv-receipt.toml");
+    let mut document =
+        fs_err::read_to_string(root_receipt.path())?.parse::<toml_edit::DocumentMut>()?;
+    let entries = document["tool"]["entrypoints"]
+        .as_array_mut()
+        .expect("entrypoints");
+    assert_eq!(entries.len(), 3);
+    entries.retain(|entry| {
+        entry
+            .as_inline_table()
+            .and_then(|entry| entry.get("name"))
+            .and_then(toml_edit::Value::as_str)
+            != Some("empty-recovery-transferred")
+    });
+    assert_eq!(entries.len(), 2);
+    root_receipt.write_str(&document.to_string())?;
+    write_recovery_wheel(links.path(), "empty-recovery-root", "2.0.0", &[], &[])?;
+    context
+        .tool_install()
+        .args([
+            "empty-recovery-root==2.0.0",
+            "--force",
+            "--no-index",
+            "--find-links",
+        ])
+        .arg(links.path())
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains(
+            "No executables are provided by package `empty-recovery-root`; removing tool",
+        ));
+    tools
+        .child("empty-recovery-root")
+        .assert(predicate::path::missing());
+    owned.assert(predicate::path::missing());
+    assert_eq!(
+        fs_err::read_to_string(replaced.path())?,
+        "foreign executable"
+    );
+    assert_eq!(fs_err::read(transferred.path())?, transferred_bytes);
+    assert_eq!(fs_err::read(peer_receipt.path())?, peer_receipt_bytes);
+    Ok(())
+}
+
+/// Changed dependencies, root versions, and interpreters all use the original export authority.
+#[test]
+fn tool_install_recovery_survives_environment_updates() -> Result<()> {
+    for preview in [None, Some("tool-install-locks")] {
+        let context = uv_test::test_context_with_versions!(&["3.13", "3.12"]).with_tool_dirs();
+        let context = if let Some(preview) = preview {
+            context.with_env(EnvVars::UV_PREVIEW_FEATURES, preview)
+        } else {
+            context
+        };
+        let links = context.temp_dir.child("links");
+        links.create_dir_all()?;
+        let bins = (0..6)
+            .map(|index| context.temp_dir.child(format!("bin-{index}")))
+            .collect::<Vec<_>>();
+        let environment = context.temp_dir.child("tools").child("recovery-root");
+        let receipt = environment.child("uv-receipt.toml");
+        write_recovery_wheel(
+            links.path(),
+            "recovery-dep",
+            "1.0.0",
+            &[],
+            &[("recovery-dep", "dep-1")],
+        )?;
+        write_recovery_wheel(
+            links.path(),
+            "recovery-root",
+            "1.0.0",
+            &["recovery-dep>=1"],
+            &[("recovery-root", "root-1"), ("recovery-old", "old-1")],
+        )?;
+        let install = |bin: &Path| {
+            let mut command = context.tool_install();
+            command
+                .arg("recovery-root")
+                .args([
+                    "--with-executables-from",
+                    "recovery-dep",
+                    "--no-index",
+                    "--find-links",
+                ])
+                .arg(links.path())
+                .env(EnvVars::UV_TOOL_BIN_DIR, bin)
+                .env(EnvVars::PATH, bin);
+            command
+        };
+        let upgrade = |bin: &Path| {
+            let mut command = context.tool_upgrade();
+            command
+                .arg("recovery-root")
+                .args(["--no-index", "--find-links"])
+                .arg(links.path())
+                .env(EnvVars::UV_TOOL_BIN_DIR, bin)
+                .env(EnvVars::PATH, bin);
+            command
+        };
+        let exported =
+            |bin: &Path, name: &str| bin.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+        let run = |bin: &Path, name: &str, output: &str| {
+            Command::new(exported(bin, name))
+                .env("PYTHONDONTWRITEBYTECODE", "1")
+                .assert()
+                .success()
+                .stdout(predicate::str::diff(format!("{output}\n")).normalize());
+        };
+        let assert_receipt = |bin: &Path, names: &[&str]| -> Result<()> {
+            let document =
+                fs_err::read_to_string(receipt.path())?.parse::<toml_edit::DocumentMut>()?;
+            let entries = document["tool"]["entrypoints"]
+                .as_array()
+                .expect("entrypoint array");
+            assert_eq!(entries.len(), names.len());
+            for name in names {
+                let target = exported(bin, name);
+                assert!(
+                    entries
+                        .iter()
+                        .any(|entry| entry.as_inline_table().is_some_and(|entry| {
+                            entry
+                                .get("install-path")
+                                .and_then(toml_edit::Value::as_str)
+                                .map(Path::new)
+                                == Some(target.as_path())
+                        }))
+                );
+            }
+            Ok(())
+        };
+
+        install(bins[0].path())
+            .args(["--python", "3.13"])
+            .assert()
+            .success();
+        let sentinel = environment.child("preserve-unless-replaced");
+        sentinel.write_str("retained environment")?;
+        let root_metadata = site_packages_path(environment.path(), "python3.13")
+            .join("recovery_root-1.0.0.dist-info/METADATA");
+        let root_metadata_before = fs_err::read(&root_metadata)?;
+        fs_err::remove_file(exported(bins[0].path(), "recovery-dep"))?;
+        write_recovery_wheel(
+            links.path(),
+            "recovery-dep",
+            "2.0.0",
+            &[],
+            &[("recovery-dep", "dep-2")],
+        )?;
+        upgrade(bins[1].path()).assert().success();
+        assert_eq!(fs_err::read(&root_metadata)?, root_metadata_before);
+        sentinel.assert("retained environment");
+        run(bins[1].path(), "recovery-dep", "dep-2");
+        run(bins[1].path(), "recovery-root", "root-1");
+        assert!(!exported(bins[0].path(), "recovery-root").exists());
+        assert_receipt(
+            bins[1].path(),
+            &["recovery-dep", "recovery-root", "recovery-old"],
+        )?;
+
+        write_recovery_wheel(
+            links.path(),
+            "recovery-root",
+            "2.0.0",
+            &["recovery-dep>=1"],
+            &[("recovery-root", "root-2"), ("recovery-new", "new-2")],
+        )?;
+        upgrade(bins[2].path()).assert().success();
+        sentinel.assert("retained environment");
+        run(bins[2].path(), "recovery-root", "root-2");
+        run(bins[2].path(), "recovery-new", "new-2");
+        assert!(!exported(bins[1].path(), "recovery-old").exists());
+        assert!(!exported(bins[2].path(), "recovery-old").exists());
+        assert_receipt(
+            bins[2].path(),
+            &["recovery-dep", "recovery-root", "recovery-new"],
+        )?;
+
+        install(bins[3].path())
+            .arg("--reinstall")
+            .assert()
+            .success();
+        sentinel.assert("retained environment");
+        run(bins[3].path(), "recovery-root", "root-2");
+        assert!(!exported(bins[2].path(), "recovery-root").exists());
+        assert_receipt(
+            bins[3].path(),
+            &["recovery-dep", "recovery-root", "recovery-new"],
+        )?;
+
+        install(bins[4].path()).arg("--force").assert().success();
+        sentinel.assert(predicate::path::missing());
+        run(bins[4].path(), "recovery-root", "root-2");
+        assert!(!exported(bins[3].path(), "recovery-root").exists());
+        assert_receipt(
+            bins[4].path(),
+            &["recovery-dep", "recovery-root", "recovery-new"],
+        )?;
+
+        sentinel.write_str("replace interpreter")?;
+        upgrade(bins[5].path())
+            .args(["--python", "3.12"])
+            .assert()
+            .success();
+        sentinel.assert(predicate::path::missing());
+        run(bins[5].path(), "recovery-root", "root-2");
+        run(bins[5].path(), "recovery-dep", "dep-2");
+        assert!(!exported(bins[4].path(), "recovery-root").exists());
+        assert_receipt(
+            bins[5].path(),
+            &["recovery-dep", "recovery-root", "recovery-new"],
+        )?;
+        Command::new(
+            venv_bin_path(environment.path())
+                .join(format!("python{}", std::env::consts::EXE_SUFFIX)),
+        )
+        .args([
+            "-c",
+            "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::diff("3.12\n").normalize());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn tool_install_recovery_rejects_case_only_competing_claims() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let tools = context.temp_dir.child("tools");
+    let bin = context.temp_dir.child("bin");
+    let links = context.workspace_root.join("test/links");
+    let install = || {
+        let mut command = context.tool_install();
+        command
+            .args(["simple-launcher==0.1.0", "--no-index", "--find-links"])
+            .arg(&links)
+            .env(EnvVars::PATH, bin.as_os_str());
+        command
+    };
+    install().assert().success();
+    context
+        .tool_install()
+        .args([
+            "basic-app==0.1.0",
+            "--with-executables-from",
+            "simple-launcher==0.1.0",
+            "--force",
+            "--no-index",
+            "--find-links",
+        ])
+        .arg(&links)
+        .env(EnvVars::PATH, bin.as_os_str())
+        .assert()
+        .success();
+    let launcher = bin.child("simple_launcher.exe");
+    let upper = bin.child("SIMPLE_LAUNCHER.exe");
+    assert_eq!(
+        uv_fs::is_same_file_allow_missing(launcher.path(), upper.path()),
+        Some(true)
+    );
+    let owner_receipt = tools.child("basic-app").child("uv-receipt.toml");
+    let mut document =
+        fs_err::read_to_string(owner_receipt.path())?.parse::<toml_edit::DocumentMut>()?;
+    let mut changed = 0;
+    for entry in document["tool"]["entrypoints"]
+        .as_array_mut()
+        .expect("entrypoint array")
+        .iter_mut()
+    {
+        let entry = entry.as_inline_table_mut().expect("entrypoint table");
+        if entry.get("name").and_then(toml_edit::Value::as_str) == Some("simple_launcher") {
+            changed += 1;
+            entry.insert(
+                "install-path",
+                toml_edit::Value::from(upper.path().to_str().expect("UTF-8 test path")),
+            );
+        }
+    }
+    assert_eq!(changed, 1);
+    owner_receipt.write_str(&document.to_string())?;
+    let receipts = [
+        tools.child("simple-launcher").child("uv-receipt.toml"),
+        owner_receipt,
+    ];
+    let before = receipts
+        .iter()
+        .map(|receipt| fs_err::read(receipt.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let environments = [tools.child("simple-launcher"), tools.child("basic-app")];
+    let package_paths = environments
+        .iter()
+        .map(|path| site_packages_path(path.path(), "python3.13"))
+        .collect::<Vec<_>>();
+    let packages = package_paths
+        .iter()
+        .map(|path| dirhash_path(path))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    for present in [true, false] {
+        if !present {
+            fs_err::remove_file(launcher.path())?;
+        }
+        install()
+            .arg("--force")
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains(
+                "because it is also recorded for `basic-app`",
+            ));
+        if !present {
+            install().assert().code(2).stderr(predicate::str::contains(
+                "because it is also recorded for `basic-app`",
+            ));
+            context
+                .tool_upgrade()
+                .args(["simple-launcher", "--offline"])
+                .assert()
+                .code(1)
+                .stderr(predicate::str::contains(
+                    "because it is also recorded for `basic-app`",
+                ));
+        }
+        for (receipt, contents) in receipts.iter().zip(&before) {
+            assert_eq!(fs_err::read(receipt.path())?, *contents);
+        }
+        for (path, contents) in package_paths.iter().zip(&packages) {
+            assert_eq!(dirhash_path(path)?, *contents);
+        }
+    }
+    launcher.assert(predicate::path::missing());
+    Ok(())
+}
+
+/// A newly introduced command is checked before any export is changed.
+#[test]
+fn tool_install_recovery_preflights_new_commands() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    let bin = context.temp_dir.child("bin");
+    let tools = context.temp_dir.child("tools");
+    let original_wheel = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(original_wheel)
+        .arg("--offline")
+        .assert()
+        .success();
+    write_recovery_wheel(
+        links.path(),
+        "recovery-root",
+        "1.0.0",
+        &[],
+        &[("recovery-root", "root-1")],
+    )?;
+    context
+        .tool_install()
+        .args(["recovery-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .success();
+    let root_export = bin.child(format!("recovery-root{}", std::env::consts::EXE_SUFFIX));
+    let foreign_export = bin.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
+    let root_bytes = fs_err::read(root_export.path())?;
+    let foreign_bytes = fs_err::read(foreign_export.path())?;
+    #[cfg(unix)]
+    let root_identity = {
+        let metadata = fs_err::symlink_metadata(root_export.path())?;
+        (
+            metadata.dev(),
+            metadata.ino(),
+            fs_err::read_link(root_export.path())?,
+        )
+    };
+    let receipts =
+        ["recovery-root", "simple-launcher"].map(|name| tools.child(name).child("uv-receipt.toml"));
+    let receipt_bytes = receipts
+        .iter()
+        .map(|path| fs_err::read(path.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let foreign_packages = site_packages_path(tools.child("simple-launcher").path(), "python3.13");
+    let foreign_package_bytes = dirhash_path(&foreign_packages)?;
+    write_recovery_wheel(
+        links.path(),
+        "recovery-root",
+        "2.0.0",
+        &[],
+        &[
+            ("recovery-root", "root-2"),
+            ("simple_launcher", "not the owner"),
+        ],
+    )?;
+    context
+        .tool_upgrade()
+        .args(["recovery-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "because it is also recorded for `simple-launcher`",
+        ));
+    assert_eq!(fs_err::read(root_export.path())?, root_bytes);
+    assert_eq!(fs_err::read(foreign_export.path())?, foreign_bytes);
+    #[cfg(unix)]
+    {
+        let metadata = fs_err::symlink_metadata(root_export.path())?;
+        assert_eq!(
+            (
+                metadata.dev(),
+                metadata.ino(),
+                fs_err::read_link(root_export.path())?
+            ),
+            root_identity
+        );
+    }
+    for (receipt, bytes) in receipts.iter().zip(&receipt_bytes) {
+        assert_eq!(fs_err::read(receipt.path())?, *bytes);
+    }
+    assert_eq!(dirhash_path(&foreign_packages)?, foreign_package_bytes);
+    Command::new(foreign_export.path())
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::diff("Hi from the simple launcher!\n").normalize());
+    // Package mutation is not rolled back by the export preflight.
+    assert!(
+        site_packages_path(tools.child("recovery-root").path(), "python3.13")
+            .join("recovery_root-2.0.0.dist-info/METADATA")
+            .exists()
+    );
+    Ok(())
+}
+
+#[test]
+fn tool_install_recovery_does_not_reacquire_pruned_commands() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    let bin = context.temp_dir.child("bin");
+    let environment = context.temp_dir.child("tools").child("recovery-root");
+    let receipt = environment.child("uv-receipt.toml");
+    write_recovery_wheel(
+        links.path(),
+        "recovery-root",
+        "1.0.0",
+        &[],
+        &[("recovery-root", "root-1"), ("recovery-pruned", "pruned-1")],
+    )?;
+    let install = || {
+        let mut command = context.tool_install();
+        command
+            .args(["recovery-root", "--no-index", "--find-links"])
+            .arg(links.path());
+        command
+    };
+    install().assert().success();
+    let pruned = bin.child(format!("recovery-pruned{}", std::env::consts::EXE_SUFFIX));
+    let mut document = fs_err::read_to_string(receipt.path())?.parse::<toml_edit::DocumentMut>()?;
+    let entries = document["tool"]["entrypoints"]
+        .as_array_mut()
+        .expect("entrypoint array");
+    let index = entries
+        .iter()
+        .position(|entry| {
+            entry
+                .as_inline_table()
+                .and_then(|entry| entry.get("name"))
+                .and_then(toml_edit::Value::as_str)
+                == Some("recovery-pruned")
+        })
+        .expect("pruned command");
+    entries.remove(index);
+    receipt.write_str(&document.to_string())?;
+    fs_err::remove_file(pruned.path())?;
+    write_recovery_wheel(
+        links.path(),
+        "recovery-root",
+        "2.0.0",
+        &[],
+        &[
+            ("recovery-root", "root-2"),
+            ("recovery-pruned", "pruned-2"),
+            ("recovery-new", "new-2"),
+        ],
+    )?;
+    context
+        .tool_upgrade()
+        .args(["recovery-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .success();
+    for argument in ["--reinstall", "--force"] {
+        install().arg(argument).assert().success();
+    }
+    pruned.assert(predicate::path::missing());
+    let document = fs_err::read_to_string(receipt.path())?.parse::<toml_edit::DocumentMut>()?;
+    let entries = document["tool"]["entrypoints"]
+        .as_array()
+        .expect("entrypoint array");
+    assert_eq!(entries.len(), 2);
+    assert!(!entries.iter().any(|entry| {
+        entry
+            .as_inline_table()
+            .and_then(|entry| entry.get("name"))
+            .and_then(toml_edit::Value::as_str)
+            == Some("recovery-pruned")
+    }));
+    for (name, output) in [("recovery-root", "root-2\n"), ("recovery-new", "new-2\n")] {
+        Command::new(
+            bin.child(format!("{name}{}", std::env::consts::EXE_SUFFIX))
+                .path(),
+        )
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::diff(output).normalize());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+struct NativePeFixture {
+    path: PathBuf,
+    bytes: Vec<u8>,
+    sha256: String,
+    machine: u16,
+}
+
+#[cfg(windows)]
+#[expect(unsafe_code)]
+fn native_system_directory() -> Result<PathBuf> {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        #[link_name = "GetSystemDirectoryW"]
+        fn get_system_directory(buffer: *mut u16, size: u32) -> u32;
+    }
+    let mut buffer = vec![0_u16; 32768];
+    // SAFETY: The writable buffer contains `size` initialized UTF-16 elements and remains alive
+    // throughout the synchronous Windows API call.
+    let length = unsafe { get_system_directory(buffer.as_mut_ptr(), u32::try_from(buffer.len())?) };
+    if length == 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let length = usize::try_from(length)?;
+    anyhow::ensure!(
+        length < buffer.len(),
+        "Native system directory exceeds the fixture bound"
+    );
+    Ok(PathBuf::from(OsString::from_wide(&buffer[..length])))
+}
+
+#[cfg(windows)]
+#[expect(unsafe_code)]
+fn observed_short_path(path: &Path, assigned_name: Option<&str>) -> Result<PathBuf> {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        #[link_name = "GetShortPathNameW"]
+        fn get_short_path_name(path: *const u16, buffer: *mut u16, size: u32) -> u32;
+    }
+    let parent = path.parent().expect("test export parent");
+    anyhow::ensure!(
+        !uv_windows::directory_is_case_sensitive(&uv_windows::open_directory(parent)?)?,
+        "The short-name fixture requires a case-insensitive directory"
+    );
+    // Provision only this owned file. A failed short-name precondition is a failed native gate.
+    if let Some(assigned_name) = assigned_name {
+        Command::new(native_system_directory()?.join("fsutil.exe"))
+            .args(["file", "setshortname"])
+            .arg(path)
+            .arg(assigned_name)
+            .assert()
+            .success();
+    }
+    let mut wide = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    anyhow::ensure!(!wide.contains(&0), "NUL in short-name fixture path");
+    wide.push(0);
+    let mut buffer = vec![0_u16; 32768];
+    // SAFETY: The input is NUL-terminated, and the output has the declared initialized length.
+    let length = unsafe {
+        get_short_path_name(
+            wide.as_ptr(),
+            buffer.as_mut_ptr(),
+            u32::try_from(buffer.len())?,
+        )
+    };
+    if length == 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let length = usize::try_from(length)?;
+    anyhow::ensure!(
+        length < buffer.len(),
+        "Short-name fixture exceeds its bound"
+    );
+    let observed = PathBuf::from(OsString::from_wide(&buffer[..length]));
+    let filename = observed.file_name().expect("observed short filename");
+    let alias = parent.join(filename);
+    anyhow::ensure!(
+        filename != path.file_name().expect("long filename")
+            && uv_windows::could_be_dos_short_name(filename)?,
+        "The native fixture did not establish the requested distinct short spelling"
+    );
+    if let Some(assigned_name) = assigned_name {
+        anyhow::ensure!(
+            uv_windows::names_equal_ordinal(filename, std::ffi::OsStr::new(assigned_name))?,
+            "The native fixture did not observe the assigned short spelling"
+        );
+    }
+    anyhow::ensure!(
+        uv_windows::FileIdentity::from_file(&uv_windows::open_file_entry(path)?)?
+            == uv_windows::FileIdentity::from_file(&uv_windows::open_file_entry(&alias)?)?,
+        "Observed short spelling does not identify the owned export"
+    );
+    let actual_names = fs_err::read_dir(parent)?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    anyhow::ensure!(
+        actual_names
+            .iter()
+            .any(|name| name == path.file_name().expect("long filename"))
+            && !actual_names.iter().any(|name| name == filename),
+        "The long and short spellings did not identify one enumerated entry"
+    );
+    Ok(alias)
+}
+
+/// A missing historical short spelling cannot release another receipt's export claim.
+#[cfg(windows)]
+#[test]
+fn tool_install_recovery_rejects_missing_short_name_claims() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    let bin = context.temp_dir.child("bin");
+    let tools = context.temp_dir.child("tools");
+    links.create_dir_all()?;
+    for (name, commands) in [
+        (
+            "short-alias-root",
+            vec![("owned-long-recovery-command", "root")],
+        ),
+        (
+            "short-alias-peer",
+            vec![
+                ("owned-long-recovery-command", "peer"),
+                ("unrelated-long-peer-command", "unrelated"),
+            ],
+        ),
+    ] {
+        write_recovery_wheel(links.path(), name, "1.0.0", &[], &commands)?;
+        context
+            .tool_install()
+            .arg(name)
+            .args(["--no-index", "--find-links"])
+            .arg(links.path())
+            .arg("--force")
+            .assert()
+            .success();
+    }
+    let long = bin.child("owned-long-recovery-command.exe");
+    let peer_export = bin.child("unrelated-long-peer-command.exe");
+    let peer_export_bytes = fs_err::read(peer_export.path())?;
+    let alias = observed_short_path(long.path(), Some("UVALIAS.EXE"))?;
+    let peer_source = venv_bin_path(tools.child("short-alias-peer").path())
+        .join("owned-long-recovery-command.exe");
+    let peer_source_alias = observed_short_path(&peer_source, Some("UVALIAS.EXE"))?;
+    assert_eq!(alias.file_name(), peer_source_alias.file_name());
+    let peer_receipt = tools.child("short-alias-peer").child("uv-receipt.toml");
+    let mut document =
+        fs_err::read_to_string(peer_receipt.path())?.parse::<toml_edit::DocumentMut>()?;
+    let entries = document["tool"]["entrypoints"]
+        .as_array_mut()
+        .expect("entrypoints");
+    assert_eq!(entries.len(), 2);
+    entries
+        .iter_mut()
+        .find(|entry| {
+            entry
+                .as_inline_table()
+                .and_then(|entry| entry.get("name"))
+                .and_then(toml_edit::Value::as_str)
+                == Some("owned-long-recovery-command")
+        })
+        .expect("peer shared entry")
+        .as_inline_table_mut()
+        .expect("entry table")
+        .insert(
+            "install-path",
+            toml_edit::Value::from(alias.to_str().expect("UTF-8 alias")),
+        );
+    peer_receipt.write_str(&document.to_string())?;
+    let receipts = [
+        tools.child("short-alias-root").child("uv-receipt.toml"),
+        peer_receipt,
+    ];
+    let receipt_bytes = receipts
+        .iter()
+        .map(|path| fs_err::read(path.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let package_paths = ["short-alias-root", "short-alias-peer"]
+        .map(|name| site_packages_path(tools.child(name).path(), "python3.13"));
+    let packages = package_paths
+        .iter()
+        .map(|path| dirhash_path(path))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    fs_err::remove_file(long.path())?;
+    anyhow::ensure!(!alias.exists(), "Observed alias survived removal");
+    for force in [false, true] {
+        let mut command = context.tool_install();
+        command
+            .args(["short-alias-root", "--no-index", "--find-links"])
+            .arg(links.path());
+        if force {
+            command.arg("--force");
+        }
+        command.assert().code(2).stderr(predicate::str::contains(
+            "possible short-name alias is missing",
+        ));
+    }
+    context
+        .tool_upgrade()
+        .args(["short-alias-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "possible short-name alias is missing",
+        ));
+    long.assert(predicate::path::missing());
+    assert!(!alias.exists());
+    assert_eq!(fs_err::read(peer_export.path())?, peer_export_bytes);
+    for (path, bytes) in receipts.iter().zip(&receipt_bytes) {
+        assert_eq!(fs_err::read(path.path())?, *bytes);
+    }
+    for (path, bytes) in package_paths.iter().zip(&packages) {
+        assert_eq!(dirhash_path(path)?, *bytes);
+    }
+    Ok(())
+}
+
+/// Two absent planned names cannot be admitted using a short spelling observed before deletion.
+#[cfg(windows)]
+#[test]
+fn tool_install_recovery_rejects_planned_short_name_aliases() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    let bin = context.temp_dir.child("bin");
+    let environment = context.temp_dir.child("tools").child("planned-alias-root");
+    links.create_dir_all()?;
+    write_recovery_wheel(
+        links.path(),
+        "planned-alias-root",
+        "1.0.0",
+        &[],
+        &[("existing-long-recovery-command", "existing-1")],
+    )?;
+    context
+        .tool_install()
+        .args(["planned-alias-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .success();
+    let existing = bin.child("existing-long-recovery-command.exe");
+    let existing_bytes = fs_err::read(existing.path())?;
+    let receipt = environment.child("uv-receipt.toml");
+    let receipt_bytes = fs_err::read(receipt.path())?;
+    let long = bin.child("planned-long-recovery-command.exe");
+    long.write_str("owned alias calibration")?;
+    let alias = observed_short_path(long.path(), Some("UVPLAN.EXE"))?;
+    let alias_command = alias
+        .file_stem()
+        .expect("short command")
+        .to_str()
+        .expect("UTF-8 command");
+    fs_err::remove_file(long.path())?;
+    assert!(!alias.exists());
+    long.write_str("owned alias recreation")?;
+    assert_eq!(observed_short_path(long.path(), Some("UVPLAN.EXE"))?, alias);
+    fs_err::remove_file(long.path())?;
+    assert!(!alias.exists());
+    write_recovery_wheel(
+        links.path(),
+        "planned-alias-root",
+        "2.0.0",
+        &[],
+        &[
+            ("planned-long-recovery-command", "long-2"),
+            (alias_command, "short-2"),
+        ],
+    )?;
+    context
+        .tool_upgrade()
+        .args(["planned-alias-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "possible short-name alias is missing",
+        ));
+    assert_eq!(fs_err::read(existing.path())?, existing_bytes);
+    assert_eq!(fs_err::read(receipt.path())?, receipt_bytes);
+    long.assert(predicate::path::missing());
+    assert!(!alias.exists());
+    // Package replacement precedes discovery of new names; export admission is not rollback.
+    assert!(
+        site_packages_path(environment.path(), "python3.13")
+            .join("planned_alias_root-2.0.0.dist-info")
+            .is_dir()
+    );
+    Ok(())
+}
+
+/// No-op repair admits all final destinations before restoring either potentially aliased name.
+#[cfg(windows)]
+#[test]
+fn tool_install_recovery_rejects_noop_short_name_aliases() -> Result<()> {
+    let fixture = native_pe_fixture("where.exe")?;
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    let markers = context.temp_dir.child("markers");
+    let observation = context.temp_dir.child("alias-observation");
+    let bin = context.temp_dir.child("bin");
+    let empty_bin = context.temp_dir.child("empty-bin");
+    let environment = context.temp_dir.child("tools").child("noop-alias-root");
+    for directory in [&links, &markers, &observation, &empty_bin] {
+        directory.create_dir_all()?;
+    }
+    markers
+        .child("owned-native-marker.txt")
+        .write_str("owned-native-marker\r\n")?;
+    let long_name = "noop-long-recovery-command.exe";
+    let observed_long = observation.child(long_name);
+    observed_long.write_str("owned alias")?;
+    let observed = observed_short_path(observed_long.path(), Some("UVNOOP.EXE"))?;
+    let short_command = observed
+        .file_stem()
+        .expect("short command")
+        .to_str()
+        .expect("UTF-8 command");
+    let short_name = format!("{short_command}.exe");
+    fs_err::remove_file(observed_long.path())?;
+    observed_long.write_str("owned alias recreation")?;
+    assert_eq!(
+        observed_short_path(observed_long.path(), Some("UVNOOP.EXE"))?,
+        observed
+    );
+    fs_err::remove_file(observed_long.path())?;
+
+    // Console launchers are installed before .data/scripts. Reserve the literal short name in
+    // the export directory too, so both installed source and initial export are distinct entries.
+    let entrypoints =
+        format!("[console_scripts]\n{short_command} = noop_alias_root.commands:main\n");
+    let module = b"def main():\n    print('literal short command')\n";
+    let tag = match fixture.machine {
+        0x014c => "py3-none-win32",
+        0x8664 => "py3-none-win_amd64",
+        0xaa64 => "py3-none-win_arm64",
+        other => anyhow::bail!("Unsupported native PE machine: 0x{other:04x}"),
+    };
+    let script = format!("noop_alias_root-1.0.0.data/scripts/{long_name}");
+    let (filename, wheel) = generate_wheel_with_binary_files(
+        &"noop-alias-root".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        tag,
+        &[
+            (
+                "noop_alias_root-1.0.0.dist-info/entry_points.txt",
+                entrypoints.as_bytes(),
+            ),
+            ("noop_alias_root/commands.py", module.as_slice()),
+            (script.as_str(), fixture.bytes.as_slice()),
+        ],
+    );
+    fs_err::write(links.path().join(filename), wheel)?;
+    bin.child(&short_name)
+        .write_str("owned literal-name reservation")?;
+    let install = |destination: &Path| {
+        let mut command = context.tool_install();
+        command
+            .args(["noop-alias-root", "--no-index", "--find-links"])
+            .arg(links.path())
+            .env(EnvVars::UV_TOOL_BIN_DIR, destination);
+        command
+    };
+    install(bin.path()).arg("--force").assert().success();
+    let source_long = venv_bin_path(environment.path()).join(long_name);
+    let source_short = venv_bin_path(environment.path()).join(&short_name);
+    let exported_long = bin.child(long_name);
+    let exported_short = bin.child(&short_name);
+    for (long, short) in [
+        (source_long.as_path(), source_short.as_path()),
+        (exported_long.path(), exported_short.path()),
+    ] {
+        let actual = fs_err::read_dir(long.parent().expect("entry parent"))?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        assert!(
+            actual
+                .iter()
+                .any(|name| name == long.file_name().expect("long name"))
+        );
+        assert!(
+            actual
+                .iter()
+                .any(|name| name == short.file_name().expect("short name"))
+        );
+        assert_ne!(
+            uv_windows::FileIdentity::from_file(&uv_windows::open_file_entry(long)?)?,
+            uv_windows::FileIdentity::from_file(&uv_windows::open_file_entry(short)?)?
+        );
+    }
+    assert_native_where(exported_long.path(), markers.path());
+    Command::new(exported_short.path())
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::diff("literal short command\n").normalize());
+    let source_bytes = [fs_err::read(&source_long)?, fs_err::read(&source_short)?];
+    let export_bytes = [
+        fs_err::read(exported_long.path())?,
+        fs_err::read(exported_short.path())?,
+    ];
+    let receipt = environment.child("uv-receipt.toml");
+    let receipt_bytes = fs_err::read(receipt.path())?;
+    let package_path = site_packages_path(environment.path(), "python3.13");
+    let packages = dirhash_path(&package_path)?;
+    let assert_refusal = |destination: &Path| {
+        install(destination)
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains(
+                "possible short-name alias is missing",
+            ));
+        context
+            .tool_upgrade()
+            .args(["noop-alias-root", "--no-index", "--find-links"])
+            .arg(links.path())
+            .env(EnvVars::UV_TOOL_BIN_DIR, destination)
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains(
+                "possible short-name alias is missing",
+            ));
+    };
+    assert_refusal(empty_bin.path());
+    assert_eq!(fs_err::read_dir(empty_bin.path())?.count(), 0);
+    assert_eq!(fs_err::read(exported_long.path())?, export_bytes[0]);
+    assert_eq!(fs_err::read(exported_short.path())?, export_bytes[1]);
+    fs_err::remove_file(exported_long.path())?;
+    fs_err::remove_file(exported_short.path())?;
+    assert_refusal(bin.path());
+    exported_long.assert(predicate::path::missing());
+    exported_short.assert(predicate::path::missing());
+    assert_eq!(fs_err::read(&source_long)?, source_bytes[0]);
+    assert_eq!(fs_err::read(&source_short)?, source_bytes[1]);
+    assert_eq!(fs_err::read(receipt.path())?, receipt_bytes);
+    assert_eq!(dirhash_path(&package_path)?, packages);
+    Ok(())
+}
+
+#[cfg(windows)]
+fn native_pe_fixture(filename: &str) -> Result<NativePeFixture> {
+    const MAX_BYTES: u64 = 2 * 1024 * 1024;
+    anyhow::ensure!(
+        matches!(filename, "where.exe" | "findstr.exe"),
+        "Unexpected native fixture name"
+    );
+    let directory = native_system_directory()?;
+    let path = directory.join(filename);
+    let metadata = fs_err::symlink_metadata(&path)?;
+    anyhow::ensure!(
+        metadata.is_file() && !metadata.is_symlink() && metadata.len() <= MAX_BYTES,
+        "Native PE fixture is not a bounded regular file"
+    );
+    let mut file = uv_windows::open_file_entry(&path)?;
+    let identity = uv_windows::FileIdentity::from_file(&file)?;
+    let mut bytes = Vec::new();
+    (&mut file).take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
+    anyhow::ensure!(
+        u64::try_from(bytes.len())? == metadata.len(),
+        "Native PE fixture changed size"
+    );
+    file.rewind()?;
+    let mut repeated = Vec::new();
+    (&mut file).take(MAX_BYTES + 1).read_to_end(&mut repeated)?;
+    anyhow::ensure!(repeated == bytes, "Native PE fixture changed while reading");
+    anyhow::ensure!(
+        uv_windows::FileIdentity::from_file(&uv_windows::open_file_entry(&path)?)? == identity,
+        "Native PE fixture path changed identity"
+    );
+    anyhow::ensure!(
+        bytes.get(..2) == Some(b"MZ") && bytes.len() >= 64,
+        "Native fixture is not a DOS/PE image"
+    );
+    let offset = usize::try_from(u32::from_le_bytes(bytes[60..64].try_into()?))?;
+    let end = offset
+        .checked_add(6)
+        .ok_or_else(|| anyhow::anyhow!("PE header offset overflow"))?;
+    anyhow::ensure!(
+        end <= bytes.len() && bytes.get(offset..offset + 4) == Some(b"PE\0\0"),
+        "Native fixture has no bounded PE header"
+    );
+    let machine = u16::from_le_bytes(bytes[offset + 4..end].try_into()?);
+    let expected_machine = match std::env::consts::ARCH {
+        "x86" => 0x014c,
+        "x86_64" => 0x8664,
+        "aarch64" => 0xaa64,
+        other => anyhow::bail!("Unsupported native PE fixture architecture: {other}"),
+    };
+    anyhow::ensure!(
+        machine == expected_machine,
+        "Native fixture architecture does not match the test process"
+    );
+    anyhow::ensure!(
+        uv_trampoline_builder::Launcher::try_from_path(&path)?.is_none(),
+        "Native fixture is a uv trampoline"
+    );
+    let sha256 = hex::encode(Sha256::digest(&bytes));
+    writeln!(
+        std::io::stderr(),
+        "native-pe-fixture {}",
+        serde_json::json!({
+            "source": path, "bytes": bytes.len(), "sha256": sha256,
+            "machine": format!("0x{machine:04x}"), "identity": format!("{identity:?}"),
+        })
+    )?;
+    Ok(NativePeFixture {
+        path,
+        bytes,
+        sha256,
+        machine,
+    })
+}
+
+#[cfg(windows)]
+fn write_native_recovery_wheel(
+    directory: &Path,
+    name: &str,
+    version: &str,
+    command: &str,
+    fixture: &NativePeFixture,
+) -> Result<PathBuf> {
+    let tag = match fixture.machine {
+        0x014c => "py3-none-win32",
+        0x8664 => "py3-none-win_amd64",
+        0xaa64 => "py3-none-win_arm64",
+        other => anyhow::bail!("Unsupported native PE machine: 0x{other:04x}"),
+    };
+    let script = format!(
+        "{}-{version}.data/scripts/{command}.exe",
+        name.replace('-', "_")
+    );
+    let (filename, bytes) = generate_wheel_with_binary_files(
+        &name.parse()?,
+        &version.parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        tag,
+        &[(script.as_str(), fixture.bytes.as_slice())],
+    );
+    let path = directory.join(filename);
+    fs_err::write(&path, bytes)?;
+    Ok(path)
+}
+
+#[cfg(windows)]
+fn assert_native_where(executable: &Path, markers: &Path) {
+    Command::new(executable)
+        .args(["/q", "/r"])
+        .arg(markers)
+        .arg("owned-native-marker.txt")
+        .current_dir(markers)
+        .env(EnvVars::PATH, markers)
+        .assert()
+        .success()
+        .stdout("");
+    Command::new(executable)
+        .args(["/q", "/r"])
+        .arg(markers)
+        .arg("absent-native-marker.txt")
+        .current_dir(markers)
+        .env(EnvVars::PATH, markers)
+        .assert()
+        .code(1)
+        .stdout("");
+}
+
+#[cfg(windows)]
+fn assert_native_findstr(executable: &Path, markers: &Path) {
+    Command::new(executable)
+        .args(["/x", "/c:owned-native-marker"])
+        .arg(markers.join("owned-native-marker.txt"))
+        .current_dir(markers)
+        .env(EnvVars::PATH, markers)
+        .assert()
+        .success()
+        .stdout("owned-native-marker\r\n");
+}
+
+/// Generic native PE exports retain the captured owner when source bytes and environments change.
+#[cfg(windows)]
+#[test]
+fn tool_install_recovery_native_pe_updates() -> Result<()> {
+    const FILE_ATTRIBUTE_TEMPORARY: u32 = 0x100;
+
+    let where_exe = native_pe_fixture("where.exe")?;
+    let findstr_exe = native_pe_fixture("findstr.exe")?;
+    assert_ne!(where_exe.sha256, findstr_exe.sha256);
+    let context = uv_test::test_context_with_versions!(&["3.13", "3.12"]).with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    let markers = context.temp_dir.child("markers");
+    links.create_dir_all()?;
+    markers.create_dir_all()?;
+    markers
+        .child("owned-native-marker.txt")
+        .write_str("owned-native-marker\r\n")?;
+    let bins = (0..3)
+        .map(|index| context.temp_dir.child(format!("native-bin-{index}")))
+        .collect::<Vec<_>>();
+    let tools = context.temp_dir.child("tools");
+    let environment = tools.child("native-recovery");
+    let peer_environment = tools.child("native-peer");
+    write_native_recovery_wheel(
+        links.path(),
+        "native-recovery",
+        "1.0.0",
+        "native-recovery",
+        &where_exe,
+    )?;
+    write_native_recovery_wheel(
+        links.path(),
+        "native-peer",
+        "1.0.0",
+        "native-peer",
+        &where_exe,
+    )?;
+    let install = |bin: &Path| {
+        let mut command = context.tool_install();
+        command
+            .args(["native-recovery", "--no-index", "--find-links"])
+            .arg(links.path())
+            .env(EnvVars::UV_TOOL_BIN_DIR, bin)
+            .env(EnvVars::PATH, bin);
+        command
+    };
+    let upgrade = |bin: &Path| {
+        let mut command = context.tool_upgrade();
+        command
+            .args(["native-recovery", "--no-index", "--find-links"])
+            .arg(links.path())
+            .env(EnvVars::UV_TOOL_BIN_DIR, bin)
+            .env(EnvVars::PATH, bin);
+        command
+    };
+    install(bins[0].path())
+        .args(["--python", "3.13"])
+        .assert()
+        .success();
+    context
+        .tool_install()
+        .args([
+            "native-peer==1.0.0",
+            "--python",
+            "3.13",
+            "--no-index",
+            "--find-links",
+        ])
+        .arg(links.path())
+        .env(EnvVars::UV_TOOL_BIN_DIR, bins[0].as_os_str())
+        .assert()
+        .success();
+    let first = bins[0].child("native-recovery.exe");
+    let peer = bins[0].child("native-peer.exe");
+    let peer_receipt = peer_environment.child("uv-receipt.toml");
+    let peer_receipt_bytes = fs_err::read(peer_receipt.path())?;
+    let peer_packages = site_packages_path(peer_environment.path(), "python3.13");
+    let peer_package_bytes = dirhash_path(&peer_packages)?;
+    assert_eq!(fs_err::read(first.path())?, where_exe.bytes);
+    assert_native_where(first.path(), markers.path());
+    let sentinel = environment.child("preserve-unless-replaced");
+    sentinel.write_str("native environment")?;
+    fs_err::remove_file(first.path())?;
+    install(bins[0].path()).assert().success();
+    sentinel.assert("native environment");
+    assert_native_where(first.path(), markers.path());
+
+    // The two receipt paths are distinct entries even though their native files share an inode.
+    fs_err::remove_file(peer.path())?;
+    fs_err::hard_link(first.path(), peer.path())?;
+    let peer_identity =
+        uv_windows::FileIdentity::from_file(&uv_windows::open_file_entry(peer.path())?)?;
+    let mut old_export = uv_windows::open_file_entry(first.path())?;
+    assert_eq!(
+        uv_windows::FileIdentity::from_file(&old_export)?,
+        peer_identity
+    );
+    write_native_recovery_wheel(
+        links.path(),
+        "native-recovery",
+        "2.0.0",
+        "native-recovery",
+        &findstr_exe,
+    )?;
+    upgrade(bins[0].path()).assert().success();
+    sentinel.assert("native environment");
+    assert_eq!(fs_err::read(first.path())?, findstr_exe.bytes);
+    assert_eq!(fs_err::read(peer.path())?, where_exe.bytes);
+    assert_ne!(
+        uv_windows::FileIdentity::from_file(&uv_windows::open_file_entry(first.path())?)?,
+        peer_identity
+    );
+    assert_eq!(
+        uv_windows::FileIdentity::from_file(&uv_windows::open_file_entry(peer.path())?)?,
+        peer_identity
+    );
+    assert_eq!(
+        uv_windows::FileIdentity::from_file(&old_export)?,
+        peer_identity
+    );
+    old_export.rewind()?;
+    let mut retained = Vec::new();
+    old_export.read_to_end(&mut retained)?;
+    assert_eq!(retained, where_exe.bytes);
+    let metadata = fs_err::metadata(first.path())?;
+    assert!(!metadata.permissions().readonly());
+    assert_eq!(metadata.file_attributes() & FILE_ATTRIBUTE_TEMPORARY, 0);
+    assert_native_findstr(first.path(), markers.path());
+    assert_native_where(peer.path(), markers.path());
+
+    install(bins[1].path()).arg("--force").assert().success();
+    sentinel.assert(predicate::path::missing());
+    first.assert(predicate::path::missing());
+    assert_eq!(
+        fs_err::read(bins[1].child("native-recovery.exe").path())?,
+        findstr_exe.bytes
+    );
+    assert_native_findstr(bins[1].child("native-recovery.exe").path(), markers.path());
+    sentinel.write_str("replace native interpreter")?;
+    upgrade(bins[2].path())
+        .args(["--python", "3.12"])
+        .assert()
+        .success();
+    sentinel.assert(predicate::path::missing());
+    bins[1]
+        .child("native-recovery.exe")
+        .assert(predicate::path::missing());
+    assert_native_findstr(bins[2].child("native-recovery.exe").path(), markers.path());
+    assert_native_where(peer.path(), markers.path());
+    assert_eq!(fs_err::read(peer_receipt.path())?, peer_receipt_bytes);
+    assert_eq!(dirhash_path(&peer_packages)?, peer_package_bytes);
+    assert_eq!(fs_err::read(&where_exe.path)?, where_exe.bytes);
+    assert_eq!(fs_err::read(&findstr_exe.path)?, findstr_exe.bytes);
+    Ok(())
+}
+
+/// Identical native bytes cannot identify the last force winner when two receipts claim one path.
+#[cfg(windows)]
+#[test]
+fn tool_install_recovery_native_pe_rejects_ambiguous_force() -> Result<()> {
+    let fixture = native_pe_fixture("where.exe")?;
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    let markers = context.temp_dir.child("markers");
+    links.create_dir_all()?;
+    markers.create_dir_all()?;
+    markers
+        .child("owned-native-marker.txt")
+        .write_str("owned-native-marker\r\n")?;
+    for name in ["native-first", "native-second"] {
+        write_native_recovery_wheel(links.path(), name, "1.0.0", "native-shared", &fixture)?;
+    }
+    let install = |name: &str| {
+        let mut command = context.tool_install();
+        command
+            .arg(name)
+            .args(["--no-index", "--find-links"])
+            .arg(links.path());
+        command
+    };
+    install("native-first").assert().success();
+    install("native-second").arg("--force").assert().success();
+    let exported = context.temp_dir.child("bin").child("native-shared.exe");
+    assert_eq!(fs_err::read(exported.path())?, fixture.bytes);
+    assert_native_where(exported.path(), markers.path());
+    let environments =
+        ["native-first", "native-second"].map(|name| context.temp_dir.child("tools").child(name));
+    let receipts = environments
+        .iter()
+        .map(|environment| environment.child("uv-receipt.toml"))
+        .collect::<Vec<_>>();
+    let receipt_bytes = receipts
+        .iter()
+        .map(|path| fs_err::read(path.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let package_paths = environments
+        .iter()
+        .map(|environment| site_packages_path(environment.path(), "python3.13"))
+        .collect::<Vec<_>>();
+    let package_bytes = package_paths
+        .iter()
+        .map(|path| dirhash_path(path))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    install("native-first")
+        .arg("--force")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "Cannot determine whether executable",
+        ));
+    context
+        .tool_upgrade()
+        .args(["native-first", "--offline"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "Cannot determine whether executable",
+        ));
+    assert_eq!(fs_err::read(exported.path())?, fixture.bytes);
+    fs_err::remove_file(exported.path())?;
+    install("native-first")
+        .arg("--force")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "because it is also recorded for `native-second`",
+        ));
+    exported.assert(predicate::path::missing());
+    for (receipt, bytes) in receipts.iter().zip(&receipt_bytes) {
+        assert_eq!(fs_err::read(receipt.path())?, *bytes);
+    }
+    for (path, bytes) in package_paths.iter().zip(&package_bytes) {
+        assert_eq!(dirhash_path(path)?, *bytes);
+    }
+    assert_eq!(fs_err::read(&fixture.path)?, fixture.bytes);
+    Ok(())
 }
 
 /// Test installing a tool when its entry point already exists

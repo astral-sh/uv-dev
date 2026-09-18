@@ -18,7 +18,7 @@ use uv_pep440::Version;
 use uv_python::{BrokenLink, Interpreter, PythonEnvironment};
 use uv_state::{StateBucket, StateStore};
 use uv_static::EnvVars;
-use uv_warnings::warn_user;
+use uv_warnings::warn_user_once;
 
 pub(crate) use receipt::ToolReceipt;
 pub use tool::{Tool, ToolEntrypoint};
@@ -163,7 +163,7 @@ impl InstalledTools {
                 continue;
             };
             let Ok(name) = PackageName::from_str(name) else {
-                warn_user!(
+                warn_user_once!(
                     "Ignoring tool directory `{}` with an invalid package name; move it outside the tool directory, or remove it if no longer needed",
                     directory.user_display()
                 );

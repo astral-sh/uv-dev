@@ -48,6 +48,31 @@ pub fn generate_wheel_with_files(
     tag: &str,
     files: &[(&str, &str)],
 ) -> (String, Vec<u8>) {
+    let files = files
+        .iter()
+        .map(|(path, contents)| (*path, contents.as_bytes()))
+        .collect::<Vec<_>>();
+    generate_wheel_with_binary_files(
+        name,
+        version,
+        requires,
+        extras,
+        requires_python,
+        tag,
+        &files,
+    )
+}
+
+/// Generate a wheel with arbitrary additional file bytes and a complete `RECORD`.
+pub fn generate_wheel_with_binary_files(
+    name: &PackageName,
+    version: &Version,
+    requires: &[Requirement],
+    extras: &BTreeMap<ExtraName, Vec<Requirement>>,
+    requires_python: Option<&VersionSpecifiers>,
+    tag: &str,
+    files: &[(&str, &[u8])],
+) -> (String, Vec<u8>) {
     let normalized = name.as_dist_info_name();
     let dist_info = format!("{normalized}-{version}.dist-info");
 
@@ -56,11 +81,11 @@ pub fn generate_wheel_with_files(
     let mut entries = vec![
         (
             format!("{normalized}/__init__.py"),
-            format!("__version__ = \"{version}\"\n"),
+            format!("__version__ = \"{version}\"\n").into_bytes(),
         ),
         (
             format!("{dist_info}/METADATA"),
-            build_metadata(name, version, requires, extras, requires_python),
+            build_metadata(name, version, requires, extras, requires_python).into_bytes(),
         ),
         (
             format!("{dist_info}/WHEEL"),
@@ -69,18 +94,18 @@ pub fn generate_wheel_with_files(
                  Generator: uv-test\n\
                  Root-Is-Purelib: true\n\
                  Tag: {tag}\n"
-            ),
+            )
+            .into_bytes(),
         ),
     ];
     entries.extend(
         files
             .iter()
-            .map(|(path, contents)| ((*path).to_string(), (*contents).to_string())),
+            .map(|(path, contents)| ((*path).to_string(), (*contents).to_vec())),
     );
     for (path, contents) in &entries {
         let entry = ZipEntryBuilder::new(path.clone().into(), ZipCompression::Stored);
-        block_on(zip.write_entry_whole(entry, contents.as_bytes()))
-            .expect("failed to write wheel file");
+        block_on(zip.write_entry_whole(entry, contents)).expect("failed to write wheel file");
     }
 
     let record = build_record(&dist_info, &entries);
@@ -95,10 +120,9 @@ pub fn generate_wheel_with_files(
 }
 
 /// Build the `RECORD` metadata for a generated wheel.
-fn build_record(dist_info: &str, entries: &[(String, String)]) -> String {
+fn build_record(dist_info: &str, entries: &[(String, Vec<u8>)]) -> String {
     let mut record = String::new();
     for (path, contents) in entries {
-        let contents = contents.as_bytes();
         let hash = base64.encode(Sha256::digest(contents));
         writeln!(&mut record, "{path},sha256={hash},{}", contents.len())
             .expect("writing RECORD metadata into a string should succeed");
@@ -337,6 +361,81 @@ mod tests {
         my_package-1.0.0.dist-info/WHEEL,sha256=ujr00BDMtYYidJ71ulklWmNFpiGqy5NyjK1fX-JwFO4,78
         my_package-1.0.0.dist-info/RECORD,,
         ");
+    }
+
+    #[test]
+    fn generate_binary_wheel() {
+        let name = PackageName::from_str("binary-package").expect("valid package name");
+        let version = Version::from_str("1.0.0").expect("valid version");
+        let path = "binary_package-1.0.0.data/scripts/native.exe";
+        let payload = b"MZ\0\xff\x80native\0";
+        let (_, bytes) = generate_wheel_with_binary_files(
+            &name,
+            &version,
+            &[],
+            &BTreeMap::new(),
+            None,
+            "py3-none-win_amd64",
+            &[(path, payload)],
+        );
+        let archive = block_on(async_zip::base::read::mem::ZipFileReader::new(bytes))
+            .expect("wheel should be a valid zip");
+        let mut files = BTreeMap::new();
+        for (index, entry) in archive.file().entries().iter().enumerate() {
+            let name = entry
+                .filename()
+                .as_str()
+                .expect("UTF-8 wheel path")
+                .to_owned();
+            let mut contents = Vec::new();
+            block_on(async {
+                archive
+                    .reader_with_entry(index)
+                    .await
+                    .expect("readable wheel entry")
+                    .read_to_end_checked(&mut contents)
+                    .await
+                    .expect("valid wheel entry");
+            });
+            assert!(files.insert(name, contents).is_none());
+        }
+        assert_eq!(files.get(path).expect("native file"), payload);
+        let record = files
+            .remove("binary_package-1.0.0.dist-info/RECORD")
+            .expect("wheel RECORD");
+        let expected = build_record(
+            "binary_package-1.0.0.dist-info",
+            &files.into_iter().collect::<Vec<_>>(),
+        );
+        let actual_lines = std::str::from_utf8(&record)
+            .expect("UTF-8 RECORD")
+            .lines()
+            .collect::<std::collections::BTreeSet<_>>();
+        let expected_lines = expected.lines().collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(actual_lines, expected_lines);
+
+        let text_files = [("data.txt", "plain UTF-8 data")];
+        let binary_files = [("data.txt", b"plain UTF-8 data".as_slice())];
+        assert_eq!(
+            generate_wheel_with_files(
+                &name,
+                &version,
+                &[],
+                &BTreeMap::new(),
+                None,
+                "py3-none-any",
+                &text_files
+            ),
+            generate_wheel_with_binary_files(
+                &name,
+                &version,
+                &[],
+                &BTreeMap::new(),
+                None,
+                "py3-none-any",
+                &binary_files
+            ),
+        );
     }
 
     #[test]

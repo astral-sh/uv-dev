@@ -201,6 +201,17 @@ impl Tool {
         Self { options, ..self }
     }
 
+    /// Create a new [`Tool`] with the given executable locations.
+    #[must_use]
+    pub fn with_entrypoints(self, entrypoints: impl IntoIterator<Item = ToolEntrypoint>) -> Self {
+        let mut entrypoints: Vec<_> = entrypoints.into_iter().collect();
+        entrypoints.sort();
+        Self {
+            entrypoints,
+            ..self
+        }
+    }
+
     /// Returns the TOML table for this tool.
     pub(crate) fn to_toml(&self) -> Result<Table, toml_edit::ser::Error> {
         let mut table = Table::new();
