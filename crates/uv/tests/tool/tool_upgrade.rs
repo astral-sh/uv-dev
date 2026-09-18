@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+use std::env::consts::EXE_SUFFIX;
 use std::process::Command;
 
 use anyhow::{Result, bail};
@@ -14,6 +16,7 @@ use wiremock::{
 
 use uv_static::EnvVars;
 
+use uv_test::packse::{generate_wheel, generate_wheel_with_files};
 use uv_test::{uv_snapshot, venv_bin_path};
 
 #[test]
@@ -1603,6 +1606,103 @@ fn tool_upgrade_writes_preview_lock() {
         ]
         "#);
     });
+}
+
+#[test]
+fn tool_upgrade_lock_updates_dependencies() -> Result<()> {
+    check_tool_upgrade_lock_preferences(&[], "2.0.0")
+}
+
+#[test]
+fn tool_upgrade_lock_preserves_untargeted_dependencies() -> Result<()> {
+    check_tool_upgrade_lock_preferences(&["--upgrade-package", "preference-dep"], "1.0.0")
+}
+
+fn check_tool_upgrade_lock_preferences(arguments: &[&str], kept_version: &str) -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    let tool_dir = context.temp_dir.child("tools").child("preference-root");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+
+    let write_dependency = |name: &str, version: &str| -> Result<()> {
+        let (filename, wheel) = generate_wheel(
+            &name.parse()?,
+            &version.parse()?,
+            &[],
+            &BTreeMap::new(),
+            None,
+            "py3-none-any",
+            &[],
+        );
+        wheels.child(filename).write_binary(&wheel)?;
+        Ok(())
+    };
+    write_dependency("preference-dep", "1.0.0")?;
+    write_dependency("preference-keep", "1.0.0")?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"preference-root".parse()?,
+        &"1.0.0".parse()?,
+        &["preference-dep".parse()?, "preference-keep".parse()?],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "preference_root/cli.py",
+                "import preference_dep\nimport preference_keep\ndef main():\n    print(f'dep-{preference_dep.__version__},keep-{preference_keep.__version__}')\n",
+            ),
+            (
+                "preference_root-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\npreference-root = preference_root.cli:main\n",
+            ),
+        ],
+    );
+    wheels.child(filename).write_binary(&wheel)?;
+
+    context
+        .tool_install()
+        .arg("preference-root")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(wheels.path())
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let executable = bin_dir.child(format!("preference-root{EXE_SUFFIX}"));
+    Command::new(executable.path())
+        .assert()
+        .success()
+        .stdout("dep-1.0.0,keep-1.0.0\n");
+
+    // The saved find-links directory now offers newer releases of both dependencies.
+    write_dependency("preference-dep", "2.0.0")?;
+    write_dependency("preference-keep", "2.0.0")?;
+    context
+        .tool_upgrade()
+        .arg("preference-root")
+        .args(arguments)
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    Command::new(executable.path())
+        .assert()
+        .success()
+        .stdout(format!("dep-2.0.0,keep-{kept_version}\n"));
+    Command::new(venv_bin_path(tool_dir.path()).join(format!("python{EXE_SUFFIX}")))
+    .arg("-I")
+    .arg("-B")
+    .arg("-c")
+    .arg("from importlib.metadata import version; print(version('preference-dep'), version('preference-keep'))")
+    .assert()
+    .success()
+    .stdout(format!("2.0.0 {kept_version}\n"));
+
+    Ok(())
 }
 
 /// Mount a minimal package index for `simple-launcher` with a caller-provided wheel hash.
