@@ -54,7 +54,8 @@ use uv_workspace::WorkspaceCache;
 
 use crate::commands::pip;
 use crate::commands::tool::recovery::{
-    ToolEntrypointSnapshot, same_entrypoint_location, same_existing_entrypoint_location,
+    ToolEntrypointClaims, ToolEntrypointSnapshot, same_entrypoint_location,
+    same_existing_entrypoint_location,
 };
 use crate::commands::tool::uninstall::owned_entrypoints_by;
 
@@ -174,15 +175,11 @@ pub(super) fn repair_tool_entrypoints(
         return Ok(None);
     }
 
-    let mut receipts = Vec::new();
-    for (name, receipt) in installed_tools.tools()? {
-        receipts.push((name, receipt?));
-    }
-    receipts.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+    let claims = ToolEntrypointClaims::capture(installed_tools)?;
     let owned = owned_entrypoints_by(
         name,
         tool,
-        &receipts,
+        claims.receipts(),
         installed_tools,
         same_existing_entrypoint_location,
     )?;
@@ -241,19 +238,7 @@ pub(super) fn repair_tool_entrypoints(
         if !exists || !same_location || !is_owned {
             // Replacing another recorded owner requires an installation-time transfer. An
             // export-only repair cannot make that ownership change durable, even with `--force`.
-            for (other_name, receipt) in &receipts {
-                if other_name == name {
-                    continue;
-                }
-                for other in receipt.entrypoints() {
-                    if same_entrypoint_location(&other.install_path, &target)? {
-                        bail!(
-                            "Cannot restore executable `{}` because it is also recorded for `{other_name}`",
-                            target.user_display()
-                        );
-                    }
-                }
-            }
+            claims.check_other_claims(name, &target)?;
             if exists && !force {
                 bail!(
                     "Executable already exists: {} (use `--force` to overwrite)",
@@ -920,14 +905,31 @@ pub(super) fn finalize_tool_install(
     printer: Printer,
 ) -> anyhow::Result<()> {
     if let Some(previous) = previous {
-        let installed_entrypoints = previous.install(
+        let installed_entrypoints = match previous.install(
             environment,
             name,
             entrypoints,
             force,
             report_unchanged,
             printer,
-        )?;
+        ) {
+            Ok(entrypoints) => entrypoints,
+            Err(err) => {
+                if matches!(
+                    err.downcast_ref::<NoExecutablesError>(),
+                    Some(NoExecutablesError::Root { .. })
+                ) {
+                    writeln!(
+                        printer.stdout(),
+                        "No executables are provided by package `{}`; removing tool",
+                        name.cyan()
+                    )?;
+                    previous.remove_owned_exports()?;
+                    installed_tools.remove_environment(name)?;
+                }
+                return Err(err);
+            }
+        };
         let tool = Tool::new(
             requirements,
             constraints,

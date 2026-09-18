@@ -3325,6 +3325,310 @@ fn write_recovery_wheel(
     Ok(path)
 }
 
+/// A malformed receipt for an unrelated, inspectable tool does not block recovery.
+#[test]
+fn tool_install_recovery_allows_unrelated_invalid_receipts() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    let tools = context.temp_dir.child("tools");
+    let bin = context.temp_dir.child("bin");
+    links.create_dir_all()?;
+    for (name, command) in [
+        ("valid-recovery-root", "valid-recovery-command"),
+        ("invalid-recovery-peer", "unrelated-recovery-command"),
+    ] {
+        write_recovery_wheel(links.path(), name, "1.0.0", &[], &[(command, "1")])?;
+        context
+            .tool_install()
+            .arg(name)
+            .args(["--no-index", "--find-links"])
+            .arg(links.path())
+            .assert()
+            .success();
+    }
+    let peer = tools.child("invalid-recovery-peer");
+    let peer_receipt = peer.child("uv-receipt.toml");
+    peer_receipt.write_str("Invalid receipt")?;
+    let peer_export = bin.child(format!(
+        "unrelated-recovery-command{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    let peer_bytes = fs_err::read(peer_export.path())?;
+    let peer_packages = site_packages_path(peer.path(), "python3.13");
+    let peer_package_hash = dirhash_path(&peer_packages)?;
+    let root_export = bin.child(format!(
+        "valid-recovery-command{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    fs_err::remove_file(root_export.path())?;
+
+    // The unchanged-environment path restores the missing export too.
+    context
+        .tool_install()
+        .args(["valid-recovery-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .success();
+    root_export.assert(predicate::path::exists());
+
+    write_recovery_wheel(
+        links.path(),
+        "valid-recovery-root",
+        "2.0.0",
+        &[],
+        &[("valid-recovery-command", "2")],
+    )?;
+    context
+        .tool_upgrade()
+        .args(["valid-recovery-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .success();
+    Command::new(root_export.path())
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .assert()
+        .success()
+        .stdout("2\n");
+    assert_eq!(
+        fs_err::read_to_string(peer_receipt.path())?,
+        "Invalid receipt"
+    );
+    assert_eq!(fs_err::read(peer_export.path())?, peer_bytes);
+    assert_eq!(dirhash_path(&peer_packages)?, peer_package_hash);
+    Ok(())
+}
+
+/// An invalid receipt cannot release a plausible competing claim, including under `--force`.
+#[test]
+fn tool_install_recovery_rejects_invalid_competing_receipts() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    let tools = context.temp_dir.child("tools");
+    let bin = context.temp_dir.child("bin");
+    links.create_dir_all()?;
+    for name in ["invalid-claim-peer", "invalid-claim-root"] {
+        let command = if cfg!(windows) && name == "invalid-claim-peer" {
+            "INVALID-CLAIM-COMMAND"
+        } else {
+            "invalid-claim-command"
+        };
+        write_recovery_wheel(links.path(), name, "1.0.0", &[], &[(command, name)])?;
+        context
+            .tool_install()
+            .arg(name)
+            .args(["--force", "--no-index", "--find-links"])
+            .arg(links.path())
+            .assert()
+            .success();
+    }
+    let peer_receipt = tools.child("invalid-claim-peer").child("uv-receipt.toml");
+    peer_receipt.write_str("Invalid receipt")?;
+    let receipts = [
+        peer_receipt,
+        tools.child("invalid-claim-root").child("uv-receipt.toml"),
+    ];
+    let receipt_bytes = receipts
+        .iter()
+        .map(|path| fs_err::read(path.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let package_paths = ["invalid-claim-peer", "invalid-claim-root"]
+        .map(|name| site_packages_path(tools.child(name).path(), "python3.13"));
+    let packages = package_paths
+        .iter()
+        .map(|path| dirhash_path(path))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let export = bin.child(format!(
+        "invalid-claim-command{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    let export_bytes = fs_err::read(export.path())?;
+    write_recovery_wheel(
+        links.path(),
+        "invalid-claim-root",
+        "2.0.0",
+        &[],
+        &[("invalid-claim-command", "2")],
+    )?;
+
+    for force in [false, true] {
+        let mut command = context.tool_install();
+        command
+            .args(["invalid-claim-root", "--no-index", "--find-links"])
+            .arg(links.path());
+        if force {
+            command.arg("--force");
+        }
+        command.assert().code(2).stderr(predicate::str::contains(
+            "`invalid-claim-peer` has a missing or invalid receipt and may provide the same executable",
+        ));
+    }
+    context
+        .tool_upgrade()
+        .args(["invalid-claim-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "`invalid-claim-peer` has a missing or invalid receipt and may provide the same executable",
+        ));
+    assert_eq!(fs_err::read(export.path())?, export_bytes);
+    for (path, bytes) in receipts.iter().zip(&receipt_bytes) {
+        assert_eq!(fs_err::read(path.path())?, *bytes);
+    }
+    for (path, bytes) in package_paths.iter().zip(&packages) {
+        assert_eq!(dirhash_path(path)?, *bytes);
+    }
+    Ok(())
+}
+
+/// A missing scripts directory is not evidence that an invalid tool has no competing export.
+#[test]
+fn tool_install_recovery_rejects_uninspectable_claims() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    let tools = context.temp_dir.child("tools");
+    let bin = context.temp_dir.child("bin");
+    links.create_dir_all()?;
+    write_recovery_wheel(
+        links.path(),
+        "inspectable-root",
+        "1.0.0",
+        &[],
+        &[("inspectable-command", "1")],
+    )?;
+    context
+        .tool_install()
+        .args(["inspectable-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .success();
+    let uninspectable = tools.child("uninspectable-peer");
+    uninspectable.create_dir_all()?;
+    uninspectable
+        .child("uv-receipt.toml")
+        .write_str("Invalid receipt")?;
+    let root = tools.child("inspectable-root");
+    let receipt = root.child("uv-receipt.toml");
+    let receipt_bytes = fs_err::read(receipt.path())?;
+    let package_path = site_packages_path(root.path(), "python3.13");
+    let packages = dirhash_path(&package_path)?;
+    let export = bin.child(format!(
+        "inspectable-command{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    let export_bytes = fs_err::read(export.path())?;
+    write_recovery_wheel(
+        links.path(),
+        "inspectable-root",
+        "2.0.0",
+        &[],
+        &[("inspectable-command", "2")],
+    )?;
+    context
+        .tool_upgrade()
+        .args(["inspectable-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("cannot be inspected"));
+    assert_eq!(fs_err::read(receipt.path())?, receipt_bytes);
+    assert_eq!(fs_err::read(export.path())?, export_bytes);
+    assert_eq!(dirhash_path(&package_path)?, packages);
+    assert_eq!(
+        fs_err::read_to_string(uninspectable.child("uv-receipt.toml").path())?,
+        "Invalid receipt"
+    );
+    Ok(())
+}
+
+/// Losing all root commands removes the environment without deleting foreign replacements.
+#[test]
+fn tool_install_recovery_removes_empty_root_owned_exports() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    let tools = context.temp_dir.child("tools");
+    let bin = context.temp_dir.child("bin");
+    links.create_dir_all()?;
+    write_recovery_wheel(
+        links.path(),
+        "empty-recovery-root",
+        "1.0.0",
+        &[],
+        &[
+            ("empty-recovery-owned", "owned"),
+            ("empty-recovery-replaced", "replaced"),
+            ("empty-recovery-transferred", "root"),
+        ],
+    )?;
+    context
+        .tool_install()
+        .args(["empty-recovery-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .success();
+    write_recovery_wheel(
+        links.path(),
+        "empty-recovery-peer",
+        "1.0.0",
+        &[],
+        &[("empty-recovery-transferred", "peer")],
+    )?;
+    context
+        .tool_install()
+        .args([
+            "empty-recovery-peer",
+            "--force",
+            "--no-index",
+            "--find-links",
+        ])
+        .arg(links.path())
+        .assert()
+        .success();
+    let owned = bin.child(format!(
+        "empty-recovery-owned{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    let replaced = bin.child(format!(
+        "empty-recovery-replaced{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    let transferred = bin.child(format!(
+        "empty-recovery-transferred{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    fs_err::remove_file(replaced.path())?;
+    replaced.write_str("foreign executable")?;
+    let transferred_bytes = fs_err::read(transferred.path())?;
+    let peer_receipt = tools.child("empty-recovery-peer").child("uv-receipt.toml");
+    let peer_receipt_bytes = fs_err::read(peer_receipt.path())?;
+    write_recovery_wheel(links.path(), "empty-recovery-root", "2.0.0", &[], &[])?;
+    context
+        .tool_install()
+        .args([
+            "empty-recovery-root==2.0.0",
+            "--force",
+            "--no-index",
+            "--find-links",
+        ])
+        .arg(links.path())
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains(
+            "No executables are provided by package `empty-recovery-root`; removing tool",
+        ));
+    tools
+        .child("empty-recovery-root")
+        .assert(predicate::path::missing());
+    owned.assert(predicate::path::missing());
+    assert_eq!(
+        fs_err::read_to_string(replaced.path())?,
+        "foreign executable"
+    );
+    assert_eq!(fs_err::read(transferred.path())?, transferred_bytes);
+    assert_eq!(fs_err::read(peer_receipt.path())?, peer_receipt_bytes);
+    Ok(())
+}
+
 /// Changed dependencies, root versions, and interpreters all use the original export authority.
 #[test]
 fn tool_install_recovery_survives_environment_updates() -> Result<()> {

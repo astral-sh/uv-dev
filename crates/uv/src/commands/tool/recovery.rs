@@ -33,7 +33,7 @@ use crate::printer::Printer;
 /// after changing the environment, and export I/O can fail after changing an earlier export.
 pub(super) struct ToolEntrypointSnapshot {
     receipt: Tool,
-    receipts: Vec<(PackageName, Tool)>,
+    claims: ToolEntrypointClaims,
     owned: Vec<OwnedExport>,
     inventory: Option<BTreeSet<(PackageName, OsString)>>,
     recorded_inventory: BTreeSet<(PackageName, OsString)>,
@@ -45,6 +45,129 @@ struct OwnedExport {
     fingerprint: ExportFingerprint,
 }
 
+/// Receipt claims, including environments whose receipt cannot establish their export set.
+pub(super) struct ToolEntrypointClaims {
+    receipts: Vec<(PackageName, Tool)>,
+    unresolved: Vec<UnresolvedToolClaims>,
+}
+
+struct UnresolvedToolClaims {
+    name: PackageName,
+    receipt_error: uv_tool::Error,
+    scripts: PathBuf,
+    inventory: io::Result<BTreeSet<OsString>>,
+}
+
+impl ToolEntrypointClaims {
+    pub(super) fn capture(installed_tools: &InstalledTools) -> anyhow::Result<Self> {
+        let mut receipts = Vec::new();
+        let mut unresolved = Vec::new();
+        for (name, receipt) in installed_tools.tools()? {
+            match receipt {
+                Ok(receipt) => receipts.push((name, receipt)),
+                Err(receipt_error) => {
+                    let scripts = installed_tools.tool_dir(&name).join(if cfg!(windows) {
+                        "Scripts"
+                    } else {
+                        "bin"
+                    });
+                    // A complete directory listing can exclude unrelated executable names. A
+                    // missing or unreadable directory cannot establish that exclusion.
+                    let inventory = fs_err::read_dir(&scripts).and_then(|entries| {
+                        entries
+                            .map(|entry| entry.map(|entry| entry.file_name()))
+                            .collect()
+                    });
+                    unresolved.push(UnresolvedToolClaims {
+                        name,
+                        receipt_error,
+                        scripts,
+                        inventory,
+                    });
+                }
+            }
+        }
+        receipts.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+        unresolved.sort_unstable_by(|left, right| left.name.cmp(&right.name));
+        Ok(Self {
+            receipts,
+            unresolved,
+        })
+    }
+
+    pub(super) fn receipts(&self) -> &[(PackageName, Tool)] {
+        &self.receipts
+    }
+
+    fn check_unresolved_claims(&self, name: &PackageName, target: &Path) -> anyhow::Result<()> {
+        let Some(filename) = target.file_name() else {
+            bail!("Invalid executable path `{}`", target.user_display());
+        };
+        for other in &self.unresolved {
+            if other.name == *name {
+                continue;
+            }
+            let inventory = other.inventory.as_ref().map_err(|err| {
+                anyhow::anyhow!(
+                    "Cannot determine whether executable `{}` belongs to `{}` because its receipt is missing or invalid and its scripts directory `{}` cannot be inspected: {err}",
+                    target.user_display(),
+                    other.name,
+                    other.scripts.user_display(),
+                )
+            })?;
+            #[cfg(unix)]
+            let may_claim = inventory.contains(filename);
+            #[cfg(windows)]
+            let may_claim = {
+                // Resolve current filesystem aliases, including DOS short names. Unlike a
+                // valid receipt, the inventory does not assert a historical short spelling.
+                let mut matches = match fs_err::symlink_metadata(other.scripts.join(filename)) {
+                    Ok(_) => true,
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => false,
+                    Err(err) => return Err(err.into()),
+                };
+                for installed_name in inventory {
+                    if uv_windows::names_equal_ordinal(installed_name, filename)? {
+                        matches = true;
+                        break;
+                    }
+                }
+                matches
+            };
+            if may_claim {
+                bail!(
+                    "Cannot restore executable `{}` because `{}` has a missing or invalid receipt and may provide the same executable: {}",
+                    target.user_display(),
+                    other.name,
+                    other.receipt_error,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn check_other_claims(
+        &self,
+        name: &PackageName,
+        target: &Path,
+    ) -> anyhow::Result<()> {
+        for (other_name, receipt) in &self.receipts {
+            if other_name == name {
+                continue;
+            }
+            for other in receipt.entrypoints() {
+                if same_entrypoint_location(&other.install_path, target)? {
+                    bail!(
+                        "Cannot restore executable `{}` because it is also recorded for `{other_name}`",
+                        target.user_display()
+                    );
+                }
+            }
+        }
+        self.check_unresolved_claims(name, target)
+    }
+}
+
 impl ToolEntrypointSnapshot {
     pub(super) fn capture(
         environment: Option<&PythonEnvironment>,
@@ -52,15 +175,14 @@ impl ToolEntrypointSnapshot {
         receipt: &Tool,
         installed_tools: &InstalledTools,
     ) -> anyhow::Result<Self> {
-        let mut receipts = Vec::new();
-        for (name, receipt) in installed_tools.tools()? {
-            receipts.push((name, receipt?));
+        let claims = ToolEntrypointClaims::capture(installed_tools)?;
+        for entrypoint in receipt.entrypoints() {
+            claims.check_unresolved_claims(name, &entrypoint.install_path)?;
         }
-        receipts.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
         let owned = owned_entrypoints_by(
             name,
             receipt,
-            &receipts,
+            claims.receipts(),
             installed_tools,
             same_existing_entrypoint_location,
         )?
@@ -116,7 +238,7 @@ impl ToolEntrypointSnapshot {
         }
         Ok(Self {
             receipt: receipt.clone(),
-            receipts,
+            claims,
             owned,
             inventory,
             recorded_inventory,
@@ -138,25 +260,8 @@ impl ToolEntrypointSnapshot {
         Ok(())
     }
 
-    fn check_other_claims(&self, name: &PackageName, target: &Path) -> anyhow::Result<()> {
-        for (other_name, receipt) in &self.receipts {
-            if other_name == name {
-                continue;
-            }
-            for other in receipt.entrypoints() {
-                if same_entrypoint_location(&other.install_path, target)? {
-                    bail!(
-                        "Cannot restore executable `{}` because it is also recorded for `{other_name}`",
-                        target.user_display()
-                    );
-                }
-            }
-        }
-        Ok(())
-    }
-
     fn admit_target(&self, name: &PackageName, target: &Path, force: bool) -> anyhow::Result<()> {
-        self.check_other_claims(name, target)?;
+        self.claims.check_other_claims(name, target)?;
         let exists = match fs_err::symlink_metadata(target) {
             Ok(metadata) if metadata.is_dir() => {
                 bail!("Executable path `{}` is a directory", target.user_display());
@@ -181,6 +286,30 @@ impl ToolEntrypointSnapshot {
                 "Executable already exists: {} (use `--force` to overwrite)",
                 target.user_display().bold()
             );
+        }
+        Ok(())
+    }
+
+    /// Remove only exports that still have their pre-mutation identity.
+    pub(super) fn remove_owned_exports(&self) -> anyhow::Result<()> {
+        #[cfg(windows)]
+        let itself = std::env::current_exe().ok();
+        for old in &self.owned {
+            if old.fingerprint.matches(&old.entrypoint.install_path)? {
+                #[cfg(windows)]
+                if itself.as_ref().is_some_and(|itself| {
+                    std::path::absolute(&old.entrypoint.install_path)
+                        .is_ok_and(|target| *itself == target)
+                }) {
+                    self_replace::self_delete().context("Failed to remove old executable")?;
+                    continue;
+                }
+                match fs_err::remove_file(&old.entrypoint.install_path) {
+                    Ok(()) => {}
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                    Err(err) => return Err(err.into()),
+                }
+            }
         }
         Ok(())
     }
@@ -213,6 +342,13 @@ impl ToolEntrypointSnapshot {
         for package in ordered_packages {
             let installed = site_packages.get_packages(package);
             let Some(dist) = installed.first() else {
+                if package == name {
+                    return Err(NoExecutablesError::Root {
+                        package: name.clone(),
+                        matching_dependency_packages: Vec::new(),
+                    }
+                    .into());
+                }
                 bail!("Expected package `{package}` to be installed");
             };
             let entries = entrypoint_paths(&site_packages, dist.name(), dist.version())?;
