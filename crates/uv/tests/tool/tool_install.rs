@@ -3955,6 +3955,154 @@ fn tool_install_recovery_rejects_planned_short_name_aliases() -> Result<()> {
     Ok(())
 }
 
+/// No-op repair admits all final destinations before restoring either potentially aliased name.
+#[cfg(windows)]
+#[test]
+fn tool_install_recovery_rejects_noop_short_name_aliases() -> Result<()> {
+    let fixture = native_pe_fixture("where.exe")?;
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    let markers = context.temp_dir.child("markers");
+    let observation = context.temp_dir.child("alias-observation");
+    let bin = context.temp_dir.child("bin");
+    let empty_bin = context.temp_dir.child("empty-bin");
+    let environment = context.temp_dir.child("tools").child("noop-alias-root");
+    for directory in [&links, &markers, &observation, &empty_bin] {
+        directory.create_dir_all()?;
+    }
+    markers
+        .child("owned-native-marker.txt")
+        .write_str("owned-native-marker\r\n")?;
+    let long_name = "noop-long-recovery-command.exe";
+    let observed_long = observation.child(long_name);
+    observed_long.write_str("owned automatic alias")?;
+    let observed = observed_short_path(observed_long.path(), None)?;
+    let short_command = observed
+        .file_stem()
+        .expect("short command")
+        .to_str()
+        .expect("UTF-8 command");
+    let short_name = format!("{short_command}.exe");
+    fs_err::remove_file(observed_long.path())?;
+    observed_long.write_str("owned automatic alias recreation")?;
+    assert_eq!(observed_short_path(observed_long.path(), None)?, observed);
+    fs_err::remove_file(observed_long.path())?;
+
+    // Console launchers are installed before .data/scripts. Reserve the literal short name in
+    // the export directory too, so both installed source and initial export are distinct entries.
+    let entrypoints =
+        format!("[console_scripts]\n{short_command} = noop_alias_root.commands:main\n");
+    let module = b"def main():\n    print('literal short command')\n";
+    let tag = match fixture.machine {
+        0x014c => "py3-none-win32",
+        0x8664 => "py3-none-win_amd64",
+        0xaa64 => "py3-none-win_arm64",
+        other => anyhow::bail!("Unsupported native PE machine: 0x{other:04x}"),
+    };
+    let script = format!("noop_alias_root-1.0.0.data/scripts/{long_name}");
+    let (filename, wheel) = generate_wheel_with_binary_files(
+        &"noop-alias-root".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &Default::default(),
+        None,
+        tag,
+        &[
+            (
+                "noop_alias_root-1.0.0.dist-info/entry_points.txt",
+                entrypoints.as_bytes(),
+            ),
+            ("noop_alias_root/commands.py", module.as_slice()),
+            (script.as_str(), fixture.bytes.as_slice()),
+        ],
+    );
+    fs_err::write(links.path().join(filename), wheel)?;
+    bin.child(&short_name)
+        .write_str("owned literal-name reservation")?;
+    let install = |destination: &Path| {
+        let mut command = context.tool_install();
+        command
+            .args(["noop-alias-root", "--no-index", "--find-links"])
+            .arg(links.path())
+            .env(EnvVars::UV_TOOL_BIN_DIR, destination);
+        command
+    };
+    install(bin.path()).arg("--force").assert().success();
+    let source_long = venv_bin_path(environment.path()).join(long_name);
+    let source_short = venv_bin_path(environment.path()).join(&short_name);
+    let exported_long = bin.child(long_name);
+    let exported_short = bin.child(&short_name);
+    for (long, short) in [
+        (source_long.as_path(), source_short.as_path()),
+        (exported_long.path(), exported_short.path()),
+    ] {
+        let actual = fs_err::read_dir(long.parent().expect("entry parent"))?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        assert!(
+            actual
+                .iter()
+                .any(|name| name == long.file_name().expect("long name"))
+        );
+        assert!(
+            actual
+                .iter()
+                .any(|name| name == short.file_name().expect("short name"))
+        );
+        assert_ne!(
+            uv_windows::FileIdentity::from_file(&uv_windows::open_file_entry(long)?)?,
+            uv_windows::FileIdentity::from_file(&uv_windows::open_file_entry(short)?)?
+        );
+    }
+    assert_native_where(exported_long.path(), markers.path());
+    Command::new(exported_short.path())
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .assert()
+        .success()
+        .stdout("literal short command\n");
+    let source_bytes = [fs_err::read(&source_long)?, fs_err::read(&source_short)?];
+    let export_bytes = [
+        fs_err::read(exported_long.path())?,
+        fs_err::read(exported_short.path())?,
+    ];
+    let receipt = environment.child("uv-receipt.toml");
+    let receipt_bytes = fs_err::read(receipt.path())?;
+    let package_path = site_packages_path(environment.path(), "python3.13");
+    let packages = dirhash_path(&package_path)?;
+    let assert_refusal = |destination: &Path| {
+        install(destination)
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains(
+                "possible short-name alias is missing",
+            ));
+        context
+            .tool_upgrade()
+            .args(["noop-alias-root", "--no-index", "--find-links"])
+            .arg(links.path())
+            .env(EnvVars::UV_TOOL_BIN_DIR, destination)
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains(
+                "possible short-name alias is missing",
+            ));
+    };
+    assert_refusal(empty_bin.path());
+    assert_eq!(fs_err::read_dir(empty_bin.path())?.count(), 0);
+    assert_eq!(fs_err::read(exported_long.path())?, export_bytes[0]);
+    assert_eq!(fs_err::read(exported_short.path())?, export_bytes[1]);
+    fs_err::remove_file(exported_long.path())?;
+    fs_err::remove_file(exported_short.path())?;
+    assert_refusal(bin.path());
+    exported_long.assert(predicate::path::missing());
+    exported_short.assert(predicate::path::missing());
+    assert_eq!(fs_err::read(&source_long)?, source_bytes[0]);
+    assert_eq!(fs_err::read(&source_short)?, source_bytes[1]);
+    assert_eq!(fs_err::read(receipt.path())?, receipt_bytes);
+    assert_eq!(dirhash_path(&package_path)?, packages);
+    Ok(())
+}
+
 #[cfg(windows)]
 fn native_pe_fixture(filename: &str) -> Result<NativePeFixture> {
     anyhow::ensure!(

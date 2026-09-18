@@ -189,7 +189,7 @@ pub(super) fn repair_tool_entrypoints(
     let environment_root = fs_err::canonicalize(environment.root())?;
     let mut replacements = BTreeMap::new();
     let mut removals = BTreeSet::new();
-    let mut entrypoints = Vec::new();
+    let mut entrypoints: Vec<ToolEntrypoint> = Vec::new();
 
     for entrypoint in tool.entrypoints() {
         let Some(filename) = entrypoint.install_path.file_name() else {
@@ -215,6 +215,12 @@ pub(super) fn repair_tool_entrypoints(
         }
 
         let target = executable_directory.join(filename);
+        // Admit the complete final target set, including unchanged entries, before the first
+        // export write. Equal entries belong to this same receipt; exact duplicate map keys
+        // retain their last replacement, while an unresolved alias aborts the whole repair.
+        for previous in &entrypoints {
+            same_entrypoint_location(&previous.install_path, &target)?;
+        }
         if same_entrypoint_location(&source, &target)? {
             bail!(
                 "Cannot export executable `{}` into its tool environment",
