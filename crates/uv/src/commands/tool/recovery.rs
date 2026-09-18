@@ -9,6 +9,8 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
+#[cfg(windows)]
+use fs_err::File;
 use itertools::Itertools;
 use owo_colors::OwoColorize;
 #[cfg(windows)]
@@ -291,7 +293,7 @@ impl ToolEntrypointSnapshot {
                 for old in &self.owned {
                     if same_existing_entrypoint_location(&old.entrypoint.install_path, &target)?
                         && old.fingerprint.matches(&target)?
-                        && old.fingerprint.points_to(&target, &source)?
+                        && ExportFingerprint::points_to(&old.fingerprint, &target, &source)?
                     {
                         replace = false;
                         break;
@@ -428,7 +430,7 @@ impl ExportFingerprint {
             && fs_err::read_link(path)? == self.target)
     }
 
-    fn points_to(&self, target: &Path, source: &Path) -> anyhow::Result<bool> {
+    fn points_to(_fingerprint: &Self, target: &Path, source: &Path) -> anyhow::Result<bool> {
         match fs_err::canonicalize(target) {
             Ok(target) => Ok(target == fs_err::canonicalize(source)?),
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
@@ -439,7 +441,7 @@ impl ExportFingerprint {
 
 #[cfg(windows)]
 struct ExportFingerprint {
-    _file: std::fs::File,
+    _file: File,
     identity: uv_windows::FileIdentity,
     digest: [u8; 32],
 }
@@ -472,13 +474,13 @@ impl ExportFingerprint {
             && digest_file(&file)? == self.digest)
     }
 
-    fn points_to(&self, _target: &Path, source: &Path) -> anyhow::Result<bool> {
-        Ok(digest_file(&open_entry(source)?)? == self.digest)
+    fn points_to(fingerprint: &Self, _target: &Path, source: &Path) -> anyhow::Result<bool> {
+        Ok(digest_file(&open_entry(source)?)? == fingerprint.digest)
     }
 }
 
 #[cfg(windows)]
-fn digest_file(mut file: &std::fs::File) -> io::Result<[u8; 32]> {
+fn digest_file(mut file: &File) -> io::Result<[u8; 32]> {
     file.rewind()?;
     let mut hash = Sha256::new();
     let mut buffer = [0; 8192];
@@ -493,7 +495,7 @@ fn digest_file(mut file: &std::fs::File) -> io::Result<[u8; 32]> {
 }
 
 #[cfg(windows)]
-fn open_entry(path: &Path) -> io::Result<std::fs::File> {
+fn open_entry(path: &Path) -> io::Result<File> {
     uv_windows::open_file_entry(path)
 }
 
@@ -686,12 +688,12 @@ mod tests {
         let source = directory.path().join("source");
         let export = directory.path().join("export");
         fs_err::write(&source, "before")?;
-        std::os::unix::fs::symlink(&source, &export)?;
+        fs_err::os::unix::fs::symlink(&source, &export)?;
         let fingerprint = ExportFingerprint::capture(&export)?;
         fs_err::write(&source, "after")?;
         assert!(fingerprint.matches(&export)?);
         fs_err::remove_file(&export)?;
-        std::os::unix::fs::symlink(directory.path().join("foreign"), &export)?;
+        fs_err::os::unix::fs::symlink(directory.path().join("foreign"), &export)?;
         assert!(!fingerprint.matches(&export)?);
         Ok(())
     }

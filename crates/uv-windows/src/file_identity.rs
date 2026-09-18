@@ -1,14 +1,14 @@
 //! Identity primitives for opened Windows filesystem objects.
 
 use std::ffi::OsStr;
-use std::fs::{File, OpenOptions};
 use std::io;
 use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
-use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 
+use fs_err::os::windows::fs::OpenOptionsExt;
+use fs_err::{File, OpenOptions};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
 use windows::Win32::Storage::FileSystem::{

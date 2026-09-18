@@ -28,7 +28,7 @@ use uv_python::{
 };
 use uv_requirements::{RequirementsSource, RequirementsSpecification};
 use uv_settings::{PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
-use uv_tool::{InstalledTools, Tool};
+use uv_tool::{InstalledTools, Tool, ToolEnvironment};
 use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::WorkspaceCache;
@@ -514,7 +514,7 @@ pub(crate) async fn install(
             ToolEntrypointSnapshot::capture(
                 current_environment
                     .as_ref()
-                    .map(|environment| environment.environment()),
+                    .map(ToolEnvironment::environment),
                 package_name,
                 receipt,
                 &installed_tools,

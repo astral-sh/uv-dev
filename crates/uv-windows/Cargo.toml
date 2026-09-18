@@ -18,8 +18,9 @@ test = false
 
 [features]
 default = ["std"]
-std = ["dep:arrayvec"]
+std = ["dep:arrayvec", "dep:fs-err"]
 
 [target.'cfg(windows)'.dependencies]
 arrayvec = { workspace = true, optional = true }
+fs-err = { workspace = true, optional = true }
 windows = { workspace = true, features = ["Win32_System_SystemServices"] }
