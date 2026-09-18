@@ -112,6 +112,25 @@ impl RequiresDist {
         workspace_cache: &WorkspaceCache,
         credentials_cache: &CredentialsCache,
     ) -> Result<Self, MetadataError> {
+        // A dynamic version requires backend metadata, but dependency fields can remain static.
+        // Prefer those declarations when the backend provides no dependency metadata at all.
+        let metadata = if metadata.dynamic
+            && metadata.requires_dist.is_empty()
+            && metadata.provides_extra.is_empty()
+            && let Ok(pyproject_toml) = uv_pypi_types::PyProjectToml::from_toml(
+                &project_workspace.current_project().pyproject_toml().raw,
+                project_workspace.current_project().root().display(),
+            )
+            && let Ok(project_metadata) =
+                uv_pypi_types::RequiresDist::from_pyproject_toml(pyproject_toml)
+            && (!project_metadata.requires_dist.is_empty()
+                || !project_metadata.provides_extra.is_empty())
+        {
+            project_metadata
+        } else {
+            metadata
+        };
+
         // Collect any `tool.uv.index` entries.
         let empty = vec![];
         let project_indexes = project_workspace
