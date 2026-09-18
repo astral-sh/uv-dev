@@ -24,6 +24,13 @@ features. The CLI documentation also discourages symlink mode because cleaning t
 symlinked environments; uv normally shares storage through copy-on-write clones on macOS and Linux
 and hardlinks on Windows.
 
+A maintainer explicitly corrected two premises in the report: uv uses reflinks and hardlinks by
+default, so sharing package data between environments does not require symlink mode, and
+`uv cache prune` already provides cleanup short of a full cache purge. This clarification does not
+resolve the requested granularity: the documented prune operation removes dangling or outdated
+cache entries and cached environments, while package/version inventory, per-version sizing, and
+version-selective removal remain unavailable.
+
 ## Draft response
 
 Thanks. The package/version inventory and size reporting are already tracked in
