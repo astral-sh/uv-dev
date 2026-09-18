@@ -580,6 +580,15 @@ pub(crate) struct InstallationPlan {
     elapsed: Duration,
 }
 
+/// Which environment an early preparation must match.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum PreparationMode {
+    /// The shared build environment is the environment that will be updated in place.
+    CurrentEnvironment,
+    /// The shared build environment will be recreated after preparation.
+    ReplacementEnvironment,
+}
+
 impl InstallationPlan {
     /// Construct an installation for a new, empty environment from an exact resolution.
     pub(crate) fn for_new_environment(resolution: &Resolution) -> Result<Self, Error> {
@@ -605,11 +614,12 @@ impl InstallationPlan {
         })
     }
 
-    /// Prepare a complete plan without modifying its environment, if all remaining builds are
-    /// isolated. Shared builds may depend on the isolated phase being installed first, so they
-    /// must continue through the normal two-phase execution path.
-    pub(crate) async fn prepare_if_isolated(
+    /// Prepare a complete plan before the installer modifies its environment, when the real build
+    /// environment is already available. Shared builds that require an earlier isolated install,
+    /// or a replacement environment, continue through the normal two-phase execution path.
+    pub(crate) async fn prepare_before_mutation(
         &mut self,
+        mode: PreparationMode,
         resolution: &Resolution,
         build_options: &BuildOptions,
         hasher: &HashStrategy,
@@ -622,13 +632,27 @@ impl InstallationPlan {
         logger: &dyn InstallLogger,
         printer: Printer,
     ) -> Result<bool, Error> {
-        if self.plan.remote.iter().any(|dist| {
+        let has_shared_source = self.plan.remote.iter().any(|dist| {
             matches!(dist.as_ref(), Dist::Source(_))
                 && !build_dispatch
                     .build_isolation()
                     .is_isolated(Some(dist.name()))
-        }) {
-            return Ok(false);
+        });
+        if has_shared_source {
+            match mode {
+                PreparationMode::ReplacementEnvironment => return Ok(false),
+                PreparationMode::CurrentEnvironment => {
+                    // Use the execution partition itself: cached wheels and unrelated reinstalls
+                    // can require mutations even when every remote source has shared isolation.
+                    let (isolated, _) = self
+                        .plan
+                        .clone()
+                        .partition(|name| build_dispatch.build_isolation().is_isolated(Some(name)));
+                    if !isolated.is_empty() {
+                        return Ok(false);
+                    }
+                }
+            }
         }
         let wheels = prepare_wheels(
             std::mem::take(&mut self.plan.remote),
@@ -650,7 +674,7 @@ impl InstallationPlan {
         Ok(true)
     }
 
-    /// The wheels that will be installed, after `prepare_if_isolated` returns `true`.
+    /// The wheels that will be installed, after `prepare_before_mutation` returns `true`.
     pub(crate) fn prepared(&self) -> &[CachedDist] {
         debug_assert!(self.plan.remote.is_empty());
         &self.plan.cached
