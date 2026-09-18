@@ -554,11 +554,7 @@ pub fn uninstall_egg(
         // Remove directories left empty by recorded files and their corresponding bytecode.
         for path in visited.iter().rev() {
             let mut path = path.as_path();
-            loop {
-                let Some(approved) = authority.prunable_directory(path)? else {
-                    break;
-                };
-
+            while let Some(approved) = authority.prunable_directory(path)? {
                 let mut entries = match fs_err::read_dir(&approved) {
                     Ok(entries) => entries,
                     Err(err) if err.kind() == std::io::ErrorKind::NotFound => break,

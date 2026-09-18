@@ -1247,7 +1247,7 @@ mod tests {
         initialize(&selected);
         let payload = selected.scheme.purelib.join("owned.py");
         write(&payload, "owned payload");
-        fs_err::set_permissions(&payload, std::fs::Permissions::from_mode(0)).unwrap();
+        fs_err::set_permissions(&payload, std::fs::Permissions::from_mode(0o0)).unwrap();
         let egg_info = recorded_egg(&selected, "../owned.py\n");
 
         uninstall_egg(&egg_info, "owned 0.1.0", &selected).unwrap();
