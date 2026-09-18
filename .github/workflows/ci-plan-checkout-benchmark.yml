@@ -1,0 +1,41 @@
+name: CI planner checkout benchmark
+
+on:
+  push:
+    branches: [zb/ci-plan-checkout-benchmark-20260918]
+
+permissions:
+  contents: read
+
+jobs:
+  checkout:
+    name: checkout ${{ matrix.replica }} depth ${{ matrix.depth }}
+    runs-on: depot-ubuntu-24.04
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        replica: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        depth: [0, 2]
+    steps:
+      - name: Checkout pinned uv commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: astral-sh/uv
+          ref: d88bb84e7bd482660a766047add177d16792b5de
+          fetch-depth: ${{ matrix.depth }}
+          persist-credentials: false
+
+      - name: Record checkout state
+        env:
+          DEPTH: ${{ matrix.depth }}
+        run: |
+          test "$(git rev-parse HEAD)" = d88bb84e7bd482660a766047add177d16792b5de
+          if [[ "$DEPTH" == 2 ]]; then
+            test "$(git rev-parse --is-shallow-repository)" = true
+          else
+            test "$(git rev-parse --is-shallow-repository)" = false
+          fi
+          git rev-parse HEAD
+          git count-objects -v
+          git for-each-ref --format='%(refname)' | wc -l
