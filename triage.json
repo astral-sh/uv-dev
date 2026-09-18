@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 9711,
+        "title": "Tracking issue: package without source distribution gets an \"incomplete\" resolution",
+        "url": "https://github.com/astral-sh/uv/issues/9711",
+        "state": "open",
+        "reason": "Canonical open tracker for the same behavior: a version with no sdist is accepted after any wheel matches the project’s Python range, even if other supported Python versions have no installable artifact."
+      },
+      {
+        "kind": "issue",
+        "number": 9425,
+        "title": "`uv add onnxruntime` fails to fetch latest version of package compatible with my environment's Python",
+        "url": "https://github.com/astral-sh/uv/issues/9425",
+        "state": "open",
+        "reason": "Package-specific open report with the same project-mode versus environment-specific resolution difference and failure caused by onnxruntime admitting a Python version for which no wheel exists."
+      },
+      {
+        "kind": "issue",
+        "number": 11274,
+        "title": "uv selects an unavailable onnxruntime version (1.20.1) despite it not existing on PyPI for the given platform",
+        "url": "https://github.com/astral-sh/uv/issues/11274",
+        "state": "closed",
+        "reason": "Earlier near-identical onnxruntime project reproduction; maintainer comments confirm universal resolution does not privilege the active interpreter or require a wheel for every environment."
+      },
+      {
+        "kind": "pull_request",
+        "number": 9827,
+        "title": "Fork version selection based on `requires-python` requirements",
+        "url": "https://github.com/astral-sh/uv/pull/9827",
+        "state": "merged",
+        "reason": "Related historical fix that explains the visible Python forks, but it only forks when Requires-Python narrows the range; it does not cover metadata admitting CPython 3.10 while artifacts start at cp311."
+      }
+    ],
+    "search_scope": "Literal searches covered onnxruntime, 1.24.3, cp310, the exact installation error, and the implementation-tag hint. Conceptual searches covered universal/project resolution, wheel availability, missing sdists, Python-version forks, Requires-Python, required environments, lockfiles, and uv pip versus project commands. Fix-oriented searches covered closed issues and merged pull requests. astral-sh/uv#5182 and astral-sh/uv#10046 were ruled out as canonical because their fix concerns non-local PyTorch versions and platform support; astral-sh/uv#8492 and astral-sh/uv#9827 address elevated Requires-Python bounds rather than missing wheels within a declared range."
+  },
+  "type": "duplicate",
+  "type_reason": "This is a CPython 3.10 instance of the still-open behavior tracked by astral-sh/uv#9711 and the onnxruntime-specific astral-sh/uv#9425. onnxruntime 1.24.3 admits Python 3.10 through Requires-Python but has no cp310 wheel or sdist. It is not a regression of astral-sh/uv#9827, whose scope is narrower Requires-Python bounds.",
+  "summary": "astral-sh/uv#9711 is the canonical open tracker, while astral-sh/uv#9425 covers the same onnxruntime/Python-wheel case. Project commands perform universal resolution and do not automatically backtrack for every missing wheel tag.",
+  "draft_response": "Thanks for the detailed reproduction. This is another instance of the incomplete universal-resolution behavior tracked in astral-sh/uv#9711, and the same Python-specific onnxruntime case already reported in astral-sh/uv#9425. In project mode, uv resolves across the project’s supported Python range rather than privileging the active interpreter. onnxruntime 1.24.3 declares Python 3.10 as supported, but publishes neither a cp310 wheel nor a source distribution, so that metadata is not enough to make the selected version installable on CPython 3.10. As a workaround, add `[tool.uv] required-environments = [\"python_version == '3.10'\"]` so the lock must contain a compatible Python 3.10 wheel, or constrain onnxruntime to `<1.24.3` for Python 3.10. We’ll keep the general behavior centralized in astral-sh/uv#9711."
+}
