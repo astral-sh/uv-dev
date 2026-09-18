@@ -251,14 +251,16 @@ fn owned_entrypoints(
     for entrypoint in receipt.entrypoints() {
         let mut owner = None;
         for (tool_name, other_receipt) in receipts {
-            let mut claims_path = false;
+            let mut matches_export = false;
             for other in other_receipt.entrypoints() {
-                if same_install_path(&other.install_path, &entrypoint.install_path)? {
-                    claims_path = true;
+                if same_install_path(&other.install_path, &entrypoint.install_path)?
+                    && entrypoint_matches(other, &tools.tool_dir(tool_name))?
+                {
+                    matches_export = true;
                     break;
                 }
             }
-            if !claims_path || !entrypoint_matches(entrypoint, &tools.tool_dir(tool_name))? {
+            if !matches_export {
                 continue;
             }
             if let Some(previous) = owner.replace(tool_name) {
