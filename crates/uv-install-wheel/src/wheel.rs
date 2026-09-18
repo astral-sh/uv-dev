@@ -889,16 +889,7 @@ pub(crate) fn install_data(
                     // Couldn't find any docs for this, took it directly from
                     // https://github.com/pypa/pip/blob/b5457dfee47dd9e9f6ec45159d9d410ba44e5ea1/src/pip/_internal/operations/install/wheel.py#L565-L583
                     let name = file.file_name().to_string_lossy().to_string();
-                    let match_name = name
-                        .strip_suffix(".exe")
-                        .or_else(|| name.strip_suffix("-script.py"))
-                        .or_else(|| name.strip_suffix(".pya"))
-                        .unwrap_or(&name);
-                    if console_scripts
-                        .iter()
-                        .chain(gui_scripts)
-                        .any(|script| script.name == match_name)
-                    {
+                    if is_script_wrapper(&name, console_scripts, gui_scripts) {
                         continue;
                     }
 
@@ -1318,6 +1309,85 @@ pub(crate) fn parse_scripts(
     } = EntryPoints::read(entry_points_path, extras, python_minor)?;
 
     Ok((console_scripts, gui_scripts))
+}
+
+/// Whether a file in `.data/scripts` is replaced by a generated entry point.
+fn is_script_wrapper(name: &str, console_scripts: &[Script], gui_scripts: &[Script]) -> bool {
+    let match_name = name
+        .strip_suffix(".exe")
+        .or_else(|| name.strip_suffix("-script.py"))
+        .or_else(|| name.strip_suffix(".pya"))
+        .unwrap_or(name);
+    console_scripts
+        .iter()
+        .chain(gui_scripts)
+        .any(|script| script.name == match_name)
+}
+
+/// Project the wheel's `RECORD` and generated entry points into the target scripts directory.
+pub(crate) fn wheel_entrypoint_paths(
+    layout: &Layout,
+    wheel: &Path,
+    dist_info_prefix: &str,
+    dist_name: &PackageName,
+    site_packages: &Path,
+) -> Result<Vec<(String, PathBuf)>, Error> {
+    let (console_scripts, gui_scripts) =
+        parse_scripts(wheel, dist_info_prefix, None, layout.python_version.1)?;
+    let data_prefix = PathBuf::from(format!("{dist_info_prefix}.data"));
+    let headers = layout.scheme.include.join(dist_name.as_str());
+    let mut record_file = File::open(wheel.join(format!("{dist_info_prefix}.dist-info/RECORD")))?;
+    let mut paths = Vec::new();
+    for entry in read_record(&mut record_file)? {
+        let relative = Path::new(&entry.path);
+        let target = if let Ok(relative) = relative.strip_prefix(&data_prefix) {
+            let mut components = relative.components();
+            let destination = match components.next().and_then(|part| part.as_os_str().to_str()) {
+                Some("scripts") => {
+                    let name = components.as_path().to_string_lossy();
+                    if is_script_wrapper(&name, &console_scripts, &gui_scripts) {
+                        continue;
+                    }
+                    &layout.scheme.scripts
+                }
+                Some("data") => &layout.scheme.data,
+                Some("purelib") => &layout.scheme.purelib,
+                Some("platlib") => &layout.scheme.platlib,
+                Some("headers") => &headers,
+                _ => {
+                    return Err(Error::InvalidWheel(format!(
+                        "Unknown wheel data path: {}",
+                        entry.path
+                    )));
+                }
+            };
+            let Some(target) =
+                normalize_path_under(destination.join(components.as_path()), destination)
+            else {
+                return Err(Error::InvalidWheel(format!(
+                    "Wheel data path escapes its destination: {}",
+                    entry.path
+                )));
+            };
+            target
+        } else {
+            site_packages.join(relative)
+        };
+        let Some(target) = normalize_path_under(target, &layout.scheme.scripts) else {
+            continue;
+        };
+        validate_data_script_destination(&target, &layout.scheme.scripts)?;
+        if let Some(name) = target.file_name().and_then(|name| name.to_str()) {
+            paths.push((name.to_string(), target));
+        }
+    }
+    for script in console_scripts.iter().chain(&gui_scripts) {
+        let script = ValidatedScript::try_from_script(script, layout)?;
+        if let Some(name) = script.as_path().file_name().and_then(|name| name.to_str()) {
+            paths.push((name.to_string(), script.as_path().to_path_buf()));
+        }
+    }
+    Ok(paths)
 }
 
 /// Rename a file with a fallback to copy that switches over on the first failure.
