@@ -419,6 +419,119 @@ fn tool_uninstall_rejects_ambiguous_copied_executable() -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
+#[test]
+fn tool_uninstall_rejects_different_basename_aliases() -> Result<()> {
+    let context = uv_test::test_context!("3.13")
+        .with_filter((r"[\\/](?:first|same-owner|second)\.cmd", "/[ALIAS].cmd"))
+        .with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    links.create_dir_all()?;
+    let script = "@echo off\r\necho shared command alias fixture\r\n";
+    for (name, scripts) in [
+        ("aaa-unrelated", &["unrelated.cmd"][..]),
+        ("first-command", &["first.cmd", "same-owner.cmd"][..]),
+        ("second-command", &["second.cmd"][..]),
+    ] {
+        let normalized = name.replace('-', "_");
+        let files = scripts
+            .iter()
+            .map(|filename| {
+                (
+                    format!("{normalized}-0.1.0.data/scripts/{filename}"),
+                    script,
+                )
+            })
+            .collect::<Vec<_>>();
+        let files = files
+            .iter()
+            .map(|(path, contents)| (path.as_str(), *contents))
+            .collect::<Vec<_>>();
+        let (filename, wheel) = generate_wheel_with_files(
+            &name.parse()?,
+            &"0.1.0".parse()?,
+            &[],
+            &Default::default(),
+            None,
+            "py3-none-any",
+            &files,
+        );
+        fs_err::write(links.child(filename), wheel)?;
+        context
+            .tool_install()
+            .arg(format!("{name}==0.1.0"))
+            .arg("--no-index")
+            .arg("--find-links")
+            .arg(links.path())
+            .assert()
+            .success();
+    }
+
+    let first = bin_dir.child("first.cmd");
+    let same_owner = bin_dir.child("same-owner.cmd");
+    let second = bin_dir.child("second.cmd");
+    // Different directory entries can alias the same copied executable on Windows.
+    for alias in [&same_owner, &second] {
+        fs_err::remove_file(alias.path())?;
+        fs_err::hard_link(first.path(), alias.path())?;
+        assert_eq!(
+            uv_fs::is_same_file_allow_missing(first.path(), alias.path()),
+            Some(true)
+        );
+    }
+    let receipts = ["aaa-unrelated", "first-command", "second-command"]
+        .map(|name| tool_dir.child(name).child("uv-receipt.toml"));
+    let receipt_contents = receipts
+        .iter()
+        .map(|receipt| fs_err::read(receipt.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let sources = [
+        ("aaa-unrelated", "unrelated.cmd"),
+        ("first-command", "first.cmd"),
+        ("first-command", "same-owner.cmd"),
+        ("second-command", "second.cmd"),
+    ]
+    .map(|(name, filename)| venv_bin_path(tool_dir.child(name).path()).join(filename));
+    for source in &sources {
+        assert_eq!(fs_err::read(source)?, script.as_bytes());
+    }
+
+    for name in ["first-command", "second-command", "--all"] {
+        uv_snapshot!(context.filters(), context.tool_uninstall().arg(name), @"
+        exit_code: 2 (failure)
+        ----- stderr -----
+        error: Cannot determine whether executable `[TEMP_DIR]/bin/[ALIAS].cmd` belongs to `first-command` or `second-command`; no tools were removed
+        ");
+        for (receipt, contents) in receipts.iter().zip(&receipt_contents) {
+            assert_eq!(fs_err::read(receipt.path())?, *contents);
+        }
+        for source in &sources {
+            assert_eq!(fs_err::read(source)?, script.as_bytes());
+        }
+        for export in [&first, &same_owner, &second] {
+            assert_eq!(fs_err::read(export.path())?, script.as_bytes());
+            assert_eq!(
+                uv_fs::is_same_file_allow_missing(first.path(), export.path()),
+                Some(true)
+            );
+        }
+        assert_eq!(
+            fs_err::read(bin_dir.child("unrelated.cmd").path())?,
+            script.as_bytes()
+        );
+    }
+    for export in [&first, &second] {
+        uv_snapshot!(context.filters(), Command::new("cmd").arg("/D").arg("/C").arg(export.path()), @"
+        exit_code: 0 (success)
+        ----- stdout -----
+        shared command alias fixture
+        ");
+    }
+    Ok(())
+}
+
 #[test]
 fn tool_uninstall_multiple_names() {
     let context = uv_test::test_context!("3.12")
