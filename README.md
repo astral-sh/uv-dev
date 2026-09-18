@@ -10,21 +10,23 @@ The report shows that repeated `uv pip install` operations can produce different
 
 This is the same underlying install race already tracked in astral-sh/uv#6568. That open issue also involves two distributions providing different contents for one `__init__.py`, repeated Docker builds succeeding or failing according to which content remains, and discussion of defined unpack/install order. astral-sh/uv#13435 is a second open reproduction in which `z3` and `z3-solver` overwrite the same module and identical `uv pip` runs produce different environments.
 
+Maintainer zanieb has confirmed that astral-sh/uv#21819 is a duplicate of astral-sh/uv#6568, establishing astral-sh/uv#6568 as the canonical discussion.
+
 The current source supports the reported ordering concern: preparation uses `FuturesUnordered`, collects prepared wheels in completion order after an unstable size sort, and installation processes the resulting wheel vector with Rayon. Setting `UV_CONCURRENT_INSTALLS=1` limits the Rayon pool but does not restore the original distribution order. This establishes a correctness problem, but the open, directly matching astral-sh/uv#6568 makes `duplicate` the appropriate classification.
 
-## Draft response
+## Maintainer decision
 
-Thanks for the detailed reproduction. This is the same underlying install race tracked in astral-sh/uv#6568: when distributions write different contents to the same path in one operation, the resulting file can depend on processing and write order, so identical installs are not deterministic. astral-sh/uv#13435 contains another confirmed reproduction, while astral-sh/uv#13437 added conflict detection rather than deterministic arbitration. We’ll centralize this in astral-sh/uv#6568, so I’m closing this as a duplicate.
+Maintainer zanieb identified astral-sh/uv#21819 as a duplicate of astral-sh/uv#6568. No further public response is needed based on the new comment.
 
 ## Classification
 
-`duplicate` takes precedence because astral-sh/uv#6568 is open and tracks the same underlying behavior closely enough to centralize discussion: `uv pip`, multiple distributions writing different contents to the same `__init__.py`, repeated container builds producing different outcomes, and a request to control or define installation order. astral-sh/uv#13435 independently confirms the same race and explicitly includes a request for deterministic ordering.
+`duplicate` is confirmed by maintainer zanieb. astral-sh/uv#6568 is open and tracks the same underlying behavior closely enough to centralize discussion: `uv pip`, multiple distributions writing different contents to the same `__init__.py`, repeated container builds producing different outcomes, and a request to control or define installation order. astral-sh/uv#13435 independently confirms the same race and explicitly includes a request for deterministic ordering.
 
 Absent those existing trackers, the report would be a bug rather than an enhancement: identical inputs producing byte-different environments is incorrect behavior, and the current source confirms an order-losing preparation path followed by parallel installation. The report does not require a reproduction request before classification because it already includes a minimal command sequence, exact package versions, the differing file sizes, and measured repeated-run behavior.
 
 ## Related
 
-- astral-sh/uv#6568 — **Race condition when two libraries update the same __init__.py** (open issue). This is the primary duplicate. It reports repeated `uv pip` Docker installs leaving different `jwt/__init__.py` contents depending on which distribution overwrites the file last. The discussion explicitly considers defined unpack order, notes that the operation is not deterministic, and requests mitigation for this race.
+- astral-sh/uv#6568 — **Race condition when two libraries update the same __init__.py** (open issue). This is the maintainer-confirmed canonical duplicate. It reports repeated `uv pip` Docker installs leaving different `jwt/__init__.py` contents depending on which distribution overwrites the file last. The discussion explicitly considers defined unpack order, notes that the operation is not deterministic, and requests mitigation for this race.
 - astral-sh/uv#13435 — **Nondeterministic behavior of `uv pip`** (open issue). This is another direct symptom and mechanism match: `z3` and `z3-solver` provide overlapping module files, and parallel installation produces different contents and success/failure outcomes across identical runs. A later commenter specifically asks for deterministic install order.
 - astral-sh/uv#13437 — **Warn when two packages write to the same module** (merged pull request). This added detection for overlapping top-level modules after several reports of packages working only intermittently. It documents the same non-deterministic install race but provides a warning, not deterministic arbitration. The detection was subsequently gated as a preview feature and refined.
 - astral-sh/uv#15813 — **Better support for conflicting transitive dependencies** (closed issue). This reports random results when concurrently installing distributions that share module namespaces. Maintainer discussion explicitly states that choosing an arbitrary package across repeated `uv run` or `uv sync` operations is still broken and that deterministic order matters. Its reporter focused on preventing hybrid modules rather than choosing a stable same-file winner, so astral-sh/uv#6568 is the better canonical duplicate.
