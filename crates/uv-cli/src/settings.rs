@@ -682,11 +682,25 @@ fn resolve_lock_check(
     }
 }
 
+/// Resolve isolated locking from CLI arguments and the environment.
+fn resolve_isolated_lock(enabled: bool, disabled: bool, environment: EnvFlag) -> bool {
+    let (isolated_lock, _) = resolve_flag_pair(
+        enabled,
+        disabled,
+        "isolated-lock",
+        "no-isolated-lock",
+        Some(environment),
+        None,
+    );
+    isolated_lock.is_enabled()
+}
+
 /// The resolved settings to use for a `run` invocation.
 #[derive(Debug, Clone)]
 pub struct RunSettings {
     pub lock_check: LockCheck,
     pub frozen: Option<FrozenSource>,
+    pub isolated_lock: bool,
     pub extras: ExtrasSpecification,
     pub groups: DependencyGroups,
     pub editable: Option<EditableMode>,
@@ -762,6 +776,8 @@ impl RunSettings {
             no_locked,
             frozen,
             no_frozen,
+            isolated_lock,
+            no_isolated_lock,
             installer,
             build,
             refresh,
@@ -814,6 +830,11 @@ impl RunSettings {
         Ok(Self {
             lock_check: locked,
             frozen,
+            isolated_lock: resolve_isolated_lock(
+                isolated_lock,
+                no_isolated_lock,
+                environment.isolated_lock,
+            ),
             extras: ExtrasSpecification::from_args(
                 extra.unwrap_or_default(),
                 no_extra,
@@ -1807,6 +1828,7 @@ impl PythonPinSettings {
 pub struct SyncSettings {
     pub lock_check: LockCheck,
     pub frozen: Option<FrozenSource>,
+    pub isolated_lock: bool,
     pub dry_run: DryRun,
     pub script: Option<PathBuf>,
     pub active: ActiveEnvironment,
@@ -1866,6 +1888,8 @@ impl SyncSettings {
             no_locked,
             frozen,
             no_frozen,
+            isolated_lock,
+            no_isolated_lock,
             active,
             no_active,
             dry_run,
@@ -1964,6 +1988,11 @@ impl SyncSettings {
             output_format,
             lock_check: locked,
             frozen,
+            isolated_lock: resolve_isolated_lock(
+                isolated_lock,
+                no_isolated_lock,
+                environment.isolated_lock,
+            ),
             dry_run,
             script,
             active: flag(active, no_active, "active")?.into(),
@@ -2147,6 +2176,7 @@ pub struct MetadataSettings {
     script: Option<PathBuf>,
     pub lock_check: LockCheck,
     pub frozen: Option<FrozenSource>,
+    pub isolated_lock: bool,
     pub sync: Option<Modifications>,
     pub active: ActiveEnvironment,
     pub python: Option<String>,
@@ -2169,6 +2199,8 @@ impl MetadataSettings {
             no_locked,
             frozen,
             no_frozen,
+            isolated_lock,
+            no_isolated_lock,
             resolver,
             build,
             refresh,
@@ -2195,6 +2227,11 @@ impl MetadataSettings {
             script,
             lock_check: locked,
             frozen,
+            isolated_lock: resolve_isolated_lock(
+                isolated_lock,
+                no_isolated_lock,
+                environment.isolated_lock,
+            ),
             sync: sync.then_some(if exact {
                 Modifications::Exact
             } else {
@@ -3042,6 +3079,7 @@ pub struct CheckSettings {
     pub groups: DependencyGroups,
     pub lock_check: LockCheck,
     pub frozen: Option<FrozenSource>,
+    pub isolated_lock: bool,
     pub no_sync: bool,
     pub no_install_project: bool,
     pub isolated: bool,
@@ -3087,6 +3125,8 @@ impl CheckSettings {
             no_locked,
             frozen,
             no_frozen,
+            isolated_lock,
+            no_isolated_lock,
             no_sync,
             no_install_project,
             isolated,
@@ -3161,6 +3201,11 @@ impl CheckSettings {
             ),
             lock_check: locked,
             frozen,
+            isolated_lock: resolve_isolated_lock(
+                isolated_lock,
+                no_isolated_lock,
+                environment.isolated_lock,
+            ),
             no_sync: no_sync.is_enabled(),
             no_install_project: no_install_project.is_enabled(),
             isolated,
