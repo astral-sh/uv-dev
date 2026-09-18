@@ -2,6 +2,8 @@
 use std::collections::BTreeSet;
 #[cfg(feature = "test-git")]
 use std::ffi::OsString;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::process::Command;
 
 use anyhow::Result;
@@ -15,12 +17,13 @@ use assert_fs::{
 use indoc::indoc;
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
+use uv_extract::dirhash::dirhash_path;
 #[cfg(windows)]
 use uv_fs::Simplified;
 use uv_fs::copy_dir_all;
 use uv_static::EnvVars;
 
-use uv_test::uv_snapshot;
+use uv_test::{site_packages_path, uv_snapshot, venv_bin_path};
 
 #[cfg(feature = "test-git")]
 fn tool_install_git_path(bin_dir: &ChildPath) -> OsString {
@@ -3012,6 +3015,117 @@ fn tool_install_no_entrypoints() {
         .assert(predicate::path::missing());
 }
 
+/// A failed forced installation must not remove another tool's existing executable.
+#[test]
+fn tool_install_failure_preserves_existing_additional_entrypoints() -> Result<()> {
+    let context = uv_test::test_context!("3.13")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let links = context.workspace_root.join("test/links");
+
+    context
+        .tool_install()
+        .arg("simple-launcher==0.1.0")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(&links)
+        .env(EnvVars::UV_TOOL_BIN_DIR, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let executable = bin_dir.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(context.filters(), Command::new(executable.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hi from the simple launcher!
+    ");
+
+    let environment = tool_dir.child("simple-launcher");
+    let receipt = environment.child("uv-receipt.toml");
+    let receipt_contents = fs_err::read(receipt.path())?;
+    let site_packages = site_packages_path(environment.path(), "python3.13");
+    let installed_contents = dirhash_path(&site_packages)?;
+    let executable_contents = fs_err::read(executable.path())?;
+    let executable_metadata = fs_err::symlink_metadata(executable.path())?;
+    let source_executable = venv_bin_path(environment.path())
+        .join(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
+    assert_eq!(fs_err::read(&source_executable)?, executable_contents);
+    #[cfg(unix)]
+    let executable_identity = {
+        assert!(executable_metadata.is_symlink());
+        assert_eq!(
+            fs_err::canonicalize(executable.path())?,
+            fs_err::canonicalize(&source_executable)?
+        );
+        (
+            executable_metadata.dev(),
+            executable_metadata.ino(),
+            fs_err::read_link(executable.path())?,
+        )
+    };
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("basic-package==0.1.0")
+        .arg("--with-executables-from")
+        .arg("simple-launcher")
+        .arg("--force")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(&links)
+        .env(EnvVars::UV_TOOL_BIN_DIR, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 2 (failure)
+    ----- stdout -----
+    No executables are provided by package `basic-package`; removing tool
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 2 packages in [TIME]
+     + basic-package==0.1.0
+     + simple-launcher==0.1.0
+    error: Failed to install entrypoints for `basic-package`
+    ");
+
+    tool_dir
+        .child("basic-package")
+        .assert(predicate::path::missing());
+    assert_eq!(fs_err::read(receipt.path())?, receipt_contents);
+    assert_eq!(dirhash_path(&site_packages)?, installed_contents);
+    assert_eq!(fs_err::read(executable.path())?, executable_contents);
+    let current_metadata = fs_err::symlink_metadata(executable.path())?;
+    assert_eq!(
+        current_metadata.file_type(),
+        executable_metadata.file_type()
+    );
+    #[cfg(unix)]
+    {
+        assert_eq!(
+            (
+                current_metadata.dev(),
+                current_metadata.ino(),
+                fs_err::read_link(executable.path())?,
+            ),
+            executable_identity
+        );
+        assert_eq!(
+            fs_err::canonicalize(executable.path())?,
+            fs_err::canonicalize(&source_executable)?
+        );
+    }
+
+    uv_snapshot!(context.filters(), Command::new(executable.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hi from the simple launcher!
+    ");
+
+    Ok(())
+}
+
 /// Test that a failed tool installation removes entrypoints installed from additional packages.
 #[test]
 fn tool_install_failure_removes_additional_entrypoints() -> Result<()> {
@@ -3047,7 +3161,6 @@ fn tool_install_failure_removes_additional_entrypoints() -> Result<()> {
      + packaging==24.0
      + pathspec==0.12.1
      + platformdirs==4.2.0
-    Installed 2 executables from `black`: black, blackd
     error: Failed to install entrypoints for `iniconfig`
     ");
 
