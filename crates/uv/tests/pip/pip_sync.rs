@@ -1,10 +1,16 @@
+use std::collections::BTreeMap;
 use std::env::consts::EXE_SUFFIX;
 
 use anyhow::Result;
 use assert_cmd::prelude::*;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
+use async_zip::base::read::mem::ZipFileReader;
+use async_zip::base::write::ZipFileWriter;
+use async_zip::{Compression, ZipEntryBuilder};
 use fs_err as fs;
+use futures::executor::block_on;
+use futures::io::AsyncReadExt;
 use indoc::{formatdoc, indoc};
 use predicates::Predicate;
 use url::Url;
@@ -16,12 +22,22 @@ use uv_fs::{Simplified, copy_dir_all};
 use uv_pypi_types::{HashAlgorithm, HashDigest};
 use uv_static::EnvVars;
 use uv_test::find_links::FindLinksServer;
-use uv_test::packse::PackseServer;
-use uv_test::{download_to_disk, site_packages_path, uv_snapshot};
+use uv_test::packse::{PackseServer, generate_wheel};
+use uv_test::{download_local_to_disk, site_packages_path, uv_snapshot};
+
+fn artifact_hash(
+    server: &PackseServer,
+    filename: &str,
+    algorithm: HashAlgorithm,
+) -> Result<String> {
+    let mut hasher = Hasher::from(algorithm);
+    hasher.update(&server.file_bytes(filename)?);
+    Ok(HashDigest::from(hasher).digest().to_string())
+}
 
 #[test]
 fn missing_requirements_txt() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
 
@@ -39,7 +55,9 @@ fn missing_requirements_txt() {
 /// `--cert` is forwarded to the HTTP client rather than silently ignored.
 #[test]
 fn cert() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_missing_file_error();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_missing_file_error();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("iniconfig==2.0.0")?;
 
@@ -59,6 +77,7 @@ fn cert() -> Result<()> {
 #[test]
 fn missing_venv() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_virtualenv_bin()
         .with_filtered_python_names();
 
@@ -89,7 +108,7 @@ fn missing_venv() -> Result<()> {
 
 #[test]
 fn missing_system() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_local_index();
     let requirements = context.temp_dir.child("requirements.txt");
     requirements.write_str("anyio")?;
 
@@ -106,10 +125,13 @@ fn missing_system() -> Result<()> {
 /// this using `clone` semantics.)
 #[test]
 fn install() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("MarkupSafe==2.1.3")?;
+    requirements_txt.write_str("simple-package==2.1.3")?;
 
     uv_snapshot!(context.pip_sync()
         .arg("requirements.txt")
@@ -119,7 +141,7 @@ fn install() -> Result<()> {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + markupsafe==2.1.3
+     + simple-package==2.1.3
     "
     );
 
@@ -127,22 +149,20 @@ fn install() -> Result<()> {
     assert!(
         !context
             .site_packages()
-            .join("markupsafe")
+            .join("simple_package")
             .join("__pycache__")
             .join("__init__.cpython-312.pyc")
             .exists()
     );
 
     context
-        .assert_command("from markupsafe import Markup")
+        .assert_command("from simple_package import __version__")
         .success();
 
     // Removing the cache shouldn't invalidate the virtual environment.
     fs::remove_dir_all(context.cache_dir.path())?;
 
-    context
-        .assert_command("from markupsafe import Markup")
-        .success();
+    context.assert_command("import simple_package").success();
 
     Ok(())
 }
@@ -150,10 +170,13 @@ fn install() -> Result<()> {
 /// Install a package into a virtual environment using copy semantics.
 #[test]
 fn install_copy() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("MarkupSafe==2.1.3")?;
+    requirements_txt.write_str("simple-package==2.1.3")?;
 
     uv_snapshot!(context.pip_sync()
         .arg("requirements.txt")
@@ -165,20 +188,16 @@ fn install_copy() -> Result<()> {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + markupsafe==2.1.3
+     + simple-package==2.1.3
     "
     );
 
-    context
-        .assert_command("from markupsafe import Markup")
-        .success();
+    context.assert_command("import simple_package").success();
 
     // Removing the cache shouldn't invalidate the virtual environment.
     fs::remove_dir_all(context.cache_dir.path())?;
 
-    context
-        .assert_command("from markupsafe import Markup")
-        .success();
+    context.assert_command("import simple_package").success();
 
     Ok(())
 }
@@ -186,10 +205,13 @@ fn install_copy() -> Result<()> {
 /// Install a package into a virtual environment using hardlink semantics.
 #[test]
 fn install_hardlink() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("MarkupSafe==2.1.3")?;
+    requirements_txt.write_str("simple-package==2.1.3")?;
 
     uv_snapshot!(context.pip_sync()
         .arg("requirements.txt")
@@ -201,20 +223,16 @@ fn install_hardlink() -> Result<()> {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + markupsafe==2.1.3
+     + simple-package==2.1.3
     "
     );
 
-    context
-        .assert_command("from markupsafe import Markup")
-        .success();
+    context.assert_command("import simple_package").success();
 
     // Removing the cache shouldn't invalidate the virtual environment.
     fs::remove_dir_all(context.cache_dir.path())?;
 
-    context
-        .assert_command("from markupsafe import Markup")
-        .success();
+    context.assert_command("import simple_package").success();
 
     Ok(())
 }
@@ -230,12 +248,17 @@ fn install_hardlink() -> Result<()> {
 fn install_hardlink_after_emlink() -> anyhow::Result<()> {
     use walkdir::WalkDir;
 
-    let Some(context) = uv_test::test_context!("3.12").with_cache_on_lowlinks_fs()? else {
+    let server = PackseServer::new("packages/pip-commands.toml");
+    let Some(context) = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_cache_on_lowlinks_fs()?
+    else {
         return Ok(());
     };
+    let context = context.with_default_index(&server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("iniconfig==2.0.0")?;
+    requirements_txt.write_str("simple-package==2.1.3")?;
 
     // First install to populate the cache.
     context
@@ -315,10 +338,13 @@ fn install_hardlink_after_emlink() -> anyhow::Result<()> {
 #[test]
 #[cfg(unix)] // Windows does not allow symlinks by default
 fn install_symlink() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("MarkupSafe==2.1.3")?;
+    requirements_txt.write_str("simple-package==2.1.3")?;
 
     uv_snapshot!(context.pip_sync()
         .arg("requirements.txt")
@@ -330,19 +356,17 @@ fn install_symlink() -> Result<()> {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + markupsafe==2.1.3
+     + simple-package==2.1.3
     "
     );
 
-    context
-        .assert_command("from markupsafe import Markup")
-        .success();
+    context.assert_command("import simple_package").success();
 
     // Removing the cache _should_ invalidate the virtual environment.
     fs::remove_dir_all(context.cache_dir.path())?;
 
     context
-        .assert_command("from markupsafe import Markup")
+        .assert_command("from simple_package import __version__")
         .failure();
 
     Ok(())
@@ -351,10 +375,13 @@ fn install_symlink() -> Result<()> {
 /// Reject attempts to use symlink semantics with `--no-cache`.
 #[test]
 fn install_symlink_no_cache() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("MarkupSafe==2.1.3")?;
+    requirements_txt.write_str("simple-package==2.1.3")?;
 
     uv_snapshot!(context.pip_sync()
         .arg("requirements.txt")
@@ -376,10 +403,13 @@ fn install_symlink_no_cache() -> Result<()> {
 /// Install multiple packages into a virtual environment.
 #[test]
 fn install_many() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
+    requirements_txt.write_str("simple-package==2.1.3\nother-package==2.0.1")?;
 
     uv_snapshot!(context.pip_sync()
         .arg("requirements.txt")
@@ -389,13 +419,13 @@ fn install_many() -> Result<()> {
     Resolved 2 packages in [TIME]
     Prepared 2 packages in [TIME]
     Installed 2 packages in [TIME]
-     + markupsafe==2.1.3
-     + tomli==2.0.1
+     + other-package==2.0.1
+     + simple-package==2.1.3
     "
     );
 
     context
-        .assert_command("from markupsafe import Markup; import tomli")
+        .assert_command("import other_package; import simple_package")
         .success();
 
     Ok(())
@@ -404,10 +434,13 @@ fn install_many() -> Result<()> {
 /// Attempt to install an already-installed package into a virtual environment.
 #[test]
 fn noop() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("MarkupSafe==2.1.3")?;
+    requirements_txt.write_str("simple-package==2.1.3")?;
 
     context
         .pip_sync()
@@ -426,9 +459,7 @@ fn noop() -> Result<()> {
     "
     );
 
-    context
-        .assert_command("from markupsafe import Markup")
-        .success();
+    context.assert_command("import simple_package").success();
 
     Ok(())
 }
@@ -436,7 +467,10 @@ fn noop() -> Result<()> {
 /// Attempt to sync an empty set of requirements.
 #[test]
 fn pip_sync_empty() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.touch()?;
@@ -462,7 +496,7 @@ fn pip_sync_empty() -> Result<()> {
     );
 
     // Install a package.
-    requirements_txt.write_str("iniconfig==2.0.0")?;
+    requirements_txt.write_str("simple-package==2.1.3")?;
     context
         .pip_sync()
         .arg("requirements.txt")
@@ -479,7 +513,7 @@ fn pip_sync_empty() -> Result<()> {
     warning: Requirements file `requirements.txt` does not contain any dependencies
     Resolved in [TIME]
     Uninstalled 1 package in [TIME]
-     - iniconfig==2.0.0
+     - simple-package==2.1.3
     "
     );
 
@@ -490,10 +524,12 @@ fn pip_sync_empty() -> Result<()> {
 /// virtual environment.
 #[test]
 fn link() -> Result<()> {
-    let context1 = uv_test::test_context!("3.12");
+    let context1 = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_packse_index("packages/pip-commands.toml");
 
     let requirements_txt = context1.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("iniconfig==2.0.0")?;
+    requirements_txt.write_str("simple-package==2.1.3")?;
 
     context1
         .pip_sync()
@@ -503,7 +539,7 @@ fn link() -> Result<()> {
         .success();
 
     // Create a separate virtual environment, but reuse the same cache.
-    let context2 = uv_test::test_context!("3.12");
+    let context2 = uv_test::test_context!("3.12").with_local_index();
     let mut cmd = context1.pip_sync();
     cmd.env(EnvVars::VIRTUAL_ENV, context2.venv.as_os_str())
         .current_dir(&context2.temp_dir);
@@ -515,14 +551,14 @@ fn link() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     Installed 1 package in [TIME]
-     + iniconfig==2.0.0
+     + simple-package==2.1.3
     "
     );
 
     context2
         .python_command()
         .arg("-c")
-        .arg("import iniconfig")
+        .arg("import simple_package")
         .current_dir(&context2.temp_dir)
         .assert()
         .success();
@@ -534,10 +570,13 @@ fn link() -> Result<()> {
 /// different requirements file.
 #[test]
 fn add_remove() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("iniconfig==2.0.0")?;
+    requirements_txt.write_str("simple-package==2.1.3")?;
 
     context
         .pip_sync()
@@ -547,7 +586,7 @@ fn add_remove() -> Result<()> {
         .success();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("tomli==2.0.1")?;
+    requirements_txt.write_str("other-package==2.0.1")?;
 
     uv_snapshot!(context.pip_sync()
         .arg("requirements.txt")
@@ -558,13 +597,13 @@ fn add_remove() -> Result<()> {
     Prepared 1 package in [TIME]
     Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
-     - iniconfig==2.0.0
-     + tomli==2.0.1
+     + other-package==2.0.1
+     - simple-package==2.1.3
     "
     );
 
-    context.assert_command("import tomli").success();
-    context.assert_command("import markupsafe").failure();
+    context.assert_command("import other_package").success();
+    context.assert_command("import simple_package").failure();
 
     Ok(())
 }
@@ -573,10 +612,13 @@ fn add_remove() -> Result<()> {
 /// virtual environment.
 #[test]
 fn install_sequential() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("iniconfig==2.0.0")?;
+    requirements_txt.write_str("simple-package==2.1.3")?;
 
     context
         .pip_sync()
@@ -586,7 +628,7 @@ fn install_sequential() -> Result<()> {
         .success();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("iniconfig==2.0.0\ntomli==2.0.1")?;
+    requirements_txt.write_str("simple-package==2.1.3\nother-package==2.0.1")?;
 
     uv_snapshot!(context.pip_sync()
         .arg("requirements.txt")
@@ -596,12 +638,12 @@ fn install_sequential() -> Result<()> {
     Resolved 2 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + tomli==2.0.1
+     + other-package==2.0.1
     "
     );
 
     context
-        .assert_command("import iniconfig; import tomli")
+        .assert_command("import other_package; import simple_package")
         .success();
 
     Ok(())
@@ -611,10 +653,13 @@ fn install_sequential() -> Result<()> {
 /// virtual environment.
 #[test]
 fn upgrade() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let _server = uv_test::packse::PackseServer::new("packages/pip-commands.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_server.index_url());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("tomli==2.0.0")?;
+    requirements_txt.write_str("simple-package==2.0.0")?;
 
     context
         .pip_sync()
@@ -624,7 +669,7 @@ fn upgrade() -> Result<()> {
         .success();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("tomli==2.0.1")?;
+    requirements_txt.write_str("simple-package==2.1.3")?;
 
     uv_snapshot!(context.pip_sync()
         .arg("requirements.txt")
@@ -635,12 +680,12 @@ fn upgrade() -> Result<()> {
     Prepared 1 package in [TIME]
     Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
-     - tomli==2.0.0
-     + tomli==2.0.1
+     - simple-package==2.0.0
+     + simple-package==2.1.3
     "
     );
 
-    context.assert_command("import tomli").success();
+    context.assert_command("import simple_package").success();
 
     Ok(())
 }
@@ -648,12 +693,16 @@ fn upgrade() -> Result<()> {
 /// Install a package into a virtual environment from a URL.
 #[test]
 fn install_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("werkzeug @ https://files.pythonhosted.org/packages/ff/1d/960bb4017c68674a1cb099534840f18d3def3ce44aed12b5ed8b78e0153e/Werkzeug-2.0.0-py3-none-any.whl")?;
+    requirements_txt.write_str(&format!(
+        "werkzeug @ {artifact_url_0}",
+        artifact_url_0 = registry_artifacts.file_url("werkzeug-2.0.0-py3-none-any.whl")
+    ))?;
 
-    uv_snapshot!(context.pip_sync()
+    uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
         .arg("--strict"), @"
     exit_code: 0 (success)
@@ -661,7 +710,7 @@ fn install_url() -> Result<()> {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + werkzeug==2.0.0 (from https://files.pythonhosted.org/packages/ff/1d/960bb4017c68674a1cb099534840f18d3def3ce44aed12b5ed8b78e0153e/Werkzeug-2.0.0-py3-none-any.whl)
+     + werkzeug==2.0.0 (from http://[LOCALHOST]/files/werkzeug-2.0.0-py3-none-any.whl)
     "
     );
 
@@ -674,7 +723,7 @@ fn install_url() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn install_git_commit() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@b270df1a2fb5d012294e9aaf05e7e0bab1e6a389")?;
@@ -702,7 +751,7 @@ fn install_git_commit() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn install_git_tag() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(
@@ -732,7 +781,7 @@ fn install_git_tag() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn install_git_subdirectories() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("example-pkg-a @ git+https://github.com/pypa/sample-namespace-packages.git@df7530eeb8fa0cb7dbb8ecb28363e8e36bfa2f45#subdirectory=pkg_resources/pkg_a\nexample-pkg-b @ git+https://github.com/pypa/sample-namespace-packages.git@df7530eeb8fa0cb7dbb8ecb28363e8e36bfa2f45#subdirectory=pkg_resources/pkg_b")?;
@@ -760,7 +809,9 @@ fn install_git_subdirectories() -> Result<()> {
 /// Install a source distribution into a virtual environment.
 #[test]
 fn install_sdist() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-29T00:00:00Z");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_exclude_newer("2025-01-29T00:00:00Z");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("source-distribution==0.0.1")?;
@@ -787,12 +838,16 @@ fn install_sdist() -> Result<()> {
 /// Install a source distribution into a virtual environment.
 #[test]
 fn install_sdist_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("source-distribution @ https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz")?;
+    requirements_txt.write_str(&format!(
+        "source-distribution @ {artifact_url_0}",
+        artifact_url_0 = registry_artifacts.file_url("source_distribution-0.0.1.tar.gz")
+    ))?;
 
-    uv_snapshot!(context.pip_sync()
+    uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
         .arg("--strict"), @"
     exit_code: 0 (success)
@@ -800,7 +855,7 @@ fn install_sdist_url() -> Result<()> {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + source-distribution==0.0.1 (from https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz)
+     + source-distribution==0.0.1 (from http://[LOCALHOST]/files/source_distribution-0.0.1.tar.gz)
     "
     );
 
@@ -815,7 +870,7 @@ fn install_sdist_url() -> Result<()> {
 /// archive format (e.g., `.tar.bz2`). This should hard-error.
 #[test]
 fn reject_sdist_archive_type_bz2() -> Result<()> {
-    let context = uv_test::test_context!("3.9");
+    let context = uv_test::test_context!("3.9").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -842,10 +897,14 @@ fn reject_sdist_archive_type_bz2() -> Result<()> {
 /// should be a no-op.
 #[test]
 fn install_url_then_install_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("werkzeug @ https://files.pythonhosted.org/packages/ff/1d/960bb4017c68674a1cb099534840f18d3def3ce44aed12b5ed8b78e0153e/Werkzeug-2.0.0-py3-none-any.whl")?;
+    requirements_txt.write_str(&format!(
+        "werkzeug @ {artifact_url_0}",
+        artifact_url_0 = registry_artifacts.file_url("werkzeug-2.0.0-py3-none-any.whl")
+    ))?;
 
     context
         .pip_sync()
@@ -854,7 +913,7 @@ fn install_url_then_install_url() -> Result<()> {
         .assert()
         .success();
 
-    uv_snapshot!(context.pip_sync()
+    uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
         .arg("--strict"), @"
     exit_code: 0 (success)
@@ -873,10 +932,14 @@ fn install_url_then_install_url() -> Result<()> {
 /// URL-based version, but doesn't right now.
 #[test]
 fn install_url_then_install_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("werkzeug @ https://files.pythonhosted.org/packages/ff/1d/960bb4017c68674a1cb099534840f18d3def3ce44aed12b5ed8b78e0153e/Werkzeug-2.0.0-py3-none-any.whl")?;
+    requirements_txt.write_str(&format!(
+        "werkzeug @ {artifact_url_0}",
+        artifact_url_0 = registry_artifacts.file_url("werkzeug-2.0.0-py3-none-any.whl")
+    ))?;
 
     context
         .pip_sync()
@@ -888,7 +951,7 @@ fn install_url_then_install_version() -> Result<()> {
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("werkzeug==2.0.0")?;
 
-    uv_snapshot!(context.pip_sync()
+    uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
         .arg("--strict"), @"
     exit_code: 0 (success)
@@ -907,7 +970,8 @@ fn install_url_then_install_version() -> Result<()> {
 /// should remove the registry-based version.
 #[test]
 fn install_version_then_install_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("werkzeug==2.0.0")?;
@@ -920,9 +984,12 @@ fn install_version_then_install_url() -> Result<()> {
         .success();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("werkzeug @ https://files.pythonhosted.org/packages/ff/1d/960bb4017c68674a1cb099534840f18d3def3ce44aed12b5ed8b78e0153e/Werkzeug-2.0.0-py3-none-any.whl")?;
+    requirements_txt.write_str(&format!(
+        "werkzeug @ {artifact_url_0}",
+        artifact_url_0 = registry_artifacts.file_url("werkzeug-2.0.0-py3-none-any.whl")
+    ))?;
 
-    uv_snapshot!(context.pip_sync()
+    uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
         .arg("--strict"), @"
     exit_code: 0 (success)
@@ -932,7 +999,7 @@ fn install_version_then_install_url() -> Result<()> {
     Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
      - werkzeug==2.0.0
-     + werkzeug==2.0.0 (from https://files.pythonhosted.org/packages/ff/1d/960bb4017c68674a1cb099534840f18d3def3ce44aed12b5ed8b78e0153e/Werkzeug-2.0.0-py3-none-any.whl)
+     + werkzeug==2.0.0 (from http://[LOCALHOST]/files/werkzeug-2.0.0-py3-none-any.whl)
     "
     );
 
@@ -946,7 +1013,7 @@ fn install_version_then_install_url() -> Result<()> {
 #[cfg(feature = "test-python-eol")]
 #[test]
 fn install_numpy_py38() -> Result<()> {
-    let context = uv_test::test_context!("3.8");
+    let context = uv_test::test_context!("3.8").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("numpy")?;
@@ -971,7 +1038,7 @@ fn install_numpy_py38() -> Result<()> {
 /// Attempt to install a package without using a remote index.
 #[test]
 fn install_no_index() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("iniconfig==2.0.0")?;
@@ -998,7 +1065,7 @@ fn install_no_index() -> Result<()> {
 /// after a previous successful installation.
 #[test]
 fn install_no_index_cached() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("iniconfig==2.0.0")?;
@@ -1039,7 +1106,7 @@ fn install_no_index_cached() -> Result<()> {
 
 #[test]
 fn warn_on_yanked() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // This version is yanked.
     let requirements_in = context.temp_dir.child("requirements.txt");
@@ -1063,7 +1130,7 @@ fn warn_on_yanked() -> Result<()> {
 
 #[test]
 fn warn_on_yanked_dry_run() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // This version is yanked.
     let requirements_in = context.temp_dir.child("requirements.txt");
@@ -1089,12 +1156,13 @@ fn warn_on_yanked_dry_run() -> Result<()> {
 /// Resolve a local wheel.
 #[test]
 fn install_local_wheel() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Download a wheel.
     let archive = context.temp_dir.child("tomli-2.0.1-py3-none-any.whl");
-    download_to_disk(
-        "https://files.pythonhosted.org/packages/97/75/10a9ebee3fd790d20926a90a2547f0bf78f371b2f13aa822c759680ca7b9/tomli-2.0.1-py3-none-any.whl",
+    download_local_to_disk(
+        &registry_artifacts.file_url("tomli-2.0.1-py3-none-any.whl"),
         &archive,
     );
 
@@ -1211,7 +1279,7 @@ fn install_local_wheel() -> Result<()> {
 /// Reject decoded path separators in an unnamed wheel URL before using the filename in cache paths.
 #[test]
 fn install_unnamed_wheel_url_rejects_path_traversal() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
@@ -1232,7 +1300,7 @@ fn install_unnamed_wheel_url_rejects_path_traversal() -> Result<()> {
 /// Reject decoded stream separators in an unnamed wheel URL before using the filename in cache paths.
 #[test]
 fn install_unnamed_wheel_url_rejects_stream_separator() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
@@ -1253,12 +1321,13 @@ fn install_unnamed_wheel_url_rejects_stream_separator() -> Result<()> {
 /// Install a wheel whose actual version doesn't match the version encoded in the filename.
 #[test]
 fn mismatched_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Download a wheel.
     let archive = context.temp_dir.child("tomli-3.7.2-py3-none-any.whl");
-    download_to_disk(
-        "https://files.pythonhosted.org/packages/97/75/10a9ebee3fd790d20926a90a2547f0bf78f371b2f13aa822c759680ca7b9/tomli-2.0.1-py3-none-any.whl",
+    download_local_to_disk(
+        &registry_artifacts.file_url("tomli-2.0.1-py3-none-any.whl"),
         &archive,
     );
 
@@ -1298,12 +1367,13 @@ fn mismatched_version() -> Result<()> {
 /// Install a wheel whose actual name doesn't match the name encoded in the filename.
 #[test]
 fn mismatched_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Download a wheel.
     let archive = context.temp_dir.child("foo-2.0.1-py3-none-any.whl");
-    download_to_disk(
-        "https://files.pythonhosted.org/packages/97/75/10a9ebee3fd790d20926a90a2547f0bf78f371b2f13aa822c759680ca7b9/tomli-2.0.1-py3-none-any.whl",
+    download_local_to_disk(
+        &registry_artifacts.file_url("tomli-2.0.1-py3-none-any.whl"),
         &archive,
     );
 
@@ -1332,12 +1402,13 @@ fn mismatched_name() -> Result<()> {
 /// Install a local source distribution.
 #[test]
 fn install_local_source_distribution() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Download a source distribution.
     let archive = context.temp_dir.child("wheel-0.42.0.tar.gz");
-    download_to_disk(
-        "https://files.pythonhosted.org/packages/b0/b4/bc2baae3970c282fae6c2cb8e0f179923dceb7eaffb0e76170628f9af97b/wheel-0.42.0.tar.gz",
+    download_local_to_disk(
+        &registry_artifacts.file_url("wheel-0.42.0.tar.gz"),
         &archive,
     );
 
@@ -1366,24 +1437,50 @@ fn install_local_source_distribution() -> Result<()> {
 
 /// This package includes a `[build-system]`, but no `build-backend`.
 ///
-/// It lists some explicit build requirements that are necessary to build the distribution:
-/// ```toml
-/// [build-system]
-/// requires = ["Cython<3", "setuptools", "wheel"]
-/// ```
-///
 /// Like `pip` and `build`, we should use PEP 517 here and respect the `requires`, but use the
 /// default build backend.
-///
-/// The example is based `DTLSSocket==0.1.16`
 #[test]
 fn install_build_system_no_backend() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_packse_index("packages/pip-sync-build.toml");
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    uv_test::archive::write_tar_gz(
+        fs::File::create(links.child("build_system_no_backend-0.1.0.tar.gz").path())?,
+        &[
+            (
+                "build_system_no_backend-0.1.0/pyproject.toml",
+                indoc! {r#"
+                [build-system]
+                requires = ["setuptools", "wheel", "build-requirement==1.0.0"]
+            "#},
+            ),
+            (
+                "build_system_no_backend-0.1.0/setup.py",
+                indoc! {r#"
+                from build_requirement import VALUE
+                from setuptools import setup
+
+                assert VALUE == "available during the build"
+                setup(name="build-system-no-backend", version="0.1.0", py_modules=["build_system_no_backend"])
+            "#},
+            ),
+            (
+                "build_system_no_backend-0.1.0/build_system_no_backend.py",
+                "__version__ = '0.1.0'\n",
+            ),
+        ],
+    )?;
+    let artifacts = FindLinksServer::new(links.path());
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("build-system-no-backend @ https://files.pythonhosted.org/packages/ec/25/1e531108ca027dc3a3b37d351f4b86d811df4884c6a81cd99e73b8b589f5/build-system-no-backend-0.1.0.tar.gz")?;
+    requirements_txt.write_str(&format!(
+        "build-system-no-backend @ {}",
+        artifacts.file_url("build_system_no_backend-0.1.0.tar.gz")
+    ))?;
 
-    uv_snapshot!(context.pip_sync()
+    uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
         .arg("--strict"), @"
     exit_code: 0 (success)
@@ -1391,7 +1488,7 @@ fn install_build_system_no_backend() -> Result<()> {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + build-system-no-backend==0.1.0 (from https://files.pythonhosted.org/packages/ec/25/1e531108ca027dc3a3b37d351f4b86d811df4884c6a81cd99e73b8b589f5/build-system-no-backend-0.1.0.tar.gz)
+     + build-system-no-backend==0.1.0 (from http://[LOCALHOST]/build_system_no_backend-0.1.0.tar.gz)
     "
     );
 
@@ -1405,14 +1502,19 @@ fn install_build_system_no_backend() -> Result<()> {
 /// Check that we show the right messages on cached, direct URL source distribution installs.
 #[test]
 fn install_url_source_dist_cached() -> Result<()> {
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_file_counts()
         .with_filtered_sizes_and_units();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("source_distribution @ https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz")?;
+    requirements_txt.write_str(&format!(
+        "source_distribution @ {artifact_url_0}",
+        artifact_url_0 = registry_artifacts.file_url("source_distribution-0.0.1.tar.gz")
+    ))?;
 
-    uv_snapshot!(context.pip_sync()
+    uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
         .arg("--strict"), @"
     exit_code: 0 (success)
@@ -1420,7 +1522,7 @@ fn install_url_source_dist_cached() -> Result<()> {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + source-distribution==0.0.1 (from https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz)
+     + source-distribution==0.0.1 (from http://[LOCALHOST]/files/source_distribution-0.0.1.tar.gz)
     "
     );
 
@@ -1431,15 +1533,16 @@ fn install_url_source_dist_cached() -> Result<()> {
     // Re-run the installation in a new virtual environment.
     context.reset_venv();
 
-    uv_snapshot!(context.pip_sync()
+    uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
         .arg("--strict")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + source-distribution==0.0.1 (from https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz)
+     + source-distribution==0.0.1 (from http://[LOCALHOST]/files/source_distribution-0.0.1.tar.gz)
     "
     );
 
@@ -1459,7 +1562,7 @@ fn install_url_source_dist_cached() -> Result<()> {
     "
     );
 
-    uv_snapshot!(context.pip_sync()
+    uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
         .arg("--strict")
         , @"
@@ -1468,7 +1571,7 @@ fn install_url_source_dist_cached() -> Result<()> {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + source-distribution==0.0.1 (from https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz)
+     + source-distribution==0.0.1 (from http://[LOCALHOST]/files/source_distribution-0.0.1.tar.gz)
     "
     );
 
@@ -1483,7 +1586,7 @@ fn install_url_source_dist_cached() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn install_git_source_dist_cached() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@b270df1a2fb5d012294e9aaf05e7e0bab1e6a389")?;
@@ -1565,6 +1668,7 @@ fn install_git_source_dist_cached() -> Result<()> {
 #[test]
 fn install_registry_source_dist_cached() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_exclude_newer("2025-01-29T00:00:00Z")
         .with_filtered_file_counts()
         .with_filtered_sizes_and_units();
@@ -1641,14 +1745,16 @@ fn install_registry_source_dist_cached() -> Result<()> {
 /// Check that we show the right messages on cached, local source distribution installs.
 #[test]
 fn install_path_source_dist_cached() -> Result<()> {
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_file_counts()
         .with_filtered_sizes_and_units();
 
     // Download a source distribution.
     let archive = context.temp_dir.child("source_distribution-0.0.1.tar.gz");
-    download_to_disk(
-        "https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz",
+    download_local_to_disk(
+        &registry_artifacts.file_url("source_distribution-0.0.1.tar.gz"),
         &archive,
     );
 
@@ -1728,14 +1834,16 @@ fn install_path_source_dist_cached() -> Result<()> {
 /// Check that we show the right messages on cached, local source distribution installs.
 #[test]
 fn install_path_built_dist_cached() -> Result<()> {
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_file_counts()
         .with_filtered_sizes_and_units();
 
     // Download a wheel.
     let archive = context.temp_dir.child("tomli-2.0.1-py3-none-any.whl");
-    download_to_disk(
-        "https://files.pythonhosted.org/packages/97/75/10a9ebee3fd790d20926a90a2547f0bf78f371b2f13aa822c759680ca7b9/tomli-2.0.1-py3-none-any.whl",
+    download_local_to_disk(
+        &registry_artifacts.file_url("tomli-2.0.1-py3-none-any.whl"),
         &archive,
     );
 
@@ -1807,12 +1915,17 @@ fn install_path_built_dist_cached() -> Result<()> {
 /// Check that we show the right messages on cached, direct URL built distribution installs.
 #[test]
 fn install_url_built_dist_cached() -> Result<()> {
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_file_counts()
         .with_filtered_sizes_and_units();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("tqdm @ https://files.pythonhosted.org/packages/00/e5/f12a80907d0884e6dff9c16d0c0114d81b8cd07dc3ae54c5e962cc83037e/tqdm-4.66.1-py3-none-any.whl")?;
+    requirements_txt.write_str(&format!(
+        "tqdm @ {artifact_url_0}",
+        artifact_url_0 = registry_artifacts.file_url("tqdm-4.66.1-py3-none-any.whl")
+    ))?;
 
     let context_filters = if cfg!(windows) {
         [("warning: The package `tqdm` requires `colorama ; sys_platform == 'win32'`, but it's not installed\n", "")]
@@ -1830,7 +1943,7 @@ fn install_url_built_dist_cached() -> Result<()> {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + tqdm==4.66.1 (from https://files.pythonhosted.org/packages/00/e5/f12a80907d0884e6dff9c16d0c0114d81b8cd07dc3ae54c5e962cc83037e/tqdm-4.66.1-py3-none-any.whl)
+     + tqdm==4.66.1 (from http://[LOCALHOST]/files/tqdm-4.66.1-py3-none-any.whl)
     "
     );
 
@@ -1847,7 +1960,7 @@ fn install_url_built_dist_cached() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     Installed 1 package in [TIME]
-     + tqdm==4.66.1 (from https://files.pythonhosted.org/packages/00/e5/f12a80907d0884e6dff9c16d0c0114d81b8cd07dc3ae54c5e962cc83037e/tqdm-4.66.1-py3-none-any.whl)
+     + tqdm==4.66.1 (from http://[LOCALHOST]/files/tqdm-4.66.1-py3-none-any.whl)
     "
     );
 
@@ -1874,7 +1987,7 @@ fn install_url_built_dist_cached() -> Result<()> {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + tqdm==4.66.1 (from https://files.pythonhosted.org/packages/00/e5/f12a80907d0884e6dff9c16d0c0114d81b8cd07dc3ae54c5e962cc83037e/tqdm-4.66.1-py3-none-any.whl)
+     + tqdm==4.66.1 (from http://[LOCALHOST]/files/tqdm-4.66.1-py3-none-any.whl)
     "
     );
 
@@ -1886,7 +1999,7 @@ fn install_url_built_dist_cached() -> Result<()> {
 /// Verify that fail with an appropriate error when a package is repeated.
 #[test]
 fn duplicate_package_overlap() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("MarkupSafe==2.1.3\nMarkupSafe==2.1.2")?;
@@ -1907,7 +2020,7 @@ fn duplicate_package_overlap() -> Result<()> {
 /// Verify that allow duplicate packages when they are disjoint.
 #[test]
 fn duplicate_package_disjoint() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("MarkupSafe==2.1.3\nMarkupSafe==2.1.2 ; python_version < '3.6'")?;
@@ -1930,7 +2043,7 @@ fn duplicate_package_disjoint() -> Result<()> {
 /// Verify that we can force reinstall of packages.
 #[test]
 fn reinstall() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
@@ -1976,7 +2089,7 @@ fn reinstall() -> Result<()> {
 /// Verify that we can force reinstall of selective packages.
 #[test]
 fn reinstall_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
@@ -2023,7 +2136,7 @@ fn reinstall_package() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn reinstall_git() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@b270df1a2fb5d012294e9aaf05e7e0bab1e6a389")?;
@@ -2070,7 +2183,7 @@ fn reinstall_git() -> Result<()> {
 /// Verify that we can force refresh of cached data.
 #[test]
 fn refresh() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
@@ -2119,7 +2232,7 @@ fn refresh() -> Result<()> {
 /// Verify that we can force refresh of selective packages.
 #[test]
 fn refresh_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
@@ -2168,7 +2281,7 @@ fn refresh_package() -> Result<()> {
 
 #[test]
 fn sync_editable() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let poetry_editable = context.temp_dir.child("poetry_editable");
 
     // Copy into the temporary directory so we can mutate it.
@@ -2315,7 +2428,7 @@ fn sync_editable() -> Result<()> {
 
 #[test]
 fn sync_editable_and_registry() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Copy the black test editable into the "current" directory
     copy_dir_all(
@@ -2416,7 +2529,7 @@ fn sync_editable_and_registry() -> Result<()> {
 
 #[test]
 fn sync_editable_and_local() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Copy the black test editable into the "current" directory
     copy_dir_all(
@@ -2484,7 +2597,7 @@ fn sync_editable_and_local() -> Result<()> {
 
 #[test]
 fn incompatible_wheel() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let wheel = context.temp_dir.child("foo-1.2.3-py3-none-any.whl");
     wheel.touch()?;
 
@@ -2511,19 +2624,23 @@ fn incompatible_wheel() -> Result<()> {
 /// Install a project without a `pyproject.toml`, using the PEP 517 build backend.
 #[test]
 fn sync_legacy_sdist_pep_517() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_in = context.temp_dir.child("requirements.in");
-    requirements_in.write_str("flake8 @ https://files.pythonhosted.org/packages/66/53/3ad4a3b74d609b3b9008a10075c40e7c8909eae60af53623c3888f7a529a/flake8-6.0.0.tar.gz")?;
+    requirements_in.write_str(&format!(
+        "flake8 @ {artifact_url_0}",
+        artifact_url_0 = registry_artifacts.file_url("flake8-6.0.0.tar.gz")
+    ))?;
 
-    uv_snapshot!(context.pip_sync()
+    uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.in"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + flake8==6.0.0 (from https://files.pythonhosted.org/packages/66/53/3ad4a3b74d609b3b9008a10075c40e7c8909eae60af53623c3888f7a529a/flake8-6.0.0.tar.gz)
+     + flake8==6.0.0 (from http://[LOCALHOST]/files/flake8-6.0.0.tar.gz)
     "
     );
 
@@ -2533,15 +2650,16 @@ fn sync_legacy_sdist_pep_517() -> Result<()> {
 /// Sync using `--find-links` with a local directory.
 #[test]
 fn find_links() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc! {r"
+    requirements_txt.write_str(&indoc::formatdoc! {r"
         markupsafe==2.1.3
         numpy==1.26.3
         tqdm==1000.0.0
-        werkzeug @ https://files.pythonhosted.org/packages/c3/fc/254c3e9b5feb89ff5b9076a23218dafbc99c96ac5941e900b71206e6313b/werkzeug-3.0.1-py3-none-any.whl
-    "})?;
+        werkzeug @ {artifact_url_0}
+    ", artifact_url_0 = registry_artifacts.file_url("werkzeug-3.0.1-py3-none-any.whl") })?;
 
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
@@ -2555,7 +2673,7 @@ fn find_links() -> Result<()> {
      + markupsafe==2.1.3
      + numpy==1.26.3
      + tqdm==1000.0.0
-     + werkzeug==3.0.1 (from https://files.pythonhosted.org/packages/c3/fc/254c3e9b5feb89ff5b9076a23218dafbc99c96ac5941e900b71206e6313b/werkzeug-3.0.1-py3-none-any.whl)
+     + werkzeug==3.0.1 (from http://[LOCALHOST]/files/werkzeug-3.0.1-py3-none-any.whl)
     "
     );
 
@@ -2565,7 +2683,7 @@ fn find_links() -> Result<()> {
 /// Sync using `--find-links` with `--no-index`, which should accept the local wheel.
 #[test]
 fn find_links_no_index_match() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc! {r"
@@ -2592,7 +2710,7 @@ fn find_links_no_index_match() -> Result<()> {
 /// Sync using `--find-links` with `--offline`, which should accept the local wheel.
 #[test]
 fn find_links_offline_match() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc! {r"
@@ -2619,7 +2737,7 @@ fn find_links_offline_match() -> Result<()> {
 /// Sync using `--find-links` with `--offline`, which should fail to find `numpy`.
 #[test]
 fn find_links_offline_no_match() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc! {r"
@@ -2647,7 +2765,7 @@ fn find_links_offline_no_match() -> Result<()> {
 /// Sync using `--find-links` with a local directory. Ensure that cached wheels are reused.
 #[test]
 fn find_links_wheel_cache() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc! {r"
@@ -2691,7 +2809,7 @@ fn find_links_wheel_cache() -> Result<()> {
 /// reused.
 #[test]
 fn find_links_source_cache() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc! {r"
@@ -2734,7 +2852,7 @@ fn find_links_source_cache() -> Result<()> {
 /// Install without network access via the `--offline` flag.
 #[test]
 fn offline() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str("black==23.10.1")?;
 
@@ -2784,7 +2902,7 @@ fn offline() -> Result<()> {
 /// Include a `constraints.txt` file with a compatible constraint.
 #[test]
 fn compatible_constraint() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("anyio==3.7.0")?;
 
@@ -2810,7 +2928,7 @@ fn compatible_constraint() -> Result<()> {
 /// Include a `constraints.txt` file with an incompatible constraint.
 #[test]
 fn incompatible_constraint() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("anyio==3.7.0")?;
 
@@ -2834,7 +2952,7 @@ fn incompatible_constraint() -> Result<()> {
 /// Include a `constraints.txt` file with an irrelevant constraint.
 #[test]
 fn irrelevant_constraint() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("anyio==3.7.0")?;
 
@@ -2860,7 +2978,7 @@ fn irrelevant_constraint() -> Result<()> {
 /// Sync with a repeated `anyio` requirement.
 #[test]
 fn repeat_requirement_identical() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str("anyio\nanyio")?;
 
@@ -2880,7 +2998,7 @@ fn repeat_requirement_identical() -> Result<()> {
 /// Sync with a repeated `anyio` requirement, with compatible versions.
 #[test]
 fn repeat_requirement_compatible() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str("anyio\nanyio==4.0.0")?;
 
@@ -2900,7 +3018,7 @@ fn repeat_requirement_compatible() -> Result<()> {
 /// Sync with a repeated, but conflicting `anyio` requirement.
 #[test]
 fn repeat_requirement_incompatible() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str("anyio<4.0.0\nanyio==4.0.0")?;
 
@@ -2920,18 +3038,22 @@ fn repeat_requirement_incompatible() -> Result<()> {
 /// See also <https://github.com/alexcrichton/tar-rs/issues/349>.
 #[test]
 fn tar_dont_preserve_mtime() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("tomli @ https://files.pythonhosted.org/packages/c0/3f/d7af728f075fb08564c5949a9c95e44352e23dee646869fa104a3b2060a3/tomli-2.0.1.tar.gz")?;
+    requirements_txt.write_str(&format!(
+        "tomli @ {artifact_url_0}",
+        artifact_url_0 = registry_artifacts.file_url("tomli-2.0.1.tar.gz")
+    ))?;
 
-    uv_snapshot!(context.pip_sync()
+    uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + tomli==2.0.1 (from https://files.pythonhosted.org/packages/c0/3f/d7af728f075fb08564c5949a9c95e44352e23dee646869fa104a3b2060a3/tomli-2.0.1.tar.gz)
+     + tomli==2.0.1 (from http://[LOCALHOST]/files/tomli-2.0.1.tar.gz)
     ");
 
     Ok(())
@@ -2940,19 +3062,56 @@ fn tar_dont_preserve_mtime() -> Result<()> {
 /// Avoid creating a file with 000 permissions
 #[test]
 fn set_read_permissions() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    let (filename, bytes) = generate_wheel(
+        &"read-permissions".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let bytes = block_on(async {
+        let reader = ZipFileReader::new(bytes).await?;
+        let mut writer = ZipFileWriter::new(Vec::new());
+        for (index, entry) in reader.file().entries().iter().enumerate() {
+            let mut contents = Vec::new();
+            reader
+                .reader_without_entry(index)
+                .await?
+                .read_to_end(&mut contents)
+                .await?;
+            let entry = ZipEntryBuilder::new(
+                entry.filename().as_str()?.to_owned().into(),
+                Compression::Stored,
+            )
+            .unix_permissions(0);
+            writer.write_entry_whole(entry, &contents).await?;
+        }
+        Ok::<_, anyhow::Error>(writer.close().await?)
+    })?;
+    fs::write(links.child(&filename), bytes)?;
+    let artifacts = FindLinksServer::new(links.path());
     let requirements_in = context.temp_dir.child("requirements.in");
-    requirements_in.write_str("databricks==0.2")?;
+    requirements_in.write_str(&format!(
+        "read-permissions @ {}",
+        artifacts.file_url(&filename)
+    ))?;
 
-    uv_snapshot!(context.pip_sync()
+    uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.in"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + databricks==0.2
+     + read-permissions==1.0.0 (from http://[LOCALHOST]/read_permissions-1.0.0-py3-none-any.whl)
     ");
+
+    context.assert_command("import read_permissions").success();
 
     Ok(())
 }
@@ -2962,7 +3121,9 @@ fn set_read_permissions() -> Result<()> {
 /// <https://github.com/astral-sh/uv/issues/1593>
 #[test]
 fn pip_entrypoints() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_exclude_newer("2024-06-01T00:00:00Z");
 
     for pip_requirement in [
         // Test compatibility with launchers in 24.0
@@ -2979,8 +3140,14 @@ fn pip_entrypoints() -> Result<()> {
             .pip_sync()
             .arg("requirements.txt")
             .arg("--strict")
-            .output()
-            .expect("Failed to install pip");
+            .assert()
+            .success();
+        context
+            .assert_command(&format!(
+                "import pip; assert pip.__version__ == {:?}",
+                pip_requirement.trim_start_matches("pip==")
+            ))
+            .success();
 
         let bin_dir = context.venv.join(if cfg!(unix) {
             "bin"
@@ -3000,7 +3167,7 @@ fn pip_entrypoints() -> Result<()> {
 
 #[test]
 fn invalidate_on_change() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Create an editable package.
     let editable_dir = context.temp_dir.child("editable");
@@ -3073,7 +3240,7 @@ requires-python = ">=3.8"
 /// Install with bytecode compilation.
 #[test]
 fn compile() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("MarkupSafe==2.1.3")?;
@@ -3087,7 +3254,7 @@ fn compile() -> Result<()> {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-    Bytecode compiled 3 files in [TIME]
+    Bytecode compiled 2 files in [TIME]
      + markupsafe==2.1.3
     "
     );
@@ -3109,7 +3276,7 @@ fn compile() -> Result<()> {
 /// Re-install with bytecode compilation.
 #[test]
 fn recompile() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("MarkupSafe==2.1.3")?;
@@ -3133,7 +3300,7 @@ fn recompile() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Bytecode compiled 3 files in [TIME]
+    Bytecode compiled 2 files in [TIME]
     "
     );
 
@@ -3154,7 +3321,7 @@ fn recompile() -> Result<()> {
 /// Raise an error when an editable's `Requires-Python` constraint is not met.
 #[test]
 fn requires_python_editable() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Create an editable package with a `Requires-Python` constraint that is not met.
     let editable_dir = context.temp_dir.child("editable");
@@ -3191,7 +3358,7 @@ requires-python = ">=3.13"
 /// Raise an error when a direct URL dependency's `Requires-Python` constraint is not met.
 #[test]
 fn requires_python_direct_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Create an editable package with a `Requires-Python` constraint that is not met.
     let editable_dir = context.temp_dir.child("editable");
@@ -3254,7 +3421,7 @@ fn require_hashes_unknown_algorithm() -> Result<()> {
 /// Omit the hash with `--require-hashes`.
 #[test]
 fn require_hashes_missing_hash() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("anyio==4.0.0")?;
@@ -3287,7 +3454,7 @@ fn require_hashes_missing_hash() -> Result<()> {
 /// Enable `--require-hashes` from the `requirements.txt`.
 #[test]
 fn require_hashes_in_requirements_txt() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc! {r"
@@ -3323,7 +3490,7 @@ fn require_hashes_in_requirements_txt() -> Result<()> {
 /// Omit the version with `--require-hashes`.
 #[test]
 fn require_hashes_missing_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(
@@ -3358,7 +3525,7 @@ fn require_hashes_missing_version() -> Result<()> {
 /// Use a non-`==` operator with `--require-hashes`.
 #[test]
 fn require_hashes_invalid_operator() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(
@@ -3461,7 +3628,7 @@ fn require_hashes_wheel_only_binary() -> Result<()> {
 #[test]
 fn require_hashes_source_no_binary() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(
@@ -3809,7 +3976,7 @@ fn require_hashes_wheel_url_mismatch() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn require_hashes_git() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
@@ -3831,7 +3998,7 @@ fn require_hashes_git() -> Result<()> {
 /// Reject local directory dependencies when `--require-hashes` is provided.
 #[test]
 fn require_hashes_source_tree() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -3928,7 +4095,7 @@ fn require_hashes_re_download() -> Result<()> {
 /// Include the hash for a built distribution specified as a local path dependency.
 #[test]
 fn require_hashes_wheel_path() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -3957,7 +4124,7 @@ fn require_hashes_wheel_path() -> Result<()> {
 /// Include a `BLAKE2b` hash for a built distribution specified as a local path dependency.
 #[test]
 fn require_hashes_wheel_path_blake2b() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -3986,7 +4153,7 @@ fn require_hashes_wheel_path_blake2b() -> Result<()> {
 /// Include the wrong `BLAKE2b` hash for a built distribution specified as a local path dependency.
 #[test]
 fn require_hashes_wheel_path_blake2b_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -4020,7 +4187,7 @@ fn require_hashes_wheel_path_blake2b_mismatch() -> Result<()> {
 /// Include the _wrong_ hash for a built distribution specified as a local path dependency.
 #[test]
 fn require_hashes_wheel_path_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -4060,7 +4227,7 @@ fn require_hashes_wheel_path_mismatch() -> Result<()> {
 /// Include the hash for a source distribution specified as a local path dependency.
 #[test]
 fn require_hashes_source_path() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -4089,7 +4256,7 @@ fn require_hashes_source_path() -> Result<()> {
 /// Include the _wrong_ hash for a source distribution specified as a local path dependency.
 #[test]
 fn require_hashes_source_path_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -4149,7 +4316,7 @@ fn require_hashes_unnamed() -> Result<()> {
 /// We disallow `--require-hashes` for editables.
 #[test]
 fn require_hashes_editable() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&indoc::formatdoc! {r"
@@ -4497,7 +4664,7 @@ fn require_hashes_at_least_one() -> Result<()> {
 /// Using `--find-links`, but the registry doesn't provide us with a hash.
 #[test]
 fn require_hashes_find_links_no_hash() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = FindLinksServer::new(&context.workspace_root.join("test/links"));
     let index = PackseServer::empty();
 
@@ -4613,7 +4780,7 @@ fn require_hashes_find_links_no_hash() -> Result<()> {
 /// Using `--find-links`, and the registry serves us a correct hash.
 #[test]
 fn require_hashes_find_links_valid_hash() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
@@ -4639,7 +4806,7 @@ fn require_hashes_find_links_valid_hash() -> Result<()> {
 /// Using `--find-links`, and the registry serves us an incorrect hash.
 #[test]
 fn require_hashes_find_links_invalid_hash() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // First, request some other hash.
     let requirements_txt = context.temp_dir.child("requirements.txt");
@@ -4843,10 +5010,39 @@ fn require_hashes_registry_valid_hash() -> Result<()> {
     Ok(())
 }
 
+/// A `--find-links` page without distribution links does not act as a package index.
+#[test]
+fn require_hashes_empty_find_links() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    let server = FindLinksServer::new(links.path());
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(&format!(
+            "hash-package==1.0.0 --hash=sha256:{}",
+            "0".repeat(64)
+        ))?;
+
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("requirements.txt")
+        .arg("--require-hashes")
+        .arg("--find-links")
+        .arg(server.url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because hash-package was not found in the package registry and you require hash-package==1.0.0, we can conclude that your requirements are unsatisfiable.
+    ");
+
+    Ok(())
+}
+
 /// Verify the index's wheel hash even when no explicit hash policy is requested.
 #[test]
 fn index_wheel_hash_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     context
         .temp_dir
         .child("requirements.txt")
@@ -5128,7 +5324,7 @@ fn require_hashes_url_invalid() -> Result<()> {
 /// Reject malformed URL hashes without downloading the distribution.
 #[test]
 fn require_hashes_url_malformed() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(
         "iniconfig @ https://files.pythonhosted.org/packages/iniconfig-2.0.0-py3-none-any.whl#subdirectory=src&sha256=123",
@@ -5218,6 +5414,7 @@ fn require_hashes_url_unnamed() -> Result<()> {
 #[test]
 fn target_built_distribution() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix();
@@ -5308,6 +5505,7 @@ fn target_built_distribution() -> Result<()> {
 #[test]
 fn target_source_distribution() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix();
@@ -5357,6 +5555,7 @@ fn target_source_distribution() -> Result<()> {
 #[test]
 fn target_no_build_isolation() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix();
@@ -5392,7 +5591,7 @@ fn target_no_build_isolation() -> Result<()> {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + wheel==0.43.0
+     + wheel==0.42.0
     ");
 
     // Ensure that the build requirements are not present in the target directory.
@@ -5419,7 +5618,7 @@ fn target_no_build_isolation() -> Result<()> {
 /// Sync to a `--target` directory without a virtual environment.
 #[test]
 fn target_system() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.12"]).with_local_index();
 
     // Install `iniconfig` to the target directory.
     let requirements_in = context.temp_dir.child("requirements.in");
@@ -5448,6 +5647,7 @@ fn target_system() -> Result<()> {
 #[test]
 fn prefix() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix();
@@ -5511,7 +5711,7 @@ fn prefix() -> Result<()> {
 /// Ensure that we install packages with markers on them.
 #[test]
 fn preserve_markers() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("anyio ; python_version > '3.7'")?;
@@ -5533,7 +5733,7 @@ fn preserve_markers() -> Result<()> {
 /// Include a `build_constraints.txt` file with an incompatible constraint.
 #[test]
 fn incompatible_build_constraint() -> Result<()> {
-    let context = uv_test::test_context!("3.9");
+    let context = uv_test::test_context!("3.9").with_local_index();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("requests==1.2")?;
 
@@ -5560,7 +5760,7 @@ fn incompatible_build_constraint() -> Result<()> {
 /// Include a `build_constraints.txt` file with a compatible constraint.
 #[test]
 fn compatible_build_constraint() -> Result<()> {
-    let context = uv_test::test_context!("3.9");
+    let context = uv_test::test_context!("3.9").with_local_index();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("requests==1.2")?;
 
@@ -5587,7 +5787,7 @@ fn compatible_build_constraint() -> Result<()> {
 
 #[test]
 fn sync_seed() -> Result<()> {
-    let context = uv_test::test_context!("3.9");
+    let context = uv_test::test_context!("3.9").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("requests==1.2")?;
@@ -5627,7 +5827,7 @@ fn sync_seed() -> Result<()> {
     Creating virtual environment with seed packages at: .venv
      + pip==24.0
      + setuptools==69.2.0
-     + wheel==0.43.0
+     + wheel==0.42.0
     Activate with: source .venv/[BIN]/activate
     "
     );
@@ -5649,7 +5849,7 @@ fn sync_seed() -> Result<()> {
 /// Sanitize zip files during extraction.
 #[test]
 fn sanitize() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Install a zip file that includes a path that extends outside the parent.
     let requirements_txt = context.temp_dir.child("requirements.txt");
@@ -5677,19 +5877,23 @@ fn sanitize() -> Result<()> {
 /// Allow semicolons attached to markers, as long as they're preceded by a space.
 #[test]
 fn semicolon_trailing_space() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements = context.temp_dir.child("requirements.txt");
-    requirements.write_str("iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl; python_version > '3.10'")?;
+    requirements.write_str(&format!(
+        "iniconfig @ {artifact_url_0}; python_version > '3.10'",
+        artifact_url_0 = registry_artifacts.file_url("iniconfig-2.0.0-py3-none-any.whl")
+    ))?;
 
-    uv_snapshot!(context.pip_sync()
+    uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + iniconfig==2.0.0 (from https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl)
+     + iniconfig==2.0.0 (from http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl)
     "
     );
 
@@ -5699,19 +5903,23 @@ fn semicolon_trailing_space() -> Result<()> {
 /// Treat a semicolon that's not whitespace-separated as a part of the URL.
 #[test]
 fn semicolon_no_space() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements = context.temp_dir.child("requirements.txt");
-    requirements.write_str("iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl;python_version > '3.10'")?;
+    requirements.write_str(&format!(
+        "iniconfig @ {artifact_url_0};python_version > '3.10'",
+        artifact_url_0 = registry_artifacts.file_url("iniconfig-2.0.0-py3-none-any.whl")
+    ))?;
 
-    uv_snapshot!(context.pip_sync()
+    uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Couldn't parse requirement in `requirements.txt` at position 0
-      cause: Expected direct URL (`https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl;python_version%20%3E%20'3.10'`) to end in a supported file extension: `.whl`, `.tar.gz`, `.zip`, `.tar.bz2`, `.tar.lz`, `.tar.lzma`, `.tar.xz`, `.tar.zst`, `.tar`, `.tbz`, `.tgz`, `.tlz`, or `.txz`
-             iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl;python_version > '3.10'
-                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      cause: Expected direct URL (`http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl;python_version%20%3E%20'3.10'`) to end in a supported file extension: `.whl`, `.tar.gz`, `.zip`, `.tar.bz2`, `.tar.lz`, `.tar.lzma`, `.tar.xz`, `.tar.zst`, `.tar`, `.tbz`, `.tgz`, `.tlz`, or `.txz`
+             iniconfig @ http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl;python_version > '3.10'
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     "
     );
 
@@ -5720,7 +5928,7 @@ fn semicolon_no_space() -> Result<()> {
 
 #[test]
 fn pep_751() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -5800,7 +6008,7 @@ fn pep_751() -> Result<()> {
 
 #[test]
 fn pep_751_rejects_duplicate_active_packages() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context.temp_dir.child("pylock.toml").write_str(
         r#"
@@ -5832,7 +6040,7 @@ fn pep_751_rejects_duplicate_active_packages() -> Result<()> {
 
 #[test]
 fn pep_751_requires_packages() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context.temp_dir.child("pylock.toml").write_str(
         r#"
@@ -5859,7 +6067,7 @@ fn pep_751_requires_packages() -> Result<()> {
 
 #[test]
 fn pep_751_empty_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("simple/single-package.toml");
     context
         .temp_dir
@@ -5908,7 +6116,7 @@ fn pep_751_empty_hashes() -> Result<()> {
 
 #[test]
 fn pep_751_validates_archive_size() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     context
         .temp_dir
         .child("iniconfig-2.0.0-py3-none-any.whl")
@@ -5940,7 +6148,7 @@ fn pep_751_validates_archive_size() -> Result<()> {
 #[test]
 fn pep_751_validates_remote_archive_size() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     context.temp_dir.child("pylock.toml").write_str(&formatdoc! {
         r#"
         lock-version = "1.0"
@@ -6013,7 +6221,7 @@ fn pep_751_validates_remote_archive_size() -> Result<()> {
 #[test]
 fn pep_751_validates_cached_remote_archive_size() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let wheel_url = server.file_url("a-1.0.0-py3-none-any.whl");
 
     context
@@ -6070,7 +6278,7 @@ fn pep_751_validates_cached_remote_archive_size() -> Result<()> {
 #[test]
 fn pep_751_validates_cached_registry_wheel_size() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let pylock = formatdoc! {
         r#"
         lock-version = "1.0"
@@ -6131,7 +6339,7 @@ fn pep_751_validates_cached_registry_wheel_size() -> Result<()> {
 #[test]
 fn pep_751_validates_cached_registry_sdist_size() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let (_, hash) = server
         .files()
         .find(|(filename, _)| *filename == "a-1.0.0.tar.gz")
@@ -6196,7 +6404,7 @@ fn pep_751_validates_cached_registry_sdist_size() -> Result<()> {
 #[test]
 fn pep_751_validates_cached_url_sdist_size() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let (_, hash) = server
         .files()
         .find(|(filename, _)| *filename == "a-1.0.0.tar.gz")
@@ -6254,7 +6462,7 @@ fn pep_751_validates_cached_url_sdist_size() -> Result<()> {
 
 #[test]
 fn pep_751_require_hashes_directory() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("foo").child("pyproject.toml");
     pyproject_toml.write_str(
@@ -6355,7 +6563,9 @@ async fn pep_751_remote() -> Result<()> {
 /// See: <https://github.com/astral-sh/uv/issues/13127>
 #[test]
 fn pep_751_wheel_only() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_packse_index("packages/pip-sync-wheel-only.toml");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -6364,7 +6574,7 @@ fn pep_751_wheel_only() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12.0"
-        dependencies = ["torch"]
+        dependencies = ["platform-wheel"]
         "#,
     )?;
 
@@ -6385,17 +6595,9 @@ fn pep_751_wheel_only() -> Result<()> {
         .arg("macos"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Would download 9 packages
-    Would install 9 packages
-     + filelock==3.13.1
-     + fsspec==2024.3.1
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + mpmath==1.3.0
-     + networkx==3.2.1
-     + sympy==1.12
-     + torch==2.2.1
-     + typing-extensions==4.10.0
+    Would download 1 package
+    Would install 1 package
+     + platform-wheel==1.0.0
     "
     );
 
@@ -6411,9 +6613,9 @@ fn pep_751_wheel_only() -> Result<()> {
         .arg("3.8"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Package `torch` can't be installed because it doesn't have a source distribution or wheel for the current platform
+    error: Package `platform-wheel` can't be installed because it doesn't have a source distribution or wheel for the current platform
 
-    hint: You're using CPython 3.8 (`cp38`), but `torch` (v2.2.1) only has wheels with the following Python implementation tag: `cp312`
+    hint: You're using CPython 3.8 (`cp38`), but `platform-wheel` (v1.0.0) only has wheels with the following Python implementation tag: `cp312`
     "
     );
 
@@ -6423,7 +6625,9 @@ fn pep_751_wheel_only() -> Result<()> {
 /// Respect `--no-binary` et al when installing from a `pylock.toml`.
 #[test]
 fn pep_751_build_options() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-29T00:00:00Z");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_exclude_newer("2025-01-29T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -6450,12 +6654,11 @@ fn pep_751_build_options() -> Result<()> {
         .arg("anyio"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + anyio==4.8.0
-     + idna==3.10
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + anyio==4.3.0
+     + idna==3.6
      + sniffio==1.3.1
-     + typing-extensions==4.12.2
     "
     );
 
@@ -6525,13 +6728,12 @@ fn pep_751_build_options() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Prepared 1 package in [TIME]
-    Uninstalled 4 packages in [TIME]
+    Uninstalled 3 packages in [TIME]
     Installed 1 package in [TIME]
-     - anyio==4.8.0
-     - idna==3.10
+     - anyio==4.3.0
+     - idna==3.6
      - sniffio==1.3.1
      + source-distribution==0.0.3
-     - typing-extensions==4.12.2
     "
     );
 
@@ -6540,18 +6742,21 @@ fn pep_751_build_options() -> Result<()> {
 
 #[test]
 fn pep_751_direct_url_tags() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
+    pyproject_toml.write_str(&format!(
         r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["MarkupSafe @ https://files.pythonhosted.org/packages/6b/b0/18f76bba336fa5aecf79d45dcd6c806c280ec44538b3c13671d49099fdd0/MarkupSafe-3.0.2-cp312-cp312-macosx_11_0_arm64.whl"]
+        dependencies = ["MarkupSafe @ {artifact_url_0}"]
         "#,
-    )?;
+        artifact_url_0 =
+            registry_artifacts.file_url("markupsafe-3.0.2-cp312-cp312-macosx_11_0_arm64.whl")
+    ))?;
 
     context
         .export()
@@ -6568,7 +6773,7 @@ fn pep_751_direct_url_tags() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to determine installation plan
-      cause: A URL (https://files.pythonhosted.org/packages/6b/b0/18f76bba336fa5aecf79d45dcd6c806c280ec44538b3c13671d49099fdd0/MarkupSafe-3.0.2-cp312-cp312-macosx_11_0_arm64.whl) dependency is incompatible with the current platform
+      cause: A URL (http://[LOCALHOST]/files/markupsafe-3.0.2-cp312-cp312-macosx_11_0_arm64.whl) dependency is incompatible with the current platform
 
     hint: The wheel is compatible with macOS (`macosx_11_0_arm64`), but you're on Linux (`manylinux_2_28_x86_64`)
     "
@@ -6582,7 +6787,7 @@ fn pep_751_direct_url_tags() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Installed 1 package in [TIME]
-     + markupsafe==3.0.2 (from https://files.pythonhosted.org/packages/6b/b0/18f76bba336fa5aecf79d45dcd6c806c280ec44538b3c13671d49099fdd0/MarkupSafe-3.0.2-cp312-cp312-macosx_11_0_arm64.whl)
+     + markupsafe==3.0.2 (from http://[LOCALHOST]/files/markupsafe-3.0.2-cp312-cp312-macosx_11_0_arm64.whl)
     "
     );
 
@@ -6591,10 +6796,14 @@ fn pep_751_direct_url_tags() -> Result<()> {
 
 #[test]
 fn incompatible_python_version_direct_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("packages/pip-sync-wheel-only.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("numpy @ https://files.pythonhosted.org/packages/ae/11/7c546fcf42145f29b71e4d6f429e96d8d68e5a7ba1830b2e68d7418f0bbd/numpy-2.3.2-cp313-cp313-win32.whl")?;
+    requirements_txt.write_str(&format!(
+        "windows-wheel @ {}",
+        server.file_url("windows_wheel-1.0.0-cp313-cp313-win32.whl")
+    ))?;
 
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
@@ -6604,7 +6813,7 @@ fn incompatible_python_version_direct_url() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     error: Failed to determine installation plan
-      cause: A URL (https://files.pythonhosted.org/packages/ae/11/7c546fcf42145f29b71e4d6f429e96d8d68e5a7ba1830b2e68d7418f0bbd/numpy-2.3.2-cp313-cp313-win32.whl) dependency is incompatible with the current platform
+      cause: A URL (http://[LOCALHOST]/files/windows_wheel-1.0.0-cp313-cp313-win32.whl) dependency is incompatible with the current platform
 
     hint: The wheel is compatible with CPython 3.13 (`cp313`), but you're using CPython 3.12 (`cp312`)
     "
@@ -6615,10 +6824,22 @@ fn incompatible_python_version_direct_url() -> Result<()> {
 
 #[test]
 fn incompatible_direct_url_redacts_credentials() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("packages/pip-sync-wheel-only.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
+
+    let mut wheel_url = Url::parse(&server.file_url("windows_wheel-1.0.0-cp313-cp313-win32.whl"))?;
+    wheel_url
+        .set_username("user")
+        .expect("HTTP URL accepts a username");
+    wheel_url
+        .set_password(Some("secret"))
+        .expect("HTTP URL accepts a password");
+    wheel_url
+        .query_pairs_mut()
+        .append_pair("X-Amz-Signature", "signing-secret");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("numpy @ https://user:secret@files.pythonhosted.org/packages/ae/11/7c546fcf42145f29b71e4d6f429e96d8d68e5a7ba1830b2e68d7418f0bbd/numpy-2.3.2-cp313-cp313-win32.whl?X-Amz-Signature=signing-secret")?;
+    requirements_txt.write_str(&format!("windows-wheel @ {wheel_url}"))?;
 
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
@@ -6628,7 +6849,7 @@ fn incompatible_direct_url_redacts_credentials() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     error: Failed to determine installation plan
-      cause: A URL (https://user:****@files.pythonhosted.org/packages/ae/11/7c546fcf42145f29b71e4d6f429e96d8d68e5a7ba1830b2e68d7418f0bbd/numpy-2.3.2-cp313-cp313-win32.whl?X-Amz-Signature=****) dependency is incompatible with the current platform
+      cause: A URL (http://user:****@[LOCALHOST]/files/windows_wheel-1.0.0-cp313-cp313-win32.whl?X-Amz-Signature=****) dependency is incompatible with the current platform
 
     hint: The wheel is compatible with CPython 3.13 (`cp313`), but you're using CPython 3.12 (`cp312`)
     "
@@ -6639,10 +6860,14 @@ fn incompatible_direct_url_redacts_credentials() -> Result<()> {
 
 #[test]
 fn incompatible_platform_direct_url() -> Result<()> {
-    let context = uv_test::test_context!("3.13");
+    let server = PackseServer::new("packages/pip-sync-wheel-only.toml");
+    let context = uv_test::test_context!("3.13").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("numpy @ https://files.pythonhosted.org/packages/ae/11/7c546fcf42145f29b71e4d6f429e96d8d68e5a7ba1830b2e68d7418f0bbd/numpy-2.3.2-cp313-cp313-win32.whl")?;
+    requirements_txt.write_str(&format!(
+        "windows-wheel @ {}",
+        server.file_url("windows_wheel-1.0.0-cp313-cp313-win32.whl")
+    ))?;
 
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
@@ -6652,7 +6877,7 @@ fn incompatible_platform_direct_url() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     error: Failed to determine installation plan
-      cause: A URL (https://files.pythonhosted.org/packages/ae/11/7c546fcf42145f29b71e4d6f429e96d8d68e5a7ba1830b2e68d7418f0bbd/numpy-2.3.2-cp313-cp313-win32.whl) dependency is incompatible with the current platform
+      cause: A URL (http://[LOCALHOST]/files/windows_wheel-1.0.0-cp313-cp313-win32.whl) dependency is incompatible with the current platform
 
     hint: The wheel is compatible with Windows (`win32`), but you're on Linux (`manylinux_2_28_x86_64`)
     "
@@ -6666,7 +6891,9 @@ fn incompatible_platform_direct_url() -> Result<()> {
 #[test]
 fn sync_missing_python_no_target() -> Result<()> {
     // Create a context that only has Python 3.11 available.
-    let context = uv_test::test_context!("3.11").with_managed_python_dirs();
+    let context = uv_test::test_context!("3.11")
+        .with_local_index()
+        .with_managed_python_dirs();
 
     let requirements = context.temp_dir.child("requirements.txt");
     requirements.write_str("anyio")?;
@@ -6688,6 +6915,7 @@ fn sync_missing_python_no_target() -> Result<()> {
 fn sync_with_target_installs_missing_python() -> Result<()> {
     // Create a context that only has Python 3.11 available.
     let context = uv_test::test_context!("3.11")
+        .with_local_index()
         .with_managed_python_dirs()
         .with_filtered_latest_python_versions();
 
@@ -6709,44 +6937,5 @@ fn sync_with_target_installs_missing_python() -> Result<()> {
      + anyio==4.3.0
     "
     );
-    Ok(())
-}
-
-fn artifact_hash(
-    server: &PackseServer,
-    filename: &str,
-    algorithm: HashAlgorithm,
-) -> Result<String> {
-    let mut hasher = Hasher::from(algorithm);
-    hasher.update(&server.file_bytes(filename)?);
-    Ok(HashDigest::from(hasher).digest().to_string())
-}
-
-/// A `--find-links` page without distribution links does not act as a package index.
-#[test]
-fn require_hashes_empty_find_links() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_local_index();
-    let links = context.temp_dir.child("links");
-    links.create_dir_all()?;
-    let server = FindLinksServer::new(links.path());
-    context
-        .temp_dir
-        .child("requirements.txt")
-        .write_str(&format!(
-            "hash-package==1.0.0 --hash=sha256:{}",
-            "0".repeat(64)
-        ))?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--require-hashes")
-        .arg("--find-links")
-        .arg(server.url()), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: No solution found when resolving dependencies
-      cause: Because hash-package was not found in the package registry and you require hash-package==1.0.0, we can conclude that your requirements are unsatisfiable.
-    ");
-
     Ok(())
 }
