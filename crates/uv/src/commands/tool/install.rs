@@ -46,7 +46,7 @@ use crate::commands::project::{
 };
 use crate::commands::tool::common::{
     ToolLock, ToolPython, finalize_tool_install, refine_interpreter, remove_entrypoints,
-    tool_entrypoints_are_fresh, tool_environment_spec,
+    repair_tool_entrypoints, tool_environment_spec,
 };
 use crate::commands::tool::{Target, ToolRequest};
 use crate::commands::{UvError, reporters::PythonDownloadReporter};
@@ -632,12 +632,21 @@ pub(crate) async fn install(
                     ),
                     Ok(SatisfiesResult::Fresh { .. })
                 );
-                if already_installed && tool_entrypoints_are_fresh(tool_receipt) {
-                    // Then we're done! Though we might need to update the receipt.
-                    if *tool_receipt.options() != options {
+                if already_installed {
+                    let repaired = repair_tool_entrypoints(
+                        environment.environment(),
+                        package_name,
+                        tool_receipt,
+                        &installed_tools,
+                        force,
+                        printer,
+                    )?;
+                    if repaired.is_some() || *tool_receipt.options() != options {
                         installed_tools.add_tool_receipt(
                             package_name,
-                            tool_receipt.clone().with_options(options),
+                            repaired
+                                .unwrap_or_else(|| tool_receipt.clone())
+                                .with_options(options),
                         )?;
                     }
 
@@ -785,13 +794,20 @@ pub(crate) async fn install(
                 && !request.is_latest()
                 && settings.reinstall.is_none()
                 && settings.resolver.upgrade.is_none()
-                && existing_tool_receipt
-                    .as_ref()
-                    .is_some_and(tool_entrypoints_are_fresh)
+                && existing_tool_receipt.is_some()
             {
                 let Some(existing_tool_receipt) = existing_tool_receipt.as_ref() else {
                     bail!("Expected an existing tool receipt");
                 };
+                let repaired = repair_tool_entrypoints(
+                    &environment,
+                    package_name,
+                    existing_tool_receipt,
+                    &installed_tools,
+                    force,
+                    printer,
+                )?;
+                let tool_receipt = repaired.as_ref().unwrap_or(existing_tool_receipt);
                 let python = if explicit_python_request {
                     python_request.clone()
                 } else {
@@ -807,7 +823,7 @@ pub(crate) async fn install(
                         receipt_excludes.clone(),
                         receipt_build_constraints.clone(),
                         python,
-                        existing_tool_receipt.entrypoints().iter().cloned(),
+                        tool_receipt.entrypoints().iter().cloned(),
                         options.clone(),
                     ),
                 )?;

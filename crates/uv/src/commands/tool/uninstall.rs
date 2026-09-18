@@ -241,7 +241,7 @@ async fn do_uninstall(
 }
 
 /// Identify the exported executables that still belong to this tool.
-fn owned_entrypoints(
+pub(super) fn owned_entrypoints(
     name: &PackageName,
     receipt: &Tool,
     receipts: &[(PackageName, Tool)],

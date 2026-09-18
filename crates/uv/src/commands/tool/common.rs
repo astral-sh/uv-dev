@@ -52,6 +52,7 @@ use uv_warnings::warn_user_once;
 use uv_workspace::WorkspaceCache;
 
 use crate::commands::pip;
+use crate::commands::tool::uninstall::owned_entrypoints;
 
 /// An error raised when a tool package provides no executables.
 #[derive(Debug, Error)]
@@ -151,7 +152,7 @@ pub(crate) fn remove_entrypoints(tool: &Tool) {
 }
 
 /// Return whether all executables recorded for a [`Tool`] exist in the configured bin directory.
-pub(crate) fn tool_entrypoints_are_fresh(tool: &Tool) -> bool {
+fn tool_entrypoints_are_fresh(tool: &Tool) -> bool {
     let Ok(executable_directory) = uv_tool::tool_executable_dir() else {
         return false;
     };
@@ -159,6 +160,197 @@ pub(crate) fn tool_entrypoints_are_fresh(tool: &Tool) -> bool {
     tool.entrypoints().iter().all(|entrypoint| {
         entrypoint.install_path.parent() == Some(executable_directory.as_path())
             && entrypoint.install_path.exists()
+    })
+}
+
+/// Repair exports of an otherwise unchanged tool without reinstalling its packages.
+///
+/// A receipt records where an executable was installed, not whether a later installation has
+/// replaced it. Check every source, destination, and old export before changing any executable.
+pub(super) fn repair_tool_entrypoints(
+    environment: &PythonEnvironment,
+    name: &PackageName,
+    tool: &Tool,
+    installed_tools: &InstalledTools,
+    force: bool,
+    printer: Printer,
+) -> anyhow::Result<Option<Tool>> {
+    if tool_entrypoints_are_fresh(tool) {
+        return Ok(None);
+    }
+
+    let mut receipts = Vec::new();
+    for (name, receipt) in installed_tools.tools()? {
+        receipts.push((name, receipt?));
+    }
+    receipts.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+    let owned = owned_entrypoints(name, tool, &receipts, installed_tools)?;
+    let executable_directory = uv_tool::tool_executable_dir()?;
+    let environment_root = fs_err::canonicalize(environment.root())?;
+    let mut replacements = BTreeMap::new();
+    let mut removals = BTreeSet::new();
+    let mut entrypoints = Vec::new();
+
+    for entrypoint in tool.entrypoints() {
+        let Some(filename) = entrypoint.install_path.file_name() else {
+            bail!(
+                "Invalid executable path `{}`",
+                entrypoint.install_path.user_display()
+            );
+        };
+        let source = environment.scripts().join(filename);
+        let canonical_source = fs_err::canonicalize(&source)
+            .with_context(|| format!("Failed to locate executable `{}`", source.user_display()))?;
+        if !canonical_source.starts_with(&environment_root)
+            || !fs_err::metadata(&canonical_source)?.is_file()
+        {
+            bail!(
+                "Executable `{}` is not a file in the tool environment",
+                source.user_display()
+            );
+        }
+        #[cfg(windows)]
+        if fs_err::symlink_metadata(&source)?.is_symlink() {
+            bail!("Executable `{}` is a symbolic link", source.user_display());
+        }
+
+        let target = executable_directory.join(filename);
+        if same_entrypoint_location(&source, &target)? {
+            bail!(
+                "Cannot export executable `{}` into its tool environment",
+                target.user_display()
+            );
+        }
+        let same_location = same_entrypoint_location(&entrypoint.install_path, &target)?;
+        let is_owned = owned.contains(entrypoint);
+        let exists = match fs_err::symlink_metadata(&target) {
+            Ok(metadata) if metadata.is_dir() => {
+                bail!("Executable path `{}` is a directory", target.user_display());
+            }
+            Ok(_) => true,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => false,
+            Err(err) => return Err(err.into()),
+        };
+        if exists && !(same_location && is_owned) && !force {
+            bail!(
+                "Executable already exists: {} (use `--force` to overwrite)",
+                target.user_display().bold()
+            );
+        }
+        if !exists || !same_location || !is_owned {
+            // Replacing another recorded owner requires an installation-time transfer. An
+            // export-only repair cannot make that ownership change durable, even with `--force`.
+            for (other_name, receipt) in &receipts {
+                if other_name == name {
+                    continue;
+                }
+                for other in receipt.entrypoints() {
+                    if same_entrypoint_location(&other.install_path, &target)? {
+                        bail!(
+                            "Cannot restore executable `{}` because it is also recorded for `{other_name}`",
+                            target.user_display()
+                        );
+                    }
+                    // If both directory names are absent, Windows cannot resolve aliases such
+                    // as differently cased paths to an existing directory identity.
+                    #[cfg(windows)]
+                    if other.install_path.file_name() == target.file_name()
+                        && other
+                            .install_path
+                            .parent()
+                            .is_some_and(|path| !path.exists())
+                        && target.parent().is_some_and(|path| !path.exists())
+                    {
+                        bail!(
+                            "Cannot compare missing executable directories for `{name}` and `{other_name}`"
+                        );
+                    }
+                }
+            }
+            replacements.insert(target.clone(), source);
+        }
+        if is_owned && !same_location {
+            removals.insert(entrypoint.install_path.clone());
+        }
+        entrypoints.push(ToolEntrypoint {
+            install_path: target,
+            ..entrypoint.clone()
+        });
+    }
+
+    fs_err::create_dir_all(&executable_directory)
+        .context("Failed to create executable directory")?;
+    #[cfg(windows)]
+    let itself = std::env::current_exe().ok();
+    for (target, source) in replacements {
+        debug!("Restoring executable: `{}`", target.user_display());
+        #[cfg(unix)]
+        replace_symlink(source, &target).context("Failed to restore executable")?;
+        #[cfg(windows)]
+        if itself.as_ref().is_some_and(|itself| {
+            std::path::absolute(&target).is_ok_and(|target| *itself == target)
+        }) {
+            self_replace::self_replace(source).context("Failed to restore executable")?;
+        } else {
+            uv_fs::copy_atomic_sync(source, &target).context("Failed to restore executable")?;
+        }
+    }
+    for old in removals {
+        #[cfg(windows)]
+        if itself
+            .as_ref()
+            .is_some_and(|itself| std::path::absolute(&old).is_ok_and(|target| *itself == target))
+        {
+            self_replace::self_delete().context("Failed to remove old executable")?;
+            continue;
+        }
+        match fs_err::remove_file(&old) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+    }
+
+    let names = entrypoints
+        .iter()
+        .map(|entrypoint| &entrypoint.name)
+        .collect::<BTreeSet<_>>();
+    let s = if names.len() == 1 { "" } else { "s" };
+    writeln!(
+        printer.stderr(),
+        "Restored {} executable{s}: {}",
+        names.len(),
+        names.iter().map(|name| name.bold()).join(", ")
+    )?;
+    warn_out_of_path(&executable_directory);
+    Ok(Some(tool.clone().with_entrypoints(entrypoints)))
+}
+
+/// Compare directory entries, not file objects: two hardlinks can have different owners.
+fn same_entrypoint_location(left: &Path, right: &Path) -> anyhow::Result<bool> {
+    if left == right {
+        return Ok(true);
+    }
+    let (Some(left_parent), Some(right_parent)) = (left.parent(), right.parent()) else {
+        return Ok(false);
+    };
+    if left.file_name() != right.file_name() {
+        return Ok(false);
+    }
+    for parent in [left_parent, right_parent] {
+        match fs_err::metadata(parent) {
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => return Ok(false),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(err) => return Err(err.into()),
+        }
+    }
+    uv_fs::is_same_file_allow_missing(left_parent, right_parent).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Cannot compare executable directories `{}` and `{}`",
+            left_parent.user_display(),
+            right_parent.user_display()
+        )
     })
 }
 

@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
+use std::path::Path;
 use std::process::Command;
 
 use anyhow::Result;
@@ -2605,84 +2606,542 @@ fn tool_install_already_installed() {
 
 #[test]
 fn tool_install_restores_missing_executables() -> Result<()> {
-    let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
+    for preview in ["", "tool-install-locks"] {
+        let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
+        let tool_dir = context.temp_dir.child("tools");
+        let first_bin_dir = context.temp_dir.child("first-bin");
+        let second_bin_dir = context.temp_dir.child("second-bin");
+        let third_bin_dir = context.temp_dir.child("third-bin");
+        let launcher = context
+            .workspace_root
+            .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+        let app = context
+            .workspace_root
+            .join("test/links/basic_app-0.1.0-py3-none-any.whl");
+        let app_requirement = format!(
+            "basic-app @ {}",
+            Url::from_file_path(&app).expect("Failed to convert app path to file URL")
+        );
+
+        context
+            .tool_install()
+            .arg(&launcher)
+            .arg("--with-executables-from")
+            .arg(&app_requirement)
+            .arg("--offline")
+            .env(EnvVars::UV_PREVIEW_FEATURES, preview)
+            .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+            .env(EnvVars::UV_TOOL_BIN_DIR, first_bin_dir.as_os_str())
+            .env(EnvVars::PATH, first_bin_dir.as_os_str())
+            .assert()
+            .success();
+
+        let environment = tool_dir.child("simple-launcher");
+        let receipt = environment.child("uv-receipt.toml");
+        let original_receipt = fs_err::read(receipt.path())?;
+        let original_config = fs_err::read(environment.child("pyvenv.cfg"))?;
+        let site_packages = site_packages_path(environment.path(), "python3.13");
+        let original_packages = dirhash_path(&site_packages)?;
+        let source_paths = ["simple_launcher", "basic-app"].map(|name| {
+            venv_bin_path(environment.path())
+                .join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
+        });
+        let source_contents = source_paths
+            .iter()
+            .map(fs_err::read)
+            .collect::<std::io::Result<Vec<_>>>()?;
+        let source_modified = source_paths
+            .iter()
+            .map(|path| fs_err::metadata(path)?.modified())
+            .collect::<std::io::Result<Vec<_>>>()?;
+        #[cfg(unix)]
+        let source_identity = source_paths
+            .iter()
+            .map(|path| fs_err::metadata(path).map(|metadata| (metadata.dev(), metadata.ino())))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        environment
+            .child("recovery-sentinel")
+            .write_str("existing environment")?;
+        let check = |bin: &Path| -> Result<()> {
+            for ((name, expected), source) in [
+                ("simple_launcher", "Hi from the simple launcher!\n"),
+                ("basic-app", "Hello from basic-app!\n"),
+            ]
+            .into_iter()
+            .zip(&source_paths)
+            {
+                let executable = bin.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+                Command::new(&executable)
+                    .env("PYTHONDONTWRITEBYTECODE", "1")
+                    .assert()
+                    .success()
+                    .stdout(expected);
+                assert_eq!(fs_err::read(&executable)?, fs_err::read(source)?);
+                #[cfg(unix)]
+                {
+                    assert!(fs_err::symlink_metadata(&executable)?.is_symlink());
+                    assert_eq!(
+                        fs_err::canonicalize(&executable)?,
+                        fs_err::canonicalize(source)?
+                    );
+                }
+                #[cfg(windows)]
+                assert!(!fs_err::symlink_metadata(&executable)?.is_symlink());
+            }
+            assert_eq!(
+                fs_err::read(environment.child("pyvenv.cfg"))?,
+                original_config
+            );
+            assert_eq!(dirhash_path(&site_packages)?, original_packages);
+            assert_eq!(
+                fs_err::read_to_string(environment.child("recovery-sentinel"))?,
+                "existing environment"
+            );
+            for ((source, contents), modified) in source_paths
+                .iter()
+                .zip(&source_contents)
+                .zip(&source_modified)
+            {
+                assert_eq!(fs_err::read(source)?, *contents);
+                assert_eq!(fs_err::metadata(source)?.modified()?, *modified);
+            }
+            #[cfg(unix)]
+            for (source, identity) in source_paths.iter().zip(&source_identity) {
+                let metadata = fs_err::metadata(source)?;
+                assert_eq!((metadata.dev(), metadata.ino()), *identity);
+            }
+            let mut current: toml::Value =
+                toml::from_str(&fs_err::read_to_string(receipt.path())?)?;
+            let mut original: toml::Value =
+                toml::from_str(std::str::from_utf8(&original_receipt)?)?;
+            let current_entrypoints = current["tool"]
+                .as_table_mut()
+                .expect("tool table")
+                .remove("entrypoints")
+                .expect("entrypoints");
+            let original_entrypoints = original["tool"]
+                .as_table_mut()
+                .expect("tool table")
+                .remove("entrypoints")
+                .expect("entrypoints");
+            assert_eq!(current, original);
+            assert_eq!(
+                current_entrypoints
+                    .as_array()
+                    .expect("entrypoint array")
+                    .len(),
+                2
+            );
+            assert_eq!(
+                original_entrypoints
+                    .as_array()
+                    .expect("entrypoint array")
+                    .len(),
+                2
+            );
+            for (current, original) in current_entrypoints
+                .as_array()
+                .expect("entrypoint array")
+                .iter()
+                .zip(original_entrypoints.as_array().expect("entrypoint array"))
+            {
+                let mut current = current.as_table().expect("entrypoint table").clone();
+                let mut original = original.as_table().expect("entrypoint table").clone();
+                let path = current.remove("install-path").expect("install path");
+                original.remove("install-path");
+                assert_eq!(
+                    Path::new(path.as_str().expect("path string")).parent(),
+                    Some(bin)
+                );
+                assert_eq!(current, original);
+            }
+            Ok(())
+        };
+        check(first_bin_dir.path())?;
+
+        let launcher_executable =
+            first_bin_dir.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
+        let app_executable =
+            first_bin_dir.child(format!("basic-app{}", std::env::consts::EXE_SUFFIX));
+        fs_err::remove_file(&launcher_executable)?;
+        fs_err::remove_file(&app_executable)?;
+
+        context
+            .tool_install()
+            .arg(&launcher)
+            .arg("--with-executables-from")
+            .arg(&app_requirement)
+            .arg("--offline")
+            .env(EnvVars::UV_PREVIEW_FEATURES, preview)
+            .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+            .env(EnvVars::UV_TOOL_BIN_DIR, first_bin_dir.as_os_str())
+            .env(EnvVars::PATH, first_bin_dir.as_os_str())
+            .assert()
+            .success()
+            .stderr(predicate::str::contains(
+                "Restored 2 executables: basic-app, simple_launcher",
+            ));
+
+        check(first_bin_dir.path())?;
+        assert_eq!(fs_err::read(receipt.path())?, original_receipt);
+        fs_err::remove_dir_all(first_bin_dir.path())?;
+
+        context
+            .tool_upgrade()
+            .arg("simple-launcher")
+            .arg("--offline")
+            .env(EnvVars::UV_PREVIEW_FEATURES, preview)
+            .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+            .env(EnvVars::UV_TOOL_BIN_DIR, first_bin_dir.as_os_str())
+            .env(EnvVars::PATH, first_bin_dir.as_os_str())
+            .assert()
+            .success()
+            .stderr(predicate::str::contains(
+                "Restored 2 executables: basic-app, simple_launcher",
+            ));
+
+        check(first_bin_dir.path())?;
+
+        context
+            .tool_install()
+            .arg(&launcher)
+            .arg("--with-executables-from")
+            .arg(&app_requirement)
+            .arg("--offline")
+            .env(EnvVars::UV_PREVIEW_FEATURES, preview)
+            .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+            .env(EnvVars::UV_TOOL_BIN_DIR, second_bin_dir.as_os_str())
+            .env(EnvVars::PATH, second_bin_dir.as_os_str())
+            .assert()
+            .success()
+            .stderr(predicate::str::contains(
+                "Restored 2 executables: basic-app, simple_launcher",
+            ));
+
+        check(second_bin_dir.path())?;
+        launcher_executable.assert(predicate::path::missing());
+        app_executable.assert(predicate::path::missing());
+
+        context
+            .tool_upgrade()
+            .arg("simple-launcher")
+            .arg("--offline")
+            .env(EnvVars::UV_PREVIEW_FEATURES, preview)
+            .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+            .env(EnvVars::UV_TOOL_BIN_DIR, third_bin_dir.as_os_str())
+            .env(EnvVars::PATH, third_bin_dir.as_os_str())
+            .assert()
+            .success()
+            .stderr(predicate::str::contains(
+                "Restored 2 executables: basic-app, simple_launcher",
+            ));
+        check(third_bin_dir.path())?;
+        for name in ["simple_launcher", "basic-app"] {
+            second_bin_dir
+                .child(format!("{name}{}", std::env::consts::EXE_SUFFIX))
+                .assert(predicate::path::missing());
+        }
+    }
+
+    Ok(())
+}
+
+/// Recovery must check all destinations before replacing an unrelated executable.
+#[test]
+fn tool_install_recovery_preflights_existing_executables() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
-    let first_bin_dir = context.temp_dir.child("first-bin");
-    let second_bin_dir = context.temp_dir.child("second-bin");
-    let launcher = context
-        .workspace_root
-        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
-    let app = context
-        .workspace_root
-        .join("test/links/basic_app-0.1.0-py3-none-any.whl");
-    let app_requirement = format!(
-        "basic-app @ {}",
-        Url::from_file_path(&app).expect("Failed to convert app path to file URL")
+    let bin_dir = context.temp_dir.child("bin");
+    let links = context.workspace_root.join("test/links");
+    let install = || {
+        let mut command = context.tool_install();
+        command
+            .arg("simple-launcher==0.1.0")
+            .arg("--with-executables-from")
+            .arg("basic-app==0.1.0")
+            .arg("--no-index")
+            .arg("--find-links")
+            .arg(&links)
+            .env(EnvVars::PATH, bin_dir.as_os_str());
+        command
+    };
+    install().assert().success();
+    let environment = tool_dir.child("simple-launcher");
+    let receipt = environment.child("uv-receipt.toml");
+    let receipt_contents = fs_err::read(receipt.path())?;
+    let site_packages = site_packages_path(environment.path(), "python3.13");
+    let installed_contents = dirhash_path(&site_packages)?;
+    let app = bin_dir.child(format!("basic-app{}", std::env::consts::EXE_SUFFIX));
+    let launcher = bin_dir.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
+    fs_err::remove_file(app.path())?;
+    fs_err::remove_file(launcher.path())?;
+    launcher.write_str("unrelated executable bytes")?;
+    install()
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("Executable already exists:"));
+    app.assert(predicate::path::missing());
+    assert_eq!(
+        fs_err::read_to_string(launcher.path())?,
+        "unrelated executable bytes"
     );
+    assert_eq!(fs_err::read(receipt.path())?, receipt_contents);
+    assert_eq!(dirhash_path(&site_packages)?, installed_contents);
 
+    install().arg("--force").assert().success();
+    Command::new(launcher.path())
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .assert()
+        .success()
+        .stdout("Hi from the simple launcher!\n");
+    Command::new(app.path())
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .assert()
+        .success()
+        .stdout("Hello from basic-app!\n");
+    assert_eq!(fs_err::read(receipt.path())?, receipt_contents);
+    assert_eq!(dirhash_path(&site_packages)?, installed_contents);
+    Ok(())
+}
+
+/// A stale receipt does not give recovery authority over another tool's exported command.
+#[test]
+fn tool_install_recovery_preserves_transferred_executables() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let second_bin_dir = context.temp_dir.child("second-bin");
+    let links = context.workspace_root.join("test/links");
+    let install = || {
+        let mut command = context.tool_install();
+        command
+            .arg("simple-launcher==0.1.0")
+            .arg("--with-executables-from")
+            .arg("basic-app==0.1.0")
+            .arg("--no-index")
+            .arg("--find-links")
+            .arg(&links)
+            .env(EnvVars::PATH, bin_dir.as_os_str());
+        command
+    };
+    install().assert().success();
     context
         .tool_install()
-        .arg(&launcher)
+        .arg("basic-app==0.1.0")
         .arg("--with-executables-from")
-        .arg(&app_requirement)
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-        .env(EnvVars::UV_TOOL_BIN_DIR, first_bin_dir.as_os_str())
-        .env(EnvVars::PATH, first_bin_dir.as_os_str())
+        .arg("simple-launcher==0.1.0")
+        .arg("--force")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(&links)
+        .env(EnvVars::PATH, bin_dir.as_os_str())
         .assert()
         .success();
+    let launcher = bin_dir.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
+    let app = bin_dir.child(format!("basic-app{}", std::env::consts::EXE_SUFFIX));
+    let owner_source = venv_bin_path(tool_dir.child("basic-app").path())
+        .join(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
+    assert_eq!(fs_err::read(launcher.path())?, fs_err::read(&owner_source)?);
+    #[cfg(unix)]
+    assert_eq!(
+        fs_err::canonicalize(launcher.path())?,
+        fs_err::canonicalize(&owner_source)?
+    );
+    let launcher_contents = fs_err::read(launcher.path())?;
+    let receipts =
+        ["simple-launcher", "basic-app"].map(|name| tool_dir.child(name).child("uv-receipt.toml"));
+    let receipt_contents = receipts
+        .iter()
+        .map(|path| fs_err::read(path.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let package_paths = ["simple-launcher", "basic-app"]
+        .map(|name| site_packages_path(tool_dir.child(name).path(), "python3.13"));
+    let packages = package_paths
+        .iter()
+        .map(|path| dirhash_path(path))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
-    let launcher_executable =
-        first_bin_dir.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
-    let app_executable = first_bin_dir.child(format!("basic-app{}", std::env::consts::EXE_SUFFIX));
-    fs_err::remove_file(&launcher_executable)?;
-    fs_err::remove_file(&app_executable)?;
-
-    context
-        .tool_install()
-        .arg(&launcher)
-        .arg("--with-executables-from")
-        .arg(&app_requirement)
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-        .env(EnvVars::UV_TOOL_BIN_DIR, first_bin_dir.as_os_str())
-        .env(EnvVars::PATH, first_bin_dir.as_os_str())
-        .assert()
-        .success();
-
-    launcher_executable.assert(predicate::path::exists());
-    app_executable.assert(predicate::path::exists());
-    fs_err::remove_file(&launcher_executable)?;
-    fs_err::remove_file(&app_executable)?;
-
+    // An otherwise-fresh install does not reclaim the command from its current owner.
+    install().assert().success();
+    assert_eq!(fs_err::read(launcher.path())?, launcher_contents);
+    fs_err::remove_file(app.path())?;
+    for force in [false, true] {
+        let mut command = install();
+        if force {
+            command.arg("--force");
+        }
+        command.assert().code(2).stderr(predicate::str::contains(
+            "because it is also recorded for `basic-app`",
+        ));
+    }
     context
         .tool_upgrade()
         .arg("simple-launcher")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-        .env(EnvVars::UV_TOOL_BIN_DIR, first_bin_dir.as_os_str())
-        .env(EnvVars::PATH, first_bin_dir.as_os_str())
+        .arg("--offline")
+        .env(EnvVars::PATH, bin_dir.as_os_str())
         .assert()
-        .success();
+        .code(1)
+        .stderr(predicate::str::contains(
+            "because it is also recorded for `basic-app`",
+        ));
+    app.assert(predicate::path::missing());
+    assert_eq!(fs_err::read(launcher.path())?, launcher_contents);
+    for (receipt, contents) in receipts.iter().zip(&receipt_contents) {
+        assert_eq!(fs_err::read(receipt.path())?, *contents);
+    }
+    for (path, contents) in package_paths.iter().zip(&packages) {
+        assert_eq!(dirhash_path(path)?, *contents);
+    }
 
-    launcher_executable.assert(predicate::path::exists());
-    app_executable.assert(predicate::path::exists());
-
-    context
-        .tool_install()
-        .arg(&launcher)
-        .arg("--with-executables-from")
-        .arg(&app_requirement)
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+    // A distinct bin directory is a new destination; the old current owner is left alone.
+    install()
         .env(EnvVars::UV_TOOL_BIN_DIR, second_bin_dir.as_os_str())
         .env(EnvVars::PATH, second_bin_dir.as_os_str())
         .assert()
         .success();
+    assert_eq!(fs_err::read(launcher.path())?, launcher_contents);
+    app.assert(predicate::path::missing());
+    assert_eq!(fs_err::read(receipts[1].path())?, receipt_contents[1]);
+    for (name, expected) in [
+        ("simple_launcher", "Hi from the simple launcher!\n"),
+        ("basic-app", "Hello from basic-app!\n"),
+    ] {
+        let executable = second_bin_dir.child(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+        Command::new(executable.path())
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .assert()
+            .success()
+            .stdout(expected);
+    }
+    Command::new(launcher.path())
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .assert()
+        .success()
+        .stdout("Hi from the simple launcher!\n");
+    for (path, contents) in package_paths.iter().zip(&packages) {
+        assert_eq!(dirhash_path(path)?, *contents);
+    }
+    Ok(())
+}
 
-    second_bin_dir
-        .child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX))
-        .assert(predicate::path::exists());
-    second_bin_dir
-        .child(format!("basic-app{}", std::env::consts::EXE_SUFFIX))
-        .assert(predicate::path::exists());
+/// A tool without recorded exports must not reacquire commands during no-op recovery.
+#[test]
+fn tool_install_recovery_preserves_empty_entrypoints() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    let second_bin_dir = context.temp_dir.child("second-bin");
+    let environment = context.temp_dir.child("tools").child("simple-launcher");
+    let wheel = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(&wheel)
+        .arg("--offline")
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+    let receipt = environment.child("uv-receipt.toml");
+    let mut document = fs_err::read_to_string(receipt.path())?.parse::<toml_edit::DocumentMut>()?;
+    document["tool"]["entrypoints"] = toml_edit::value(toml_edit::Array::new());
+    receipt.write_str(&document.to_string())?;
+    let contents = fs_err::read(receipt.path())?;
+    fs_err::remove_file(bin_dir.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX)))?;
+    let site_packages = site_packages_path(environment.path(), "python3.13");
+    let installed = dirhash_path(&site_packages)?;
+    context
+        .tool_install()
+        .arg(&wheel)
+        .arg("--offline")
+        .env(EnvVars::UV_TOOL_BIN_DIR, second_bin_dir.as_os_str())
+        .assert()
+        .success();
+    context
+        .tool_upgrade()
+        .arg("simple-launcher")
+        .arg("--offline")
+        .env(EnvVars::UV_TOOL_BIN_DIR, second_bin_dir.as_os_str())
+        .assert()
+        .success();
+    second_bin_dir.assert(predicate::path::missing());
+    assert_eq!(fs_err::read(receipt.path())?, contents);
+    let source = venv_bin_path(environment.path())
+        .join(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
+    Command::new(source)
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .assert()
+        .success()
+        .stdout("Hi from the simple launcher!\n");
+    assert_eq!(dirhash_path(&site_packages)?, installed);
+    Ok(())
+}
 
+#[cfg(windows)]
+#[test]
+fn tool_install_recovery_handles_bin_directory_aliases() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    let alias = context.temp_dir.child("BIN");
+    let links = context.workspace_root.join("test/links");
+    let install = || {
+        let mut command = context.tool_install();
+        command
+            .arg("simple-launcher==0.1.0")
+            .arg("--no-index")
+            .arg("--find-links")
+            .arg(&links)
+            .env(EnvVars::PATH, bin_dir.as_os_str());
+        command
+    };
+    install().assert().success();
+    assert_eq!(
+        uv_fs::is_same_file_allow_missing(bin_dir.path(), alias.path()),
+        Some(true)
+    );
+    let executable = bin_dir.child("simple_launcher.exe");
+    let contents = fs_err::read(executable.path())?;
+    install()
+        .env(EnvVars::UV_TOOL_BIN_DIR, alias.as_os_str())
+        .assert()
+        .success();
+    assert_eq!(fs_err::read(executable.path())?, contents);
+    Command::new(executable.path())
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .assert()
+        .success()
+        .stdout("Hi from the simple launcher!\n");
+
+    context
+        .tool_install()
+        .arg("basic-app==0.1.0")
+        .arg("--with-executables-from")
+        .arg("simple-launcher==0.1.0")
+        .arg("--force")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(&links)
+        .env(EnvVars::UV_TOOL_BIN_DIR, alias.as_os_str())
+        .assert()
+        .success();
+    let receipts = ["simple-launcher", "basic-app"].map(|name| {
+        context
+            .temp_dir
+            .child("tools")
+            .child(name)
+            .child("uv-receipt.toml")
+    });
+    let receipt_contents = receipts
+        .iter()
+        .map(|path| fs_err::read(path.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    fs_err::remove_dir_all(bin_dir.path())?;
+    install().assert().code(2).stderr(predicate::str::contains(
+        "Cannot compare missing executable directories",
+    ));
+    bin_dir.assert(predicate::path::missing());
+    for (receipt, contents) in receipts.iter().zip(&receipt_contents) {
+        assert_eq!(fs_err::read(receipt.path())?, *contents);
+    }
     Ok(())
 }
 

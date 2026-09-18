@@ -37,7 +37,7 @@ use crate::commands::project::{
 };
 use crate::commands::reporters::PythonDownloadReporter;
 use crate::commands::tool::common::{
-    ToolLock, remove_entrypoints, tool_entrypoints_are_fresh, tool_environment_spec,
+    ToolLock, remove_entrypoints, repair_tool_entrypoints, tool_environment_spec,
 };
 use crate::commands::{ExitStatus, conjunction, tool::common::finalize_tool_install};
 use crate::printer::Printer;
@@ -596,8 +596,7 @@ async fn upgrade_tool(
     if matches!(
         outcome,
         UpgradeOutcome::UpgradeEnvironment | UpgradeOutcome::UpgradeTool
-    ) || !tool_entrypoints_are_fresh(&existing_tool_receipt)
-    {
+    ) {
         // At this point, we updated the existing environment, so we should remove any of its
         // existing executables.
         remove_entrypoints(&existing_tool_receipt);
@@ -625,14 +624,30 @@ async fn upgrade_tool(
             tool_lock.as_ref(),
             printer,
         )?;
-    } else if tool_locks {
-        ToolLock::write(&tool_dir, tool_lock.as_ref())?;
-        installed_tools.add_tool_receipt(
-            name,
-            existing_tool_receipt
-                .clone()
-                .with_options(ToolOptions::from(options)),
-        )?;
+    } else {
+        let repaired = if matches!(outcome, UpgradeOutcome::NoOp) {
+            repair_tool_entrypoints(
+                &environment,
+                name,
+                &existing_tool_receipt,
+                installed_tools,
+                false,
+                printer,
+            )?
+        } else {
+            None
+        };
+        if tool_locks || repaired.is_some() {
+            if tool_locks {
+                ToolLock::write(&tool_dir, tool_lock.as_ref())?;
+            }
+            installed_tools.add_tool_receipt(
+                name,
+                repaired
+                    .unwrap_or_else(|| existing_tool_receipt.clone())
+                    .with_options(ToolOptions::from(options)),
+            )?;
+        }
     }
 
     let constraint = match &outcome {
