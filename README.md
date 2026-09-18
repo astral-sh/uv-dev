@@ -44,6 +44,8 @@ The reporter's script stores the arguments produced by `west packages pip`, appe
 
 The reporter also tried importing the generated requirement files and project requirements through `uv add --dev`. They report that resolution then fails on conflicts, but did not include the conflicts. Their remaining project-interface question is how to express the needed overrides from the command line, since `uv add` does not offer the `uv pip install --overrides` flag.
 
+For the separate dynamic-deployment workflow, the second reporter confirmed that adding `uv pip check` works in their complex deployment. This provides a practical post-install enforcement step for metadata-declared conflicts, though it detects the incompatible state after installation rather than preventing the mutation.
+
 ## Maintainer direction
 
 Maintainers regard `uv pip install` invocations as intentionally independent, consistent with pip, rather than as updates to a persistent dependency declaration. They recommend migrating this workflow to the top-level project interface: record the dependency set in one place and use `uv sync` to derive and maintain the environment. One maintainer offered to help map the workflow to that interface if it does not meet the reporter's needs.
