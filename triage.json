@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 1655,
+        "title": "Add `pip cache info` and `pip cache list`",
+        "url": "https://github.com/astral-sh/uv/issues/1655",
+        "state": "open",
+        "reason": "The closest inventory match: it requests listing cached distribution identities and per-entry sizes."
+      },
+      {
+        "kind": "issue",
+        "number": 11239,
+        "title": "Support `uv cache clean` with pattern similar to `pip cache remove <pattern>`",
+        "url": "https://github.com/astral-sh/uv/issues/11239",
+        "state": "open",
+        "reason": "The closest selective-removal match: it requests finer-grained selection beyond package-wide cache cleaning."
+      },
+      {
+        "kind": "issue",
+        "number": 9790,
+        "title": "uv cache management strategies for always-growing caches?",
+        "url": "https://github.com/astral-sh/uv/issues/9790",
+        "state": "open",
+        "reason": "It reports the same accumulation of old versions after upgrades, but proposes automatic retention or eviction rather than manual package/version management."
+      },
+      {
+        "kind": "issue",
+        "number": 16008,
+        "title": "Should/make `uv cache prune` delete packages that are not used anywhere via link count",
+        "url": "https://github.com/astral-sh/uv/issues/16008",
+        "state": "open",
+        "reason": "It seeks automatic collection of packages unused by environments; maintainer discussion explains the symlink limitation and favors age- or size-based eviction."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for cache inventory/list/info, package-version removal, patterns, per-package size and disk usage, unused entries, cache growth, eviction, pruning, hardlinks, symlinks, and avoiding re-downloads. Fix-oriented searches covered existing clean, prune, and size implementations. Merged astral-sh/uv#16032 only added aggregate cache sizing. astral-sh/uv#12854 was less precise than astral-sh/uv#1655; astral-sh/uv#18962 mixed per-version cleanup with unrelated environment management; historical astral-sh/uv#6909 and astral-sh/uv#6915 fixed dangling archives rather than adding version-level selection. No implementing pull request was found."
+  },
+  "type": "duplicate",
+  "type_reason": "Open astral-sh/uv#1655 already tracks cached-distribution listing and sizing, while astral-sh/uv#11239 tracks more selective removal. These are unimplemented enhancements rather than incorrect behavior, but duplicate takes precedence because the design can be centralized in those existing discussions.",
+  "summary": "Existing open issues collectively cover package/version inventory, finer-grained deletion, size visibility, and the motivating accumulation of old cached versions.",
+  "draft_response": "Thanks. Package/version inventory and size reporting are already tracked in astral-sh/uv#1655, while finer-grained cache removal is tracked in astral-sh/uv#11239. The broader accumulation of old versions is discussed in astral-sh/uv#9790 and astral-sh/uv#16008.\n\nToday, `uv cache clean <package>` removes all cached entries for that package, and `uv cache size` reports only the total cache size; version-level listing, sizing, and removal are not currently available. Symlink mode is also discouraged because clearing the cache can break linked environments; the default link modes already share package data where supported. Let’s keep the design discussion in those existing issues."
+}
