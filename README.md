@@ -10,6 +10,8 @@ The reported behavior is reproducible. A dynamic version forces uv to prepare ba
 
 Hatchling 1.32.3 was published on 2026-09-17, matching the onset in the report. Its change from pypa/hatch#2398 preserves the original version string in core metadata. Hatchling 1.32.0 normalized the extracted value before writing metadata and does not exhibit the failure.
 
+A uv maintainer confirmed that Hatchling's generated metadata violates the core-metadata specification and therefore requires an upstream fix regardless of uv's defensive handling.
+
 ## Reproduction
 
 Outcome: **reproducible**.
@@ -63,6 +65,8 @@ The parent regression added `crates/uv/tests/lock/lock.rs::lock_dynamic_version_
 Outcome: **fixed**.
 
 The fix is in `crates/uv-distribution/src/metadata/requires_dist.rs`. Local and workspace projects whose version is dynamic still use the backend to determine dynamic metadata. When that backend result contains neither dependencies nor provided extras, uv now reparses the project's PEP 621 metadata and uses its dependency declarations if those fields are static and non-empty. The fallback is deliberately limited to an empty backend dependency result: genuinely dynamic dependency fields continue to use the backend, and non-empty backend metadata remains authoritative for behavior such as Hatchling's recursive-extra expansion.
+
+This uv fallback does not make the Hatchling output valid. Maintainer direction is that Hatchling must also correct the specification violation upstream.
 
 The parent regression now expects a five-package lock containing `anyio`, `idna`, and `sniffio` alongside the project and its `iniconfig` dependency group. It also deletes the first lockfile and recreates it offline, confirming that cached malformed backend metadata is corrected through the same lowering path. Focused validation passed for the parent regression, dynamic-version path dependencies, and both Hatchling and Setuptools recursive-extra cases. `cargo +stable fmt --all -- --check`, `git diff --check`, and Clippy for all `uv-distribution` targets with warnings denied also passed. The pinned repository toolchain lacked writable Rustfmt and Clippy components in this environment, so the installed stable toolchain supplied those formatting and lint checks.
 
