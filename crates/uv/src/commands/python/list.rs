@@ -31,17 +31,23 @@ enum Kind {
 }
 
 #[derive(Debug, Serialize)]
-struct NamedVersionParts {
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+struct PythonVersionParts {
+    #[cfg_attr(feature = "schemars", schemars(range(max = u64::MAX)))]
     major: u64,
+    #[cfg_attr(feature = "schemars", schemars(range(max = u64::MAX)))]
     minor: u64,
+    #[cfg_attr(feature = "schemars", schemars(range(max = u64::MAX)))]
     patch: u64,
 }
 
 #[derive(Debug, Serialize)]
-struct PrintData {
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+struct PythonListEntry {
     key: String,
+    #[cfg_attr(feature = "schemars", schemars(with = "String"))]
     version: Version,
-    version_parts: NamedVersionParts,
+    version_parts: PythonVersionParts,
     path: Option<String>,
     symlink: Option<String>,
     url: Option<String>,
@@ -50,6 +56,23 @@ struct PrintData {
     implementation: String,
     arch: String,
     libc: String,
+}
+
+/// Generate the JSON schema for Python installation listings.
+#[cfg(feature = "schemars")]
+pub fn json_schema() -> schemars::Schema {
+    let mut schema = schemars::generate::SchemaSettings::draft07()
+        .for_serialize()
+        .into_generator()
+        .into_root_schema_for::<Vec<PythonListEntry>>();
+    schema.insert("title".to_owned(), "uv python list".into());
+    schema
+}
+
+/// Generate the per-record schema for preview JSONL Python listings.
+#[cfg(feature = "schemars")]
+pub fn jsonl_schema() -> schemars::Schema {
+    crate::commands::report::jsonl_array_schema::<PythonListEntry>("uv python list JSONL (preview)")
 }
 
 /// List available Python installations.
@@ -256,11 +279,11 @@ pub(crate) async fn list(
                     let version = key.version();
                     let release = version.release();
 
-                    Ok(PrintData {
+                    Ok(PythonListEntry {
                         key: key.to_string(),
                         version: version.version().clone(),
                         #[expect(clippy::get_first)]
-                        version_parts: NamedVersionParts {
+                        version_parts: PythonVersionParts {
                             major: release.get(0).copied().unwrap_or(0),
                             minor: release.get(1).copied().unwrap_or(0),
                             patch: release.get(2).copied().unwrap_or(0),
@@ -326,4 +349,114 @@ pub(crate) async fn list(
     }
 
     Ok(ExitStatus::Success)
+}
+
+#[cfg(all(test, feature = "schemars"))]
+mod tests {
+    use anyhow::{Context, Result};
+    use serde_json::{Value, json};
+    use uv_test::json_schema::JsonSchema;
+
+    use super::{PythonListEntry, PythonVersionParts, json_schema, jsonl_schema};
+    use crate::printer::jsonl_result_data;
+
+    fn entry() -> Result<PythonListEntry> {
+        Ok(PythonListEntry {
+            key: "cpython-3.12.0-linux-x86_64-gnu".to_owned(),
+            version: "3.12.0".parse()?,
+            version_parts: PythonVersionParts {
+                major: 3,
+                minor: 12,
+                patch: 0,
+            },
+            path: None,
+            symlink: None,
+            url: Some("https://example.org/cpython-3.12.0.tar.gz".to_owned()),
+            os: "linux".to_owned(),
+            variant: "default".to_owned(),
+            implementation: "cpython".to_owned(),
+            arch: "x86_64".to_owned(),
+            libc: "gnu".to_owned(),
+        })
+    }
+
+    #[test]
+    fn json_schemas_describe_serialized_entries() -> Result<()> {
+        let mut installed = entry()?;
+        installed.path = Some("/python/bin/python".to_owned());
+        installed.symlink = Some("python3.12".to_owned());
+        installed.url = None;
+        let entries = [entry()?, installed];
+        let payload = serde_json::to_value(&entries)?;
+        assert_eq!(payload[0]["version"], "3.12.0");
+
+        let document = serde_json::to_value(json_schema())?;
+        assert_eq!(document["title"], "uv python list");
+        assert_eq!(document["type"], "array");
+        let validator = JsonSchema::new(&serde_json::to_string(&document)?)?;
+        validator.parse(&serde_json::to_vec(&entries)?)?;
+        validator.parse(b"[]")?;
+        for invalid in [b"null".as_slice(), b"{}", b"[null]", b"[{}]"] {
+            assert!(validator.parse(invalid).is_err());
+        }
+
+        for field in [
+            "key",
+            "version",
+            "version_parts",
+            "path",
+            "symlink",
+            "url",
+            "os",
+            "variant",
+            "implementation",
+            "arch",
+            "libc",
+        ] {
+            let mut missing = payload.clone();
+            missing[0]
+                .as_object_mut()
+                .context("expected a Python list entry")?
+                .remove(field);
+            assert!(validator.parse(&serde_json::to_vec(&missing)?).is_err());
+        }
+
+        let parts = &document["definitions"]["PythonVersionParts"]["properties"];
+        for field in ["major", "minor", "patch"] {
+            assert_eq!(parts[field]["type"], "integer");
+            assert_eq!(parts[field]["minimum"], 0);
+            assert_eq!(parts[field]["maximum"], u64::MAX);
+            let mut maximum = payload.clone();
+            maximum[0]["version_parts"][field] = json!(u64::MAX);
+            let maximum = serde_json::to_string(&maximum)?;
+            validator.parse(maximum.as_bytes())?;
+            let maximum_value = u64::MAX.to_string();
+            assert_eq!(maximum.matches(&maximum_value).count(), 1);
+            let above_maximum =
+                maximum.replacen(&maximum_value, &(u128::from(u64::MAX) + 1).to_string(), 1);
+            assert!(validator.parse(above_maximum.as_bytes()).is_err());
+            for invalid_value in [Value::Null, json!(-1), json!(0.5), json!("3")] {
+                let mut invalid = payload.clone();
+                invalid[0]["version_parts"][field] = invalid_value;
+                assert!(validator.parse(&serde_json::to_vec(&invalid)?).is_err());
+            }
+        }
+
+        let record_document = serde_json::to_value(jsonl_schema())?;
+        assert_eq!(record_document["title"], "uv python list JSONL (preview)");
+        let records = JsonSchema::new(&serde_json::to_string(&record_document)?)?;
+        records.parse(jsonl_result_data(&entries)?.as_bytes())?;
+        records.parse(br#"{"type":"result","data":[]}"#)?;
+        records.parse(br#"{"type":"progress","phase":"resolve","status":"started"}"#)?;
+        for invalid in [
+            br#"{"type":"result"}"#.as_slice(),
+            br#"{"type":"result","data":null}"#,
+            br#"{"type":"result","data":{}}"#,
+            br#"{"type":"unknown","data":[]}"#,
+            br#"{"type":"progress","phase":"resolve"}"#,
+        ] {
+            assert!(records.parse(invalid).is_err());
+        }
+        Ok(())
+    }
 }

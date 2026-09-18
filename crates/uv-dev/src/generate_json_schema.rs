@@ -53,6 +53,8 @@ pub(crate) enum Target {
     Version,
     /// The `uv self version` JSON output format.
     SelfVersion,
+    /// The `uv python list` JSON output format.
+    PythonList,
     /// Shared progress records in the preview JSONL output format.
     JsonlProgress,
     /// Records in the preview `uv workspace metadata` JSONL output format.
@@ -69,6 +71,8 @@ pub(crate) enum Target {
     VersionJsonl,
     /// Records in the preview `uv self version` JSONL output format.
     SelfVersionJsonl,
+    /// Records in the preview `uv python list` JSONL output format.
+    PythonListJsonl,
 }
 
 impl Target {
@@ -82,6 +86,7 @@ impl Target {
             Self::PipCheck => "docs/reference/internals/pip-check.schema.json",
             Self::Version => "docs/reference/internals/version.schema.json",
             Self::SelfVersion => "docs/reference/internals/self-version.schema.json",
+            Self::PythonList => "docs/reference/internals/python-list.schema.json",
             Self::JsonlProgress => "docs/reference/internals/jsonl-progress.schema.json",
             Self::WorkspaceMetadataJsonl => "docs/reference/internals/metadata-jsonl.schema.json",
             Self::ToolListJsonl => "docs/reference/internals/tool-list-jsonl.schema.json",
@@ -90,6 +95,7 @@ impl Target {
             Self::PipCheckJsonl => "docs/reference/internals/pip-check-jsonl.schema.json",
             Self::VersionJsonl => "docs/reference/internals/version-jsonl.schema.json",
             Self::SelfVersionJsonl => "docs/reference/internals/self-version-jsonl.schema.json",
+            Self::PythonListJsonl => "docs/reference/internals/python-list-jsonl.schema.json",
         }
     }
 
@@ -103,6 +109,7 @@ impl Target {
             Self::PipCheck => "cargo dev generate-json-schema --target pip-check",
             Self::Version => "cargo dev generate-json-schema --target version",
             Self::SelfVersion => "cargo dev generate-json-schema --target self-version",
+            Self::PythonList => "cargo dev generate-json-schema --target python-list",
             Self::JsonlProgress => "cargo dev generate-json-schema --target jsonl-progress",
             Self::WorkspaceMetadataJsonl => {
                 "cargo dev generate-json-schema --target workspace-metadata-jsonl"
@@ -113,6 +120,7 @@ impl Target {
             Self::PipCheckJsonl => "cargo dev generate-json-schema --target pip-check-jsonl",
             Self::VersionJsonl => "cargo dev generate-json-schema --target version-jsonl",
             Self::SelfVersionJsonl => "cargo dev generate-json-schema --target self-version-jsonl",
+            Self::PythonListJsonl => "cargo dev generate-json-schema --target python-list-jsonl",
         }
     }
 }
@@ -190,6 +198,7 @@ fn schema(target: Target) -> schemars::Schema {
         Target::PipCheck => uv::commands::pip_check_json_schema(),
         Target::Version => uv::commands::version_json_schema(),
         Target::SelfVersion => uv::commands::self_version_json_schema(),
+        Target::PythonList => uv::commands::python_list_json_schema(),
         Target::JsonlProgress => uv::commands::jsonl_progress_json_schema(),
         Target::WorkspaceMetadataJsonl => uv::commands::workspace_metadata_jsonl_schema(),
         Target::ToolListJsonl => uv::commands::tool_list_jsonl_schema(),
@@ -198,6 +207,7 @@ fn schema(target: Target) -> schemars::Schema {
         Target::PipCheckJsonl => uv::commands::pip_check_jsonl_schema(),
         Target::VersionJsonl => uv::commands::version_jsonl_schema(),
         Target::SelfVersionJsonl => uv::commands::self_version_jsonl_schema(),
+        Target::PythonListJsonl => uv::commands::python_list_jsonl_schema(),
     }
 }
 
@@ -490,6 +500,32 @@ mod tests {
                     .parse(br#"{"type":"progress","phase":"resolve"}"#)
                     .is_err()
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn python_list_record_schema_uses_an_array_envelope() -> anyhow::Result<()> {
+        let document = serde_json::to_value(schema(Target::PythonList))?;
+        assert_eq!(document["title"], "uv python list");
+        assert_eq!(document["type"], "array");
+        let validator = JsonSchema::new(&serde_json::to_string(&document)?)?;
+        validator.parse(b"[]")?;
+        assert!(validator.parse(b"{}").is_err());
+
+        let document = serde_json::to_value(schema(Target::PythonListJsonl))?;
+        assert_eq!(document["title"], "uv python list JSONL (preview)");
+        assert_eq!(document["anyOf"].as_array().map(Vec::len), Some(2));
+        let validator = JsonSchema::new(&serde_json::to_string(&document)?)?;
+        validator.parse(br#"{"type":"result","data":[]}"#)?;
+        validator.parse(br#"{"type":"progress","phase":"resolve","status":"started"}"#)?;
+        for invalid in [
+            br#"{"type":"result"}"#.as_slice(),
+            br#"{"type":"result","data":{}}"#,
+            br#"{"type":"result","data":[{}]}"#,
+            br#"{"type":"unknown","data":[]}"#,
+        ] {
+            assert!(validator.parse(invalid).is_err());
         }
         Ok(())
     }

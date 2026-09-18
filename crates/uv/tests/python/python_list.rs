@@ -1,16 +1,71 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::process::{Command, Output};
+use std::sync::LazyLock;
 
 use uv_platform::{Arch, Os};
 use uv_static::EnvVars;
 
-use anyhow::{Result, anyhow};
-use serde_json::json;
+use anyhow::{Context, Result, anyhow};
+use serde_json::{Value, json};
+use uv_test::json_schema::JsonSchema;
+use uv_test::jsonl::{JsonlOutput, JsonlResultExpectation};
 use uv_test::uv_snapshot;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
 };
+
+static PYTHON_LIST_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> =
+    LazyLock::new(|| {
+        JsonSchema::new(include_str!(
+            "../../../../docs/reference/internals/python-list.schema.json"
+        ))
+        .map_err(|error| error.to_string())
+    });
+
+static PYTHON_LIST_JSONL_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> =
+    LazyLock::new(|| {
+        JsonSchema::new(include_str!(
+            "../../../../docs/reference/internals/python-list-jsonl.schema.json"
+        ))
+        .map_err(|error| error.to_string())
+    });
+
+fn parse_python_list(contents: &[u8]) -> Result<Value> {
+    PYTHON_LIST_SCHEMA
+        .as_ref()
+        .map_err(|error| anyhow!("invalid Python-list schema: {error}"))?
+        .parse(contents)
+        .context("Python-list schema mismatch")
+}
+
+fn jsonl_python_list(context: &uv_test::TestContext) -> Command {
+    let mut command = context.python_list();
+    command.env_remove(EnvVars::RUST_LOG);
+    command.args(["--output-format", "jsonl", "--preview-features", "jsonl"]);
+    command
+}
+
+fn parse_python_list_jsonl(
+    output: &Output,
+    expectation: JsonlResultExpectation,
+) -> Result<JsonlOutput> {
+    let schema = PYTHON_LIST_JSONL_SCHEMA
+        .as_ref()
+        .map_err(|error| anyhow!("invalid JSONL Python-list schema: {error}"))?;
+    JsonlOutput::parse(schema, output, expectation)
+}
+
+fn parse_python_list_jsonl_report(output: &Output) -> Result<(Vec<Value>, Value)> {
+    let parsed = parse_python_list_jsonl(output, JsonlResultExpectation::Required)?;
+    let result = parsed.result.context("missing JSONL Python-list result")?;
+    let data = result.get("data").context("missing Python-list data")?;
+    Ok((
+        parsed.progress,
+        parse_python_list(&serde_json::to_vec(data)?)?,
+    ))
+}
 
 #[test]
 fn python_list_json_quiet() -> Result<()> {
@@ -36,6 +91,8 @@ fn python_list_json_quiet() -> Result<()> {
     []
     ");
     assert_eq!(default.stdout, quiet.stdout);
+    assert_eq!(parse_python_list(&default.stdout)?, json!([]));
+    assert_eq!(parse_python_list(&quiet.stdout)?, json!([]));
 
     uv_snapshot!(context.filters(), list().args(["--only-installed", "--output-format", "json", "-qq"]), @"
     exit_code: 0 (success)
@@ -153,24 +210,26 @@ fn python_list() {
 fn python_list_jsonl() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 
-    let output = context
+    let json_output = context
         .python_list()
-        .arg("cpython")
-        .arg("--only-installed")
-        .arg("--output-format")
-        .arg("jsonl")
-        .arg("--preview-features")
-        .arg("jsonl")
+        .args(["cpython", "--only-installed", "--output-format", "json"])
+        .output()?;
+    assert!(json_output.status.success());
+    let expected = parse_python_list(&json_output.stdout)?;
+
+    let output = jsonl_python_list(&context)
+        .args(["cpython", "--only-installed"])
         .output()?;
     assert!(output.status.success());
 
-    let result = serde_json::from_slice::<serde_json::Value>(&output.stdout)?;
-    let installation = result["data"]
+    let (progress, data) = parse_python_list_jsonl_report(&output)?;
+    assert!(progress.is_empty());
+    assert_eq!(data, expected);
+    let installation = data
         .as_array()
         .and_then(|installations| installations.first())
         .ok_or_else(|| anyhow!("expected an installed Python in the JSONL result"))?;
     insta::assert_json_snapshot!(json!({
-        "type": result["type"],
         "implementation": installation["implementation"],
         "major": installation["version_parts"]["major"],
         "minor": installation["version_parts"]["minor"],
@@ -182,21 +241,35 @@ fn python_list_jsonl() -> Result<()> {
       "implementation": "cpython",
       "installed": true,
       "major": 3,
-      "minor": 12,
-      "type": "result"
+      "minor": 12
     }
     "#);
 
-    uv_snapshot!(context.filters(), context.python_list()
+    let empty = uv_snapshot!(context.filters(), jsonl_python_list(&context)
         .arg("pypy")
-        .arg("--only-installed")
-        .arg("--output-format").arg("jsonl")
-        .arg("--preview-features").arg("jsonl"), @r#"
+        .arg("--only-installed"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {"type":"result","data":[]}
     "#
     );
+    assert_eq!(parse_python_list_jsonl_report(&empty)?.1, json!([]));
+
+    for mode in ["-q", "--no-progress"] {
+        let output = jsonl_python_list(&context)
+            .args(["cpython", "--only-installed", mode])
+            .output()?;
+        assert!(output.status.success());
+        let (progress, data) = parse_python_list_jsonl_report(&output)?;
+        assert!(progress.is_empty());
+        assert_eq!(data, expected);
+    }
+    let silent = jsonl_python_list(&context)
+        .args(["cpython", "--only-installed", "-qq"])
+        .output()?;
+    assert!(silent.status.success());
+    assert!(silent.stdout.is_empty());
+    parse_python_list_jsonl(&silent, JsonlResultExpectation::Forbidden)?;
 
     Ok(())
 }
@@ -624,7 +697,7 @@ fn python_list_downloads_installed() {
 /// filtered by `--managed-python` and `--no-managed-python`.
 #[test]
 #[cfg(all(unix, feature = "test-python-managed"))]
-fn python_list_managed_symlinks() {
+fn python_list_managed_symlinks() -> Result<()> {
     use assert_cmd::assert::OutputAssertExt;
 
     let context = uv_test::test_context_with_versions!(&[])
@@ -661,6 +734,60 @@ fn python_list_managed_symlinks() {
     cpython-3.10.[LATEST]-[PLATFORM]    [BIN]/[PYTHON] -> managed/cpython-3.10-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     cpython-3.10.[LATEST]-[PLATFORM]    managed/cpython-3.10-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
+
+    let list = |preference: &str| {
+        let mut command = context.python_list();
+        command
+            .env_remove(EnvVars::RUST_LOG)
+            .env(EnvVars::UV_PYTHON_SEARCH_PATH, &bin_dir)
+            .args(["3.10", "--only-installed", preference]);
+        command
+    };
+    let excluded = list("--no-managed-python")
+        .args(["--output-format", "json"])
+        .output()?;
+    assert!(excluded.status.success());
+    assert_eq!(parse_python_list(&excluded.stdout)?, json!([]));
+
+    let included = list("--managed-python")
+        .args(["--output-format", "json"])
+        .output()?;
+    assert!(included.status.success());
+    let expected = parse_python_list(&included.stdout)?;
+    let entries = expected
+        .as_array()
+        .context("expected managed Python entries")?;
+    assert_eq!(entries.len(), 2);
+    let mut aliases = 0;
+    for entry in entries {
+        assert_eq!(entry["implementation"], "cpython");
+        assert_eq!(entry["version_parts"]["major"], 3);
+        assert_eq!(entry["version_parts"]["minor"], 10);
+        assert!(entry["url"].is_null());
+        let reported_path = entry["path"].as_str().context("missing installed path")?;
+        let installed_path = context.temp_dir.join(reported_path);
+        if fs_err::symlink_metadata(&installed_path)?.is_symlink() {
+            aliases += 1;
+            assert!(installed_path.starts_with(&bin_dir));
+            let target = fs_err::read_link(&installed_path)?;
+            let displayed_target = target
+                .strip_prefix(context.temp_dir.path())
+                .unwrap_or(&target);
+            assert_eq!(entry["symlink"], displayed_target.display().to_string());
+        } else {
+            assert!(entry["symlink"].is_null());
+        }
+    }
+    assert_eq!(aliases, 1);
+
+    let jsonl = list("--managed-python")
+        .args(["--output-format", "jsonl", "--preview-features", "jsonl"])
+        .output()?;
+    assert!(jsonl.status.success());
+    let (progress, data) = parse_python_list_jsonl_report(&jsonl)?;
+    assert!(progress.is_empty());
+    assert_eq!(data, expected);
+    Ok(())
 }
 
 #[tokio::test]
@@ -733,6 +860,114 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     cpython-3.13.2+freethreaded-linux-powerpc64le-gnu    https://custom.com/ccpython-3.13.2+freethreaded-linux-powerpc64le-gnu.tar.gz
     ");
 
+    let list = |url: &str| {
+        let mut command = context.python_list();
+        command
+            .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+            .env_remove(EnvVars::RUST_LOG)
+            .args([
+                "--only-downloads",
+                "--all-versions",
+                "--all-platforms",
+                "--all-arches",
+                "--python-downloads-json-url",
+                url,
+            ]);
+        command
+    };
+    let json_output = list(&server.uri())
+        .args(["--output-format", "json"])
+        .output()?;
+    assert!(json_output.status.success());
+    let expected = parse_python_list(&json_output.stdout)?;
+    insta::assert_json_snapshot!(&expected, @r#"
+    [
+      {
+        "arch": "aarch64",
+        "implementation": "cpython",
+        "key": "cpython-3.14.0-macos-aarch64-none",
+        "libc": "none",
+        "os": "macos",
+        "path": null,
+        "symlink": null,
+        "url": "https://custom.com/cpython-3.14.0-darwin-aarch64-none.tar.gz",
+        "variant": "default",
+        "version": "3.14.0",
+        "version_parts": {
+          "major": 3,
+          "minor": 14,
+          "patch": 0
+        }
+      },
+      {
+        "arch": "powerpc64le",
+        "implementation": "cpython",
+        "key": "cpython-3.13.2+freethreaded-linux-powerpc64le-gnu",
+        "libc": "gnu",
+        "os": "linux",
+        "path": null,
+        "symlink": null,
+        "url": "https://custom.com/ccpython-3.13.2+freethreaded-linux-powerpc64le-gnu.tar.gz",
+        "variant": "freethreaded",
+        "version": "3.13.2",
+        "version_parts": {
+          "major": 3,
+          "minor": 13,
+          "patch": 2
+        }
+      }
+    ]
+    "#);
+    let quiet = list(&server.uri())
+        .args(["--output-format", "json", "-q"])
+        .output()?;
+    assert!(quiet.status.success());
+    assert_eq!(quiet.stdout, json_output.stdout);
+    parse_python_list(&quiet.stdout)?;
+
+    for mode in [None, Some("-q"), Some("--no-progress")] {
+        let mut command = list(&server.uri());
+        command.args(["--output-format", "jsonl", "--preview-features", "jsonl"]);
+        if let Some(mode) = mode {
+            command.arg(mode);
+        }
+        let output = command.output()?;
+        assert!(output.status.success());
+        let (progress, data) = parse_python_list_jsonl_report(&output)?;
+        if mode.is_some() {
+            assert!(progress.is_empty());
+        }
+        assert_eq!(data, expected);
+    }
+    let silent = list(&server.uri())
+        .args([
+            "--output-format",
+            "jsonl",
+            "--preview-features",
+            "jsonl",
+            "-qq",
+        ])
+        .output()?;
+    assert!(silent.status.success());
+    assert!(silent.stdout.is_empty());
+    parse_python_list_jsonl(&silent, JsonlResultExpectation::Forbidden)?;
+
+    for endpoint in ["404", "invalid"] {
+        for output_format in ["json", "jsonl"] {
+            let mut command = list(&format!("{}/{endpoint}", server.uri()));
+            command.args(["--output-format", output_format]);
+            if output_format == "jsonl" {
+                command.args(["--preview-features", "jsonl"]);
+            }
+            let output = command.output()?;
+            assert_eq!(output.status.code(), Some(2));
+            assert!(output.stdout.is_empty());
+            if output_format == "jsonl" {
+                parse_python_list_jsonl(&output, JsonlResultExpectation::Forbidden)?;
+            }
+        }
+    }
+
     // test invalid URL path
     uv_snapshot!(context.filters(), context
         .python_list()
@@ -760,7 +995,7 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
 }
 
 #[test]
-fn python_list_with_mirrors() {
+fn python_list_with_mirrors() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_collapsed_whitespace()
@@ -844,4 +1079,76 @@ fn python_list_with_mirrors() {
     pypy-3.10.16-[PLATFORM] https://downloads.python.org/pypy/[FILE-PATH]
     graalpy-3.10.0-[PLATFORM] https://github.com/oracle/graalpython/releases/download/[FILE-PATH]
     ");
+
+    for (request, implementation, mirror, url_prefix) in [
+        (
+            "cpython@3.10.19",
+            "cpython",
+            Some((
+                EnvVars::UV_PYTHON_INSTALL_MIRROR,
+                "https://mirror.example.com",
+            )),
+            "https://mirror.example.com/",
+        ),
+        (
+            "pypy@3.10",
+            "pypy",
+            Some((
+                EnvVars::UV_PYPY_INSTALL_MIRROR,
+                "https://pypy-mirror.example.com",
+            )),
+            "https://pypy-mirror.example.com/",
+        ),
+        (
+            "cpython@3.10.19",
+            "cpython",
+            None,
+            "https://releases.astral.sh/github/python-build-standalone/releases/download/",
+        ),
+        (
+            "pypy@3.10",
+            "pypy",
+            None,
+            "https://downloads.python.org/pypy/",
+        ),
+    ] {
+        let list = || {
+            let mut command = context.python_list();
+            command
+                .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+                .env_remove(EnvVars::UV_PYTHON_INSTALL_MIRROR)
+                .env_remove(EnvVars::UV_PYPY_INSTALL_MIRROR)
+                .env_remove(EnvVars::RUST_LOG)
+                .args([request, "--only-downloads"]);
+            if let Some((name, value)) = mirror {
+                command.env(name, value);
+            }
+            command
+        };
+        let output = list().args(["--output-format", "json"]).output()?;
+        assert!(output.status.success());
+        let expected = parse_python_list(&output.stdout)?;
+        let entries = expected.as_array().context("expected Python downloads")?;
+        assert!(!entries.is_empty());
+        for entry in entries {
+            assert_eq!(entry["implementation"], implementation);
+            assert!(entry["path"].is_null());
+            assert!(entry["symlink"].is_null());
+            assert!(
+                entry["url"]
+                    .as_str()
+                    .context("missing Python download URL")?
+                    .starts_with(url_prefix)
+            );
+        }
+
+        let jsonl = list()
+            .args(["--output-format", "jsonl", "--preview-features", "jsonl"])
+            .output()?;
+        assert!(jsonl.status.success());
+        let (progress, data) = parse_python_list_jsonl_report(&jsonl)?;
+        assert!(progress.is_empty());
+        assert_eq!(data, expected);
+    }
+    Ok(())
 }
