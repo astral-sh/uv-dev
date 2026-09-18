@@ -2615,8 +2615,13 @@ fn tool_install_already_installed() {
 
 #[test]
 fn tool_install_restores_missing_executables() -> Result<()> {
-    for preview in ["", "tool-install-locks"] {
+    for preview in [None, Some("tool-install-locks")] {
         let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
+        let context = if let Some(preview) = preview {
+            context.with_env(EnvVars::UV_PREVIEW_FEATURES, preview)
+        } else {
+            context
+        };
         let tool_dir = context.temp_dir.child("tools");
         let first_bin_dir = context.temp_dir.child("first-bin");
         let second_bin_dir = context.temp_dir.child("second-bin");
@@ -2638,7 +2643,6 @@ fn tool_install_restores_missing_executables() -> Result<()> {
             .arg("--with-executables-from")
             .arg(&app_requirement)
             .arg("--offline")
-            .env(EnvVars::UV_PREVIEW_FEATURES, preview)
             .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
             .env(EnvVars::UV_TOOL_BIN_DIR, first_bin_dir.as_os_str())
             .env(EnvVars::PATH, first_bin_dir.as_os_str())
@@ -2781,7 +2785,6 @@ fn tool_install_restores_missing_executables() -> Result<()> {
             .arg("--with-executables-from")
             .arg(&app_requirement)
             .arg("--offline")
-            .env(EnvVars::UV_PREVIEW_FEATURES, preview)
             .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
             .env(EnvVars::UV_TOOL_BIN_DIR, first_bin_dir.as_os_str())
             .env(EnvVars::PATH, first_bin_dir.as_os_str())
@@ -2799,7 +2802,6 @@ fn tool_install_restores_missing_executables() -> Result<()> {
             .tool_upgrade()
             .arg("simple-launcher")
             .arg("--offline")
-            .env(EnvVars::UV_PREVIEW_FEATURES, preview)
             .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
             .env(EnvVars::UV_TOOL_BIN_DIR, first_bin_dir.as_os_str())
             .env(EnvVars::PATH, first_bin_dir.as_os_str())
@@ -2817,7 +2819,6 @@ fn tool_install_restores_missing_executables() -> Result<()> {
             .arg("--with-executables-from")
             .arg(&app_requirement)
             .arg("--offline")
-            .env(EnvVars::UV_PREVIEW_FEATURES, preview)
             .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
             .env(EnvVars::UV_TOOL_BIN_DIR, second_bin_dir.as_os_str())
             .env(EnvVars::PATH, second_bin_dir.as_os_str())
@@ -2835,7 +2836,6 @@ fn tool_install_restores_missing_executables() -> Result<()> {
             .tool_upgrade()
             .arg("simple-launcher")
             .arg("--offline")
-            .env(EnvVars::UV_PREVIEW_FEATURES, preview)
             .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
             .env(EnvVars::UV_TOOL_BIN_DIR, third_bin_dir.as_os_str())
             .env(EnvVars::PATH, third_bin_dir.as_os_str())
@@ -3193,8 +3193,13 @@ fn write_recovery_wheel(
 /// Changed dependencies, root versions, and interpreters all use the original export authority.
 #[test]
 fn tool_install_recovery_survives_environment_updates() -> Result<()> {
-    for preview in ["", "tool-install-locks"] {
+    for preview in [None, Some("tool-install-locks")] {
         let context = uv_test::test_context_with_versions!(&["3.13", "3.12"]).with_tool_dirs();
+        let context = if let Some(preview) = preview {
+            context.with_env(EnvVars::UV_PREVIEW_FEATURES, preview)
+        } else {
+            context
+        };
         let links = context.temp_dir.child("links");
         links.create_dir_all()?;
         let bins = (0..6)
@@ -3227,7 +3232,6 @@ fn tool_install_recovery_survives_environment_updates() -> Result<()> {
                     "--find-links",
                 ])
                 .arg(links.path())
-                .env(EnvVars::UV_PREVIEW_FEATURES, preview)
                 .env(EnvVars::UV_TOOL_BIN_DIR, bin)
                 .env(EnvVars::PATH, bin);
             command
@@ -3238,7 +3242,6 @@ fn tool_install_recovery_survives_environment_updates() -> Result<()> {
                 .arg("recovery-root")
                 .args(["--no-index", "--find-links"])
                 .arg(links.path())
-                .env(EnvVars::UV_PREVIEW_FEATURES, preview)
                 .env(EnvVars::UV_TOOL_BIN_DIR, bin)
                 .env(EnvVars::PATH, bin);
             command
