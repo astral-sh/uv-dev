@@ -1,4 +1,8 @@
+use std::collections::BTreeMap;
 use std::fmt::Write;
+#[cfg(windows)]
+use std::io::Read;
+use std::path::Path;
 
 use anyhow::{Result, bail};
 use itertools::Itertools;
@@ -8,6 +12,8 @@ use tracing::debug;
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
 use uv_tool::{InstalledTools, Tool, ToolEntrypoint};
+#[cfg(windows)]
+use uv_trampoline_builder::{Launcher, LauncherKind};
 
 use crate::commands::ExitStatus;
 use crate::printer::Printer;
@@ -99,15 +105,50 @@ async fn do_uninstall(
     names: Vec<PackageName>,
     printer: Printer,
 ) -> Result<()> {
-    let mut dangling = false;
+    // Determine ownership before removing any environment. In particular, copied native
+    // executables can have identical contents in multiple tools, so their receipts alone cannot
+    // identify the last tool to install them with `--force`.
+    let all_tools = installed_tools.tools()?;
+    let checks_ownership = all_tools
+        .iter()
+        .any(|(name, receipt)| receipt.is_ok() && (names.is_empty() || names.contains(name)));
+    let mut receipts = Vec::new();
+    for (name, receipt) in all_tools {
+        match receipt {
+            Ok(receipt) => receipts.push((name, receipt)),
+            // Missing selected receipts have only a dangling-environment cleanup plan. With
+            // `--all`, malformed receipts receive the same cleanup. Neither claims an executable.
+            Err(uv_tool::Error::MissingToolReceipt(..)) if names.contains(&name) => {}
+            Err(_) if names.is_empty() => {}
+            Err(_) if !checks_ownership => {}
+            Err(err) => return Err(err.into()),
+        }
+    }
+    receipts.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+    let mut planned_entrypoints = BTreeMap::new();
+    if names.is_empty() {
+        for (name, receipt) in &receipts {
+            let entrypoints = owned_entrypoints(name, receipt, &receipts, installed_tools)?;
+            planned_entrypoints.insert(name.clone(), entrypoints);
+        }
+    } else {
+        for name in &names {
+            if let Some(receipt) = installed_tools.get_tool_receipt(name)? {
+                let entrypoints = owned_entrypoints(name, &receipt, &receipts, installed_tools)?;
+                planned_entrypoints.insert(name.clone(), entrypoints);
+            }
+        }
+    }
+
+    let mut removed_environment = false;
     let mut entrypoints = if names.is_empty() {
         let mut entrypoints = vec![];
         for (name, receipt) in installed_tools.tools()? {
-            let Ok(receipt) = receipt else {
+            let Ok(_receipt) = receipt else {
                 // If the tool is not installed properly, attempt to remove the environment anyway.
                 match installed_tools.remove_environment(&name) {
                     Ok(()) => {
-                        dangling = true;
+                        removed_environment = true;
                         writeln!(
                             printer.stderr(),
                             "Removed dangling environment for `{name}`"
@@ -127,17 +168,25 @@ async fn do_uninstall(
                 }
             };
 
-            entrypoints.extend(uninstall_tool(&name, &receipt, installed_tools).await?);
+            let Some(planned) = planned_entrypoints.get(&name) else {
+                bail!("Missing executable ownership plan for `{name}`");
+            };
+            let removed_entrypoints = uninstall_tool(&name, planned, installed_tools).await?;
+            if removed_entrypoints.is_empty() {
+                removed_environment = true;
+                writeln!(printer.stderr(), "Removed environment for `{name}`")?;
+            }
+            entrypoints.extend(removed_entrypoints);
         }
         entrypoints
     } else {
         let mut entrypoints = vec![];
         for name in names {
-            let Some(receipt) = installed_tools.get_tool_receipt(&name)? else {
+            let Some(_receipt) = installed_tools.get_tool_receipt(&name)? else {
                 // If the tool is not installed properly, attempt to remove the environment anyway.
                 match installed_tools.remove_environment(&name) {
                     Ok(()) => {
-                        dangling = true;
+                        removed_environment = true;
                         writeln!(
                             printer.stderr(),
                             "Removed dangling environment for `{name}`"
@@ -155,15 +204,23 @@ async fn do_uninstall(
                 }
             };
 
-            entrypoints.extend(uninstall_tool(&name, &receipt, installed_tools).await?);
+            let Some(planned) = planned_entrypoints.get(&name) else {
+                bail!("Missing executable ownership plan for `{name}`");
+            };
+            let removed_entrypoints = uninstall_tool(&name, planned, installed_tools).await?;
+            if removed_entrypoints.is_empty() {
+                removed_environment = true;
+                writeln!(printer.stderr(), "Removed environment for `{name}`")?;
+            }
+            entrypoints.extend(removed_entrypoints);
         }
         entrypoints
     };
     entrypoints.sort_unstable_by(|a, b| a.name.cmp(&b.name));
 
     if entrypoints.is_empty() {
-        // If we removed at least one dangling environment, there's no need to summarize.
-        if !dangling {
+        // If we removed at least one environment without executables, there's no need to summarize.
+        if !removed_environment {
             writeln!(printer.stderr(), "Nothing to uninstall")?;
         }
         return Ok(());
@@ -183,20 +240,186 @@ async fn do_uninstall(
     Ok(())
 }
 
-/// Uninstall a tool.
-async fn uninstall_tool(
+/// Identify the exported executables that still belong to this tool.
+fn owned_entrypoints(
     name: &PackageName,
     receipt: &Tool,
+    receipts: &[(PackageName, Tool)],
     tools: &InstalledTools,
 ) -> Result<Vec<ToolEntrypoint>> {
-    // Remove the tool itself.
+    let mut owned = Vec::new();
+    for entrypoint in receipt.entrypoints() {
+        let mut owner = None;
+        for (tool_name, other_receipt) in receipts {
+            let mut matches_export = false;
+            for other in other_receipt.entrypoints() {
+                #[cfg(unix)]
+                let same_path = other.install_path == entrypoint.install_path;
+                #[cfg(windows)]
+                let same_path = same_install_path(&other.install_path, &entrypoint.install_path)?;
+                if same_path && entrypoint_matches(other, &tools.tool_dir(tool_name))? {
+                    matches_export = true;
+                    break;
+                }
+            }
+            if !matches_export {
+                continue;
+            }
+            if let Some(previous) = owner.replace(tool_name) {
+                bail!(
+                    "Cannot determine whether executable `{}` belongs to `{previous}` or `{tool_name}`; no tools were removed",
+                    entrypoint.install_path.user_display()
+                );
+            }
+        }
+        if owner == Some(name) {
+            owned.push(entrypoint.clone());
+        } else {
+            debug!(
+                "Retaining executable not owned by `{name}`: {}",
+                entrypoint.install_path.user_display()
+            );
+        }
+    }
+    Ok(owned)
+}
+
+/// Compare receipt paths without confusing differently cased Windows copies with unique owners.
+#[cfg(windows)]
+fn same_install_path(left: &Path, right: &Path) -> Result<bool> {
+    if left == right {
+        return Ok(true);
+    }
+    for path in [left, right] {
+        match fs_err::metadata(path) {
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(err) => return Err(err.into()),
+        }
+    }
+    if let Some(same) = uv_fs::is_same_file_allow_missing(left, right) {
+        Ok(same)
+    } else {
+        bail!(
+            "Cannot compare executable ownership paths `{}` and `{}`",
+            left.user_display(),
+            right.user_display()
+        )
+    }
+}
+
+/// Match an export to the conventional scripts directory of one installed tool.
+///
+/// Unix exports must be symlinks to the exact script. Windows exports must be regular copies of
+/// the exact script. A uv script launcher must also name this environment's Python executable;
+/// other copied executables are supported only when the caller finds a unique matching receipt.
+fn entrypoint_matches(entrypoint: &ToolEntrypoint, tool_directory: &Path) -> Result<bool> {
+    let Some(filename) = entrypoint.install_path.file_name() else {
+        return Ok(false);
+    };
+    let scripts = tool_directory.join(if cfg!(windows) { "Scripts" } else { "bin" });
+    let source = scripts.join(filename);
+    let metadata = match fs_err::symlink_metadata(&entrypoint.install_path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(err.into()),
+    };
+
+    #[cfg(unix)]
+    {
+        if !metadata.is_symlink() {
+            return Ok(false);
+        }
+        let target = match fs_err::canonicalize(&entrypoint.install_path) {
+            Ok(target) => target,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(err) => return Err(err.into()),
+        };
+        let source = match fs_err::canonicalize(source) {
+            Ok(source) => source,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(err) => return Err(err.into()),
+        };
+        Ok(target == source
+            && source.starts_with(fs_err::canonicalize(tool_directory)?)
+            && fs_err::metadata(source)?.is_file())
+    }
+
+    #[cfg(windows)]
+    {
+        if !metadata.is_file() || metadata.is_symlink() {
+            return Ok(false);
+        }
+        let source_metadata = match fs_err::symlink_metadata(&source) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(err) => return Err(err.into()),
+        };
+        if !source_metadata.is_file()
+            || source_metadata.is_symlink()
+            || metadata.len() != source_metadata.len()
+        {
+            return Ok(false);
+        }
+        if let Some(launcher) = Launcher::try_from_path(&entrypoint.install_path)? {
+            match launcher.kind {
+                LauncherKind::Script => {}
+                LauncherKind::Python => return Ok(false),
+            }
+            if !launcher.python_path.is_absolute() {
+                return Ok(false);
+            }
+            let python = match launcher.python_path.file_name() {
+                Some(filename) if filename == "python.exe" || filename == "pythonw.exe" => {
+                    scripts.join(filename)
+                }
+                _ => return Ok(false),
+            };
+            let expected = match dunce::canonicalize(python) {
+                Ok(expected) => expected,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(err) => return Err(err.into()),
+            };
+            let actual = match dunce::canonicalize(&launcher.python_path) {
+                Ok(actual) => actual,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(err) => return Err(err.into()),
+            };
+            if actual != expected {
+                return Ok(false);
+            }
+        }
+        let mut installed = fs_err::File::open(&entrypoint.install_path)?;
+        let mut source = fs_err::File::open(source)?;
+        let mut installed_buffer = [0; 8192];
+        let mut source_buffer = [0; 8192];
+        loop {
+            let count = installed.read(&mut installed_buffer)?;
+            source.read_exact(&mut source_buffer[..count])?;
+            if installed_buffer[..count] != source_buffer[..count] {
+                return Ok(false);
+            }
+            if count == 0 {
+                return Ok(source.read(&mut source_buffer)? == 0);
+            }
+        }
+    }
+}
+
+/// Uninstall a tool after its executable ownership has been checked.
+async fn uninstall_tool(
+    name: &PackageName,
+    entrypoints: &[ToolEntrypoint],
+    tools: &InstalledTools,
+) -> Result<Vec<ToolEntrypoint>> {
+    // Remove the tool itself, after validating the other tool receipts.
     tools.remove_environment(name)?;
 
     #[cfg(windows)]
     let itself = std::env::current_exe().ok();
 
     // Remove the tool's entrypoints.
-    let entrypoints = receipt.entrypoints();
+    let mut removed_entrypoints = Vec::with_capacity(entrypoints.len());
     for entrypoint in entrypoints {
         debug!(
             "Removing executable: {}",
@@ -208,11 +431,12 @@ async fn uninstall_tool(
             std::path::absolute(&entrypoint.install_path).is_ok_and(|target| *itself == target)
         }) {
             self_replace::self_delete()?;
+            removed_entrypoints.push(entrypoint.clone());
             continue;
         }
 
         match fs_err::tokio::remove_file(&entrypoint.install_path).await {
-            Ok(()) => {}
+            Ok(()) => removed_entrypoints.push(entrypoint.clone()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 debug!(
                     "Executable not found: {}",
@@ -225,5 +449,5 @@ async fn uninstall_tool(
         }
     }
 
-    Ok(entrypoints.to_vec())
+    Ok(removed_entrypoints)
 }
