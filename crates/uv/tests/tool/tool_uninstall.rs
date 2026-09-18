@@ -403,11 +403,13 @@ fn tool_uninstall_rejects_ambiguous_copied_executable() -> Result<()> {
     );
 
     for name in ["first-native", "second-native", "--all"] {
-        uv_snapshot!(context.filters(), context.tool_uninstall().arg(name), @"
-        exit_code: 2 (failure)
-        ----- stderr -----
-        error: Cannot determine whether executable `bin/shared.cmd` belongs to `first-native` or `second-native`; no tools were removed
-        ");
+        insta::allow_duplicates! {
+            uv_snapshot!(context.filters(), context.tool_uninstall().arg(name), @"
+            exit_code: 2 (failure)
+            ----- stderr -----
+            error: Cannot determine whether executable `bin/shared.cmd` belongs to `first-native` or `second-native`; no tools were removed
+            ");
+        }
         assert_eq!(fs_err::read(first_receipt.path())?, first_contents);
         assert_eq!(fs_err::read(second_receipt.path())?, second_contents);
         assert_eq!(fs_err::read(executable.path())?, script.as_bytes());
@@ -500,11 +502,13 @@ fn tool_uninstall_rejects_different_basename_aliases() -> Result<()> {
     }
 
     for name in ["first-command", "second-command", "--all"] {
-        uv_snapshot!(context.filters(), context.tool_uninstall().arg(name), @"
-        exit_code: 2 (failure)
-        ----- stderr -----
-        error: Cannot determine whether executable `bin/[ALIAS].cmd` belongs to `first-command` or `second-command`; no tools were removed
-        ");
+        insta::allow_duplicates! {
+            uv_snapshot!(context.filters(), context.tool_uninstall().arg(name), @"
+            exit_code: 2 (failure)
+            ----- stderr -----
+            error: Cannot determine whether executable `bin/[ALIAS].cmd` belongs to `first-command` or `second-command`; no tools were removed
+            ");
+        }
         for (receipt, contents) in receipts.iter().zip(&receipt_contents) {
             assert_eq!(fs_err::read(receipt.path())?, *contents);
         }
@@ -524,11 +528,13 @@ fn tool_uninstall_rejects_different_basename_aliases() -> Result<()> {
         );
     }
     for export in [&first, &second] {
-        uv_snapshot!(context.filters(), Command::new("cmd").arg("/D").arg("/C").arg(export.path()), @"
-        exit_code: 0 (success)
-        ----- stdout -----
-        shared command alias fixture
-        ");
+        insta::allow_duplicates! {
+            uv_snapshot!(context.filters(), Command::new("cmd").arg("/D").arg("/C").arg(export.path()), @"
+            exit_code: 0 (success)
+            ----- stdout -----
+            shared command alias fixture
+            ");
+        }
     }
     Ok(())
 }
