@@ -3770,6 +3770,146 @@ fn run_isolated_incompatible_python() -> Result<()> {
 }
 
 #[test]
+fn run_isolated_lock() -> Result<()> {
+    let server = PackseServer::new("simple/single-package.toml");
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a>=1.0.0"]
+    "#})?;
+    let sentinel = context.venv.child("sentinel");
+    sentinel.write_str("present")?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--isolated-lock")
+        .arg("--index")
+        .arg(server.index_url())
+        .arg("python").arg("-c").arg("import a; print(a.__version__)"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    2.0.0
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==2.0.0
+    ");
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    assert!(context.site_packages().join("a").exists());
+    assert!(sentinel.exists());
+
+    context
+        .lock()
+        .arg("--index")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let lockfile = context.read("uv.lock");
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--isolated-lock")
+        .arg("--resolution=lowest-direct")
+        .arg("--index")
+        .arg(server.index_url())
+        .arg("python").arg("-c").arg("import a; print(a.__version__)"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+
+    ----- stderr -----
+    Ignoring existing lockfile due to change in resolution mode: `highest` vs. `lowest-direct`
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - a==2.0.0
+     + a==1.0.0
+    ");
+    assert_eq!(lockfile, context.read("uv.lock"));
+    assert!(sentinel.exists());
+
+    Ok(())
+}
+
+#[test]
+fn run_isolated_lock_script() -> Result<()> {
+    let server = PackseServer::new("simple/single-package.toml");
+    let context = uv_test::test_context!("3.12");
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["a>=1.0.0"]
+        # ///
+        import a
+        print(a.__version__)
+    "#})?;
+
+    context
+        .sync()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--isolated-lock")
+        .arg("--index")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    assert!(!context.temp_dir.child("script.py.lock").exists());
+
+    context
+        .lock()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--index")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let lockfile = context.read("script.py.lock");
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--isolated-lock")
+        .arg("--resolution=lowest-direct")
+        .arg("--index")
+        .arg(server.index_url())
+        .arg("--script").arg(script.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+
+    ----- stderr -----
+    Ignoring existing lockfile due to change in resolution mode: `highest` vs. `lowest-direct`
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - a==2.0.0
+     + a==1.0.0
+    ");
+    assert_eq!(lockfile, context.read("script.py.lock"));
+
+    context
+        .sync()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--isolated-lock")
+        .arg("--resolution=lowest-direct")
+        .arg("--index")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    assert_eq!(lockfile, context.read("script.py.lock"));
+
+    Ok(())
+}
+
+#[test]
 fn run_isolated_does_not_modify_lock() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
