@@ -345,6 +345,7 @@ fn tool_uninstall_after_same_tool_reinstall() -> Result<()> {
 fn tool_uninstall_rejects_ambiguous_copied_executable() -> Result<()> {
     let context = uv_test::test_context!("3.13")
         .with_filtered_exe_suffix()
+        .with_filter((r"[\\/]BIN[\\/]shared\.cmd", "/bin/shared.cmd"))
         .with_tool_dirs();
     let links = context.temp_dir.child("links");
     let tool_dir = context.temp_dir.child("tools");
@@ -363,21 +364,33 @@ fn tool_uninstall_rejects_ambiguous_copied_executable() -> Result<()> {
             &[(script_path.as_str(), script)],
         );
         fs_err::write(links.child(filename), wheel)?;
-        context
-            .tool_install()
+        let mut install = context.tool_install();
+        install
             .arg(format!("{name}==0.1.0"))
             .arg("--no-index")
             .arg("--find-links")
             .arg(links.path())
-            .arg("--force")
-            .assert()
-            .success();
+            .arg("--force");
+        if name == "second-native" {
+            install.env(
+                EnvVars::UV_TOOL_BIN_DIR,
+                context.temp_dir.child("BIN").path(),
+            );
+        }
+        install.assert().success();
     }
     let executable = context.temp_dir.child("bin").child("shared.cmd");
     let first_receipt = tool_dir.child("first-native").child("uv-receipt.toml");
     let second_receipt = tool_dir.child("second-native").child("uv-receipt.toml");
     let first_contents = fs_err::read(first_receipt.path())?;
     let second_contents = fs_err::read(second_receipt.path())?;
+    assert_eq!(
+        uv_fs::is_same_file_allow_missing(
+            executable.path(),
+            context.temp_dir.child("BIN").child("shared.cmd").path()
+        ),
+        Some(true)
+    );
     assert_eq!(fs_err::read(executable.path())?, script.as_bytes());
     assert_eq!(
         fs_err::read(venv_bin_path(tool_dir.child("first-native").path()).join("shared.cmd"))?,

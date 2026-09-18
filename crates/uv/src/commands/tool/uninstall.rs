@@ -251,12 +251,14 @@ fn owned_entrypoints(
     for entrypoint in receipt.entrypoints() {
         let mut owner = None;
         for (tool_name, other_receipt) in receipts {
-            if !other_receipt
-                .entrypoints()
-                .iter()
-                .any(|other| other.install_path == entrypoint.install_path)
-                || !entrypoint_matches(entrypoint, &tools.tool_dir(tool_name))?
-            {
+            let mut claims_path = false;
+            for other in other_receipt.entrypoints() {
+                if same_install_path(&other.install_path, &entrypoint.install_path)? {
+                    claims_path = true;
+                    break;
+                }
+            }
+            if !claims_path || !entrypoint_matches(entrypoint, &tools.tool_dir(tool_name))? {
                 continue;
             }
             if let Some(previous) = owner.replace(tool_name) {
@@ -276,6 +278,36 @@ fn owned_entrypoints(
         }
     }
     Ok(owned)
+}
+
+/// Compare receipt paths without confusing differently cased Windows copies with unique owners.
+fn same_install_path(left: &Path, right: &Path) -> Result<bool> {
+    #[cfg(unix)]
+    {
+        Ok(left == right)
+    }
+    #[cfg(windows)]
+    {
+        if left == right {
+            return Ok(true);
+        }
+        for path in [left, right] {
+            match fs_err::metadata(path) {
+                Ok(_) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(err) => return Err(err.into()),
+            }
+        }
+        if let Some(same) = uv_fs::is_same_file_allow_missing(left, right) {
+            Ok(same)
+        } else {
+            bail!(
+                "Cannot compare executable ownership paths `{}` and `{}`",
+                left.user_display(),
+                right.user_display()
+            )
+        }
+    }
 }
 
 /// Match an export to the conventional scripts directory of one installed tool.
