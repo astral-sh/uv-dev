@@ -3456,6 +3456,72 @@ mod test {
     }
 
     #[test]
+    fn complexified_markers_are_canonical() {
+        let lower = Bound::Included(Version::new([3, 8]));
+        let upper = Bound::Excluded(Version::new([3, 12]));
+
+        assert_eq!(
+            m("extra == 'foo'").complexify_python_versions(lower.as_ref(), Bound::Unbounded),
+            m("python_full_version >= '3.8' and extra == 'foo'")
+        );
+
+        for marker in [
+            "extra == 'foo'",
+            "extra != 'foo'",
+            "os_name in 'nt,posix'",
+            "os_name not in 'nt,posix'",
+            "'win' in sys_platform",
+            "'win' not in sys_platform",
+            "'foo' in extras",
+            "'dev' not in dependency_groups",
+            "sys_platform == 'win32'",
+            "implementation_version >= '3.10'",
+            "(python_full_version < '3.10' and extra == 'foo') or extra == 'bar'",
+        ] {
+            let expected = m(&format!(
+                "python_full_version >= '3.8' and python_full_version < '3.12' and ({marker})"
+            ));
+            assert_eq!(
+                m(marker).complexify_python_versions(lower.as_ref(), upper.as_ref()),
+                expected,
+                "{marker}"
+            );
+        }
+    }
+
+    #[test]
+    fn complexified_markers_boundaries() {
+        let version38 = Version::new([3, 8]);
+        let version39 = Version::new([3, 9]);
+
+        assert_eq!(
+            MarkerTree::TRUE.complexify_python_versions(
+                Bound::Included(&version38),
+                Bound::Included(&version38),
+            ),
+            m("python_full_version == '3.8'")
+        );
+        assert_eq!(
+            m("python_full_version == '3.8'")
+                .negate()
+                .complexify_python_versions(
+                    Bound::Excluded(&version38),
+                    Bound::Included(&version39),
+                ),
+            m("python_full_version > '3.8' and python_full_version <= '3.9'")
+        );
+        for marker in [MarkerTree::TRUE, MarkerTree::FALSE, m("extra == 'foo'")] {
+            assert_eq!(
+                marker.complexify_python_versions(
+                    Bound::Included(&version39),
+                    Bound::Included(&version38),
+                ),
+                MarkerTree::FALSE
+            );
+        }
+    }
+
+    #[test]
     fn simplified_markers() {
         // Takes optional lower (inclusive) and upper (exclusive)
         // bounds representing `requires-python` and a "complexified"
