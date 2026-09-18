@@ -8,7 +8,6 @@ mod pipreqs;
 use std::borrow::Cow;
 use std::ffi::OsString;
 use std::fmt::Formatter;
-use std::fmt::Write;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
@@ -1216,7 +1215,7 @@ impl PythonRunner {
         /// Read lines from a reader and store them in a buffer.
         async fn read_from(
             mut reader: tokio::io::Split<tokio::io::BufReader<impl tokio::io::AsyncRead + Unpin>>,
-            mut printer: Printer,
+            level: BuildOutput,
             buffer: &mut Vec<String>,
         ) -> io::Result<()> {
             loop {
@@ -1224,7 +1223,11 @@ impl PythonRunner {
                     Some(line_buf) => {
                         let line_buf = line_buf.strip_suffix(b"\r").unwrap_or(&line_buf);
                         let line = String::from_utf8_lossy(line_buf).into();
-                        let _ = write!(printer, "{line}");
+                        match level {
+                            BuildOutput::Stderr => anstream::eprintln!("{line}"),
+                            BuildOutput::Debug => debug!("{line}"),
+                            BuildOutput::Quiet => {}
+                        }
                         buffer.push(line);
                     }
                     None => return Ok(()),
@@ -1265,10 +1268,9 @@ impl PythonRunner {
         let stderr_reader = tokio::io::BufReader::new(child.stderr.take().unwrap()).split(b'\n');
 
         // Asynchronously read from the in-memory pipes.
-        let printer = Printer::from(self.level);
         let result = tokio::join!(
-            read_from(stdout_reader, printer, &mut stdout_buf),
-            read_from(stderr_reader, printer, &mut stderr_buf),
+            read_from(stdout_reader, self.level, &mut stdout_buf),
+            read_from(stderr_reader, self.level, &mut stderr_buf),
         );
         match result {
             (Ok(()), Ok(())) => {}
@@ -1291,40 +1293,5 @@ impl PythonRunner {
             stderr: stderr_buf,
             status,
         })
-    }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum Printer {
-    /// Send the build backend output to `stderr`.
-    Stderr,
-    /// Send the build backend output to `tracing`.
-    Debug,
-    /// Hide the build backend output.
-    Quiet,
-}
-
-impl From<BuildOutput> for Printer {
-    fn from(output: BuildOutput) -> Self {
-        match output {
-            BuildOutput::Stderr => Self::Stderr,
-            BuildOutput::Debug => Self::Debug,
-            BuildOutput::Quiet => Self::Quiet,
-        }
-    }
-}
-
-impl Write for Printer {
-    fn write_str(&mut self, s: &str) -> std::fmt::Result {
-        match self {
-            Self::Stderr => {
-                anstream::eprintln!("{s}");
-            }
-            Self::Debug => {
-                debug!("{s}");
-            }
-            Self::Quiet => {}
-        }
-        Ok(())
     }
 }
