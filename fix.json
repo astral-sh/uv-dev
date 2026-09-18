@@ -1,0 +1,12 @@
+{
+  "outcome": "fixed",
+  "summary": "Dynamic-version projects now recover their static PEP 621 dependencies when backend metadata unexpectedly contains no dependency fields. The regression test now requires the complete lock and verifies cached offline regeneration, while non-empty backend metadata remains authoritative.",
+  "validation": [
+    "Parent Hatchling regression test",
+    "Dynamic-version path dependency test",
+    "Hatchling and Setuptools recursive-extra tests",
+    "Formatting and diff checks",
+    "uv-distribution Clippy with warnings denied"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/1969"
+}
