@@ -1,0 +1,19 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 2398,
+        "title": "Fix version metadata to preserve leading zeros in CalVer",
+        "url": "https://github.com/pypa/hatch/pull/2398",
+        "state": "merged",
+        "reason": "pypa/hatch#2398 made Hatchling emit the raw dynamic version in core metadata. The reported regex captures the trailing newline in `VERSION`, so Hatchling 1.32.3 places a blank line after the `Version` header and the subsequent `Requires-Dist` fields are ignored."
+      }
+    ],
+    "search_scope": "Searched open and closed uv issues and open, closed, and merged pull requests using literal queries for `project.dependencies`, `dependency-groups`, removed direct dependencies, `DynamicField(\"version\")`, `No static pyproject.toml available`, `Requires-Dist`, Hatchling, and uv 0.12.16. Conceptual and fix-oriented searches covered malformed or stale build metadata, dynamic versions, backend validation, lockfile omissions, recent resolver changes, and the 0.12.16 release diff. No existing uv tracker matched. astral-sh/uv#6712 was ruled out because it reused stale `.egg-info`; astral-sh/uv#11047 concerns a cached dynamic version appearing in the lockfile; astral-sh/uv#10776 concerns recursive extras and lock freshness. An isolated reproduction confirmed Hatchling 1.32.3 fails while pinning 1.32.0 restores the dependencies."
+  },
+  "type": "bug",
+  "type_reason": "The command succeeds while silently generating an incomplete lockfile. Although pypa/hatch#2398 introduced the malformed backend metadata, uv accepts it instead of reporting an error, causing declared dependencies to disappear.",
+  "summary": "No duplicate uv issue or pull request was found. The direct antecedent is pypa/hatch#2398, whose raw-version change explains both the malformed metadata and the 2026-09-17 onset.",
+  "draft_response": "Thanks for the detailed log. I can reproduce this, and the immediate regression comes from Hatchling 1.32.3.\n\nYour version regex captures the trailing newline in `VERSION`. pypa/hatch#2398 changed Hatchling to preserve that raw value in core metadata, producing a blank line after the `Version` header. The later `Requires-Dist` fields are therefore ignored, while uv still reads dependency groups separately.\n\nAs an immediate workaround, set `requires = [\"hatchling==1.32.0\"]` under `[build-system]`, then run `uv lock -U` again. This remains a uv bug because malformed backend metadata should be rejected instead of silently producing an incomplete lockfile."
+}
