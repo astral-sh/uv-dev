@@ -10,7 +10,7 @@ The reported behavior is reproducible. A dynamic version forces uv to prepare ba
 
 Hatchling 1.32.3 was published on 2026-09-17, matching the onset in the report. Its change from pypa/hatch#2398 preserves the original version string in core metadata. Hatchling 1.32.0 normalized the extracted value before writing metadata and does not exhibit the failure.
 
-A uv maintainer confirmed that Hatchling's generated metadata violates the core-metadata specification and therefore requires an upstream fix regardless of uv's defensive handling.
+A uv maintainer confirmed that Hatchling's generated metadata violates the core-metadata specification. The upstream correction was merged in pypa/hatch#2438; it strips surrounding whitespace from the version before writing the email-style core-metadata header while retaining the rest of the original spelling.
 
 ## Reproduction
 
@@ -66,7 +66,7 @@ Outcome: **fixed**.
 
 The fix is in `crates/uv-distribution/src/metadata/requires_dist.rs`. Local and workspace projects whose version is dynamic still use the backend to determine dynamic metadata. When that backend result contains neither dependencies nor provided extras, uv now reparses the project's PEP 621 metadata and uses its dependency declarations if those fields are static and non-empty. The fallback is deliberately limited to an empty backend dependency result: genuinely dynamic dependency fields continue to use the backend, and non-empty backend metadata remains authoritative for behavior such as Hatchling's recursive-extra expansion.
 
-This uv fallback does not make the Hatchling output valid. Maintainer direction is that Hatchling must also correct the specification violation upstream.
+This uv fallback does not make the Hatchling output valid. The specification violation was fixed upstream by pypa/hatch#2438, which was merged on 2026-09-18. The pull request explicitly cites astral-sh/uv#21824 and handles both leading and trailing newlines by trimming surrounding whitespace before serializing `Version`. No Hatchling release containing that change is established in the available context, so the documented pin and regex change remain the confirmed workarounds for Hatchling 1.32.3.
 
 The parent regression now expects a five-package lock containing `anyio`, `idna`, and `sniffio` alongside the project and its `iniconfig` dependency group. It also deletes the first lockfile and recreates it offline, confirming that cached malformed backend metadata is corrected through the same lowering path. Focused validation passed for the parent regression, dynamic-version path dependencies, and both Hatchling and Setuptools recursive-extra cases. `cargo +stable fmt --all -- --check`, `git diff --check`, and Clippy for all `uv-distribution` targets with warnings denied also passed. The pinned repository toolchain lacked writable Rustfmt and Clippy components in this environment, so the installed stable toolchain supplied those formatting and lint checks.
 
@@ -95,6 +95,7 @@ This is not a duplicate. No open or closed uv issue or pull request was found fo
 ## Related
 
 - pypa/hatch#2398 — merged pull request, “Fix version metadata to preserve leading zeros in CalVer.” It changed Hatchling to write the original dynamic version string into core metadata. In this report, the original value includes the newline captured by `(?P<version>[^']+)`, which places a blank line before `Requires-Dist` and directly causes those fields to be ignored.
+- pypa/hatch#2438 — merged pull request, “Strip surrounding whitespace from version metadata.” It fixes the upstream regression by trimming leading and trailing whitespace before writing `Version`, preserving stylized version spelling without allowing newlines to corrupt the remaining core-metadata headers. It explicitly addresses astral-sh/uv#21824.
 
 ## Search coverage
 
@@ -102,4 +103,4 @@ Searches covered open and closed uv issues and open, closed, and merged uv pull 
 
 astral-sh/uv#6712 was inspected because uv 0.3.5 failed to notice changed dependencies for a dynamic-version editable project. It was ruled out because that regression reused stale `.egg-info`; astral-sh/uv#21824 prepares fresh Hatchling metadata, and clearing the cache does not address the malformed output. astral-sh/uv#11047 was also ruled out because it concerns a dynamic version intermittently appearing in the lockfile after a cached build, not missing `Requires-Dist` fields. astral-sh/uv#10776 uses Hatchling with a dynamic version, but its confirmed trigger is recursive self-referential extras and its symptom is a perpetually stale lockfile, so it is not the same failure.
 
-Pull request: https://github.com/astral-sh/uv-dev/pull/1969
+Pull request: astral-sh/uv-dev#1969
