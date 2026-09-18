@@ -308,6 +308,7 @@ fn python_list_warns_on_non_native_search_path_interpreters() -> Result<()> {
     ");
 
     uv_snapshot!(context.filters(), context.python_find()
+        .arg("--system")
         .env(EnvVars::UV_PYTHON_SEARCH_PATH, &python_search_path), @"
     exit_code: 2 (failure)
     ----- stderr -----
