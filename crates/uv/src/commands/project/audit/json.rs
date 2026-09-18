@@ -87,9 +87,27 @@ impl Report {
 
 /// JSON report containing separate findings for each audited tool.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub(crate) struct ToolReports {
     schema: Schema,
     tools: Vec<ToolReport>,
+}
+
+/// Generate the JSON schema for preview tool audit reports.
+#[cfg(feature = "schemars")]
+pub fn tool_json_schema() -> schemars::Schema {
+    let mut schema = schemars::generate::SchemaSettings::draft07()
+        .for_serialize()
+        .into_generator()
+        .into_root_schema_for::<ToolReports>();
+    schema.insert("title".to_owned(), "uv tool audit (preview)".into());
+    schema
+}
+
+/// Generate the per-record schema for preview JSONL tool audit reports.
+#[cfg(feature = "schemars")]
+pub fn tool_jsonl_schema() -> schemars::Schema {
+    crate::commands::report::jsonl_object_schema::<ToolReports>("uv tool audit JSONL (preview)")
 }
 
 impl ToolReports {
@@ -115,6 +133,7 @@ impl ToolReports {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct ToolReport {
     name: String,
     #[serde(flatten)]
@@ -240,7 +259,10 @@ mod tests {
     use uv_redacted::DisplaySafeUrl;
     use uv_test::json_schema::JsonSchema;
 
-    use super::{AuditResults, Report, project_json_schema, project_jsonl_schema};
+    use super::{
+        AuditResults, Report, ToolReports, project_json_schema, project_jsonl_schema,
+        tool_json_schema, tool_jsonl_schema,
+    };
     use crate::printer::{Printer, jsonl_result};
 
     fn audit() -> Result<AuditResults> {
@@ -331,6 +353,69 @@ mod tests {
             assert!(validator.parse(above.as_bytes()).is_err());
             let mut negative = payload.clone();
             negative["summary"][field] = json!(-1);
+            assert!(validator.parse(&serde_json::to_vec(&negative)?).is_err());
+        }
+        let mut invalid_version = payload;
+        invalid_version["schema"]["version"] = json!(1);
+        assert!(
+            validator
+                .parse(&serde_json::to_vec(&invalid_version)?)
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tool_schemas_describe_serialized_findings() -> Result<()> {
+        let report = ToolReports::from_audits(&[
+            ("first-tool".parse()?, audit()?),
+            ("second-tool".parse()?, audit()?),
+        ]);
+        let payload = serde_json::to_value(&report)?;
+        assert_eq!(payload["tools"][0]["name"], "first-tool");
+        assert_eq!(payload["tools"][1]["name"], "second-tool");
+        assert_eq!(
+            payload["tools"][0]["vulnerabilities"][0]["display_id"],
+            "CVE-2026-12345"
+        );
+        assert_eq!(
+            payload["tools"][0]["adverse_statuses"][0]["reason"],
+            Value::Null
+        );
+
+        let document = serde_json::to_value(tool_json_schema())?;
+        assert_eq!(document["title"], "uv tool audit (preview)");
+        let validator = JsonSchema::new(&serde_json::to_string(&document)?)?;
+        validator.parse(&serde_json::to_vec(&report)?)?;
+        validator.parse(&serde_json::to_vec(&ToolReports::from_audits(&[]))?)?;
+        let record_validator = JsonSchema::new(&serde_json::to_string(&tool_jsonl_schema())?)?;
+        record_validator.parse(jsonl_result(&report)?.as_bytes())?;
+
+        for field in ["name", "summary", "vulnerabilities", "adverse_statuses"] {
+            let mut missing = payload.clone();
+            missing["tools"][0]
+                .as_object_mut()
+                .context("expected a tool report")?
+                .remove(field);
+            assert!(validator.parse(&serde_json::to_vec(&missing)?).is_err());
+        }
+        for field in ["audited_packages", "vulnerabilities", "adverse_statuses"] {
+            assert_eq!(
+                document["definitions"]["Summary"]["properties"][field]["maximum"],
+                u64::MAX
+            );
+            let mut maximum = payload.clone();
+            maximum["tools"][0]["summary"][field] = json!(u64::MAX);
+            let maximum = serde_json::to_string(&maximum)?;
+            validator.parse(maximum.as_bytes())?;
+            let above = maximum.replacen(
+                &u64::MAX.to_string(),
+                &(u128::from(u64::MAX) + 1).to_string(),
+                1,
+            );
+            assert!(validator.parse(above.as_bytes()).is_err());
+            let mut negative = payload.clone();
+            negative["tools"][0]["summary"][field] = json!(-1);
             assert!(validator.parse(&serde_json::to_vec(&negative)?).is_err());
         }
         let mut invalid_version = payload;

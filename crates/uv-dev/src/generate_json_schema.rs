@@ -57,6 +57,8 @@ pub(crate) enum Target {
     PythonList,
     /// The preview `uv audit` JSON output format.
     Audit,
+    /// The preview `uv tool audit` JSON output format.
+    ToolAudit,
     /// Shared progress records in the preview JSONL output format.
     JsonlProgress,
     /// Records in the preview `uv workspace metadata` JSONL output format.
@@ -77,6 +79,8 @@ pub(crate) enum Target {
     PythonListJsonl,
     /// Records in the preview `uv audit` JSONL output format.
     AuditJsonl,
+    /// Records in the preview `uv tool audit` JSONL output format.
+    ToolAuditJsonl,
 }
 
 impl Target {
@@ -92,6 +96,7 @@ impl Target {
             Self::SelfVersion => "docs/reference/internals/self-version.schema.json",
             Self::PythonList => "docs/reference/internals/python-list.schema.json",
             Self::Audit => "docs/reference/internals/audit.schema.json",
+            Self::ToolAudit => "docs/reference/internals/tool-audit.schema.json",
             Self::JsonlProgress => "docs/reference/internals/jsonl-progress.schema.json",
             Self::WorkspaceMetadataJsonl => "docs/reference/internals/metadata-jsonl.schema.json",
             Self::ToolListJsonl => "docs/reference/internals/tool-list-jsonl.schema.json",
@@ -102,6 +107,7 @@ impl Target {
             Self::SelfVersionJsonl => "docs/reference/internals/self-version-jsonl.schema.json",
             Self::PythonListJsonl => "docs/reference/internals/python-list-jsonl.schema.json",
             Self::AuditJsonl => "docs/reference/internals/audit-jsonl.schema.json",
+            Self::ToolAuditJsonl => "docs/reference/internals/tool-audit-jsonl.schema.json",
         }
     }
 
@@ -117,6 +123,7 @@ impl Target {
             Self::SelfVersion => "cargo dev generate-json-schema --target self-version",
             Self::PythonList => "cargo dev generate-json-schema --target python-list",
             Self::Audit => "cargo dev generate-json-schema --target audit",
+            Self::ToolAudit => "cargo dev generate-json-schema --target tool-audit",
             Self::JsonlProgress => "cargo dev generate-json-schema --target jsonl-progress",
             Self::WorkspaceMetadataJsonl => {
                 "cargo dev generate-json-schema --target workspace-metadata-jsonl"
@@ -129,6 +136,7 @@ impl Target {
             Self::SelfVersionJsonl => "cargo dev generate-json-schema --target self-version-jsonl",
             Self::PythonListJsonl => "cargo dev generate-json-schema --target python-list-jsonl",
             Self::AuditJsonl => "cargo dev generate-json-schema --target audit-jsonl",
+            Self::ToolAuditJsonl => "cargo dev generate-json-schema --target tool-audit-jsonl",
         }
     }
 }
@@ -208,6 +216,7 @@ fn schema(target: Target) -> schemars::Schema {
         Target::SelfVersion => uv::commands::self_version_json_schema(),
         Target::PythonList => uv::commands::python_list_json_schema(),
         Target::Audit => uv::commands::audit_json_schema(),
+        Target::ToolAudit => uv::commands::tool_audit_json_schema(),
         Target::JsonlProgress => uv::commands::jsonl_progress_json_schema(),
         Target::WorkspaceMetadataJsonl => uv::commands::workspace_metadata_jsonl_schema(),
         Target::ToolListJsonl => uv::commands::tool_list_jsonl_schema(),
@@ -218,6 +227,7 @@ fn schema(target: Target) -> schemars::Schema {
         Target::SelfVersionJsonl => uv::commands::self_version_jsonl_schema(),
         Target::PythonListJsonl => uv::commands::python_list_jsonl_schema(),
         Target::AuditJsonl => uv::commands::audit_jsonl_schema(),
+        Target::ToolAuditJsonl => uv::commands::tool_audit_jsonl_schema(),
     }
 }
 
@@ -348,6 +358,12 @@ mod tests {
                     "vulnerabilities": [],
                     "adverse_statuses": []
                 }),
+            ),
+            (
+                Target::ToolAudit,
+                Target::ToolAuditJsonl,
+                "uv tool audit JSONL (preview)",
+                json!({"schema": {"version": "preview"}, "tools": []}),
             ),
         ];
 
