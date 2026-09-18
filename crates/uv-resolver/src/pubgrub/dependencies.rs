@@ -84,18 +84,12 @@ pub(crate) struct PubGrubDependency {
     pub(crate) version: Range<Version>,
 
     /// When the parent that created this dependency is a "normal" package
-    /// (non-extra non-group), this corresponds to its name.
+    /// (non-extra non-group), this corresponds to its name. Replacement overrides do not
+    /// retain the parent, since their edges are conditional on the replacement's conflict fork.
     ///
-    /// This is used to create project-level `ConflictItemRef` for a specific
-    /// package. In effect, this lets us "delay" filtering of project
-    /// dependencies when a conflict is declared between the project and a
-    /// group.
-    ///
-    /// The main problem with dealing with project level conflicts is that if you
-    /// declare a conflict between a package and a group, we represent that
-    /// group as a dependency of that package. So if you filter out the package
-    /// in a fork due to a conflict, you also filter out the group. Therefore,
-    /// we introduce this parent field to enable "delayed" filtering.
+    /// Project-conflict filtering retains these required dependencies, including
+    /// self-constraints, even when their target project is excluded. Otherwise a project could
+    /// silently discard a required workspace member to produce a satisfiable resolution.
     pub(crate) parent: Option<PackageName>,
 
     /// The direct source constraint attached to this dependency edge.
@@ -114,15 +108,16 @@ impl PubGrubDependency {
     /// reason that package cannot be selected.
     pub(crate) fn from_requirements<'a>(
         conflicts: &Conflicts,
-        requirements: impl IntoIterator<Item = Cow<'a, Requirement>>,
+        requirements: impl IntoIterator<Item = (Cow<'a, Requirement>, bool)>,
         group_name: Option<&'a GroupName>,
         parent_package: Option<&'a PubGrubPackage>,
     ) -> Result<Vec<Self>, UnsatisfiableRequirement> {
         let mut dependencies = Vec::new();
-        for requirement in requirements {
+        for (requirement, replacement) in requirements {
             dependencies.extend(Self::from_requirement(
                 conflicts,
                 requirement,
+                replacement,
                 group_name,
                 parent_package,
             )?);
@@ -133,6 +128,7 @@ impl PubGrubDependency {
     fn from_requirement<'a>(
         conflicts: &Conflicts,
         requirement: Cow<'a, Requirement>,
+        replacement: bool,
         group_name: Option<&'a GroupName>,
         parent_package: Option<&'a PubGrubPackage>,
     ) -> Result<impl Iterator<Item = Self> + 'a, UnsatisfiableRequirement> {
@@ -141,8 +137,9 @@ impl PubGrubDependency {
         }
 
         let parent_name = parent_package.and_then(|package| package.name_no_root());
-        let is_normal_parent = parent_package
-            .is_some_and(|parent| parent.extra().is_none() && parent.group().is_none());
+        let is_normal_parent = !replacement
+            && parent_package
+                .is_some_and(|parent| parent.extra().is_none() && parent.group().is_none());
         let iter = if !requirement.extras.is_empty() {
             // This is crazy subtle, but if any of the extras in the
             // requirement are part of a declared conflict, then we

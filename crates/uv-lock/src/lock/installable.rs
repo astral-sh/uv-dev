@@ -16,7 +16,9 @@ use uv_configuration::{
 use uv_distribution_types::{Edge, FirstParty, Node, Resolution, ResolvedDist};
 use uv_normalize::{DefaultExtras, ExtraName, GroupName, PackageName};
 use uv_platform_tags::Tags;
-use uv_pypi_types::{ConflictKind, ConflictSet, ResolverMarkerEnvironment};
+use uv_pypi_types::{
+    ConflictKind, ConflictKindRef, ConflictSet, Conflicts, ResolverMarkerEnvironment,
+};
 
 use uv_resolver_types::UniversalMarker;
 use uv_resolver_types::universal_marker::ActivatedConflictItems;
@@ -38,6 +40,17 @@ fn newly_activated_extras<'lock>(
             (!activated_extras.contains(&key)).then_some(key)
         })
         .collect()
+}
+
+fn newly_activated_project<'lock>(
+    conflicts: &Conflicts,
+    dep: &'lock Dependency,
+    activated_projects: &[&PackageName],
+) -> Option<&'lock PackageName> {
+    let package = &dep.package_id.name;
+    (conflicts.contains(package, ConflictKindRef::Project)
+        && !activated_projects.contains(&package))
+    .then_some(package)
 }
 
 /// Record another condition under which a locked package and optional extra are reachable.
@@ -398,9 +411,14 @@ trait InstallableExt<'lock>: Installable<'lock> {
                     dependencies_for_conflict_validation.push((dist, dep));
                 }
                 let additional_activated_extras = newly_activated_extras(dep, &activated_extras);
+                let additional_activated_project =
+                    newly_activated_project(self.lock().conflicts(), dep, &activated_projects);
                 if !dep.complexified_marker.evaluate(
                     marker_env,
-                    activated_projects.iter().copied(),
+                    activated_projects
+                        .iter()
+                        .copied()
+                        .chain(additional_activated_project),
                     activated_extras
                         .iter()
                         .chain(additional_activated_extras.iter())
@@ -460,6 +478,9 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 for key in additional_activated_extras {
                     activated_extras.push(key);
                 }
+                if let Some(project) = additional_activated_project {
+                    activated_projects.push(project);
+                }
 
                 // Push its dependencies on the queue.
                 add_reachability(
@@ -501,6 +522,16 @@ trait InstallableExt<'lock>: Installable<'lock> {
                     .ok_or_else(|| LockErrorKind::MissingRootPackage {
                         name: root_name.clone(),
                     })?;
+
+                if groups.prod()
+                    && self
+                        .lock()
+                        .conflicts()
+                        .contains(root_name, ConflictKindRef::Project)
+                    && !activated_projects.contains(&root_name)
+                {
+                    activated_projects.push(root_name);
+                }
 
                 // Add the package to the graph.
                 let package_index = self.lock().by_id[&dist.id];
@@ -564,6 +595,15 @@ trait InstallableExt<'lock>: Installable<'lock> {
                     .ok_or_else(|| LockErrorKind::MissingRootPackage {
                         name: root_name.clone(),
                     })?;
+
+                if self
+                    .lock()
+                    .conflicts()
+                    .contains(root_name, ConflictKindRef::Project)
+                    && !activated_projects.contains(&root_name)
+                {
+                    activated_projects.push(root_name);
+                }
 
                 // Add the package to the graph.
                 let package_index = self.lock().by_id[&dist.id];
@@ -677,9 +717,14 @@ trait InstallableExt<'lock>: Installable<'lock> {
                     dep_reachability.and(parent_reachability);
                     let additional_activated_extras =
                         newly_activated_extras(dep, &activated_extras);
+                    let additional_activated_project =
+                        newly_activated_project(self.lock().conflicts(), dep, &activated_projects);
                     if !dep_reachability.evaluate(
                         marker_env,
-                        activated_projects.iter().copied(),
+                        activated_projects
+                            .iter()
+                            .copied()
+                            .chain(additional_activated_project),
                         activated_extras
                             .iter()
                             .chain(additional_activated_extras.iter())
@@ -699,6 +744,9 @@ trait InstallableExt<'lock>: Installable<'lock> {
                     for key in additional_activated_extras {
                         activated_extras_set.insert(key);
                         activated_extras.push(key);
+                    }
+                    if let Some(project) = additional_activated_project {
+                        activated_projects.push(project);
                     }
                     // Push its dependencies on the queue.
                     if add_reachability(&mut reachability, (dep.index, None), dep_reachability) {
@@ -727,6 +775,17 @@ trait InstallableExt<'lock>: Installable<'lock> {
             // to adjust the `Conflicts` internals to own these sorts of
             // checks. ---AG
             for set in self.lock().conflicts().iter() {
+                let projects = set.iter().filter(|item| match item.kind() {
+                    ConflictKind::Project => activated_projects.contains(&item.package()),
+                    ConflictKind::Extra(_) | ConflictKind::Group(_) => false,
+                });
+                if let Some((first, second)) = projects.tuple_combinations().next() {
+                    return Err(LockErrorKind::ConflictingProject {
+                        package1: first.package().clone(),
+                        package2: second.package().clone(),
+                    }
+                    .into());
+                }
                 for ((pkg1, extra1), (pkg2, extra2)) in
                     activated_extras_set.iter().tuple_combinations()
                 {

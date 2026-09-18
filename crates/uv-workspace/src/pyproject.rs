@@ -529,6 +529,13 @@ pub struct ToolUv {
     /// Scoped overrides currently support registry version specifiers only. Direct URL and path
     /// sources, including Git sources, and explicit indexes are not supported.
     ///
+    /// A table with `requirement` and `replacement` can replace a dependency with a differently
+    /// named package. The selector must be a plain registry requirement. It matches requests whose
+    /// version range is contained within the selector, after ordinary overrides are applied.
+    /// Requests with extras, direct sources, or explicit indexes are left unchanged. The
+    /// replacement's own dependencies are exempt from rules that would replace them with the
+    /// replacement itself.
+    ///
     /// !!! note
     ///     In `uv lock`, `uv sync`, and `uv run`, uv will only read `override-dependencies` from
     ///     the `pyproject.toml` at the workspace root, and will ignore any declarations in other

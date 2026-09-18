@@ -333,6 +333,7 @@ pub fn from_lock<'lock>(
         groups,
         annotate,
         install_options,
+        true,
     )?;
 
     nodes.sort_unstable_by_key(|node| &node.package.id);

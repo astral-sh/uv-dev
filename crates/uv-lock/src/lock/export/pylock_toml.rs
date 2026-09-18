@@ -786,6 +786,7 @@ impl<'lock> PylockToml {
             dev,
             annotate,
             install_options,
+            false,
         )?;
 
         // Sort the nodes.

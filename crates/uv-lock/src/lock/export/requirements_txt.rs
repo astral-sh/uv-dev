@@ -46,6 +46,7 @@ impl<'lock> RequirementsTxtExport<'lock> {
             dev,
             annotate,
             install_options,
+            false,
         )?;
 
         // Sort the nodes, such that unnamed URLs (editables) appear at the top.

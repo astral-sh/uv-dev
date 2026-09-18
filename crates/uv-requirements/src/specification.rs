@@ -37,9 +37,7 @@ use url::Url;
 
 use uv_cache_key::CanonicalUrl;
 use uv_client::BaseClientBuilder;
-use uv_configuration::{
-    DependencyGroups, ExcludeDependency, NoBinary, NoBuild, Override, PackageOverride,
-};
+use uv_configuration::{DependencyGroups, ExcludeDependency, NoBinary, NoBuild, Override};
 use uv_distribution_types::{Index, Requirement};
 use uv_distribution_types::{
     IndexUrl, NameRequirementSpecification, UnresolvedRequirement,
@@ -50,7 +48,7 @@ use uv_normalize::{ExtraName, PackageName, PipGroupName};
 use uv_pypi_types::PyProjectToml;
 use uv_redacted::DisplaySafeUrl;
 use uv_requirements_txt::{RequirementsTxt, RequirementsTxtRequirement, SourceCache};
-use uv_scripts::{OverrideDependency, Pep723Metadata};
+use uv_scripts::Pep723Metadata;
 use uv_warnings::warn_user;
 
 use crate::{RequirementsSource, SourceTree};
@@ -141,20 +139,8 @@ impl RequirementsSpecification {
                 .as_ref()
                 .into_iter()
                 .flatten()
-                .map(|dependency| match dependency {
-                    OverrideDependency::Requirement(requirement) => {
-                        Override::Requirement(Requirement::from(requirement.clone()))
-                    }
-                    OverrideDependency::Package(package) => Override::Package(PackageOverride {
-                        package: package.package.clone(),
-                        dependencies: package
-                            .dependencies
-                            .iter()
-                            .cloned()
-                            .map(Requirement::from)
-                            .collect(),
-                    }),
-                })
+                .cloned()
+                .map(|dependency| dependency.map(Requirement::from))
                 .collect();
 
             Self {

@@ -3795,8 +3795,8 @@ impl Fork {
                 return true;
             }
             match conflicting_item.kind() {
-                // We should not filter entire projects unless they're a top-level dependency
-                // Otherwise, we'll fail to solve for children of the project, like extras
+                // Required project dependencies cannot be discarded by a conflict fork.
+                // Replacement overrides omit the parent so their edges can be filtered.
                 ConflictKindRef::Project => {
                     if dep.parent.is_some() {
                         return true;

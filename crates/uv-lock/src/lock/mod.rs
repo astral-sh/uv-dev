@@ -23,8 +23,8 @@ use uv_cache_key::RepositoryUrl;
 use uv_configuration::{
     BuildOptions, Constraints, DependencyGroupsWithDefaults, ExcludeDependency, ExcludeNewer,
     ExcludeNewerPackage, Excludes, ExtrasSpecificationWithDefaults, ForkStrategy, InstallTarget,
-    Override, Overrides, PackageOverride, Prerelease, PrereleaseMode, PrereleasePackage,
-    ResolutionMode, ScopedOverrideSourceError,
+    Override, OverrideError, Overrides, Prerelease, PrereleaseMode, PrereleasePackage,
+    ResolutionMode,
 };
 use uv_distribution::{
     DistributionDatabase, FlatRequiresDist, Metadata as DistributionMetadata, RequiresDist,
@@ -4105,23 +4105,9 @@ impl Lock {
         // Validate that the lockfile was generated with the same overrides.
         let normalized_overrides = {
             let normalize = |entry: Override<Requirement>| -> Result<_, LockError> {
-                match entry {
-                    Override::Requirement(requirement) => Ok(Override::Requirement(
-                        normalize_requirement(requirement, root, &self.requires_python)?,
-                    )),
-                    Override::Package(package) => Ok(Override::Package(PackageOverride {
-                        package: package.package,
-                        dependencies: package
-                            .dependencies
-                            .into_vec()
-                            .into_iter()
-                            .map(|requirement| {
-                                normalize_requirement(requirement, root, &self.requires_python)
-                            })
-                            .collect::<Result<Vec<_>, _>>()?
-                            .into_boxed_slice(),
-                    })),
-                }
+                entry.try_map(|requirement| {
+                    normalize_requirement(requirement, root, &self.requires_python)
+                })
             };
             let expected: BTreeSet<_> = overrides
                 .iter()
@@ -4240,7 +4226,7 @@ impl Lock {
 
         let dependency_overrides = if allow_missing_package_metadata {
             Overrides::from_entries(normalized_overrides.into_iter().collect())
-                .map_err(LockErrorKind::InvalidScopedOverride)?
+                .map_err(LockErrorKind::InvalidOverride)?
         } else {
             Overrides::default()
         };
@@ -6106,21 +6092,7 @@ impl ResolverManifest {
             overrides: self
                 .overrides
                 .into_iter()
-                .map(|entry| match entry {
-                    Override::Requirement(requirement) => {
-                        Ok(Override::Requirement(requirement.relative_to(root)?))
-                    }
-                    Override::Package(package) => Ok(Override::Package(PackageOverride {
-                        package: package.package,
-                        dependencies: package
-                            .dependencies
-                            .into_vec()
-                            .into_iter()
-                            .map(|requirement| requirement.relative_to(root))
-                            .collect::<Result<Vec<_>, _>>()?
-                            .into_boxed_slice(),
-                    })),
-                })
+                .map(|entry| entry.try_map(|requirement| requirement.relative_to(root)))
                 .collect::<Result<BTreeSet<_>, io::Error>>()?,
             excludes: self.excludes,
             build_constraints: self
@@ -9663,7 +9635,7 @@ enum LockErrorKind {
     /// An error that occurs when the overrides for validating a
     /// metadata-free lockfile cannot be scoped to their packages.
     #[error(transparent)]
-    InvalidScopedOverride(#[from] ScopedOverrideSourceError),
+    InvalidOverride(#[from] OverrideError),
     /// An error that occurs when multiple packages with the same
     /// ID were found.
     #[error("Found duplicate package `{id}`", id = id.cyan())]
@@ -10024,6 +9996,11 @@ enum LockErrorKind {
         extra1: ExtraName,
         package2: PackageName,
         extra2: ExtraName,
+    },
+    #[error("Found conflicting packages `{package1}` and `{package2}` enabled simultaneously")]
+    ConflictingProject {
+        package1: PackageName,
+        package2: PackageName,
     },
     #[error(transparent)]
     GitUrlParse(#[from] GitUrlParseError),

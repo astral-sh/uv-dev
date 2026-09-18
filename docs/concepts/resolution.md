@@ -456,6 +456,35 @@ permits stable-first pre-release fallback for that package for the entire resolu
 exact yanked-version pin in any scoped override opts that package into yanked-version candidate
 selection for the entire resolution, even if the scope is not selected.
 
+An override can also replace a dependency with a differently named package:
+
+```toml
+[tool.uv]
+override-dependencies = [
+    { requirement = "urllib3<2", replacement = "virtual-lib1" },
+    { requirement = "urllib3>=2", replacement = "virtual-lib2" },
+]
+
+[tool.uv.sources]
+virtual-lib1 = { workspace = true }
+virtual-lib2 = { workspace = true }
+```
+
+The `requirement` selector must be a registry requirement without extras, markers, or a direct
+source. A rule matches when the requested version range is contained in the selector's range.
+Requests that span both ranges, such as an unconstrained `urllib3`, remain unchanged. Ordinary
+overrides are applied before these replacement rules. Selectors whose version ranges and replacement
+markers overlap are rejected.
+
+Requirements with extras, direct sources, or explicit indexes are left unchanged.
+
+The replacement retains the request's environment marker, but otherwise replaces the requirement
+completely. Its own dependencies are exempt from a rule that would replace them with itself. For
+example, `virtual-lib1` can depend on `urllib3<2` without creating a recursive dependency on
+`virtual-lib1`. This allows
+[virtual workspace members](projects/workspaces.md#alternative-dependency-environments) to select
+incompatible library versions for unmodified callers.
+
 If multiple overrides are provided for the same package, they must be differentiated with
 [markers](#platform-markers). If a package has a dependency with a marker, it is replaced
 unconditionally when using overrides — it does not matter if the marker evaluates to true or false.
