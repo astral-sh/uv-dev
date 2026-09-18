@@ -44,6 +44,7 @@ jobs:
     needs: plan
     strategy:
       fail-fast: false
+      max-parallel: 8
       matrix: ${{ fromJson(needs.plan.outputs.extra-images) }}
     uses: $/.github/workflows/publish-docker-image.yml
     with:
