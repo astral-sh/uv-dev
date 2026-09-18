@@ -20,7 +20,7 @@ use assert_fs::{
     fixture::{FileTouch, FileWriteStr, PathChild, PathCreateDir},
 };
 use indoc::indoc;
-use insta::assert_snapshot;
+use insta::{allow_duplicates, assert_snapshot};
 use predicates::prelude::{PredicateStrExt, predicate};
 #[cfg(windows)]
 use sha2::{Digest, Sha256};
@@ -3015,11 +3015,13 @@ fn tool_install_recovery_preflights_present_competing_receipts() -> Result<()> {
         if force {
             command.arg("--force");
         }
-        uv_snapshot!(context.filters(), command, @r"
-        exit_code: 2 (failure)
-        ----- stderr -----
-        error: Cannot restore executable `bin/recovery-root` because it is also recorded for `recovery-peer`
-        ");
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), command, @r"
+            exit_code: 2 (failure)
+            ----- stderr -----
+            error: Cannot restore executable `bin/recovery-root` because it is also recorded for `recovery-peer`
+            ");
+        }
         old.assert(predicate::path::missing());
         assert_eq!(fs_err::read(shared.path())?, shared_contents);
         #[cfg(unix)]
