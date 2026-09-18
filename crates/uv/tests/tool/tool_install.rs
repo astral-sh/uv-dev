@@ -3736,8 +3736,11 @@ fn tool_install_recovery_survives_environment_updates() -> Result<()> {
                     entries
                         .iter()
                         .any(|entry| entry.as_inline_table().is_some_and(|entry| {
-                            entry.get("install-path").and_then(toml_edit::Value::as_str)
-                                == target.to_str()
+                            entry
+                                .get("install-path")
+                                .and_then(toml_edit::Value::as_str)
+                                .map(Path::new)
+                                == Some(target.as_path())
                         }))
                 );
             }
