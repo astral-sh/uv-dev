@@ -253,9 +253,11 @@ fn owned_entrypoints(
         for (tool_name, other_receipt) in receipts {
             let mut matches_export = false;
             for other in other_receipt.entrypoints() {
-                if same_install_path(&other.install_path, &entrypoint.install_path)?
-                    && entrypoint_matches(other, &tools.tool_dir(tool_name))?
-                {
+                #[cfg(unix)]
+                let same_path = other.install_path == entrypoint.install_path;
+                #[cfg(windows)]
+                let same_path = same_install_path(&other.install_path, &entrypoint.install_path)?;
+                if same_path && entrypoint_matches(other, &tools.tool_dir(tool_name))? {
                     matches_export = true;
                     break;
                 }
@@ -283,32 +285,26 @@ fn owned_entrypoints(
 }
 
 /// Compare receipt paths without confusing differently cased Windows copies with unique owners.
+#[cfg(windows)]
 fn same_install_path(left: &Path, right: &Path) -> Result<bool> {
-    #[cfg(unix)]
-    {
-        Ok(left == right)
+    if left == right {
+        return Ok(true);
     }
-    #[cfg(windows)]
-    {
-        if left == right {
-            return Ok(true);
+    for path in [left, right] {
+        match fs_err::metadata(path) {
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(err) => return Err(err.into()),
         }
-        for path in [left, right] {
-            match fs_err::metadata(path) {
-                Ok(_) => {}
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-                Err(err) => return Err(err.into()),
-            }
-        }
-        if let Some(same) = uv_fs::is_same_file_allow_missing(left, right) {
-            Ok(same)
-        } else {
-            bail!(
-                "Cannot compare executable ownership paths `{}` and `{}`",
-                left.user_display(),
-                right.user_display()
-            )
-        }
+    }
+    if let Some(same) = uv_fs::is_same_file_allow_missing(left, right) {
+        Ok(same)
+    } else {
+        bail!(
+            "Cannot compare executable ownership paths `{}` and `{}`",
+            left.user_display(),
+            right.user_display()
+        )
     }
 }
 
