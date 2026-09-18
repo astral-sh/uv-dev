@@ -6,6 +6,7 @@ use uv_normalize::PackageName;
 use super::AuditResults;
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub(crate) struct Report {
     schema: Schema,
     #[serde(flatten)]
@@ -13,10 +14,28 @@ pub(crate) struct Report {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct ReportBody {
     summary: Summary,
     vulnerabilities: Vec<Vulnerability>,
     adverse_statuses: Vec<AdverseStatus>,
+}
+
+/// Generate the JSON schema for preview project audit reports.
+#[cfg(feature = "schemars")]
+pub fn project_json_schema() -> schemars::Schema {
+    let mut schema = schemars::generate::SchemaSettings::draft07()
+        .for_serialize()
+        .into_generator()
+        .into_root_schema_for::<Report>();
+    schema.insert("title".to_owned(), "uv audit (preview)".into());
+    schema
+}
+
+/// Generate the per-record schema for preview JSONL project audit reports.
+#[cfg(feature = "schemars")]
+pub fn project_jsonl_schema() -> schemars::Schema {
+    crate::commands::report::jsonl_object_schema::<Report>("uv audit JSONL (preview)")
 }
 
 impl Report {
@@ -103,25 +122,32 @@ struct ToolReport {
 }
 
 #[derive(Debug, Serialize, Default)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct Schema {
     version: SchemaVersion,
 }
 
 #[derive(Debug, Serialize, Default)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 enum SchemaVersion {
     #[default]
     Preview,
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct Summary {
+    #[cfg_attr(feature = "schemars", schemars(range(max = u64::MAX)))]
     audited_packages: usize,
+    #[cfg_attr(feature = "schemars", schemars(range(max = u64::MAX)))]
     vulnerabilities: usize,
+    #[cfg_attr(feature = "schemars", schemars(range(max = u64::MAX)))]
     adverse_statuses: usize,
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct Dependency {
     name: String,
     version: String,
@@ -137,6 +163,7 @@ impl From<&uv_audit::Dependency> for Dependency {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct Vulnerability {
     dependency: Dependency,
     id: String,
@@ -185,6 +212,7 @@ impl From<&uv_audit::Vulnerability> for Vulnerability {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct AdverseStatus {
     name: String,
     status: String,
@@ -198,5 +226,120 @@ impl From<&uv_audit::ProjectStatus> for AdverseStatus {
             status: status.status.to_string(),
             reason: status.reason.clone(),
         }
+    }
+}
+
+#[cfg(all(test, feature = "schemars"))]
+mod tests {
+    use anyhow::{Context, Result};
+    use serde_json::{Value, json};
+    use uv_audit::{
+        AdverseStatus, Dependency, Finding, ProjectStatus, Vulnerability, VulnerabilityID,
+    };
+    use uv_cli::AuditOutputFormat;
+    use uv_redacted::DisplaySafeUrl;
+    use uv_test::json_schema::JsonSchema;
+
+    use super::{AuditResults, Report, project_json_schema, project_jsonl_schema};
+    use crate::printer::{Printer, jsonl_result};
+
+    fn audit() -> Result<AuditResults> {
+        Ok(AuditResults {
+            printer: Printer::Silent,
+            n_packages: 3,
+            output_format: AuditOutputFormat::Json,
+            findings: vec![
+                Finding::Vulnerability(Box::new(Vulnerability {
+                    dependency: Dependency::new("example".parse()?, "1.0".parse()?),
+                    id: VulnerabilityID::new("SOURCE-123"),
+                    summary: Some("Example finding".to_owned()),
+                    description: Some("Finding details".to_owned()),
+                    link: Some(DisplaySafeUrl::parse("https://example.org/advisory/123")?),
+                    fix_versions: vec!["1.1".parse()?],
+                    aliases: vec![VulnerabilityID::new("CVE-2026-12345")],
+                    published: Some("2026-01-01T00:00:00Z".parse()?),
+                    modified: Some("2026-02-01T00:00:00Z".parse()?),
+                })),
+                Finding::ProjectStatus(ProjectStatus {
+                    name: "archived-example".parse()?,
+                    status: AdverseStatus::Archived,
+                    reason: None,
+                }),
+            ],
+            artifact_uri: "uv.lock".to_owned(),
+        })
+    }
+
+    #[test]
+    fn project_schemas_describe_serialized_findings() -> Result<()> {
+        let results = audit()?;
+        let (vulnerabilities, statuses) = results.split_findings();
+        let report = Report::from_findings(results.n_packages, &vulnerabilities, &statuses);
+        let payload = serde_json::to_value(&report)?;
+        assert_eq!(
+            payload["vulnerabilities"][0]["display_id"],
+            "CVE-2026-12345"
+        );
+        assert_eq!(payload["adverse_statuses"][0]["reason"], Value::Null);
+
+        let document = serde_json::to_value(project_json_schema())?;
+        assert_eq!(document["title"], "uv audit (preview)");
+        let validator = JsonSchema::new(&serde_json::to_string(&document)?)?;
+        validator.parse(&serde_json::to_vec(&report)?)?;
+        validator.parse(&serde_json::to_vec(&Report::from_findings(0, &[], &[]))?)?;
+        let record_validator = JsonSchema::new(&serde_json::to_string(&project_jsonl_schema())?)?;
+        record_validator.parse(jsonl_result(&report)?.as_bytes())?;
+
+        for field in ["summary", "description", "link", "published", "modified"] {
+            let mut nullable = payload.clone();
+            nullable["vulnerabilities"][0][field] = Value::Null;
+            validator.parse(&serde_json::to_vec(&nullable)?)?;
+        }
+        for field in [
+            "dependency",
+            "id",
+            "display_id",
+            "aliases",
+            "summary",
+            "description",
+            "link",
+            "fix_versions",
+            "published",
+            "modified",
+        ] {
+            let mut missing = payload.clone();
+            missing["vulnerabilities"][0]
+                .as_object_mut()
+                .context("expected a vulnerability")?
+                .remove(field);
+            assert!(validator.parse(&serde_json::to_vec(&missing)?).is_err());
+        }
+        for field in ["audited_packages", "vulnerabilities", "adverse_statuses"] {
+            assert_eq!(
+                document["definitions"]["Summary"]["properties"][field]["maximum"],
+                u64::MAX
+            );
+            let mut maximum = payload.clone();
+            maximum["summary"][field] = json!(u64::MAX);
+            let maximum = serde_json::to_string(&maximum)?;
+            validator.parse(maximum.as_bytes())?;
+            let above = maximum.replacen(
+                &u64::MAX.to_string(),
+                &(u128::from(u64::MAX) + 1).to_string(),
+                1,
+            );
+            assert!(validator.parse(above.as_bytes()).is_err());
+            let mut negative = payload.clone();
+            negative["summary"][field] = json!(-1);
+            assert!(validator.parse(&serde_json::to_vec(&negative)?).is_err());
+        }
+        let mut invalid_version = payload;
+        invalid_version["schema"]["version"] = json!(1);
+        assert!(
+            validator
+                .parse(&serde_json::to_vec(&invalid_version)?)
+                .is_err()
+        );
+        Ok(())
     }
 }

@@ -55,6 +55,8 @@ pub(crate) enum Target {
     SelfVersion,
     /// The `uv python list` JSON output format.
     PythonList,
+    /// The preview `uv audit` JSON output format.
+    Audit,
     /// Shared progress records in the preview JSONL output format.
     JsonlProgress,
     /// Records in the preview `uv workspace metadata` JSONL output format.
@@ -73,6 +75,8 @@ pub(crate) enum Target {
     SelfVersionJsonl,
     /// Records in the preview `uv python list` JSONL output format.
     PythonListJsonl,
+    /// Records in the preview `uv audit` JSONL output format.
+    AuditJsonl,
 }
 
 impl Target {
@@ -87,6 +91,7 @@ impl Target {
             Self::Version => "docs/reference/internals/version.schema.json",
             Self::SelfVersion => "docs/reference/internals/self-version.schema.json",
             Self::PythonList => "docs/reference/internals/python-list.schema.json",
+            Self::Audit => "docs/reference/internals/audit.schema.json",
             Self::JsonlProgress => "docs/reference/internals/jsonl-progress.schema.json",
             Self::WorkspaceMetadataJsonl => "docs/reference/internals/metadata-jsonl.schema.json",
             Self::ToolListJsonl => "docs/reference/internals/tool-list-jsonl.schema.json",
@@ -96,6 +101,7 @@ impl Target {
             Self::VersionJsonl => "docs/reference/internals/version-jsonl.schema.json",
             Self::SelfVersionJsonl => "docs/reference/internals/self-version-jsonl.schema.json",
             Self::PythonListJsonl => "docs/reference/internals/python-list-jsonl.schema.json",
+            Self::AuditJsonl => "docs/reference/internals/audit-jsonl.schema.json",
         }
     }
 
@@ -110,6 +116,7 @@ impl Target {
             Self::Version => "cargo dev generate-json-schema --target version",
             Self::SelfVersion => "cargo dev generate-json-schema --target self-version",
             Self::PythonList => "cargo dev generate-json-schema --target python-list",
+            Self::Audit => "cargo dev generate-json-schema --target audit",
             Self::JsonlProgress => "cargo dev generate-json-schema --target jsonl-progress",
             Self::WorkspaceMetadataJsonl => {
                 "cargo dev generate-json-schema --target workspace-metadata-jsonl"
@@ -121,6 +128,7 @@ impl Target {
             Self::VersionJsonl => "cargo dev generate-json-schema --target version-jsonl",
             Self::SelfVersionJsonl => "cargo dev generate-json-schema --target self-version-jsonl",
             Self::PythonListJsonl => "cargo dev generate-json-schema --target python-list-jsonl",
+            Self::AuditJsonl => "cargo dev generate-json-schema --target audit-jsonl",
         }
     }
 }
@@ -199,6 +207,7 @@ fn schema(target: Target) -> schemars::Schema {
         Target::Version => uv::commands::version_json_schema(),
         Target::SelfVersion => uv::commands::self_version_json_schema(),
         Target::PythonList => uv::commands::python_list_json_schema(),
+        Target::Audit => uv::commands::audit_json_schema(),
         Target::JsonlProgress => uv::commands::jsonl_progress_json_schema(),
         Target::WorkspaceMetadataJsonl => uv::commands::workspace_metadata_jsonl_schema(),
         Target::ToolListJsonl => uv::commands::tool_list_jsonl_schema(),
@@ -208,6 +217,7 @@ fn schema(target: Target) -> schemars::Schema {
         Target::VersionJsonl => uv::commands::version_jsonl_schema(),
         Target::SelfVersionJsonl => uv::commands::self_version_jsonl_schema(),
         Target::PythonListJsonl => uv::commands::python_list_jsonl_schema(),
+        Target::AuditJsonl => uv::commands::audit_jsonl_schema(),
     }
 }
 
@@ -326,6 +336,17 @@ mod tests {
                     "target": {"python_version": "3.12.0", "python_platform": null},
                     "packages_checked": 0,
                     "diagnostics": []
+                }),
+            ),
+            (
+                Target::Audit,
+                Target::AuditJsonl,
+                "uv audit JSONL (preview)",
+                json!({
+                    "schema": {"version": "preview"},
+                    "summary": {"audited_packages": 0, "vulnerabilities": 0, "adverse_statuses": 0},
+                    "vulnerabilities": [],
+                    "adverse_statuses": []
                 }),
             ),
         ];
