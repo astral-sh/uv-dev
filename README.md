@@ -6,13 +6,57 @@ Classification: bug
 
 ## Summary
 
-`uv lock` completes successfully but omits every dependency declared in `[project].dependencies` and their transitive dependencies. Dependencies under `[dependency-groups]` are still resolved. The reported project has a dynamic version supplied by Hatchling, and its build requirements do not constrain the Hatchling version.
+The reported behavior is reproducible. A dynamic version forces uv to prepare backend metadata. With a newline-terminated `VERSION` file, the reported Hatch version pattern `(?P<version>[^']+)` captures the trailing newline. Hatchling 1.32.3 writes that raw value into the `Version` core-metadata header, placing a blank line before `Requires-Python` and `Requires-Dist`. uv then resolves the separately read dependency group but omits the static project dependencies.
 
-The verbose output shows that uv cannot use the project metadata statically because `version` is dynamic, invokes `hatchling.build.prepare_metadata_for_build_editable()`, and selects Hatchling 1.32.3. The prepared project is then added to the solver without either runtime dependency; the dev-group dependencies are added separately from the workspace configuration.
+Hatchling 1.32.3 was published on 2026-09-17, matching the onset in the report. Its change from pypa/hatch#2398 preserves the original version string in core metadata. Hatchling 1.32.0 normalized the extracted value before writing metadata and does not exhibit the failure.
 
-An isolated reproduction confirms the mechanism. With a newline-terminated `VERSION` file and the reported pattern `(?P<version>[^']+)`, Hatchling 1.32.0 emits a valid `Version: 0.1.0` header followed by `Requires-Dist`. Hatchling 1.32.3 emits the captured newline as part of the raw version, producing a blank line immediately after `Version`. Core metadata parsing treats that blank line as the end of the header section, so the later `Requires-Dist` fields are ignored. uv 0.12.16 consequently locks only the dependency group. Pinning the build requirement to `hatchling==1.32.0` restores the runtime dependencies.
+## Reproduction
 
-Hatchling 1.32.3 was published on 2026-09-17, matching the report's onset. pypa/hatch#2398 introduced the raw-version behavior to preserve leading zeros in CalVer versions.
+Outcome: **reproducible**.
+
+The report used uv 0.12.16, Python 3.14.7, and Linux under WSL2. The isolated reproduction used the published uv 0.12.16 Linux x86-64 binary, CPython 3.12.3, a dedicated cache and tool directory under `/tmp`, and no user configuration. Python 3.12 was used with `requires-python = ">=3.12"`; the failure is in generated core metadata and reproduced independently of the reported Python 3.14 environment.
+
+Minimal `pyproject.toml`:
+
+```toml
+[project]
+name = "repro"
+dynamic = ["version"]
+requires-python = ">=3.12"
+dependencies = ["anyio==4.3.0", "idna==3.6"]
+
+[dependency-groups]
+dev = ["iniconfig==2.0.0"]
+
+[build-system]
+requires = ["hatchling==1.32.3"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "VERSION"
+pattern = "(?P<version>[^']+)"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/repro"]
+```
+
+`VERSION` contained `0.1.0` followed by a newline. Running `uv lock --upgrade --python /usr/bin/python3.12 --no-python-downloads` with uv 0.12.16 succeeded with `Resolved 2 packages`. The lock contained only `repro` and the dev dependency `iniconfig`; `anyio`, `idna`, and `anyio`'s transitive dependency `sniffio` were absent.
+
+The wheel built with Hatchling 1.32.3 contained:
+
+```text
+Metadata-Version: 2.5
+Name: repro
+Version: 0.1.0
+
+Requires-Python: >=3.12
+Requires-Dist: anyio==4.3.0
+Requires-Dist: idna==3.6
+```
+
+The blank line terminates the metadata headers, so uv's `mailparse`-based parser does not expose the later lines as `Requires-Dist` fields. Pinning `hatchling==1.32.0` removed that blank line and uv 0.12.16 resolved 5 packages, including both direct dependencies and `sniffio`. Keeping Hatchling 1.32.3 but changing the pattern to `(?P<version>\\S+)` also resolved all 5 packages. uv 0.12.13 reproduced the omission with Hatchling 1.32.3, so the evidence does not indicate a uv 0.12.16 code regression.
+
+Relevant existing tests do not cover this exact integration. `crates/uv/tests/lock/lock.rs::lock_dynamic_version` covers locking a project with a dynamic version but declares an empty static dependency list. `crates/uv-pypi-types/src/metadata/metadata_resolver.rs::test_parse_metadata` covers parsing normal headers and a description body after a blank line, but not backend metadata in which dependency-looking lines are placed after an unintended early blank line.
 
 ## Draft response
 
@@ -45,11 +89,3 @@ This is not a duplicate. No open or closed uv issue or pull request was found fo
 Searches covered open and closed uv issues and open, closed, and merged uv pull requests. Literal queries included `project.dependencies`, `dependency-groups`, missing or removed direct dependencies, `uv lock`, `upgrade-package`, `DynamicField("version")`, `No static pyproject.toml available`, `Requires-Dist`, Hatchling, and uv 0.12.16. Conceptual queries covered stale or malformed build metadata, dynamic versions, dependencies omitted from lockfiles, backend metadata validation, and dependency changes not being picked up. Fix-oriented review covered the uv 0.12.16 release changes and recent resolver, lockfile, metadata, and local-dependency pull requests. The Hatchling 1.32.3 release and its originating pull request were followed after the verbose log identified that backend version.
 
 astral-sh/uv#6712 was inspected because uv 0.3.5 failed to notice changed dependencies for a dynamic-version editable project. It was ruled out because that regression reused stale `.egg-info`; astral-sh/uv#21824 prepares fresh Hatchling metadata, and clearing the cache does not address the malformed output. astral-sh/uv#11047 was also ruled out because it concerns a dynamic version intermittently appearing in the lockfile after a cached build, not missing `Requires-Dist` fields. astral-sh/uv#10776 uses Hatchling with a dynamic version, but its confirmed trigger is recursive self-referential extras and its symptom is a perpetually stale lockfile, so it is not the same failure.
-
-## Supporting evidence
-
-- The report's log selects Hatchling 1.32.3 and calls `prepare_metadata_for_build_editable()` because `[project].dynamic` contains `version`.
-- After metadata preparation, the solver adds the project and its dev group, then expands only the dev-group requirements. Neither declared runtime dependency appears.
-- A minimal reproduction with uv 0.12.16 and Hatchling 1.32.3 resolves 7 packages and includes the project and pytest group, but omits the two `[project].dependencies` entries.
-- The same backend-generated `METADATA` contains two blank lines after `Version: 0.1.0`; the later `Requires-Python` and `Requires-Dist` lines fall outside the parsed header block.
-- Pinning the same reproduction to Hatchling 1.32.0 makes uv 0.12.16 resolve 14 packages and records both direct runtime dependencies and their transitive dependencies.
