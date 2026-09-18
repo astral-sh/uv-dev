@@ -317,9 +317,7 @@ impl Interpreter {
             });
         }
 
-        let Ok(installations) = ManagedPythonInstallations::from_settings(None) else {
-            return false;
-        };
+        let installations = ManagedPythonInstallations::from_settings(None);
         let Ok(root) = installations.absolute_root() else {
             return false;
         };
