@@ -1,3 +1,5 @@
+#[cfg(windows)]
+use std::collections::BTreeMap;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::process::Command;
@@ -305,7 +307,7 @@ fn tool_uninstall_preserves_unrelated_replacement() -> Result<()> {
 }
 
 #[test]
-fn tool_uninstall_after_same_tool_reinstall() -> Result<()> {
+fn tool_uninstall_after_same_tool_reinstall() {
     let context = uv_test::test_context!("3.13")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -337,7 +339,6 @@ fn tool_uninstall_after_same_tool_reinstall() -> Result<()> {
     Uninstalled 1 executable: simple_launcher
     ");
     executable.assert(predicate::path::missing());
-    Ok(())
 }
 
 #[cfg(windows)]
@@ -358,7 +359,7 @@ fn tool_uninstall_rejects_ambiguous_copied_executable() -> Result<()> {
             &name.parse()?,
             &"0.1.0".parse()?,
             &[],
-            &Default::default(),
+            &BTreeMap::default(),
             None,
             "py3-none-any",
             &[(script_path.as_str(), script)],
@@ -453,7 +454,7 @@ fn tool_uninstall_rejects_different_basename_aliases() -> Result<()> {
             &name.parse()?,
             &"0.1.0".parse()?,
             &[],
-            &Default::default(),
+            &BTreeMap::default(),
             None,
             "py3-none-any",
             &files,

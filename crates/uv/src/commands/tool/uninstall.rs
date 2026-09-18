@@ -247,7 +247,11 @@ pub(super) fn owned_entrypoints(
     receipts: &[(PackageName, Tool)],
     tools: &InstalledTools,
 ) -> Result<Vec<ToolEntrypoint>> {
-    owned_entrypoints_by(name, receipt, receipts, tools, same_install_path)
+    #[cfg(unix)]
+    let same_export = |left: &Path, right: &Path| Ok(left == right);
+    #[cfg(windows)]
+    let same_export = same_install_path;
+    owned_entrypoints_by(name, receipt, receipts, tools, same_export)
 }
 
 /// Apply the same source/receipt classifier with the caller's export-identity relation.
@@ -294,32 +298,26 @@ pub(super) fn owned_entrypoints_by(
 }
 
 /// Compare receipt paths without confusing differently cased Windows copies with unique owners.
+#[cfg(windows)]
 fn same_install_path(left: &Path, right: &Path) -> Result<bool> {
-    #[cfg(unix)]
-    {
-        Ok(left == right)
+    if left == right {
+        return Ok(true);
     }
-    #[cfg(windows)]
-    {
-        if left == right {
-            return Ok(true);
+    for path in [left, right] {
+        match fs_err::metadata(path) {
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(err) => return Err(err.into()),
         }
-        for path in [left, right] {
-            match fs_err::metadata(path) {
-                Ok(_) => {}
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-                Err(err) => return Err(err.into()),
-            }
-        }
-        if let Some(same) = uv_fs::is_same_file_allow_missing(left, right) {
-            Ok(same)
-        } else {
-            bail!(
-                "Cannot compare executable ownership paths `{}` and `{}`",
-                left.user_display(),
-                right.user_display()
-            )
-        }
+    }
+    if let Some(same) = uv_fs::is_same_file_allow_missing(left, right) {
+        Ok(same)
+    } else {
+        bail!(
+            "Cannot compare executable ownership paths `{}` and `{}`",
+            left.user_display(),
+            right.user_display()
+        )
     }
 }
 
