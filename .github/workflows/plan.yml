@@ -104,15 +104,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          auth_header="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64)"
+          gh auth setup-git --hostname "${GITHUB_SERVER_URL#https://}"
           shallow_args=()
           if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then
             shallow_args+=(--unshallow)
           fi
-          echo "::add-mask::$auth_header"
-          git \
-            -c "http.${GITHUB_SERVER_URL}/.extraheader=AUTHORIZATION: basic $auth_header" \
-            fetch \
+          git fetch \
             "${shallow_args[@]}" \
             --filter=blob:none \
             --no-tags \
