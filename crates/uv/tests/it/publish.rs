@@ -1,5 +1,8 @@
+use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileTouch, FileWriteStr, PathChild};
+use async_zip::base::write::ZipFileWriter;
+use async_zip::{Compression, ZipEntryBuilder};
 use fs_err::OpenOptions;
 use indoc::{formatdoc, indoc};
 use serde_json::{Value, json};
@@ -7,8 +10,9 @@ use sha2::{Digest, Sha256};
 use std::env::current_dir;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use uv_static::EnvVars;
-use uv_test::{uv_snapshot, venv_bin_path};
+use uv_test::{TestContext, uv_snapshot, venv_bin_path};
 use wiremock::matchers::{basic_auth, body_json, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
@@ -71,50 +75,125 @@ async fn mock_trusted_publishing(server: &MockServer, runs: u64) {
         .await;
 }
 
-#[test]
-fn username_password_no_longer_supported() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+fn username_password_error() -> ResponseTemplate {
+    ResponseTemplate::new(403).set_body_json(json!({
+        "code": "403 Username/Password authentication is no longer supported. Migrate to API Tokens or Trusted Publishers instead. See https://test.pypi.org/help/#apitoken and https://test.pypi.org/help/#trusted-publishers",
+    }))
+}
 
-    uv_snapshot!(context.filters(), context.publish()
+/// Isolate local rejected uploads from ambient proxy and GitHub authentication settings.
+fn local_publish(context: &TestContext) -> Command {
+    let mut command = context.publish();
+    command
+        .env(EnvVars::NO_PROXY, "localhost,127.0.0.1,::1")
+        .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("GH_ENTERPRISE_TOKEN")
+        .env_remove("GITHUB_ENTERPRISE_TOKEN");
+    command
+}
+
+#[tokio::test]
+async fn username_password_no_longer_supported() {
+    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/legacy/"))
+        .and(basic_auth("dummy", "dummy"))
+        .respond_with(username_password_error())
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), local_publish(&context)
         .arg("-u")
         .arg("dummy")
         .arg("-p")
         .arg("dummy")
         .arg("--publish-url")
-        .arg("https://test.pypi.org/legacy/")
+        .arg(format!("{}/legacy/", server.uri()))
         .arg(dummy_wheel()), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Publishing 1 file to https://test.pypi.org/legacy/
+    Publishing 1 file to http://[LOCALHOST]/legacy/
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
     Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to https://test.pypi.org/legacy/
+    error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to http://[LOCALHOST]/legacy/
       cause: Server returned status code 403 Forbidden. Server says: 403 Username/Password authentication is no longer supported. Migrate to API Tokens or Trusted Publishers instead. See https://test.pypi.org/help/#apitoken and https://test.pypi.org/help/#trusted-publishers
     "
     );
 }
 
-#[test]
-fn invalid_token() {
+#[tokio::test]
+async fn invalid_token() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let server = MockServer::start().await;
+    let wheel = context.temp_dir.child("ok-1.0.0-py3-none-any.whl");
+    let mut writer = ZipFileWriter::new(Vec::new());
+    for (name, contents) in [
+        (
+            "ok-1.0.0.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: ok\nVersion: 1.0.0\n",
+        ),
+        (
+            "ok-1.0.0.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        ),
+        (
+            "ok-1.0.0.dist-info/RECORD",
+            "ok-1.0.0.dist-info/METADATA,,\nok-1.0.0.dist-info/WHEEL,,\nok-1.0.0.dist-info/RECORD,,\n",
+        ),
+    ] {
+        writer
+            .write_entry_whole(
+                ZipEntryBuilder::new(name.into(), Compression::Stored),
+                contents.as_bytes(),
+            )
+            .await?;
+    }
+    fs_err::write(wheel.path(), writer.close().await?)?;
 
-    uv_snapshot!(context.filters(), context.publish()
+    Mock::given(method("POST"))
+        .and(path("/legacy/"))
+        .and(basic_auth("__token__", "dummy"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(json!({
+            "message": "Access was denied to this resource.",
+            "code": "403 Invalid or non-existent authentication information. See https://test.pypi.org/help/#invalid-auth for more information.",
+            "title": "Forbidden",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), local_publish(&context)
         .arg("-u")
         .arg("__token__")
         .arg("-p")
         .arg("dummy")
         .arg("--publish-url")
-        .arg("https://test.pypi.org/legacy/")
-        .arg(dummy_wheel()), @"
+        .arg(format!("{}/legacy/", server.uri()))
+        .arg(wheel.path()), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Publishing 1 file to https://test.pypi.org/legacy/
+    Publishing 1 file to http://[LOCALHOST]/legacy/
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
     Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to https://test.pypi.org/legacy/
+    error: Failed to publish `ok-1.0.0-py3-none-any.whl` to http://[LOCALHOST]/legacy/
       cause: Server returned status code 403 Forbidden. Server says: 403 Invalid or non-existent authentication information. See https://test.pypi.org/help/#invalid-auth for more information.
     "
     );
+
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .expect("Request recording is enabled")
+            .len(),
+        1
+    );
+    server.verify().await;
+    Ok(())
 }
 
 /// Emulate a missing `permission` `id-token: write` situation.
@@ -282,9 +361,36 @@ async fn publish_wheels_before_sdist_in_filename_order() {
 }
 
 /// Check that we (don't) use the keyring and warn for missing keyring behaviors correctly.
-#[test]
-fn check_keyring_behaviours() {
+#[tokio::test]
+async fn check_keyring_behaviours() {
     let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let server = MockServer::start().await;
+    let publish_url = format!("{}/legacy/?ok", server.uri());
+    let check_url = format!("{}/simple/", server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/simple/ok/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"{"name":"ok","files":[]}"#,
+            "application/vnd.pypi.simple.v1+json",
+        ))
+        .expect(4)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/legacy/"))
+        .and(basic_auth("dummy", "dummy"))
+        .respond_with(username_password_error())
+        .expect(3)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/legacy/"))
+        .and(basic_auth("dummy", ""))
+        .respond_with(username_password_error())
+        .expect(1)
+        .mount(&server)
+        .await;
 
     // Install our keyring plugin
     context
@@ -300,7 +406,7 @@ fn check_keyring_behaviours() {
         .success();
 
     // Ok: The keyring may be used for the index page.
-    uv_snapshot!(context.filters(), context.publish()
+    uv_snapshot!(context.filters(), local_publish(&context)
         .arg("-u")
         .arg("dummy")
         .arg("-p")
@@ -308,23 +414,23 @@ fn check_keyring_behaviours() {
         .arg("--keyring-provider")
         .arg("subprocess")
         .arg("--check-url")
-        .arg("https://test.pypi.org/simple/")
+        .arg(&check_url)
         .arg("--publish-url")
-        .arg("https://test.pypi.org/legacy/?ok")
+        .arg(&publish_url)
         .arg(dummy_wheel())
         .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Publishing 1 file to https://test.pypi.org/legacy/?ok
+    Publishing 1 file to http://[LOCALHOST]/legacy/?ok
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
     Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to https://test.pypi.org/legacy/?ok
+    error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to http://[LOCALHOST]/legacy/?ok
       cause: Server returned status code 403 Forbidden. Server says: 403 Username/Password authentication is no longer supported. Migrate to API Tokens or Trusted Publishers instead. See https://test.pypi.org/help/#apitoken and https://test.pypi.org/help/#trusted-publishers
     "
     );
 
     // Warn: The keyring is unused.
-    uv_snapshot!(context.filters(), context.publish()
+    uv_snapshot!(context.filters(), local_publish(&context)
         .arg("-u")
         .arg("dummy")
         .arg("-p")
@@ -332,67 +438,69 @@ fn check_keyring_behaviours() {
         .arg("--keyring-provider")
         .arg("subprocess")
         .arg("--publish-url")
-        .arg("https://test.pypi.org/legacy/?ok")
+        .arg(&publish_url)
         .arg(dummy_wheel())
         .env(EnvVars::PATH, venv_bin_path(&context.venv)),  @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Publishing 1 file to https://test.pypi.org/legacy/?ok
+    Publishing 1 file to http://[LOCALHOST]/legacy/?ok
     warning: Using `--keyring-provider` with a password or token and no check URL has no effect
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
     Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to https://test.pypi.org/legacy/?ok
+    error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to http://[LOCALHOST]/legacy/?ok
       cause: Server returned status code 403 Forbidden. Server says: 403 Username/Password authentication is no longer supported. Migrate to API Tokens or Trusted Publishers instead. See https://test.pypi.org/help/#apitoken and https://test.pypi.org/help/#trusted-publishers
     "
     );
 
     // Warn: There is no keyring entry for the user dummy.
     // https://github.com/astral-sh/uv/issues/7963#issuecomment-2453558043
-    uv_snapshot!(context.filters(), context.publish()
+    uv_snapshot!(context.filters(), local_publish(&context)
         .arg("-u")
         .arg("dummy")
         .arg("--keyring-provider")
         .arg("subprocess")
         .arg("--check-url")
-        .arg("https://test.pypi.org/simple/")
+        .arg(&check_url)
         .arg("--publish-url")
-        .arg("https://test.pypi.org/legacy/?ok")
+        .arg(&publish_url)
         .arg(dummy_wheel())
         .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Publishing 1 file to https://test.pypi.org/legacy/?ok
-    Keyring request for dummy@https://test.pypi.org/legacy/?ok
-    Keyring request for dummy@test.pypi.org
-    warning: Keyring has no password for URL `https://test.pypi.org/legacy/?ok` and username `dummy`
+    Publishing 1 file to http://[LOCALHOST]/legacy/?ok
+    Keyring request for dummy@http://[LOCALHOST]/legacy/?ok
+    Keyring request for dummy@[LOCALHOST]
+    Keyring request for dummy@http://[LOCALHOST]
+    warning: Keyring has no password for URL `http://[LOCALHOST]/legacy/?ok` and username `dummy`
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
     Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    Keyring request for dummy@https://test.pypi.org/legacy/?ok
-    Keyring request for dummy@test.pypi.org
-    error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to https://test.pypi.org/legacy/?ok
+    Keyring request for dummy@http://[LOCALHOST]/legacy/?ok
+    Keyring request for dummy@[LOCALHOST]
+    Keyring request for dummy@http://[LOCALHOST]
+    error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to http://[LOCALHOST]/legacy/?ok
       cause: Server returned status code 403 Forbidden. Server says: 403 Username/Password authentication is no longer supported. Migrate to API Tokens or Trusted Publishers instead. See https://test.pypi.org/help/#apitoken and https://test.pypi.org/help/#trusted-publishers
     "
     );
 
     // Ok: There is a keyring entry for the user dummy.
     // https://github.com/astral-sh/uv/issues/7963#issuecomment-2453558043
-    uv_snapshot!(context.filters(), context.publish()
+    uv_snapshot!(context.filters(), local_publish(&context)
         .arg("-u")
         .arg("dummy")
         .arg("--keyring-provider")
         .arg("subprocess")
         .arg("--publish-url")
-        .arg("https://test.pypi.org/legacy/?ok")
+        .arg(&publish_url)
         .arg(dummy_wheel())
-        .env(EnvVars::KEYRING_TEST_CREDENTIALS, r#"{"https://test.pypi.org/legacy/?ok": {"dummy": "dummy"}}"#)
+        .env(EnvVars::KEYRING_TEST_CREDENTIALS, json!({(publish_url): {"dummy": "dummy"}}).to_string())
         .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Publishing 1 file to https://test.pypi.org/legacy/?ok
-    Keyring request for dummy@https://test.pypi.org/legacy/?ok
+    Publishing 1 file to http://[LOCALHOST]/legacy/?ok
+    Keyring request for dummy@http://[LOCALHOST]/legacy/?ok
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
     Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to https://test.pypi.org/legacy/?ok
+    error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to http://[LOCALHOST]/legacy/?ok
       cause: Server returned status code 403 Forbidden. Server says: 403 Username/Password authentication is no longer supported. Migrate to API Tokens or Trusted Publishers instead. See https://test.pypi.org/help/#apitoken and https://test.pypi.org/help/#trusted-publishers
     "
     );
