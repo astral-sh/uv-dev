@@ -4298,7 +4298,7 @@ fn native_pe_fixture(filename: &str) -> Result<NativePeFixture> {
         uv_trampoline_builder::Launcher::try_from_path(&path)?.is_none(),
         "Native fixture is a uv trampoline"
     );
-    let sha256 = format!("{:x}", Sha256::digest(&bytes));
+    let sha256 = hex::encode(Sha256::digest(&bytes));
     eprintln!(
         "native-pe-fixture {}",
         serde_json::json!({

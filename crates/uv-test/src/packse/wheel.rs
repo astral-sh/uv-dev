@@ -404,7 +404,7 @@ mod tests {
             .remove("binary_package-1.0.0.dist-info/RECORD")
             .expect("wheel RECORD");
         let expected = build_record(
-            "binary_package-1.0.0",
+            "binary_package-1.0.0.dist-info",
             &files.into_iter().collect::<Vec<_>>(),
         );
         let actual_lines = std::str::from_utf8(&record)
