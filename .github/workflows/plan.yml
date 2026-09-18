@@ -104,7 +104,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh auth setup-git --hostname "${GITHUB_SERVER_URL#https://}"
+          gh auth setup-git
           shallow_args=()
           if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then
             shallow_args+=(--unshallow)
