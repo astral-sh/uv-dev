@@ -1,4 +1,7 @@
-use anyhow::Result;
+use std::process::{Command, Output};
+use std::sync::LazyLock;
+
+use anyhow::{Context, Result, anyhow};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
@@ -9,7 +12,55 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_static::EnvVars;
+use uv_test::json_schema::JsonSchema;
+use uv_test::jsonl::{JsonlOutput, JsonlResultExpectation};
 use uv_test::{TestContext, uv_snapshot};
+
+static TOOL_AUDIT_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> = LazyLock::new(|| {
+    JsonSchema::new(include_str!(
+        "../../../../docs/reference/internals/tool-audit.schema.json"
+    ))
+    .map_err(|error| error.to_string())
+});
+
+static TOOL_AUDIT_JSONL_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> =
+    LazyLock::new(|| {
+        JsonSchema::new(include_str!(
+            "../../../../docs/reference/internals/tool-audit-jsonl.schema.json"
+        ))
+        .map_err(|error| error.to_string())
+    });
+
+fn parse_tool_audit_report(contents: &[u8]) -> Result<Value> {
+    TOOL_AUDIT_SCHEMA
+        .as_ref()
+        .map_err(|error| anyhow!("invalid tool audit schema: {error}"))?
+        .parse(contents)
+        .context("tool audit schema mismatch")
+}
+
+fn parse_tool_audit_jsonl(
+    output: &Output,
+    expectation: JsonlResultExpectation,
+) -> Result<JsonlOutput> {
+    let schema = TOOL_AUDIT_JSONL_SCHEMA
+        .as_ref()
+        .map_err(|error| anyhow!("invalid JSONL tool audit schema: {error}"))?;
+    JsonlOutput::parse(schema, output, expectation)
+}
+
+fn parse_tool_audit_jsonl_report(output: &Output) -> Result<(Vec<Value>, Value)> {
+    let parsed = parse_tool_audit_jsonl(output, JsonlResultExpectation::Required)?;
+    let mut result = parsed.result.context("missing JSONL tool audit result")?;
+    result
+        .as_object_mut()
+        .context("expected an object-valued tool audit result")?
+        .remove("type");
+    Ok((
+        parsed.progress,
+        parse_tool_audit_report(&serde_json::to_vec(&result)?)?,
+    ))
+}
 
 /// A test context for auditing tools installed into isolated directories.
 struct AuditTestContext {
@@ -38,6 +89,18 @@ impl AuditTestContext {
 
     fn filters(&self) -> Vec<(&str, &str)> {
         self.inner.filters()
+    }
+
+    fn report(&self, format: &str, service_url: &str) -> Command {
+        let mut command = self.inner.tool_audit();
+        command
+            .env_remove(EnvVars::RUST_LOG)
+            .env(
+                EnvVars::UV_PREVIEW_FEATURES,
+                "audit,tool-install-locks,json-output,jsonl",
+            )
+            .args(["--output-format", format, "--service-url", service_url]);
+        command
     }
 
     /// Install a tool from the test links, optionally with a lockfile.
@@ -534,14 +597,14 @@ async fn tool_audit_configured_ignore() -> Result<()> {
 }
 
 #[tokio::test]
-async fn tool_audit_json() {
+async fn tool_audit_json() -> Result<()> {
     let context = AuditTestContext::new("3.12");
     context.install_tool("simple-launcher", true);
 
     let server = MockServer::start().await;
     mount_clean_service(&server).await;
 
-    uv_snapshot!(context.filters(), context.inner.tool_audit()
+    let output = uv_snapshot!(context.filters(), context.inner.tool_audit()
         .arg("--all")
         .arg("--output-format")
         .arg("json")
@@ -568,17 +631,34 @@ async fn tool_audit_json() {
       ]
     }
     "#);
+    let expected = parse_tool_audit_report(&output.stdout)?;
+    assert_eq!(expected["tools"][0]["name"], "simple-launcher");
+    for mode in ["-q", "--no-progress"] {
+        let output = context
+            .report("json", &server.uri())
+            .args(["--all", mode])
+            .output()?;
+        assert!(output.status.success());
+        assert_eq!(parse_tool_audit_report(&output.stdout)?, expected);
+    }
+    let silent = context
+        .report("json", &server.uri())
+        .args(["--all", "-qq"])
+        .output()?;
+    assert!(silent.status.success());
+    assert!(silent.stdout.is_empty());
+    Ok(())
 }
 
 #[tokio::test]
-async fn tool_audit_jsonl() {
+async fn tool_audit_jsonl() -> Result<()> {
     let context = AuditTestContext::new("3.12");
     context.install_tool("simple-launcher", true);
 
     let server = MockServer::start().await;
     mount_clean_service(&server).await;
 
-    uv_snapshot!(context.filters(), context.inner.tool_audit()
+    let output = uv_snapshot!(context.filters(), context.inner.tool_audit()
         .arg("--all")
         .arg("--output-format")
         .arg("jsonl")
@@ -593,17 +673,37 @@ async fn tool_audit_jsonl() {
     {"type":"result","schema":{"version":"preview"},"tools":[{"name":"simple-launcher","summary":{"audited_packages":1,"vulnerabilities":0,"adverse_statuses":0},"vulnerabilities":[],"adverse_statuses":[]}]}
     "#
     );
+    let (progress, expected) = parse_tool_audit_jsonl_report(&output)?;
+    assert_eq!(progress.len(), 3);
+    for mode in ["-q", "--no-progress"] {
+        let output = context
+            .report("jsonl", &server.uri())
+            .args(["--all", mode])
+            .output()?;
+        assert!(output.status.success());
+        let (progress, report) = parse_tool_audit_jsonl_report(&output)?;
+        assert!(progress.is_empty());
+        assert_eq!(report, expected);
+    }
+    let silent = context
+        .report("jsonl", &server.uri())
+        .args(["--all", "-qq"])
+        .output()?;
+    assert!(silent.status.success());
+    assert!(silent.stdout.is_empty());
+    parse_tool_audit_jsonl(&silent, JsonlResultExpectation::Forbidden)?;
+    Ok(())
 }
 
 #[tokio::test]
-async fn tool_audit_json_preview_warning() {
+async fn tool_audit_json_preview_warning() -> Result<()> {
     let context = AuditTestContext::new("3.12");
     context.install_tool("simple-launcher", true);
 
     let server = MockServer::start().await;
     mount_clean_service(&server).await;
 
-    uv_snapshot!(context.filters(), context.inner.tool_audit()
+    let output = uv_snapshot!(context.filters(), context.inner.tool_audit()
         .arg("--all")
         .arg("--output-format")
         .arg("json")
@@ -632,10 +732,12 @@ async fn tool_audit_json_preview_warning() {
     ----- stderr -----
     warning: The `--output-format json` option is experimental and the schema may change without warning. Pass `--preview-features json-output` to disable this warning.
     "#);
+    parse_tool_audit_report(&output.stdout)?;
+    Ok(())
 }
 
 #[tokio::test]
-async fn tool_audit_json_all_tools() {
+async fn tool_audit_json_all_tools() -> Result<()> {
     let context = AuditTestContext::new("3.13");
     context.install_tool("simple-launcher", true);
     context.install_tool("basic-app", true);
@@ -643,7 +745,7 @@ async fn tool_audit_json_all_tools() {
     let server = MockServer::start().await;
     mount_clean_service(&server).await;
 
-    uv_snapshot!(context.filters(), context.inner.tool_audit()
+    let output = uv_snapshot!(context.filters(), context.inner.tool_audit()
         .arg("--all")
         .arg("--output-format")
         .arg("json")
@@ -680,6 +782,186 @@ async fn tool_audit_json_all_tools() {
       ]
     }
     "#);
+    let expected = parse_tool_audit_report(&output.stdout)?;
+    assert_eq!(expected["tools"][0]["name"], "basic-app");
+    assert_eq!(expected["tools"][1]["name"], "simple-launcher");
+    let output = context
+        .report("jsonl", &server.uri())
+        .args(["--all", "--no-progress"])
+        .output()?;
+    assert!(output.status.success());
+    let (progress, report) = parse_tool_audit_jsonl_report(&output)?;
+    assert!(progress.is_empty());
+    assert_eq!(report, expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_audit_json_vulnerability() -> Result<()> {
+    let context = AuditTestContext::new("3.12");
+    context.install_tool("simple-launcher", true);
+
+    let server = MockServer::start().await;
+    mount_vulnerable_service(&server).await;
+
+    let output = uv_snapshot!(context.filters(), context
+        .report("json", &server.uri())
+        .arg("simple-launcher"), @r#"
+    exit_code: 1 (failure)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "tools": [
+        {
+          "name": "simple-launcher",
+          "summary": {
+            "audited_packages": 1,
+            "vulnerabilities": 1,
+            "adverse_statuses": 0
+          },
+          "vulnerabilities": [
+            {
+              "dependency": {
+                "name": "simple-launcher",
+                "version": "0.1.0"
+              },
+              "id": "PYSEC-2026-0001",
+              "display_id": "PYSEC-2026-0001",
+              "aliases": [],
+              "summary": "A test vulnerability in simple-launcher",
+              "description": null,
+              "link": "https://example.com/advisory/PYSEC-2026-0001",
+              "fix_versions": [
+                "0.2.0"
+              ],
+              "published": null,
+              "modified": "2026-01-01T00:00:00Z"
+            }
+          ],
+          "adverse_statuses": []
+        }
+      ]
+    }
+    "#);
+    let expected = parse_tool_audit_report(&output.stdout)?;
+    assert_eq!(expected["tools"][0]["summary"]["vulnerabilities"], 1);
+    for format in ["json", "jsonl"] {
+        for mode in [None, Some("-q"), Some("--no-progress")] {
+            let mut command = context.report(format, &server.uri());
+            command.arg("simple-launcher");
+            if let Some(mode) = mode {
+                command.arg(mode);
+            }
+            let output = command.output()?;
+            assert_eq!(output.status.code(), Some(1));
+            if format == "jsonl" {
+                let (progress, report) = parse_tool_audit_jsonl_report(&output)?;
+                if mode.is_some() {
+                    assert!(progress.is_empty());
+                }
+                assert_eq!(report, expected);
+            } else {
+                assert_eq!(parse_tool_audit_report(&output.stdout)?, expected);
+            }
+        }
+        let silent = context
+            .report(format, &server.uri())
+            .args(["simple-launcher", "-qq"])
+            .output()?;
+        assert_eq!(silent.status.code(), Some(1));
+        assert!(silent.stdout.is_empty());
+        if format == "jsonl" {
+            parse_tool_audit_jsonl(&silent, JsonlResultExpectation::Forbidden)?;
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_audit_json_empty_and_setup_failure() -> Result<()> {
+    let context = AuditTestContext::new("3.12");
+    let server = MockServer::start().await;
+
+    let output = uv_snapshot!(context.filters(), context
+        .report("json", &server.uri())
+        .arg("--all"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "tools": []
+    }
+    "#);
+    let expected = parse_tool_audit_report(&output.stdout)?;
+    assert_eq!(expected["tools"], json!([]));
+
+    for format in ["json", "jsonl"] {
+        let output = context
+            .report(format, &server.uri())
+            .arg("--all")
+            .output()?;
+        assert!(output.status.success());
+        if format == "jsonl" {
+            let (progress, report) = parse_tool_audit_jsonl_report(&output)?;
+            assert!(progress.is_empty());
+            assert_eq!(report, expected);
+        } else {
+            assert_eq!(parse_tool_audit_report(&output.stdout)?, expected);
+        }
+        let output = context
+            .report(format, &server.uri())
+            .arg("simple-launcher")
+            .output()?;
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        if format == "jsonl" {
+            let parsed = parse_tool_audit_jsonl(&output, JsonlResultExpectation::Forbidden)?;
+            assert!(parsed.progress.is_empty());
+        }
+    }
+    assert!(
+        server
+            .received_requests()
+            .await
+            .is_some_and(|requests| requests.is_empty())
+    );
+
+    context.install_tool("simple-launcher", false);
+    for format in ["json", "jsonl"] {
+        let output = context
+            .report(format, &server.uri())
+            .args(["--all", "--quiet"])
+            .output()?;
+        assert!(output.status.success());
+        if format == "jsonl" {
+            let (progress, report) = parse_tool_audit_jsonl_report(&output)?;
+            assert!(progress.is_empty());
+            assert_eq!(report, expected);
+        } else {
+            assert_eq!(parse_tool_audit_report(&output.stdout)?, expected);
+        }
+        let output = context
+            .report(format, &server.uri())
+            .arg("simple-launcher")
+            .output()?;
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        if format == "jsonl" {
+            let parsed = parse_tool_audit_jsonl(&output, JsonlResultExpectation::Forbidden)?;
+            assert!(parsed.progress.is_empty());
+        }
+    }
+    assert!(
+        server
+            .received_requests()
+            .await
+            .is_some_and(|requests| requests.is_empty())
+    );
+    Ok(())
 }
 
 #[tokio::test]

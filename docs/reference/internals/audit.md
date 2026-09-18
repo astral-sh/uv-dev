@@ -24,5 +24,13 @@ to emit only the result; repeated `--quiet` suppresses it as well.
 Consumers must also check the process exit status. A completed audit can return a valid report with
 a nonzero status when it finds vulnerabilities. A setup failure can terminate without a result.
 
+`uv tool audit` reports findings separately for each selected installed tool. Its
+[JSON schema](tool-audit.schema.json) describes an object with the preview schema version and a
+`tools` array. Each tool has its name, summary counts, vulnerabilities, and adverse project
+statuses. The [JSONL record schema](tool-audit-jsonl.schema.json) also describes progress records
+and the final result. Enable `audit,tool-install-locks,json-output` for JSON or
+`audit,tool-install-locks,jsonl` for JSONL. Tools must have an installed lockfile to be auditable;
+the schemas do not change selection, skipped-tool warnings, or the command's exit status.
+
 The schemas are generated from uv's report serialization types. They describe the current preview
 format; their availability does not make that format stable.

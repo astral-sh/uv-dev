@@ -41,6 +41,10 @@ pub(crate) use project::audit::audit;
 pub use project::audit::json::project_json_schema as audit_json_schema;
 #[cfg(feature = "schemars")]
 pub use project::audit::json::project_jsonl_schema as audit_jsonl_schema;
+#[cfg(feature = "schemars")]
+pub use project::audit::json::tool_json_schema as tool_audit_json_schema;
+#[cfg(feature = "schemars")]
+pub use project::audit::json::tool_jsonl_schema as tool_audit_jsonl_schema;
 pub(crate) use project::check::check;
 pub(crate) use project::export::export;
 pub(crate) use project::format::format;
