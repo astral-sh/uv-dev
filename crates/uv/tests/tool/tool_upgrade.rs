@@ -7,7 +7,7 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::indoc;
 use insta::assert_snapshot;
-use predicates::prelude::predicate;
+use predicates::prelude::{PredicateStrExt, predicate};
 use serde_json::json;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -1770,7 +1770,7 @@ fn check_tool_upgrade_lock_preferences(arguments: &[&str], kept_version: &str) -
     Command::new(executable.path())
         .assert()
         .success()
-        .stdout("dep-1.0.0,keep-1.0.0\n");
+        .stdout(predicate::str::diff("dep-1.0.0,keep-1.0.0\n").normalize());
 
     // The saved find-links directory now offers newer releases of both dependencies.
     write_dependency("preference-dep", "2.0.0")?;
@@ -1787,7 +1787,7 @@ fn check_tool_upgrade_lock_preferences(arguments: &[&str], kept_version: &str) -
     Command::new(executable.path())
         .assert()
         .success()
-        .stdout(format!("dep-2.0.0,keep-{kept_version}\n"));
+        .stdout(predicate::str::diff(format!("dep-2.0.0,keep-{kept_version}\n")).normalize());
     Command::new(venv_bin_path(tool_dir.path()).join(format!("python{EXE_SUFFIX}")))
     .arg("-I")
     .arg("-B")
@@ -1795,7 +1795,7 @@ fn check_tool_upgrade_lock_preferences(arguments: &[&str], kept_version: &str) -
     .arg("from importlib.metadata import version; print(version('preference-dep'), version('preference-keep'))")
     .assert()
     .success()
-    .stdout(format!("2.0.0 {kept_version}\n"));
+    .stdout(predicate::str::diff(format!("2.0.0 {kept_version}\n")).normalize());
 
     Ok(())
 }
