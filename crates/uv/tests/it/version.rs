@@ -1,11 +1,112 @@
-use anyhow::{Ok, Result};
+use std::process::{Command, Output};
+use std::sync::LazyLock;
+
+use anyhow::{Context, Ok, Result};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::indoc;
 use insta::assert_snapshot;
+use serde_json::Value;
 
 use uv_static::EnvVars;
+use uv_test::json_schema::JsonSchema;
+use uv_test::jsonl::{JsonlOutput, JsonlResultExpectation};
 use uv_test::{apply_filters, uv_snapshot};
+
+static VERSION_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> = LazyLock::new(|| {
+    JsonSchema::new(include_str!(
+        "../../../../docs/reference/internals/version.schema.json"
+    ))
+    .map_err(|error| error.to_string())
+});
+
+static VERSION_JSONL_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> =
+    LazyLock::new(|| {
+        JsonSchema::new(include_str!(
+            "../../../../docs/reference/internals/version-jsonl.schema.json"
+        ))
+        .map_err(|error| error.to_string())
+    });
+
+static SELF_VERSION_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> =
+    LazyLock::new(|| {
+        JsonSchema::new(include_str!(
+            "../../../../docs/reference/internals/self-version.schema.json"
+        ))
+        .map_err(|error| error.to_string())
+    });
+
+static SELF_VERSION_JSONL_SCHEMA: LazyLock<std::result::Result<JsonSchema, String>> =
+    LazyLock::new(|| {
+        JsonSchema::new(include_str!(
+            "../../../../docs/reference/internals/self-version-jsonl.schema.json"
+        ))
+        .map_err(|error| error.to_string())
+    });
+
+fn parse_version(contents: &[u8]) -> Result<Value> {
+    VERSION_SCHEMA
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!("invalid version schema: {error}"))?
+        .parse(contents)
+        .context("version report schema mismatch")
+}
+
+fn parse_self_version(contents: &[u8]) -> Result<Value> {
+    SELF_VERSION_SCHEMA
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!("invalid self-version schema: {error}"))?
+        .parse(contents)
+        .context("self-version report schema mismatch")
+}
+
+fn version_jsonl(context: &uv_test::TestContext) -> Command {
+    let mut command = context.version();
+    // `RUST_LOG` suppresses progress, so lifecycle tests control it explicitly.
+    command.env_remove(EnvVars::RUST_LOG);
+    command.args([
+        "--offline",
+        "--no-python-downloads",
+        "--output-format",
+        "jsonl",
+        "--preview-features",
+        "jsonl",
+    ]);
+    command
+}
+
+fn parse_version_jsonl(
+    output: &Output,
+    expectation: JsonlResultExpectation,
+) -> Result<JsonlOutput> {
+    let schema = VERSION_JSONL_SCHEMA
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!("invalid JSONL version schema: {error}"))?;
+    JsonlOutput::parse(schema, output, expectation)
+}
+
+fn parse_version_jsonl_report(output: &Output) -> Result<(Vec<Value>, Value)> {
+    let parsed = parse_version_jsonl(output, JsonlResultExpectation::Required)?;
+    let mut report = parsed
+        .result
+        .context("missing final JSONL version report")?;
+    report
+        .as_object_mut()
+        .context("JSONL version report is not an object")?
+        .remove("type");
+    let report = parse_version(&serde_json::to_vec(&report)?)?;
+    Ok((parsed.progress, report))
+}
+
+fn parse_self_version_jsonl(
+    output: &Output,
+    expectation: JsonlResultExpectation,
+) -> Result<JsonlOutput> {
+    let schema = SELF_VERSION_JSONL_SCHEMA
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!("invalid JSONL self-version schema: {error}"))?;
+    JsonlOutput::parse(schema, output, expectation)
+}
 
 // Print the version
 #[test]
@@ -57,7 +158,7 @@ fn version_get_json() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.version()
+    let output = uv_snapshot!(context.filters(), context.version()
         .arg("--output-format").arg("json"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
@@ -67,6 +168,7 @@ fn version_get_json() -> Result<()> {
       "commit_info": null
     }
     "#);
+    parse_version(&output.stdout)?;
 
     let pyproject = fs_err::read_to_string(&pyproject_toml)?;
     assert_snapshot!(
@@ -120,7 +222,7 @@ fn version_get_json_quiet() -> Result<()> {
     assert!(default.status.success());
     assert!(quiet.status.success());
     assert_eq!(default.stdout, quiet.stdout);
-    let version_info: serde_json::Value = serde_json::from_slice(&quiet.stdout)?;
+    let version_info = parse_version(&quiet.stdout)?;
     assert_eq!(
         version_info,
         serde_json::json!({
@@ -160,7 +262,7 @@ fn version_get_jsonl() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.version()
+    let output = uv_snapshot!(context.filters(), context.version()
         .arg("--output-format").arg("jsonl")
         .arg("--preview-features").arg("jsonl"), @r#"
     exit_code: 0 (success)
@@ -168,7 +270,136 @@ fn version_get_jsonl() -> Result<()> {
     {"type":"result","package_name":"myproject","version":"1.10.31","commit_info":null}
     "#
     );
+    let (progress, report) = parse_version_jsonl_report(&output)?;
+    assert!(progress.is_empty());
+    assert_eq!(report["package_name"], "myproject");
+    assert_eq!(report["version"], "1.10.31");
 
+    Ok(())
+}
+
+#[test]
+fn version_jsonl_lifecycle() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    let original = indoc! {r#"
+        [project]
+        name = "myproject"
+        version = "1.10.31"
+        requires-python = ">=3.12"
+    "#};
+    let updated = original.replace("1.10.31", "1.2.3");
+    pyproject_toml.write_str(original)?;
+
+    let expected = context
+        .version()
+        .args([
+            "--offline",
+            "--no-python-downloads",
+            "--output-format",
+            "json",
+            "--dry-run",
+            "1.2.3",
+        ])
+        .assert()
+        .success();
+    let expected = parse_version(&expected.get_output().stdout)?;
+    let proposed = uv_snapshot!(context.filters(), version_jsonl(&context)
+        .args(["--dry-run", "1.2.3"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"type":"result","package_name":"myproject","version":"1.2.3","commit_info":null}
+    "#);
+    let (progress, report) = parse_version_jsonl_report(&proposed)?;
+    assert!(progress.is_empty());
+    assert_eq!(report, expected);
+    assert_eq!(fs_err::read_to_string(&pyproject_toml)?, original);
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    assert!(!context.temp_dir.child(".venv").exists());
+
+    let completed = version_jsonl(&context)
+        .args(["--no-index", "--no-sync", "--python", "3.12", "1.2.3"])
+        .assert()
+        .success();
+    let (progress, report) = parse_version_jsonl_report(completed.get_output())?;
+    assert_eq!(report, expected);
+    assert!(
+        progress
+            .iter()
+            .any(|event| event["phase"] == "resolve" && event["status"] == "started")
+    );
+    assert!(
+        progress
+            .iter()
+            .any(|event| event["phase"] == "resolve" && event["status"] == "completed")
+    );
+    assert_eq!(fs_err::read_to_string(&pyproject_toml)?, updated);
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert_eq!(lock["package"][0]["name"].as_str(), Some("myproject"));
+    assert_eq!(lock["package"][0]["version"].as_str(), Some("1.2.3"));
+    assert!(!context.temp_dir.child(".venv").exists());
+
+    let lockfile = context.read("uv.lock");
+    for flag in ["--quiet", "--no-progress"] {
+        pyproject_toml.write_str(original)?;
+        let output = version_jsonl(&context)
+            .args(["--frozen", "1.2.3", flag])
+            .assert()
+            .success();
+        let (progress, report) = parse_version_jsonl_report(output.get_output())?;
+        assert!(progress.is_empty(), "{flag} emitted progress");
+        assert_eq!(report, expected);
+        assert_eq!(fs_err::read_to_string(&pyproject_toml)?, updated);
+    }
+
+    pyproject_toml.write_str(original)?;
+    let silent = version_jsonl(&context)
+        .args(["--frozen", "1.2.3", "-qq"])
+        .assert()
+        .success()
+        .stdout("");
+    let parsed = parse_version_jsonl(silent.get_output(), JsonlResultExpectation::Forbidden)?;
+    assert!(parsed.status.success());
+    assert!(parsed.progress.is_empty());
+    assert_eq!(fs_err::read_to_string(&pyproject_toml)?, updated);
+    assert_eq!(context.read("uv.lock"), lockfile);
+    assert!(!context.temp_dir.child(".venv").exists());
+    Ok(())
+}
+
+#[test]
+fn version_jsonl_setup_failures() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let missing = uv_snapshot!(context.filters(), version_jsonl(&context), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No `pyproject.toml` found in current directory or any parent directory
+
+    hint: If you meant to view uv's version, use `uv self version` instead
+    ");
+    let parsed = parse_version_jsonl(&missing, JsonlResultExpectation::Forbidden)?;
+    assert!(!parsed.status.success());
+    assert!(parsed.progress.is_empty());
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    let original = indoc! {r#"
+        [project]
+        name = "myproject"
+        version = "1.10.31"
+    "#};
+    pyproject_toml.write_str(original)?;
+    let invalid = uv_snapshot!(context.filters(), version_jsonl(&context)
+        .args(["--frozen", "abcd"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: expected version to start with a number, but no leading ASCII digits were found
+    ");
+    let parsed = parse_version_jsonl(&invalid, JsonlResultExpectation::Forbidden)?;
+    assert!(!parsed.status.success());
+    assert!(parsed.progress.is_empty());
+    assert_eq!(fs_err::read_to_string(&pyproject_toml)?, original);
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    assert!(!context.temp_dir.child(".venv").exists());
     Ok(())
 }
 
@@ -292,7 +523,7 @@ fn version_set_json_quiet() -> Result<()> {
     assert!(quiet.status.success());
     assert_eq!(default.stdout, quiet.stdout);
     assert_eq!(fs_err::read_to_string(&pyproject_toml)?, updated);
-    let version_info: serde_json::Value = serde_json::from_slice(&quiet.stdout)?;
+    let version_info = parse_version(&quiet.stdout)?;
     assert_eq!(
         version_info,
         serde_json::json!({
@@ -2507,7 +2738,7 @@ fn self_version_json() -> Result<()> {
         "#,
     )?;
 
-    if git_version_info_expected() {
+    let output = if git_version_info_expected() {
         uv_snapshot!(context.filters(), context.self_version()
           .arg("--output-format").arg("json"), @r#"
         exit_code: 0 (success)
@@ -2524,7 +2755,7 @@ fn self_version_json() -> Result<()> {
           },
           "target_triple": "[TARGET]"
         }
-        "#);
+        "#)
     } else {
         uv_snapshot!(context.filters(), context.self_version()
           .arg("--output-format").arg("json"), @r#"
@@ -2536,8 +2767,9 @@ fn self_version_json() -> Result<()> {
         "commit_info": null,
         "target_triple": "[TARGET]"
       }
-      "#);
-    }
+      "#)
+    };
+    parse_self_version(&output.stdout)?;
 
     let pyproject = fs_err::read_to_string(&pyproject_toml)?;
     assert_snapshot!(
@@ -2570,7 +2802,7 @@ fn self_version_json_quiet() -> Result<()> {
         .assert()
         .success();
     assert_eq!(default.get_output().stdout, quiet.get_output().stdout);
-    let version_info: serde_json::Value = serde_json::from_slice(&quiet.get_output().stdout)?;
+    let version_info = parse_self_version(&quiet.get_output().stdout)?;
     assert_eq!(version_info["package_name"], "uv");
     assert!(version_info["version"].is_string());
     assert!(version_info.get("commit_info").is_some());
@@ -2586,6 +2818,69 @@ fn self_version_json_quiet() -> Result<()> {
         .assert()
         .success()
         .stdout("");
+    Ok(())
+}
+
+#[test]
+fn self_version_jsonl() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    let original = indoc! {r#"
+        [project]
+        name = "myapp"
+        version = "0.1.2"
+    "#};
+    pyproject_toml.write_str(original)?;
+    let self_version = || {
+        let mut command = context.self_version();
+        command
+            .env_remove(EnvVars::RUST_LOG)
+            .args(["--offline", "--no-python-downloads"]);
+        command
+    };
+
+    let expected = self_version()
+        .args(["--output-format", "json"])
+        .assert()
+        .success();
+    let expected = parse_self_version(&expected.get_output().stdout)?;
+    assert_eq!(expected["package_name"], "uv");
+
+    for flag in [None, Some("--quiet"), Some("--no-progress")] {
+        let mut command = self_version();
+        command.args(["--output-format", "jsonl", "--preview-features", "jsonl"]);
+        if let Some(flag) = flag {
+            command.arg(flag);
+        }
+        let output = command.assert().success();
+        let parsed =
+            parse_self_version_jsonl(output.get_output(), JsonlResultExpectation::Required)?;
+        assert!(parsed.progress.is_empty());
+        let mut report = parsed.result.context("missing self-version result")?;
+        report
+            .as_object_mut()
+            .context("self-version report is not an object")?
+            .remove("type");
+        assert_eq!(parse_self_version(&serde_json::to_vec(&report)?)?, expected);
+    }
+
+    let silent = self_version()
+        .args([
+            "--output-format",
+            "jsonl",
+            "--preview-features",
+            "jsonl",
+            "-qq",
+        ])
+        .assert()
+        .success()
+        .stdout("");
+    let parsed = parse_self_version_jsonl(silent.get_output(), JsonlResultExpectation::Forbidden)?;
+    assert!(parsed.status.success());
+    assert!(parsed.progress.is_empty());
+    assert_eq!(fs_err::read_to_string(&pyproject_toml)?, original);
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    assert!(!context.temp_dir.child(".venv").exists());
     Ok(())
 }
 

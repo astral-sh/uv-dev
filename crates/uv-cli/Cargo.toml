@@ -40,6 +40,7 @@ anstream = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive", "string"] }
 clap_complete_command = { workspace = true }
+schemars = { workspace = true, optional = true }
 serde = { workspace = true }
 url = { workspace = true }
 
@@ -48,6 +49,7 @@ insta = { workspace = true }
 
 [features]
 default = []
+schemars = ["dep:schemars"]
 self-update = []
 
 [build-dependencies]

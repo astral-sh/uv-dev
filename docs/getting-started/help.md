@@ -65,6 +65,16 @@ $ uv --version      # Same output as `uv self version`
 $ uv -V             # Will not include the build commit and date
 ```
 
+For machine-readable version and build information, use `uv self version --output-format json`. Its
+[JSON Schema](../reference/internals/self-version.schema.json) is generated from the output type.
+The `commit_info` field is `null` when Git build information is unavailable. Unlike `uv version`,
+this command describes uv itself even when run inside a project.
+
+Use `--output-format jsonl --preview-features jsonl` to emit the same information as a single-line
+`"type": "result"` record. The
+[JSONL record schema](../reference/internals/self-version-jsonl.schema.json) describes the preview
+format, which may change without warning.
+
 !!! note
 
     Before uv 0.7.0, `uv version` was used instead of `uv self version`.

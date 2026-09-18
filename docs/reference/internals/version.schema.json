@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "uv version",
+  "description": "Version information for a project (`uv version`).",
+  "type": "object",
+  "properties": {
+    "commit_info": {
+      "description": "Always `null`; project versions do not include uv's build information.\nThis field remains in the output for backwards compatibility.",
+      "type": "null"
+    },
+    "package_name": {
+      "description": "Name of the package.",
+      "type": ["string", "null"]
+    },
+    "version": {
+      "description": "Version, such as \"0.5.1\".",
+      "type": "string"
+    }
+  },
+  "required": ["package_name", "version", "commit_info"]
+}

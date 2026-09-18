@@ -49,6 +49,10 @@ pub(crate) enum Target {
     Sync,
     /// The preview `uv pip check` JSON output format.
     PipCheck,
+    /// The `uv version` JSON output format.
+    Version,
+    /// The `uv self version` JSON output format.
+    SelfVersion,
     /// Shared progress records in the preview JSONL output format.
     JsonlProgress,
     /// Records in the preview `uv workspace metadata` JSONL output format.
@@ -61,6 +65,10 @@ pub(crate) enum Target {
     SyncJsonl,
     /// Records in the preview `uv pip check` JSONL output format.
     PipCheckJsonl,
+    /// Records in the preview `uv version` JSONL output format.
+    VersionJsonl,
+    /// Records in the preview `uv self version` JSONL output format.
+    SelfVersionJsonl,
 }
 
 impl Target {
@@ -72,12 +80,16 @@ impl Target {
             Self::Lock => "docs/reference/internals/lock.schema.json",
             Self::Sync => "docs/reference/internals/sync.schema.json",
             Self::PipCheck => "docs/reference/internals/pip-check.schema.json",
+            Self::Version => "docs/reference/internals/version.schema.json",
+            Self::SelfVersion => "docs/reference/internals/self-version.schema.json",
             Self::JsonlProgress => "docs/reference/internals/jsonl-progress.schema.json",
             Self::WorkspaceMetadataJsonl => "docs/reference/internals/metadata-jsonl.schema.json",
             Self::ToolListJsonl => "docs/reference/internals/tool-list-jsonl.schema.json",
             Self::LockJsonl => "docs/reference/internals/lock-jsonl.schema.json",
             Self::SyncJsonl => "docs/reference/internals/sync-jsonl.schema.json",
             Self::PipCheckJsonl => "docs/reference/internals/pip-check-jsonl.schema.json",
+            Self::VersionJsonl => "docs/reference/internals/version-jsonl.schema.json",
+            Self::SelfVersionJsonl => "docs/reference/internals/self-version-jsonl.schema.json",
         }
     }
 
@@ -89,6 +101,8 @@ impl Target {
             Self::Lock => "cargo dev generate-json-schema --target lock",
             Self::Sync => "cargo dev generate-json-schema --target sync",
             Self::PipCheck => "cargo dev generate-json-schema --target pip-check",
+            Self::Version => "cargo dev generate-json-schema --target version",
+            Self::SelfVersion => "cargo dev generate-json-schema --target self-version",
             Self::JsonlProgress => "cargo dev generate-json-schema --target jsonl-progress",
             Self::WorkspaceMetadataJsonl => {
                 "cargo dev generate-json-schema --target workspace-metadata-jsonl"
@@ -97,6 +111,8 @@ impl Target {
             Self::LockJsonl => "cargo dev generate-json-schema --target lock-jsonl",
             Self::SyncJsonl => "cargo dev generate-json-schema --target sync-jsonl",
             Self::PipCheckJsonl => "cargo dev generate-json-schema --target pip-check-jsonl",
+            Self::VersionJsonl => "cargo dev generate-json-schema --target version-jsonl",
+            Self::SelfVersionJsonl => "cargo dev generate-json-schema --target self-version-jsonl",
         }
     }
 }
@@ -172,12 +188,16 @@ fn schema(target: Target) -> schemars::Schema {
         Target::Lock => uv::commands::lock_json_schema(),
         Target::Sync => uv::commands::sync_json_schema(),
         Target::PipCheck => uv::commands::pip_check_json_schema(),
+        Target::Version => uv::commands::version_json_schema(),
+        Target::SelfVersion => uv::commands::self_version_json_schema(),
         Target::JsonlProgress => uv::commands::jsonl_progress_json_schema(),
         Target::WorkspaceMetadataJsonl => uv::commands::workspace_metadata_jsonl_schema(),
         Target::ToolListJsonl => uv::commands::tool_list_jsonl_schema(),
         Target::LockJsonl => uv::commands::lock_jsonl_schema(),
         Target::SyncJsonl => uv::commands::sync_jsonl_schema(),
         Target::PipCheckJsonl => uv::commands::pip_check_jsonl_schema(),
+        Target::VersionJsonl => uv::commands::version_jsonl_schema(),
+        Target::SelfVersionJsonl => uv::commands::self_version_jsonl_schema(),
     }
 }
 
@@ -228,7 +248,9 @@ fn generate(target: Target) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Context;
     use serde_json::{Value, json};
+    use uv_cli::version::{ProjectVersionInfo, uv_self_version};
     use uv_test::json_schema::JsonSchema;
 
     use super::{Target, schema};
@@ -319,6 +341,148 @@ mod tests {
             }
             result["type"] = json!("result");
             result["schema"]["version"] = json!(1);
+            assert!(validator.parse(&serde_json::to_vec(&result)?).is_err());
+            assert!(validator.parse(br#"{"type":"result"}"#).is_err());
+            assert!(
+                validator
+                    .parse(br#"{"type":"progress","phase":"resolve"}"#)
+                    .is_err()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn version_schemas_describe_serialized_values() -> anyhow::Result<()> {
+        let name = "project".parse()?;
+        let version = "1.2.3".parse()?;
+        let project = serde_json::to_value(ProjectVersionInfo::new(Some(&name), &version))?;
+        let anonymous = serde_json::to_value(ProjectVersionInfo::new(None, &version))?;
+        let self_version = serde_json::to_value(uv_self_version())?;
+
+        let project_schema = serde_json::to_value(schema(Target::Version))?;
+        assert_eq!(project_schema["title"], "uv version");
+        assert_eq!(
+            project_schema["required"],
+            json!(["package_name", "version", "commit_info"])
+        );
+        assert_eq!(project_schema["properties"]["commit_info"]["type"], "null");
+        assert_eq!(
+            project_schema["properties"]["package_name"]["type"],
+            json!(["string", "null"])
+        );
+        let project_validator = JsonSchema::new(&serde_json::to_string(&project_schema)?)?;
+        project_validator.parse(&serde_json::to_vec(&project)?)?;
+        project_validator.parse(&serde_json::to_vec(&anonymous)?)?;
+        for invalid_commit_info in [json!({}), json!(false), json!("unknown")] {
+            let mut invalid = project.clone();
+            invalid["commit_info"] = invalid_commit_info;
+            assert!(
+                project_validator
+                    .parse(&serde_json::to_vec(&invalid)?)
+                    .is_err()
+            );
+        }
+
+        let self_schema = serde_json::to_value(schema(Target::SelfVersion))?;
+        assert_eq!(self_schema["title"], "uv self version");
+        assert_eq!(
+            self_schema["required"],
+            json!(["package_name", "version", "commit_info", "target_triple"])
+        );
+        let commits = &self_schema["definitions"]["CommitInfo"]["properties"];
+        assert_eq!(commits["last_tag"]["type"], json!(["string", "null"]));
+        assert_eq!(commits["commits_since_last_tag"]["type"], "integer");
+        assert_eq!(commits["commits_since_last_tag"]["minimum"], 0);
+        assert_eq!(commits["commits_since_last_tag"]["maximum"], u32::MAX);
+        let self_validator = JsonSchema::new(&serde_json::to_string(&self_schema)?)?;
+        self_validator.parse(&serde_json::to_vec(&self_version)?)?;
+        let mut from_tarball = self_version.clone();
+        from_tarball["commit_info"] = Value::Null;
+        self_validator.parse(&serde_json::to_vec(&from_tarball)?)?;
+        let mut from_git = self_version.clone();
+        from_git["commit_info"] = json!({
+            "short_commit_hash": "53b0f5d92",
+            "commit_hash": "53b0f5d924110e5b26fbf09f6fd3a03d67b475b7",
+            "commit_date": "2023-10-19",
+            "last_tag": null,
+            "commits_since_last_tag": 0
+        });
+        self_validator.parse(&serde_json::to_vec(&from_git)?)?;
+        for invalid_distance in [json!(-1), json!(u64::from(u32::MAX) + 1), json!(0.5)] {
+            let mut invalid = from_git.clone();
+            invalid["commit_info"]["commits_since_last_tag"] = invalid_distance;
+            assert!(
+                self_validator
+                    .parse(&serde_json::to_vec(&invalid)?)
+                    .is_err()
+            );
+        }
+
+        for (validator, report, fields) in [
+            (
+                &project_validator,
+                &project,
+                ["package_name", "version", "commit_info"].as_slice(),
+            ),
+            (
+                &self_validator,
+                &self_version,
+                ["package_name", "version", "commit_info", "target_triple"].as_slice(),
+            ),
+        ] {
+            for field in fields {
+                let mut missing = report.clone();
+                missing
+                    .as_object_mut()
+                    .context("version report is not an object")?
+                    .remove(*field);
+                assert!(validator.parse(&serde_json::to_vec(&missing)?).is_err());
+            }
+            let mut invalid = report.clone();
+            invalid["version"] = Value::Null;
+            assert!(validator.parse(&serde_json::to_vec(&invalid)?).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn version_jsonl_record_schemas_validate_both_variants() -> anyhow::Result<()> {
+        let name = "project".parse()?;
+        let version = "1.2.3".parse()?;
+        let cases = [
+            (
+                Target::Version,
+                Target::VersionJsonl,
+                "uv version JSONL (preview)",
+                serde_json::to_value(ProjectVersionInfo::new(Some(&name), &version))?,
+            ),
+            (
+                Target::SelfVersion,
+                Target::SelfVersionJsonl,
+                "uv self version JSONL (preview)",
+                serde_json::to_value(uv_self_version())?,
+            ),
+        ];
+
+        for (object_target, record_target, title, mut result) in cases {
+            JsonSchema::new(&serde_json::to_string(&schema(object_target))?)?
+                .parse(&serde_json::to_vec(&result)?)?;
+            assert!(result.get("schema").is_none());
+            let document = serde_json::to_value(schema(record_target))?;
+            assert_eq!(document["title"], title);
+            assert_eq!(document["anyOf"].as_array().map(Vec::len), Some(2));
+            let validator = JsonSchema::new(&serde_json::to_string(&document)?)?;
+            validator.parse(br#"{"type":"progress","phase":"resolve","status":"started"}"#)?;
+            result["type"] = json!("result");
+            validator.parse(&serde_json::to_vec(&result)?)?;
+
+            for discriminator in [Value::Null, json!("progress"), json!("unknown")] {
+                result["type"] = discriminator;
+                assert!(validator.parse(&serde_json::to_vec(&result)?).is_err());
+            }
+            result["type"] = json!("result");
+            result["version"] = json!(1);
             assert!(validator.parse(&serde_json::to_vec(&result)?).is_err());
             assert!(validator.parse(br#"{"type":"result"}"#).is_err());
             assert!(

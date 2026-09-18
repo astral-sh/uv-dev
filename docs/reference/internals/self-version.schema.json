@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "uv self version",
+  "description": "Version information for uv itself (e.g., in `uv self version`).",
+  "type": "object",
+  "properties": {
+    "commit_info": {
+      "description": "Information about the git commit we may have been built from.\n\n`None` if not built from a git repo or if retrieval failed.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/CommitInfo"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "package_name": {
+      "description": "Name of the package (always \"uv\").",
+      "type": "string"
+    },
+    "target_triple": {
+      "description": "The target triple for which uv was built (e.g., `x86_64-unknown-linux-gnu`).",
+      "type": "string"
+    },
+    "version": {
+      "description": "Version, such as \"0.5.1\".",
+      "type": "string"
+    }
+  },
+  "required": ["package_name", "version", "commit_info", "target_triple"],
+  "definitions": {
+    "CommitInfo": {
+      "description": "Information about the git repository where uv was built from.",
+      "type": "object",
+      "properties": {
+        "commit_date": {
+          "type": "string"
+        },
+        "commit_hash": {
+          "type": "string"
+        },
+        "commits_since_last_tag": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0
+        },
+        "last_tag": {
+          "type": ["string", "null"]
+        },
+        "short_commit_hash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "short_commit_hash",
+        "commit_hash",
+        "commit_date",
+        "last_tag",
+        "commits_since_last_tag"
+      ]
+    }
+  }
+}

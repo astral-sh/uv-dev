@@ -6462,6 +6462,7 @@ dependencies = [
  "clap_complete_command",
  "fs-err",
  "insta",
+ "schemars",
  "serde",
  "url",
  "uv-audit",
