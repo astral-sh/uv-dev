@@ -1,9 +1,13 @@
 #[cfg(any(feature = "test-git", feature = "test-git-lfs"))]
 use std::collections::BTreeSet;
-#[cfg(feature = "test-git")]
+#[cfg(any(windows, feature = "test-git"))]
 use std::ffi::OsString;
+#[cfg(windows)]
+use std::io::{Read, Seek};
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
+#[cfg(windows)]
+use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -18,6 +22,8 @@ use assert_fs::{
 use indoc::indoc;
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
+#[cfg(windows)]
+use sha2::{Digest, Sha256};
 use url::Url;
 use uv_extract::dirhash::dirhash_path;
 #[cfg(windows)]
@@ -25,6 +31,8 @@ use uv_fs::Simplified;
 use uv_fs::copy_dir_all;
 use uv_static::EnvVars;
 
+#[cfg(windows)]
+use uv_test::packse::generate_wheel_with_binary_files;
 use uv_test::packse::generate_wheel_with_files;
 use uv_test::{site_packages_path, uv_snapshot, venv_bin_path};
 
@@ -3654,6 +3662,400 @@ fn tool_install_recovery_does_not_reacquire_pruned_commands() -> Result<()> {
         .success()
         .stdout(output);
     }
+    Ok(())
+}
+
+#[cfg(windows)]
+struct NativePeFixture {
+    path: PathBuf,
+    bytes: Vec<u8>,
+    sha256: String,
+    machine: u16,
+}
+
+#[cfg(windows)]
+#[expect(unsafe_code)]
+fn native_system_directory() -> Result<PathBuf> {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        #[link_name = "GetSystemDirectoryW"]
+        fn get_system_directory(buffer: *mut u16, size: u32) -> u32;
+    }
+    let mut buffer = vec![0_u16; 32768];
+    // SAFETY: The writable buffer contains `size` initialized UTF-16 elements and remains alive
+    // throughout the synchronous Windows API call.
+    let length = unsafe { get_system_directory(buffer.as_mut_ptr(), u32::try_from(buffer.len())?) };
+    if length == 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let length = usize::try_from(length)?;
+    anyhow::ensure!(
+        length < buffer.len(),
+        "Native system directory exceeds the fixture bound"
+    );
+    Ok(PathBuf::from(OsString::from_wide(&buffer[..length])))
+}
+
+#[cfg(windows)]
+fn native_pe_fixture(filename: &str) -> Result<NativePeFixture> {
+    anyhow::ensure!(
+        matches!(filename, "where.exe" | "findstr.exe"),
+        "Unexpected native fixture name"
+    );
+    const MAX_BYTES: u64 = 2 * 1024 * 1024;
+    let directory = native_system_directory()?;
+    let path = directory.join(filename);
+    let metadata = fs_err::symlink_metadata(&path)?;
+    anyhow::ensure!(
+        metadata.is_file() && !metadata.is_symlink() && metadata.len() <= MAX_BYTES,
+        "Native PE fixture is not a bounded regular file"
+    );
+    let mut file = uv_windows::open_file_entry(&path)?;
+    let identity = uv_windows::FileIdentity::from_file(&file)?;
+    let mut bytes = Vec::new();
+    (&mut file).take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
+    anyhow::ensure!(
+        u64::try_from(bytes.len())? == metadata.len(),
+        "Native PE fixture changed size"
+    );
+    file.rewind()?;
+    let mut repeated = Vec::new();
+    (&mut file).take(MAX_BYTES + 1).read_to_end(&mut repeated)?;
+    anyhow::ensure!(repeated == bytes, "Native PE fixture changed while reading");
+    anyhow::ensure!(
+        uv_windows::FileIdentity::from_file(&uv_windows::open_file_entry(&path)?)? == identity,
+        "Native PE fixture path changed identity"
+    );
+    anyhow::ensure!(
+        bytes.get(..2) == Some(b"MZ") && bytes.len() >= 64,
+        "Native fixture is not a DOS/PE image"
+    );
+    let offset = usize::try_from(u32::from_le_bytes(bytes[60..64].try_into()?))?;
+    let end = offset
+        .checked_add(6)
+        .ok_or_else(|| anyhow::anyhow!("PE header offset overflow"))?;
+    anyhow::ensure!(
+        end <= bytes.len() && bytes.get(offset..offset + 4) == Some(b"PE\0\0"),
+        "Native fixture has no bounded PE header"
+    );
+    let machine = u16::from_le_bytes(bytes[offset + 4..end].try_into()?);
+    let expected_machine = match std::env::consts::ARCH {
+        "x86" => 0x014c,
+        "x86_64" => 0x8664,
+        "aarch64" => 0xaa64,
+        other => anyhow::bail!("Unsupported native PE fixture architecture: {other}"),
+    };
+    anyhow::ensure!(
+        machine == expected_machine,
+        "Native fixture architecture does not match the test process"
+    );
+    anyhow::ensure!(
+        uv_trampoline_builder::Launcher::try_from_path(&path)?.is_none(),
+        "Native fixture is a uv trampoline"
+    );
+    let sha256 = format!("{:x}", Sha256::digest(&bytes));
+    eprintln!(
+        "native-pe-fixture {}",
+        serde_json::json!({
+            "source": path, "bytes": bytes.len(), "sha256": sha256,
+            "machine": format!("0x{machine:04x}"), "identity": format!("{identity:?}"),
+        })
+    );
+    Ok(NativePeFixture {
+        path,
+        bytes,
+        sha256,
+        machine,
+    })
+}
+
+#[cfg(windows)]
+fn write_native_recovery_wheel(
+    directory: &Path,
+    name: &str,
+    version: &str,
+    command: &str,
+    fixture: &NativePeFixture,
+) -> Result<PathBuf> {
+    let tag = match fixture.machine {
+        0x014c => "py3-none-win32",
+        0x8664 => "py3-none-win_amd64",
+        0xaa64 => "py3-none-win_arm64",
+        other => anyhow::bail!("Unsupported native PE machine: 0x{other:04x}"),
+    };
+    let script = format!(
+        "{}-{version}.data/scripts/{command}.exe",
+        name.replace('-', "_")
+    );
+    let (filename, bytes) = generate_wheel_with_binary_files(
+        &name.parse()?,
+        &version.parse()?,
+        &[],
+        &Default::default(),
+        None,
+        tag,
+        &[(script.as_str(), fixture.bytes.as_slice())],
+    );
+    let path = directory.join(filename);
+    fs_err::write(&path, bytes)?;
+    Ok(path)
+}
+
+#[cfg(windows)]
+fn assert_native_where(executable: &Path, markers: &Path) {
+    Command::new(executable)
+        .args(["/q", "/r"])
+        .arg(markers)
+        .arg("owned-native-marker.txt")
+        .current_dir(markers)
+        .env(EnvVars::PATH, markers)
+        .assert()
+        .success()
+        .stdout("");
+    Command::new(executable)
+        .args(["/q", "/r"])
+        .arg(markers)
+        .arg("absent-native-marker.txt")
+        .current_dir(markers)
+        .env(EnvVars::PATH, markers)
+        .assert()
+        .code(1)
+        .stdout("");
+}
+
+#[cfg(windows)]
+fn assert_native_findstr(executable: &Path, markers: &Path) {
+    Command::new(executable)
+        .args(["/x", "/c:owned-native-marker"])
+        .arg(markers.join("owned-native-marker.txt"))
+        .current_dir(markers)
+        .env(EnvVars::PATH, markers)
+        .assert()
+        .success()
+        .stdout("owned-native-marker\r\n");
+}
+
+/// Generic native PE exports retain the captured owner when source bytes and environments change.
+#[cfg(windows)]
+#[test]
+fn tool_install_recovery_native_pe_updates() -> Result<()> {
+    let where_exe = native_pe_fixture("where.exe")?;
+    let findstr_exe = native_pe_fixture("findstr.exe")?;
+    assert_ne!(where_exe.sha256, findstr_exe.sha256);
+    let context = uv_test::test_context_with_versions!(&["3.13", "3.12"]).with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    let markers = context.temp_dir.child("markers");
+    links.create_dir_all()?;
+    markers.create_dir_all()?;
+    markers
+        .child("owned-native-marker.txt")
+        .write_str("owned-native-marker\r\n")?;
+    let bins = (0..3)
+        .map(|index| context.temp_dir.child(format!("native-bin-{index}")))
+        .collect::<Vec<_>>();
+    let tools = context.temp_dir.child("tools");
+    let environment = tools.child("native-recovery");
+    let peer_environment = tools.child("native-peer");
+    write_native_recovery_wheel(
+        links.path(),
+        "native-recovery",
+        "1.0.0",
+        "native-recovery",
+        &where_exe,
+    )?;
+    write_native_recovery_wheel(
+        links.path(),
+        "native-peer",
+        "1.0.0",
+        "native-peer",
+        &where_exe,
+    )?;
+    let install = |bin: &Path| {
+        let mut command = context.tool_install();
+        command
+            .args(["native-recovery", "--no-index", "--find-links"])
+            .arg(links.path())
+            .env(EnvVars::UV_TOOL_BIN_DIR, bin)
+            .env(EnvVars::PATH, bin);
+        command
+    };
+    let upgrade = |bin: &Path| {
+        let mut command = context.tool_upgrade();
+        command
+            .args(["native-recovery", "--no-index", "--find-links"])
+            .arg(links.path())
+            .env(EnvVars::UV_TOOL_BIN_DIR, bin)
+            .env(EnvVars::PATH, bin);
+        command
+    };
+    install(bins[0].path())
+        .args(["--python", "3.13"])
+        .assert()
+        .success();
+    context
+        .tool_install()
+        .args([
+            "native-peer==1.0.0",
+            "--python",
+            "3.13",
+            "--no-index",
+            "--find-links",
+        ])
+        .arg(links.path())
+        .env(EnvVars::UV_TOOL_BIN_DIR, bins[0].as_os_str())
+        .assert()
+        .success();
+    let first = bins[0].child("native-recovery.exe");
+    let peer = bins[0].child("native-peer.exe");
+    let peer_receipt = peer_environment.child("uv-receipt.toml");
+    let peer_receipt_bytes = fs_err::read(peer_receipt.path())?;
+    let peer_packages = site_packages_path(peer_environment.path(), "python3.13");
+    let peer_package_bytes = dirhash_path(&peer_packages)?;
+    assert_eq!(fs_err::read(first.path())?, where_exe.bytes);
+    assert_native_where(first.path(), markers.path());
+    let sentinel = environment.child("preserve-unless-replaced");
+    sentinel.write_str("native environment")?;
+    fs_err::remove_file(first.path())?;
+    install(bins[0].path()).assert().success();
+    sentinel.assert("native environment");
+    assert_native_where(first.path(), markers.path());
+
+    // The two receipt paths are distinct entries even though their native files share an inode.
+    fs_err::remove_file(peer.path())?;
+    fs_err::hard_link(first.path(), peer.path())?;
+    let peer_identity =
+        uv_windows::FileIdentity::from_file(&uv_windows::open_file_entry(peer.path())?)?;
+    assert_eq!(
+        uv_windows::FileIdentity::from_file(&uv_windows::open_file_entry(first.path())?)?,
+        peer_identity
+    );
+    write_native_recovery_wheel(
+        links.path(),
+        "native-recovery",
+        "2.0.0",
+        "native-recovery",
+        &findstr_exe,
+    )?;
+    upgrade(bins[0].path()).assert().success();
+    sentinel.assert("native environment");
+    assert_eq!(fs_err::read(first.path())?, findstr_exe.bytes);
+    assert_eq!(fs_err::read(peer.path())?, where_exe.bytes);
+    assert_ne!(
+        uv_windows::FileIdentity::from_file(&uv_windows::open_file_entry(first.path())?)?,
+        peer_identity
+    );
+    assert_eq!(
+        uv_windows::FileIdentity::from_file(&uv_windows::open_file_entry(peer.path())?)?,
+        peer_identity
+    );
+    assert_native_findstr(first.path(), markers.path());
+    assert_native_where(peer.path(), markers.path());
+
+    install(bins[1].path()).arg("--force").assert().success();
+    sentinel.assert(predicate::path::missing());
+    first.assert(predicate::path::missing());
+    assert_eq!(
+        fs_err::read(bins[1].child("native-recovery.exe").path())?,
+        findstr_exe.bytes
+    );
+    assert_native_findstr(bins[1].child("native-recovery.exe").path(), markers.path());
+    sentinel.write_str("replace native interpreter")?;
+    upgrade(bins[2].path())
+        .args(["--python", "3.12"])
+        .assert()
+        .success();
+    sentinel.assert(predicate::path::missing());
+    bins[1]
+        .child("native-recovery.exe")
+        .assert(predicate::path::missing());
+    assert_native_findstr(bins[2].child("native-recovery.exe").path(), markers.path());
+    assert_native_where(peer.path(), markers.path());
+    assert_eq!(fs_err::read(peer_receipt.path())?, peer_receipt_bytes);
+    assert_eq!(dirhash_path(&peer_packages)?, peer_package_bytes);
+    assert_eq!(fs_err::read(&where_exe.path)?, where_exe.bytes);
+    assert_eq!(fs_err::read(&findstr_exe.path)?, findstr_exe.bytes);
+    Ok(())
+}
+
+/// Identical native bytes cannot identify the last force winner when two receipts claim one path.
+#[cfg(windows)]
+#[test]
+fn tool_install_recovery_native_pe_rejects_ambiguous_force() -> Result<()> {
+    let fixture = native_pe_fixture("where.exe")?;
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    let markers = context.temp_dir.child("markers");
+    links.create_dir_all()?;
+    markers.create_dir_all()?;
+    markers
+        .child("owned-native-marker.txt")
+        .write_str("owned-native-marker\r\n")?;
+    for name in ["native-first", "native-second"] {
+        write_native_recovery_wheel(links.path(), name, "1.0.0", "native-shared", &fixture)?;
+    }
+    let install = |name: &str| {
+        let mut command = context.tool_install();
+        command
+            .arg(name)
+            .args(["--no-index", "--find-links"])
+            .arg(links.path());
+        command
+    };
+    install("native-first").assert().success();
+    install("native-second").arg("--force").assert().success();
+    let exported = context.temp_dir.child("bin").child("native-shared.exe");
+    assert_eq!(fs_err::read(exported.path())?, fixture.bytes);
+    assert_native_where(exported.path(), markers.path());
+    let environments =
+        ["native-first", "native-second"].map(|name| context.temp_dir.child("tools").child(name));
+    let receipts = environments
+        .iter()
+        .map(|environment| environment.child("uv-receipt.toml"))
+        .collect::<Vec<_>>();
+    let receipt_bytes = receipts
+        .iter()
+        .map(|path| fs_err::read(path.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let package_paths = environments
+        .iter()
+        .map(|environment| site_packages_path(environment.path(), "python3.13"))
+        .collect::<Vec<_>>();
+    let package_bytes = package_paths
+        .iter()
+        .map(|path| dirhash_path(path))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    install("native-first")
+        .arg("--force")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "Cannot determine whether executable",
+        ));
+    context
+        .tool_upgrade()
+        .args(["native-first", "--offline"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "Cannot determine whether executable",
+        ));
+    assert_eq!(fs_err::read(exported.path())?, fixture.bytes);
+    fs_err::remove_file(exported.path())?;
+    install("native-first")
+        .arg("--force")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "because it is also recorded for `native-second`",
+        ));
+    exported.assert(predicate::path::missing());
+    for (receipt, bytes) in receipts.iter().zip(&receipt_bytes) {
+        assert_eq!(fs_err::read(receipt.path())?, *bytes);
+    }
+    for (path, bytes) in package_paths.iter().zip(&package_bytes) {
+        assert_eq!(dirhash_path(path)?, *bytes);
+    }
+    assert_eq!(fs_err::read(&fixture.path)?, fixture.bytes);
     Ok(())
 }
 
