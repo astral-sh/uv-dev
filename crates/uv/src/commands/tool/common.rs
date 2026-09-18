@@ -238,12 +238,6 @@ pub(super) fn repair_tool_entrypoints(
             Err(err) if err.kind() == io::ErrorKind::NotFound => false,
             Err(err) => return Err(err.into()),
         };
-        if exists && !(same_location && is_owned) && !force {
-            bail!(
-                "Executable already exists: {} (use `--force` to overwrite)",
-                target.user_display().bold()
-            );
-        }
         if !exists || !same_location || !is_owned {
             // Replacing another recorded owner requires an installation-time transfer. An
             // export-only repair cannot make that ownership change durable, even with `--force`.
@@ -259,6 +253,12 @@ pub(super) fn repair_tool_entrypoints(
                         );
                     }
                 }
+            }
+            if exists && !force {
+                bail!(
+                    "Executable already exists: {} (use `--force` to overwrite)",
+                    target.user_display().bold()
+                );
             }
             replacements.insert(target.clone(), source);
         }

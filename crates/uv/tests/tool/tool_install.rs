@@ -21,7 +21,7 @@ use assert_fs::{
 };
 use indoc::indoc;
 use insta::assert_snapshot;
-use predicates::prelude::predicate;
+use predicates::prelude::{PredicateStrExt, predicate};
 #[cfg(windows)]
 use sha2::{Digest, Sha256};
 use url::Url;
@@ -2910,6 +2910,139 @@ fn tool_install_recovery_preflights_existing_executables() -> Result<()> {
         .stdout("Hello from basic-app!\n");
     assert_eq!(fs_err::read(receipt.path())?, receipt_contents);
     assert_eq!(dirhash_path(&site_packages)?, installed_contents);
+    Ok(())
+}
+
+/// A present competing receipt must be diagnosed before suggesting a forced overwrite.
+#[test]
+fn tool_install_recovery_preflights_present_competing_receipts() -> Result<()> {
+    let context = uv_test::test_context!("3.13")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    write_recovery_wheel(
+        links.path(),
+        "recovery-root",
+        "1.0.0",
+        &[],
+        &[("recovery-old", "old"), ("recovery-root", "root")],
+    )?;
+    write_recovery_wheel(
+        links.path(),
+        "recovery-peer",
+        "1.0.0",
+        &[],
+        &[("recovery-root", "peer")],
+    )?;
+    let install = || {
+        let mut command = context.tool_install();
+        command
+            .args(["recovery-root==1.0.0", "--no-index", "--find-links"])
+            .arg(links.path())
+            .env(EnvVars::PATH, bin_dir.as_os_str());
+        command
+    };
+    install().assert().success();
+    context
+        .tool_install()
+        .args([
+            "recovery-peer==1.0.0",
+            "--force",
+            "--no-index",
+            "--find-links",
+        ])
+        .arg(links.path())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let old = bin_dir.child(format!("recovery-old{}", std::env::consts::EXE_SUFFIX));
+    let shared = bin_dir.child(format!("recovery-root{}", std::env::consts::EXE_SUFFIX));
+    let receipts = ["recovery-root", "recovery-peer"]
+        .map(|name| tool_dir.child(name).child("uv-receipt.toml"));
+    let receipt_contents = receipts
+        .iter()
+        .map(|path| fs_err::read(path.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let root: toml::Value = toml::from_str(std::str::from_utf8(&receipt_contents[0])?)?;
+    let peer: toml::Value = toml::from_str(std::str::from_utf8(&receipt_contents[1])?)?;
+    assert_eq!(
+        root["tool"]["entrypoints"][0]["install-path"].as_str(),
+        old.path().to_str()
+    );
+    assert_eq!(
+        root["tool"]["entrypoints"][1]["install-path"].as_str(),
+        shared.path().to_str()
+    );
+    assert_eq!(
+        peer["tool"]["entrypoints"][0]["install-path"].as_str(),
+        shared.path().to_str()
+    );
+    let package_paths = ["recovery-root", "recovery-peer"]
+        .map(|name| site_packages_path(tool_dir.child(name).path(), "python3.13"));
+    let packages = package_paths
+        .iter()
+        .map(|path| dirhash_path(path))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let peer_source = venv_bin_path(tool_dir.child("recovery-peer").path())
+        .join(format!("recovery-root{}", std::env::consts::EXE_SUFFIX));
+    let shared_contents = fs_err::read(shared.path())?;
+    assert_eq!(shared_contents, fs_err::read(&peer_source)?);
+    #[cfg(unix)]
+    let shared_identity = {
+        let metadata = fs_err::symlink_metadata(shared.path())?;
+        assert!(metadata.is_symlink());
+        assert_eq!(
+            fs_err::canonicalize(shared.path())?,
+            fs_err::canonicalize(&peer_source)?
+        );
+        (metadata.dev(), metadata.ino())
+    };
+    Command::new(shared.path())
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::diff("peer\n").normalize());
+
+    // This earlier destination is eligible for repair, but the later recorded conflict must
+    // abort the complete plan before any export or receipt is changed.
+    fs_err::remove_file(old.path())?;
+    for force in [false, true] {
+        let mut command = install();
+        if force {
+            command.arg("--force");
+        }
+        uv_snapshot!(context.filters(), command, @r"
+        exit_code: 2 (failure)
+        ----- stderr -----
+        error: Cannot restore executable `bin/recovery-root` because it is also recorded for `recovery-peer`
+        ");
+        old.assert(predicate::path::missing());
+        assert_eq!(fs_err::read(shared.path())?, shared_contents);
+        #[cfg(unix)]
+        {
+            let metadata = fs_err::symlink_metadata(shared.path())?;
+            assert_eq!((metadata.dev(), metadata.ino()), shared_identity);
+            assert_eq!(
+                fs_err::canonicalize(shared.path())?,
+                fs_err::canonicalize(&peer_source)?
+            );
+        }
+        for (receipt, contents) in receipts.iter().zip(&receipt_contents) {
+            assert_eq!(fs_err::read(receipt.path())?, *contents);
+        }
+        for (path, contents) in package_paths.iter().zip(&packages) {
+            assert_eq!(dirhash_path(path)?, *contents);
+        }
+        Command::new(shared.path())
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .assert()
+            .success()
+            .stdout(predicate::str::diff("peer\n").normalize());
+    }
     Ok(())
 }
 
