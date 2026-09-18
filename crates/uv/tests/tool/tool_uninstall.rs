@@ -346,7 +346,7 @@ fn tool_uninstall_after_same_tool_reinstall() {
 fn tool_uninstall_rejects_ambiguous_copied_executable() -> Result<()> {
     let context = uv_test::test_context!("3.13")
         .with_filtered_exe_suffix()
-        .with_filter((r"[\\/]BIN[\\/]shared\.cmd", "/bin/shared.cmd"))
+        .with_filter((r"\bBIN[\\/]shared\.cmd", "bin/shared.cmd"))
         .with_tool_dirs();
     let links = context.temp_dir.child("links");
     let tool_dir = context.temp_dir.child("tools");
@@ -406,7 +406,7 @@ fn tool_uninstall_rejects_ambiguous_copied_executable() -> Result<()> {
         uv_snapshot!(context.filters(), context.tool_uninstall().arg(name), @"
         exit_code: 2 (failure)
         ----- stderr -----
-        error: Cannot determine whether executable `[TEMP_DIR]/bin/shared.cmd` belongs to `first-native` or `second-native`; no tools were removed
+        error: Cannot determine whether executable `bin/shared.cmd` belongs to `first-native` or `second-native`; no tools were removed
         ");
         assert_eq!(fs_err::read(first_receipt.path())?, first_contents);
         assert_eq!(fs_err::read(second_receipt.path())?, second_contents);
@@ -503,7 +503,7 @@ fn tool_uninstall_rejects_different_basename_aliases() -> Result<()> {
         uv_snapshot!(context.filters(), context.tool_uninstall().arg(name), @"
         exit_code: 2 (failure)
         ----- stderr -----
-        error: Cannot determine whether executable `[TEMP_DIR]/bin/[ALIAS].cmd` belongs to `first-command` or `second-command`; no tools were removed
+        error: Cannot determine whether executable `bin/[ALIAS].cmd` belongs to `first-command` or `second-command`; no tools were removed
         ");
         for (receipt, contents) in receipts.iter().zip(&receipt_contents) {
             assert_eq!(fs_err::read(receipt.path())?, *contents);
