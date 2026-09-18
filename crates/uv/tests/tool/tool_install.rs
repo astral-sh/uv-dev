@@ -1,13 +1,17 @@
+use std::collections::BTreeMap;
 #[cfg(any(feature = "test-git", feature = "test-git-lfs"))]
 use std::collections::BTreeSet;
 #[cfg(any(windows, feature = "test-git"))]
 use std::ffi::OsString;
+use std::fmt::Write as _;
 #[cfg(windows)]
-use std::io::{Read, Seek};
+use std::io::{Read, Seek, Write as _};
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 #[cfg(windows)]
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -2688,7 +2692,7 @@ fn tool_install_restores_missing_executables() -> Result<()> {
                     .env("PYTHONDONTWRITEBYTECODE", "1")
                     .assert()
                     .success()
-                    .stdout(expected);
+                    .stdout(predicate::str::diff(expected).normalize());
                 assert_eq!(fs_err::read(&executable)?, fs_err::read(source)?);
                 #[cfg(unix)]
                 {
@@ -2902,12 +2906,12 @@ fn tool_install_recovery_preflights_existing_executables() -> Result<()> {
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .assert()
         .success()
-        .stdout("Hi from the simple launcher!\n");
+        .stdout(predicate::str::diff("Hi from the simple launcher!\n").normalize());
     Command::new(app.path())
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .assert()
         .success()
-        .stdout("Hello from basic-app!\n");
+        .stdout(predicate::str::diff("Hello from basic-app!\n").normalize());
     assert_eq!(fs_err::read(receipt.path())?, receipt_contents);
     assert_eq!(dirhash_path(&site_packages)?, installed_contents);
     Ok(())
@@ -2970,16 +2974,22 @@ fn tool_install_recovery_preflights_present_competing_receipts() -> Result<()> {
     let root: toml::Value = toml::from_str(std::str::from_utf8(&receipt_contents[0])?)?;
     let peer: toml::Value = toml::from_str(std::str::from_utf8(&receipt_contents[1])?)?;
     assert_eq!(
-        root["tool"]["entrypoints"][0]["install-path"].as_str(),
-        old.path().to_str()
+        root["tool"]["entrypoints"][0]["install-path"]
+            .as_str()
+            .map(Path::new),
+        Some(old.path())
     );
     assert_eq!(
-        root["tool"]["entrypoints"][1]["install-path"].as_str(),
-        shared.path().to_str()
+        root["tool"]["entrypoints"][1]["install-path"]
+            .as_str()
+            .map(Path::new),
+        Some(shared.path())
     );
     assert_eq!(
-        peer["tool"]["entrypoints"][0]["install-path"].as_str(),
-        shared.path().to_str()
+        peer["tool"]["entrypoints"][0]["install-path"]
+            .as_str()
+            .map(Path::new),
+        Some(shared.path())
     );
     let package_paths = ["recovery-root", "recovery-peer"]
         .map(|name| site_packages_path(tool_dir.child(name).path(), "python3.13"));
@@ -3155,13 +3165,13 @@ fn tool_install_recovery_preserves_transferred_executables() -> Result<()> {
             .env("PYTHONDONTWRITEBYTECODE", "1")
             .assert()
             .success()
-            .stdout(expected);
+            .stdout(predicate::str::diff(expected).normalize());
     }
     Command::new(launcher.path())
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .assert()
         .success()
-        .stdout("Hi from the simple launcher!\n");
+        .stdout(predicate::str::diff("Hi from the simple launcher!\n").normalize());
     for (path, contents) in package_paths.iter().zip(&packages) {
         assert_eq!(dirhash_path(path)?, *contents);
     }
@@ -3215,7 +3225,7 @@ fn tool_install_recovery_preserves_empty_entrypoints() -> Result<()> {
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .assert()
         .success()
-        .stdout("Hi from the simple launcher!\n");
+        .stdout(predicate::str::diff("Hi from the simple launcher!\n").normalize());
     assert_eq!(dirhash_path(&site_packages)?, installed);
     Ok(())
 }
@@ -3253,7 +3263,7 @@ fn tool_install_recovery_handles_bin_directory_aliases() -> Result<()> {
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .assert()
         .success()
-        .stdout("Hi from the simple launcher!\n");
+        .stdout(predicate::str::diff("Hi from the simple launcher!\n").normalize());
 
     context
         .tool_install()
@@ -3302,10 +3312,11 @@ fn write_recovery_wheel(
     let mut entrypoints = String::from("[console_scripts]\n");
     let mut module = String::new();
     for (index, (command, output)) in commands.iter().enumerate() {
-        entrypoints.push_str(&format!(
-            "{command} = {normalized}.commands:command_{index}\n"
-        ));
-        module.push_str(&format!("def command_{index}():\n    print({output:?})\n"));
+        writeln!(
+            entrypoints,
+            "{command} = {normalized}.commands:command_{index}"
+        )?;
+        writeln!(module, "def command_{index}():\n    print({output:?})")?;
     }
     let requirements = requirements
         .iter()
@@ -3315,7 +3326,7 @@ fn write_recovery_wheel(
         &name.parse()?,
         &version.parse()?,
         &requirements,
-        &Default::default(),
+        &BTreeMap::default(),
         None,
         "py3-none-any",
         &[(&entrypoints_path, &entrypoints), (&module_path, &module)],
@@ -3388,7 +3399,7 @@ fn tool_install_recovery_allows_unrelated_invalid_receipts() -> Result<()> {
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .assert()
         .success()
-        .stdout("2\n");
+        .stdout(predicate::str::diff("2\n").normalize());
     assert_eq!(
         fs_err::read_to_string(peer_receipt.path())?,
         "Invalid receipt"
@@ -3601,6 +3612,24 @@ fn tool_install_recovery_removes_empty_root_owned_exports() -> Result<()> {
     let transferred_bytes = fs_err::read(transferred.path())?;
     let peer_receipt = tools.child("empty-recovery-peer").child("uv-receipt.toml");
     let peer_receipt_bytes = fs_err::read(peer_receipt.path())?;
+    // Both receipts retain their original claim after an overwrite. Record the completed
+    // transfer before testing cleanup; a competing valid receipt must still block recovery.
+    let root_receipt = tools.child("empty-recovery-root").child("uv-receipt.toml");
+    let mut document =
+        fs_err::read_to_string(root_receipt.path())?.parse::<toml_edit::DocumentMut>()?;
+    let entries = document["tool"]["entrypoints"]
+        .as_array_mut()
+        .expect("entrypoints");
+    assert_eq!(entries.len(), 3);
+    entries.retain(|entry| {
+        entry
+            .as_inline_table()
+            .and_then(|entry| entry.get("name"))
+            .and_then(toml_edit::Value::as_str)
+            != Some("empty-recovery-transferred")
+    });
+    assert_eq!(entries.len(), 2);
+    root_receipt.write_str(&document.to_string())?;
     write_recovery_wheel(links.path(), "empty-recovery-root", "2.0.0", &[], &[])?;
     context
         .tool_install()
@@ -3692,7 +3721,7 @@ fn tool_install_recovery_survives_environment_updates() -> Result<()> {
                 .env("PYTHONDONTWRITEBYTECODE", "1")
                 .assert()
                 .success()
-                .stdout(format!("{output}\n"));
+                .stdout(predicate::str::diff(format!("{output}\n")).normalize());
         };
         let assert_receipt = |bin: &Path, names: &[&str]| -> Result<()> {
             let document =
@@ -3805,7 +3834,7 @@ fn tool_install_recovery_survives_environment_updates() -> Result<()> {
         ])
         .assert()
         .success()
-        .stdout("3.12\n");
+        .stdout(predicate::str::diff("3.12\n").normalize());
     }
     Ok(())
 }
@@ -4010,7 +4039,7 @@ fn tool_install_recovery_preflights_new_commands() -> Result<()> {
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .assert()
         .success()
-        .stdout("Hi from the simple launcher!\n");
+        .stdout(predicate::str::diff("Hi from the simple launcher!\n").normalize());
     // Package mutation is not rolled back by the export preflight.
     assert!(
         site_packages_path(tools.child("recovery-root").path(), "python3.13")
@@ -4102,7 +4131,7 @@ fn tool_install_recovery_does_not_reacquire_pruned_commands() -> Result<()> {
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .assert()
         .success()
-        .stdout(output);
+        .stdout(predicate::str::diff(output).normalize());
     }
     Ok(())
 }
@@ -4353,7 +4382,7 @@ fn tool_install_recovery_rejects_planned_short_name_aliases() -> Result<()> {
     let receipt_bytes = fs_err::read(receipt.path())?;
     let long = bin.child("planned-long-recovery-command.exe");
     long.write_str("owned alias calibration")?;
-    let alias = observed_short_path(long.path(), None)?;
+    let alias = observed_short_path(long.path(), Some("UVPLAN.EXE"))?;
     let alias_command = alias
         .file_stem()
         .expect("short command")
@@ -4362,7 +4391,7 @@ fn tool_install_recovery_rejects_planned_short_name_aliases() -> Result<()> {
     fs_err::remove_file(long.path())?;
     assert!(!alias.exists());
     long.write_str("owned alias recreation")?;
-    assert_eq!(observed_short_path(long.path(), None)?, alias);
+    assert_eq!(observed_short_path(long.path(), Some("UVPLAN.EXE"))?, alias);
     fs_err::remove_file(long.path())?;
     assert!(!alias.exists());
     write_recovery_wheel(
@@ -4417,8 +4446,8 @@ fn tool_install_recovery_rejects_noop_short_name_aliases() -> Result<()> {
         .write_str("owned-native-marker\r\n")?;
     let long_name = "noop-long-recovery-command.exe";
     let observed_long = observation.child(long_name);
-    observed_long.write_str("owned automatic alias")?;
-    let observed = observed_short_path(observed_long.path(), None)?;
+    observed_long.write_str("owned alias")?;
+    let observed = observed_short_path(observed_long.path(), Some("UVNOOP.EXE"))?;
     let short_command = observed
         .file_stem()
         .expect("short command")
@@ -4426,8 +4455,11 @@ fn tool_install_recovery_rejects_noop_short_name_aliases() -> Result<()> {
         .expect("UTF-8 command");
     let short_name = format!("{short_command}.exe");
     fs_err::remove_file(observed_long.path())?;
-    observed_long.write_str("owned automatic alias recreation")?;
-    assert_eq!(observed_short_path(observed_long.path(), None)?, observed);
+    observed_long.write_str("owned alias recreation")?;
+    assert_eq!(
+        observed_short_path(observed_long.path(), Some("UVNOOP.EXE"))?,
+        observed
+    );
     fs_err::remove_file(observed_long.path())?;
 
     // Console launchers are installed before .data/scripts. Reserve the literal short name in
@@ -4446,7 +4478,7 @@ fn tool_install_recovery_rejects_noop_short_name_aliases() -> Result<()> {
         &"noop-alias-root".parse()?,
         &"1.0.0".parse()?,
         &[],
-        &Default::default(),
+        &BTreeMap::default(),
         None,
         tag,
         &[
@@ -4501,7 +4533,7 @@ fn tool_install_recovery_rejects_noop_short_name_aliases() -> Result<()> {
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .assert()
         .success()
-        .stdout("literal short command\n");
+        .stdout(predicate::str::diff("literal short command\n").normalize());
     let source_bytes = [fs_err::read(&source_long)?, fs_err::read(&source_short)?];
     let export_bytes = [
         fs_err::read(exported_long.path())?,
@@ -4547,11 +4579,11 @@ fn tool_install_recovery_rejects_noop_short_name_aliases() -> Result<()> {
 
 #[cfg(windows)]
 fn native_pe_fixture(filename: &str) -> Result<NativePeFixture> {
+    const MAX_BYTES: u64 = 2 * 1024 * 1024;
     anyhow::ensure!(
         matches!(filename, "where.exe" | "findstr.exe"),
         "Unexpected native fixture name"
     );
-    const MAX_BYTES: u64 = 2 * 1024 * 1024;
     let directory = native_system_directory()?;
     let path = directory.join(filename);
     let metadata = fs_err::symlink_metadata(&path)?;
@@ -4603,13 +4635,14 @@ fn native_pe_fixture(filename: &str) -> Result<NativePeFixture> {
         "Native fixture is a uv trampoline"
     );
     let sha256 = hex::encode(Sha256::digest(&bytes));
-    eprintln!(
+    writeln!(
+        std::io::stderr(),
         "native-pe-fixture {}",
         serde_json::json!({
             "source": path, "bytes": bytes.len(), "sha256": sha256,
             "machine": format!("0x{machine:04x}"), "identity": format!("{identity:?}"),
         })
-    );
+    )?;
     Ok(NativePeFixture {
         path,
         bytes,
@@ -4640,7 +4673,7 @@ fn write_native_recovery_wheel(
         &name.parse()?,
         &version.parse()?,
         &[],
-        &Default::default(),
+        &BTreeMap::default(),
         None,
         tag,
         &[(script.as_str(), fixture.bytes.as_slice())],
@@ -4688,6 +4721,8 @@ fn assert_native_findstr(executable: &Path, markers: &Path) {
 #[cfg(windows)]
 #[test]
 fn tool_install_recovery_native_pe_updates() -> Result<()> {
+    const FILE_ATTRIBUTE_TEMPORARY: u32 = 0x100;
+
     let where_exe = native_pe_fixture("where.exe")?;
     let findstr_exe = native_pe_fixture("findstr.exe")?;
     assert_ne!(where_exe.sha256, findstr_exe.sha256);
@@ -4774,8 +4809,9 @@ fn tool_install_recovery_native_pe_updates() -> Result<()> {
     fs_err::hard_link(first.path(), peer.path())?;
     let peer_identity =
         uv_windows::FileIdentity::from_file(&uv_windows::open_file_entry(peer.path())?)?;
+    let mut old_export = uv_windows::open_file_entry(first.path())?;
     assert_eq!(
-        uv_windows::FileIdentity::from_file(&uv_windows::open_file_entry(first.path())?)?,
+        uv_windows::FileIdentity::from_file(&old_export)?,
         peer_identity
     );
     write_native_recovery_wheel(
@@ -4797,6 +4833,17 @@ fn tool_install_recovery_native_pe_updates() -> Result<()> {
         uv_windows::FileIdentity::from_file(&uv_windows::open_file_entry(peer.path())?)?,
         peer_identity
     );
+    assert_eq!(
+        uv_windows::FileIdentity::from_file(&old_export)?,
+        peer_identity
+    );
+    old_export.rewind()?;
+    let mut retained = Vec::new();
+    old_export.read_to_end(&mut retained)?;
+    assert_eq!(retained, where_exe.bytes);
+    let metadata = fs_err::metadata(first.path())?;
+    assert!(!metadata.permissions().readonly());
+    assert_eq!(metadata.file_attributes() & FILE_ATTRIBUTE_TEMPORARY, 0);
     assert_native_findstr(first.path(), markers.path());
     assert_native_where(peer.path(), markers.path());
 

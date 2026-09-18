@@ -437,7 +437,7 @@ impl ToolEntrypointSnapshot {
                 }
                 let mut previous_target = None;
                 for previous in planned.keys() {
-                    if same_entrypoint_location(previous, &target)? {
+                    if same_planned_entrypoint_location(previous, &target)? {
                         previous_target = Some(previous.clone());
                         break;
                     }
@@ -481,8 +481,7 @@ impl ToolEntrypointSnapshot {
                 }) {
                     self_replace::self_replace(source).context("Failed to install executable")?;
                 } else {
-                    uv_fs::copy_atomic_sync(source, &target)
-                        .context("Failed to install executable")?;
+                    copy_executable(&source, &target).context("Failed to install executable")?;
                 }
             }
             let entrypoint = ToolEntrypoint::new(&entry_name, target, package.to_string());
@@ -635,6 +634,27 @@ fn open_entry(path: &Path) -> io::Result<File> {
     uv_windows::open_file_entry(path)
 }
 
+/// Atomically replace an export while its previous file identity remains open.
+#[cfg(windows)]
+pub(super) fn copy_executable(source: &Path, target: &Path) -> io::Result<()> {
+    let parent = target.parent().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "Executable path has no parent")
+    })?;
+    let temporary = tempfile::Builder::new().tempfile_in(uv_fs::verbatim_path(parent))?;
+    fs_err::copy(source, temporary.path())?;
+
+    // `keep` clears the temporary and read-only attributes before the standard library's rename
+    // can use POSIX replacement semantics for a destination with an open identity handle.
+    let (_file, path) = temporary.keep().map_err(|error| error.error)?;
+    let mut temporary = tempfile::TempPath::try_from_path(path)?;
+    let target = uv_fs::verbatim_path(target);
+    uv_fs::with_retry_sync(&temporary, &target, "rename", || {
+        fs_err::rename(&temporary, &target)
+    })?;
+    temporary.disable_cleanup(true);
+    Ok(())
+}
+
 /// Compare exported directory entries, not the file objects to which hardlinks refer.
 pub(super) fn same_entrypoint_location(left: &Path, right: &Path) -> anyhow::Result<bool> {
     compare_entrypoint_location(left, right, false)
@@ -644,6 +664,23 @@ pub(super) fn same_entrypoint_location(left: &Path, right: &Path) -> anyhow::Res
 /// be resolved. Competing receipt claims must use the strict comparison instead.
 pub(super) fn same_existing_entrypoint_location(left: &Path, right: &Path) -> anyhow::Result<bool> {
     compare_entrypoint_location(left, right, true)
+}
+
+/// A newly planned name can be distinguished from a present entry by current alias lookup.
+/// Two absent destinations still require the strict historical short-name check.
+pub(super) fn same_planned_entrypoint_location(left: &Path, right: &Path) -> anyhow::Result<bool> {
+    #[cfg(windows)]
+    let missing_are_distinct = {
+        let exists = |path: &Path| match fs_err::symlink_metadata(path) {
+            Ok(_) => Ok(true),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(err) => Err(err),
+        };
+        exists(left)? != exists(right)?
+    };
+    #[cfg(unix)]
+    let missing_are_distinct = false;
+    compare_entrypoint_location(left, right, missing_are_distinct)
 }
 
 fn compare_entrypoint_location(
@@ -782,9 +819,60 @@ fn compare_entrypoint_location(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use std::io::{Read, Seek};
+    #[cfg(windows)]
+    use std::os::windows::fs::MetadataExt;
+
     use super::ExportFingerprint;
     #[cfg(windows)]
-    use super::{same_entrypoint_location, same_existing_entrypoint_location};
+    use super::{
+        copy_executable, same_entrypoint_location, same_existing_entrypoint_location,
+        same_planned_entrypoint_location,
+    };
+
+    #[cfg(windows)]
+    #[test]
+    fn replace_export_with_open_identity_handle() -> anyhow::Result<()> {
+        const FILE_ATTRIBUTE_TEMPORARY: u32 = 0x100;
+
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("source.exe");
+        let export = directory.path().join("export.exe");
+        let peer = directory.path().join("peer.exe");
+        fs_err::write(&source, "new executable")?;
+        fs_err::write(&export, "old executable")?;
+        fs_err::hard_link(&export, &peer)?;
+        let mut old_export = uv_windows::open_file_entry(&export)?;
+        let identity = uv_windows::FileIdentity::from_file(&old_export)?;
+        let source_permissions = fs_err::metadata(&source)?.permissions();
+        let mut readonly = source_permissions.clone();
+        readonly.set_readonly(true);
+        fs_err::set_permissions(&source, readonly)?;
+        let result = copy_executable(&source, &export);
+        fs_err::set_permissions(&source, source_permissions)?;
+        result?;
+
+        assert_eq!(fs_err::read(&export)?, b"new executable");
+        assert_eq!(fs_err::read(&peer)?, b"old executable");
+        assert_ne!(
+            uv_windows::FileIdentity::from_file(&uv_windows::open_file_entry(&export)?)?,
+            identity
+        );
+        assert_eq!(
+            uv_windows::FileIdentity::from_file(&uv_windows::open_file_entry(&peer)?)?,
+            identity
+        );
+        assert_eq!(uv_windows::FileIdentity::from_file(&old_export)?, identity);
+        old_export.rewind()?;
+        let mut retained = Vec::new();
+        old_export.read_to_end(&mut retained)?;
+        assert_eq!(retained, b"old executable");
+        let metadata = fs_err::metadata(&export)?;
+        assert!(!metadata.permissions().readonly());
+        assert_eq!(metadata.file_attributes() & FILE_ATTRIBUTE_TEMPORARY, 0);
+        Ok(())
+    }
 
     #[cfg(windows)]
     #[test]
@@ -803,6 +891,7 @@ mod tests {
         let long = directory.path().join("unambiguously-long.exe");
         let short = directory.path().join("CUSTOM.EXE");
         assert!(same_entrypoint_location(&long, &short).is_err());
+        assert!(same_planned_entrypoint_location(&long, &short).is_err());
         assert!(!same_existing_entrypoint_location(&long, &short)?);
         let missing_long = directory
             .path()
@@ -810,10 +899,28 @@ mod tests {
             .join("unambiguously-long.exe");
         let missing_short = directory.path().join("missing").join("CUSTOM.EXE");
         assert!(same_entrypoint_location(&missing_long, &missing_short).is_err());
+        assert!(same_planned_entrypoint_location(&missing_long, &missing_short).is_err());
         assert!(!same_existing_entrypoint_location(
             &missing_long,
             &missing_short
         )?);
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn present_and_missing_planned_names_are_distinct() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let present = directory.path().join("black.exe");
+        let missing = directory.path().join("blackd.exe");
+        fs_err::write(&present, "existing executable")?;
+        assert!(same_entrypoint_location(&present, &missing).is_err());
+        assert!(!same_planned_entrypoint_location(&present, &missing)?);
+        assert!(!same_planned_entrypoint_location(&missing, &present)?);
+        let alias = directory.path().join("BLACK.exe");
+        assert!(same_planned_entrypoint_location(&present, &alias)?);
+        fs_err::remove_file(&present)?;
+        assert!(same_planned_entrypoint_location(&present, &missing).is_err());
         Ok(())
     }
 

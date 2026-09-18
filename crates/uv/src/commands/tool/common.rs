@@ -53,9 +53,11 @@ use uv_warnings::warn_user_once;
 use uv_workspace::WorkspaceCache;
 
 use crate::commands::pip;
+#[cfg(windows)]
+use crate::commands::tool::recovery::copy_executable;
 use crate::commands::tool::recovery::{
     ToolEntrypointClaims, ToolEntrypointSnapshot, same_entrypoint_location,
-    same_existing_entrypoint_location,
+    same_existing_entrypoint_location, same_planned_entrypoint_location,
 };
 use crate::commands::tool::uninstall::owned_entrypoints_by;
 
@@ -217,7 +219,7 @@ pub(super) fn repair_tool_entrypoints(
         // export write. Equal entries belong to this same receipt; exact duplicate map keys
         // retain their last replacement, while an unresolved alias aborts the whole repair.
         for previous in &entrypoints {
-            same_entrypoint_location(&previous.install_path, &target)?;
+            same_planned_entrypoint_location(&previous.install_path, &target)?;
         }
         if same_entrypoint_location(&source, &target)? {
             bail!(
@@ -270,7 +272,7 @@ pub(super) fn repair_tool_entrypoints(
         }) {
             self_replace::self_replace(source).context("Failed to restore executable")?;
         } else {
-            uv_fs::copy_atomic_sync(source, &target).context("Failed to restore executable")?;
+            copy_executable(&source, &target).context("Failed to restore executable")?;
         }
     }
     for old in removals {
