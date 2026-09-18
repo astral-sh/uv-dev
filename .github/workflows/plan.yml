@@ -157,9 +157,9 @@ jobs:
           [[ "$HAS_BUILD_PUSH_DOCKER_LABEL" == "true" ]] && has_build_push_docker_label=1
           [[ "$HAS_BUILD_WINDOWS_TRAMPOLINE_LABEL" == "true" ]] && has_build_windows_trampoline_label=1
 
-          # Pull requests check out GitHub's synthetic merge commit, whose first parent is the
-          # current base. Other events compare against `main`, which is fetched above for branch
-          # dispatches.
+          # Pull requests compare GitHub's synthetic merge commit with its first parent.
+          # Pushes to main and manual dispatches compare against main. Dispatches on another
+          # branch or tag fetch main above.
           if [[ "$GH_REF" == refs/pull/*/merge ]]; then
             comparison_base="HEAD^1"
           else
