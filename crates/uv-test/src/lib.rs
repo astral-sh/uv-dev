@@ -2145,6 +2145,25 @@ impl TestContext {
             .unwrap_or_else(|_| panic!("Missing file: `{}`", file.user_display()))
     }
 
+    /// Rewrite registry identities in a lockfile without changing its artifact URLs.
+    pub fn rewrite_lock_registry_sources(&self, registry: &str) -> anyhow::Result<()> {
+        let mut lock: toml_edit::DocumentMut = self.read("uv.lock").parse()?;
+        let Some(packages) = lock["package"].as_array_of_tables_mut() else {
+            anyhow::bail!("lockfile should contain packages");
+        };
+        for package in packages.iter_mut() {
+            if let Some(source) = package
+                .get_mut("source")
+                .and_then(toml_edit::Item::as_inline_table_mut)
+                && source.get("registry").is_some()
+            {
+                source.insert("registry", toml_edit::Value::from(registry));
+            }
+        }
+        fs_err::write(self.temp_dir.join("uv.lock"), lock.to_string())?;
+        Ok(())
+    }
+
     /// Creates a new `Command` that is intended to be suitable for use in
     /// all tests.
     fn new_command(&self) -> Command {

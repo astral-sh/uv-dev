@@ -1,0 +1,25 @@
+name = "workflow"
+description = "Local packages for dependency add and remove workflow tests."
+
+[root]
+requires = ["workflow-direct"]
+
+[expected]
+satisfiable = true
+
+[expected.packages]
+workflow-direct = "1.0.0"
+workflow-transitive = "2.0.0"
+
+[packages.workflow-direct.versions."1.0.0"]
+requires = ["workflow-transitive>=2"]
+sdist_backend = "in-tree"
+
+[packages.workflow-transitive.versions."2.0.0"]
+sdist_backend = "in-tree"
+
+[packages.workflow-added.versions."3.0.0"]
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true
