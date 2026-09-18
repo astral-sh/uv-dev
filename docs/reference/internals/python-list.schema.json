@@ -1,0 +1,85 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "uv python list",
+  "type": "array",
+  "items": {
+    "$ref": "#/definitions/PythonListEntry"
+  },
+  "definitions": {
+    "PythonListEntry": {
+      "type": "object",
+      "properties": {
+        "arch": {
+          "type": "string"
+        },
+        "implementation": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "libc": {
+          "type": "string"
+        },
+        "os": {
+          "type": "string"
+        },
+        "path": {
+          "type": ["string", "null"]
+        },
+        "symlink": {
+          "type": ["string", "null"]
+        },
+        "url": {
+          "type": ["string", "null"]
+        },
+        "variant": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "version_parts": {
+          "$ref": "#/definitions/PythonVersionParts"
+        }
+      },
+      "required": [
+        "key",
+        "version",
+        "version_parts",
+        "path",
+        "symlink",
+        "url",
+        "os",
+        "variant",
+        "implementation",
+        "arch",
+        "libc"
+      ]
+    },
+    "PythonVersionParts": {
+      "type": "object",
+      "properties": {
+        "major": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0
+        },
+        "minor": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0
+        },
+        "patch": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0
+        }
+      },
+      "required": ["major", "minor", "patch"]
+    }
+  }
+}
