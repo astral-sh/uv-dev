@@ -371,15 +371,6 @@ pub fn uninstall_legacy_editable(egg_link: &Path) -> Result<Uninstall, Error> {
     // This comes from `pkg_resources.normalize_path`
     let target_line = normcase(target_line);
 
-    match fs_err::remove_file(egg_link) {
-        Ok(()) => {
-            trace!("Removed file: {}", egg_link.display());
-            file_count += 1;
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => return Err(err.into()),
-    }
-
     let site_package = egg_link.parent().ok_or(Error::BrokenVenv(
         "`.egg-link` file is not in a directory".to_string(),
     ))?;
@@ -390,22 +381,37 @@ pub fn uninstall_legacy_editable(egg_link: &Path) -> Result<Uninstall, Error> {
     // is modified).
     let _guard = EASY_INSTALL_PTH.lock().unwrap();
 
-    let content = fs_err::read_to_string(&easy_install)?;
-    let mut new_content = String::with_capacity(content.len());
-    let mut removed = false;
+    let content = match fs_err::read_to_string(&easy_install) {
+        Ok(content) => Some(content),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => return Err(err.into()),
+    };
+    if let Some(content) = content {
+        let mut new_content = String::with_capacity(content.len());
+        let mut removed = false;
 
-    // https://github.com/pypa/pip/blob/41587f5e0017bcd849f42b314dc8a34a7db75621/src/pip/_internal/req/req_uninstall.py#L634
-    for line in content.lines() {
-        if !removed && line.trim() == target_line {
-            removed = true;
-        } else {
-            new_content.push_str(line);
-            new_content.push('\n');
+        // https://github.com/pypa/pip/blob/41587f5e0017bcd849f42b314dc8a34a7db75621/src/pip/_internal/req/req_uninstall.py#L634
+        for line in content.lines() {
+            if !removed && line.trim() == target_line {
+                removed = true;
+            } else {
+                new_content.push_str(line);
+                new_content.push('\n');
+            }
+        }
+        if removed {
+            write_atomic_sync(&easy_install, new_content)?;
+            trace!("Removed line from `easy-install.pth`: {target_line}");
         }
     }
-    if removed {
-        write_atomic_sync(&easy_install, new_content)?;
-        trace!("Removed line from `easy-install.pth`: {target_line}");
+
+    match fs_err::remove_file(egg_link) {
+        Ok(()) => {
+            trace!("Removed file: {}", egg_link.display());
+            file_count += 1;
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
     }
 
     Ok(Uninstall {
