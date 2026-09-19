@@ -1,0 +1,11 @@
+{
+  "outcome": "fixed",
+  "summary": "NetBSD compatible tags retained uppercase release suffixes, causing lowercase locally built wheels to be rejected. The fix lowercases NetBSD releases during tag construction, and the updated end-to-end regression now verifies successful installation.",
+  "validation": [
+    "Focused NetBSD pip-install regression",
+    "uv-platform-tags test suite (55 tests)",
+    "Focused uv-platform-tags Clippy",
+    "Rust formatting and diff checks"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/1989"
+}

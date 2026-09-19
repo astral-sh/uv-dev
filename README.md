@@ -13,8 +13,8 @@ tags as incompatible. An otherwise identical wheel whose filename uses uppercase
 successfully.
 
 The checkout's compatible-tag construction replaces dots and hyphens in FreeBSD and NetBSD
-releases, but only the FreeBSD branch lowercases the release. This agrees with the observed tags,
-although the reproduction—not source inspection—is the basis for the outcome.
+releases, but only the FreeBSD branch lowercased the release. The fix applies the same lowercase
+normalization to NetBSD and updates the end-to-end regression to require successful installation.
 
 ## Reproduction
 
@@ -58,21 +58,42 @@ the package's maturin payload or CPython ABI. It does not test the native NetBSD
 exercises uv 0.12.13's normal interpreter query, compatible-tag generation, installation-plan, and
 wheel-selection paths with the reported NetBSD platform data.
 
-No existing integration test under `crates/uv/tests/` or `crates/uv-client/tests/it/` covers NetBSD
-wheel installation or NetBSD compatible-tag generation. The only NetBSD-specific test assertion is
-`crates/uv-platform-tags/src/platform_tag.rs::invalid_characters_platform`, which verifies that a
-NetBSD tag containing a backslash is rejected; it does not cover release casing or compatibility.
-`crates/uv-platform-tags/src/tags.rs::test_platform_tags_invalid_release_arch` covers invalid
-FreeBSD input only.
+Before the parent regression was added, no integration test under `crates/uv/tests/` or
+`crates/uv-client/tests/it/` covered NetBSD wheel installation or NetBSD compatible-tag generation.
+The pre-existing NetBSD-specific assertion in
+`crates/uv-platform-tags/src/platform_tag.rs::invalid_characters_platform` only verifies rejection
+of a tag containing a backslash. The parent regression now exercises the complete interpreter
+query, compatible-tag generation, wheel selection, and installation path.
+
+## Fix
+
+Outcome: **fixed**.
+
+`crates/uv-platform-tags/src/tags.rs` now lowercases a NetBSD release after replacing dots and
+hyphens with underscores, matching the existing FreeBSD normalization. For an interpreter release
+of `11.0-STABLE`, uv consequently generates `netbsd_11_0_stable_amd64`, which matches the locally
+built wheel.
+
+The parent regression in `crates/uv/tests/pip_install/pip_install.rs` was updated from asserting the
+undesirable incompatibility to asserting that the lowercase wheel installs successfully through
+`uv pip install`. Before the production change, that desired snapshot failed with the exact
+`stable` versus `STABLE` error; after the change it passes. No additional command test was added
+because other installation commands consume the same compatible-tag list, and no distinct failure
+from this confirmed cause was demonstrated in another producer or consumer.
+
+Focused validation succeeded:
+
+- `cargo test --package uv --test pip_install install_netbsd_wheel_normalizes_release_tag_case`
+- `cargo test --package uv-platform-tags` (55 tests)
+- `cargo +stable clippy --package uv-platform-tags --all-targets --locked -- -D warnings`
+- `cargo +stable fmt --all`
 
 ## Draft response
 
-Thanks, this is reproducible as a bug in uv 0.12.13. With NetBSD release `11.0-STABLE`, uv rejects a
-local wheel tagged `netbsd_11_0_stable_amd64` and generates
-`netbsd_11_0_STABLE_amd64` as the current-platform tag. The same fixture installs when the filename
-uses uppercase `STABLE`. The current compatible-tag code lowercases FreeBSD releases but not NetBSD
-releases, and there is no NetBSD casing regression test. The next step is to normalize the NetBSD
-release consistently and add focused compatible-tag and installation coverage.
+Thanks, this is reproducible as a bug in uv 0.12.13. NetBSD compatible-tag generation retained the
+uppercase letters in `11.0-STABLE`, causing a lowercase locally built wheel to be rejected. The fix
+normalizes NetBSD releases to lowercase, consistently with FreeBSD, and the end-to-end regression
+now verifies that the reported wheel tag installs successfully.
 
 ## Classification
 
@@ -97,3 +118,5 @@ integration tests in `crates/uv/tests/` and `crates/uv-client/tests/it/`, and BS
 history. astral-sh/uv#3824 and astral-sh/uv#13713 concern libc or interpreter operating-system
 detection rather than wheel platform-tag normalization. No separate NetBSD-specific tracker or
 NetBSD tag-fix pull request was identified beyond astral-sh/uv#21846.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/1989
