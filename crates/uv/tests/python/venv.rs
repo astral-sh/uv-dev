@@ -72,6 +72,20 @@ fn create_venv() {
 }
 
 #[test]
+fn create_venv_powershell_activator_uses_utf8_bom() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.venv().arg("--clear").assert().success();
+
+    let scripts = if cfg!(windows) { "Scripts" } else { "bin" };
+    let activator = fs_err::read(context.venv.join(scripts).join("activate.ps1"))?;
+
+    assert!(activator.starts_with(&[0xef, 0xbb, 0xbf]));
+
+    Ok(())
+}
+
+#[test]
 fn create_venv_preview_skips_distutils_patch_on_py310_plus() {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 
@@ -1723,7 +1737,7 @@ fn verify_pyvenv_cfg_relocatable() {
     let activate_nu = scripts.child("activate.nu");
     activate_nu.assert(predicates::path::is_file());
     activate_nu.assert(predicates::str::contains(
-        r"let virtual_env = (path self | path dirname | path dirname)",
+        r"const virtual_env = (path self | path dirname | path dirname)",
     ));
 
     // csh cannot determine its own script location, so activate.csh should not
