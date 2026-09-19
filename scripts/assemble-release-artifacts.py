@@ -73,28 +73,8 @@ def check_checksum(archive: Path, checksum: Path) -> None:
         raise ValueError(f"Archive checksum differs from input: {archive.name}")
 
 
-def assemble(
-    built: Path, signed_wheels: Path, signed_archives: Path, output: Path
-) -> None:
-    """Assemble every configured target into new publication directories.
-
-    `built` contains `wheels/<target>`, `sdists/<package>`, and `github-archives`.
-    `signed_wheels` contains `<system>/<target>` directories; `signed_archives`
-    is flat. The JSON values in `RELEASE_PLAN`, `RELEASE_TARGETS`, `MACOS_TARGETS`,
-    and `WINDOWS_TARGETS` identify the expected archives and signed replacements.
-
-    Require complete inputs, use signed replacements for macOS and Windows, and
-    copy the other distributions unchanged. Missing replacements never fall back
-    to the original binaries. `output` must not exist; it receives
-    `wheels/<package>`, `sdists/<package>`, and `github-archives` directories.
-    """
-    plan = json.loads(os.environ["RELEASE_PLAN"])
-    targets = json.loads(os.environ["RELEASE_TARGETS"])
-    signed_targets = {
-        platform["target"]: system
-        for system in ("macos", "windows")
-        for platform in json.loads(os.environ[f"{system.upper()}_TARGETS"])
-    }
+def github_archive_inventory(plan: dict) -> dict[str, tuple[str, str]]:
+    """Read the unique GitHub archive and checksum for each planned uv target."""
     releases = [release for release in plan["releases"] if release["app_name"] == "uv"]
     if len(releases) != 1:
         raise ValueError("Expected one uv release in the cargo-dist plan")
@@ -107,12 +87,17 @@ def assemble(
         if target in archives:
             raise ValueError(f"Multiple GitHub archives for {target}")
         archives[target] = (name, artifact["checksum"])
-    if set(archives) != set(targets) or not signed_targets.keys() <= archives.keys():
-        raise ValueError(
-            "GitHub archive targets differ from the release target inventory"
-        )
+    return archives
 
-    output.mkdir()
+
+def assemble_python_distributions(
+    built: Path,
+    signed_wheels: Path,
+    output: Path,
+    targets: list[str],
+    signed_targets: dict[str, str],
+) -> None:
+    """Copy each package's wheels and sdist, requiring every signed replacement."""
     selected_signed_wheels = set()
     for package in PACKAGES:
         wheels = output / "wheels" / package
@@ -139,6 +124,15 @@ def assemble(
     if set(signed_wheels.rglob("*.whl")) != selected_signed_wheels:
         raise ValueError("Signed wheels differ from the signing target inventory")
 
+
+def assemble_github_archives(
+    built: Path,
+    signed_archives: Path,
+    output: Path,
+    archives: dict[str, tuple[str, str]],
+    signed_targets: dict[str, str],
+) -> None:
+    """Verify the complete archive inventories and copy each selected checksum pair."""
     destination = output / "github-archives"
     destination.mkdir()
     expected_built = {name for names in archives.values() for name in names}
@@ -152,6 +146,39 @@ def assemble(
         check_checksum(source / archive, source / checksum)
         for name in (archive, checksum):
             copy_distribution(source / name, destination)
+
+
+def assemble(
+    built: Path, signed_wheels: Path, signed_archives: Path, output: Path
+) -> None:
+    """Assemble every configured target into new publication directories.
+
+    `built` contains `wheels/<target>`, `sdists/<package>`, and `github-archives`.
+    `signed_wheels` contains `<system>/<target>` directories; `signed_archives`
+    is flat. The JSON values in `RELEASE_PLAN`, `RELEASE_TARGETS`, `MACOS_TARGETS`,
+    and `WINDOWS_TARGETS` identify the expected archives and signed replacements.
+
+    Require complete inputs, use signed replacements for macOS and Windows, and
+    copy the other distributions unchanged. Missing replacements never fall back
+    to the original binaries. `output` must not exist; it receives
+    `wheels/<package>`, `sdists/<package>`, and `github-archives` directories.
+    """
+    plan = json.loads(os.environ["RELEASE_PLAN"])
+    targets = json.loads(os.environ["RELEASE_TARGETS"])
+    signed_targets = {
+        platform["target"]: system
+        for system in ("macos", "windows")
+        for platform in json.loads(os.environ[f"{system.upper()}_TARGETS"])
+    }
+    archives = github_archive_inventory(plan)
+    if set(archives) != set(targets) or not signed_targets.keys() <= archives.keys():
+        raise ValueError(
+            "GitHub archive targets differ from the release target inventory"
+        )
+
+    output.mkdir()
+    assemble_python_distributions(built, signed_wheels, output, targets, signed_targets)
+    assemble_github_archives(built, signed_archives, output, archives, signed_targets)
 
 
 def main() -> None:

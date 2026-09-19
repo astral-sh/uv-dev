@@ -152,99 +152,105 @@ def get_virtualenv():
 
     # Use `sysconfig`, if available.
     if sysconfig_scheme:
-        import re
+        return _get_sysconfig_virtualenv(sysconfig_scheme)
+    return _get_distutils_virtualenv()
 
-        sysconfig_paths = {
-            i: sysconfig.get_path(i, expand=False, scheme=sysconfig_scheme)
-            for i in sysconfig.get_path_names()
-        }
 
-        # Determine very configuration variable that we need to resolve.
-        config_var_keys = set()
+def _get_sysconfig_virtualenv(sysconfig_scheme):
+    import re
 
-        conf_var_re = re.compile(r"\{\w+}")
-        for element in sysconfig_paths.values():
-            for k in conf_var_re.findall(element):
-                config_var_keys.add(k[1:-1])
-        config_var_keys.add("PYTHONFRAMEWORK")
+    sysconfig_paths = {
+        i: sysconfig.get_path(i, expand=False, scheme=sysconfig_scheme)
+        for i in sysconfig.get_path_names()
+    }
 
-        # Look them up.
-        sysconfig_vars = {i: sysconfig.get_config_var(i or "") for i in config_var_keys}
+    # Determine every configuration variable that we need to resolve.
+    config_var_keys = set()
 
-        # Information about the prefix (determines the Python home).
-        prefix = os.path.abspath(sys.prefix)
-        base_prefix = os.path.abspath(sys.base_prefix)
+    conf_var_re = re.compile(r"\{\w+}")
+    for element in sysconfig_paths.values():
+        for k in conf_var_re.findall(element):
+            config_var_keys.add(k[1:-1])
+    config_var_keys.add("PYTHONFRAMEWORK")
 
-        # Information about the exec prefix (dynamic stdlib modules).
-        base_exec_prefix = os.path.abspath(sys.base_exec_prefix)
-        exec_prefix = os.path.abspath(sys.exec_prefix)
+    # Look them up.
+    sysconfig_vars = {i: sysconfig.get_config_var(i or "") for i in config_var_keys}
 
-        # Set any prefixes to empty, which makes the resulting paths relative.
-        prefixes = prefix, exec_prefix, base_prefix, base_exec_prefix
-        sysconfig_vars.update(
-            {k: "" if v in prefixes else v for k, v in sysconfig_vars.items()}
-        )
+    # Information about the prefix (determines the Python home).
+    prefix = os.path.abspath(sys.prefix)
+    base_prefix = os.path.abspath(sys.base_prefix)
 
-        def expand_path(path: str) -> str:
-            return path.format(**sysconfig_vars).replace("/", os.sep).lstrip(os.sep)
+    # Information about the exec prefix (dynamic stdlib modules).
+    base_exec_prefix = os.path.abspath(sys.base_exec_prefix)
+    exec_prefix = os.path.abspath(sys.exec_prefix)
 
-        return {
-            "purelib": expand_path(sysconfig_paths["purelib"]),
-            "platlib": expand_path(sysconfig_paths["platlib"]),
-            "include": os.path.join(
-                "include", "site", f"python{get_major_minor_version()}"
-            ),
-            "scripts": expand_path(sysconfig_paths["scripts"]),
-            "data": expand_path(sysconfig_paths["data"]),
-        }
-    else:
-        # Use distutils primarily because that's what pip does.
-        # https://github.com/pypa/pip/blob/ae5fff36b0aad6e5e0037884927eaa29163c0611/src/pip/_internal/locations/__init__.py#L249
+    # Set any prefixes to empty, which makes the resulting paths relative.
+    prefixes = prefix, exec_prefix, base_prefix, base_exec_prefix
+    sysconfig_vars.update(
+        {k: "" if v in prefixes else v for k, v in sysconfig_vars.items()}
+    )
 
-        # Disable the use of the setuptools shim, if it's injected. Per pip:
-        #
-        # > If pip's going to use distutils, it should not be using the copy that setuptools
-        # > might have injected into the environment. This is done by removing the injected
-        # > shim, if it's injected.
-        #
-        # > See https://github.com/pypa/pip/issues/8761 for the original discussion and
-        # > rationale for why this is done within pip.
-        try:
-            __import__("_distutils_hack").remove_shim()
-        except (ImportError, AttributeError):
-            pass
+    def expand_path(path: str) -> str:
+        return path.format(**sysconfig_vars).replace("/", os.sep).lstrip(os.sep)
 
-        import warnings
+    return {
+        "purelib": expand_path(sysconfig_paths["purelib"]),
+        "platlib": expand_path(sysconfig_paths["platlib"]),
+        "include": os.path.join(
+            "include", "site", f"python{get_major_minor_version()}"
+        ),
+        "scripts": expand_path(sysconfig_paths["scripts"]),
+        "data": expand_path(sysconfig_paths["data"]),
+    }
 
-        with warnings.catch_warnings():  # disable warning for PEP-632
-            warnings.simplefilter("ignore")
-            from distutils import dist
-            from distutils.command.install import SCHEME_KEYS
 
-        d = dist.Distribution({"script_args": "--no-user-cfg"})
-        if hasattr(sys, "_framework"):
-            sys._framework = None
+def _get_distutils_virtualenv():
+    # Use distutils primarily because that's what pip does.
+    # https://github.com/pypa/pip/blob/ae5fff36b0aad6e5e0037884927eaa29163c0611/src/pip/_internal/locations/__init__.py#L249
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            i = d.get_command_obj("install", create=True)
+    # Disable the use of the setuptools shim, if it's injected. Per pip:
+    #
+    # > If pip's going to use distutils, it should not be using the copy that setuptools
+    # > might have injected into the environment. This is done by removing the injected
+    # > shim, if it's injected.
+    #
+    # > See https://github.com/pypa/pip/issues/8761 for the original discussion and
+    # > rationale for why this is done within pip.
+    try:
+        __import__("_distutils_hack").remove_shim()
+    except (ImportError, AttributeError):
+        pass
 
-        i.prefix = os.sep
-        i.finalize_options()
-        distutils_paths = {
-            key: (getattr(i, f"install_{key}")[1:]).lstrip(os.sep)
-            for key in SCHEME_KEYS
-        }
+    import warnings
 
-        return {
-            "purelib": distutils_paths["purelib"],
-            "platlib": distutils_paths["platlib"],
-            "include": os.path.join(
-                "include", "site", f"python{get_major_minor_version()}"
-            ),
-            "scripts": distutils_paths["scripts"],
-            "data": distutils_paths["data"],
-        }
+    with warnings.catch_warnings():  # disable warning for PEP-632
+        warnings.simplefilter("ignore")
+        from distutils import dist
+        from distutils.command.install import SCHEME_KEYS
+
+    d = dist.Distribution({"script_args": "--no-user-cfg"})
+    if hasattr(sys, "_framework"):
+        sys._framework = None
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        i = d.get_command_obj("install", create=True)
+
+    i.prefix = os.sep
+    i.finalize_options()
+    distutils_paths = {
+        key: (getattr(i, f"install_{key}")[1:]).lstrip(os.sep) for key in SCHEME_KEYS
+    }
+
+    return {
+        "purelib": distutils_paths["purelib"],
+        "platlib": distutils_paths["platlib"],
+        "include": os.path.join(
+            "include", "site", f"python{get_major_minor_version()}"
+        ),
+        "scripts": distutils_paths["scripts"],
+        "data": distutils_paths["data"],
+    }
 
 
 def get_scheme(use_sysconfig_scheme: bool):
@@ -417,6 +423,98 @@ def get_scheme(use_sysconfig_scheme: bool):
         return get_distutils_scheme()
 
 
+def _get_linux_platform(architecture):
+    # noinspection PyProtectedMember
+    from .packaging._manylinux import _get_glibc_version
+
+    # noinspection PyProtectedMember
+    from .packaging._musllinux import _get_musl_version
+
+    # https://github.com/pypa/packaging/blob/4dc334c86d43f83371b194ca91618ed99e0e49ca/src/packaging/tags.py#L539-L543
+    # https://github.com/astral-sh/uv/issues/9842
+    if struct.calcsize("P") == 4:
+        if architecture == "x86_64":
+            architecture = "i686"
+        elif architecture == "aarch64":
+            architecture = "armv8l"
+
+    musl_version = _get_musl_version(sys.executable)
+    glibc_version = _get_glibc_version()
+
+    if musl_version:
+        operating_system = {
+            "name": "musllinux",
+            "major": musl_version[0],
+            "minor": musl_version[1],
+        }
+    elif glibc_version != (-1, -1):
+        operating_system = {
+            "name": "manylinux",
+            "major": glibc_version[0],
+            "minor": glibc_version[1],
+        }
+    elif hasattr(sys, "getandroidapilevel"):
+        # On Python <3.13, Android reports itself as "linux".
+        operating_system = {
+            "name": "android",
+            "api_level": sys.getandroidapilevel(),
+        }
+    else:
+        print(json.dumps({"result": "error", "kind": "libc_not_found"}))
+        sys.exit(0)
+    return operating_system, architecture
+
+
+def _get_macos_platform():
+    # Apparently, Mac OS is reporting i386 sometimes in sysconfig.get_platform even
+    # though that's not a thing anymore.
+    # https://github.com/astral-sh/uv/issues/2450
+    version, _, architecture = platform.mac_ver()
+
+    if not version or not architecture:
+        print(json.dumps({"result": "error", "kind": "broken_mac_ver"}))
+        sys.exit(0)
+
+    # https://github.com/pypa/packaging/blob/cc938f984bbbe43c5734b9656c9837ab3a28191f/src/packaging/tags.py#L356-L363
+    is_32bit = struct.calcsize("P") == 4
+    if is_32bit:
+        if architecture.startswith("ppc"):
+            architecture = "ppc"
+        else:
+            architecture = "i386"
+
+    version = version.split(".")
+    return {
+        "name": "macos",
+        "major": int(version[0]),
+        "minor": int(version[1]),
+    }, architecture
+
+
+def _get_emscripten_os():
+    pyemscripten_platform_version = sysconfig.get_config_var(
+        "PYEMSCRIPTEN_PLATFORM_VERSION"
+    )
+    # Fall back to PYODIDE_ABI_VERSION for backward compatibility.
+    pyodide_abi_version = sysconfig.get_config_var("PYODIDE_ABI_VERSION")
+    if pyemscripten_platform_version:
+        version = pyemscripten_platform_version.split("_")
+        return {
+            "name": "pyemscripten",
+            "major": int(version[0]),
+            "minor": int(version[1]),
+        }
+    if pyodide_abi_version:
+        version = pyodide_abi_version.split("_")
+        return {
+            "name": "pyodide",
+            "major": int(version[0]),
+            "minor": int(version[1]),
+        }
+    print(json.dumps({"result": "error", "kind": "emscripten_not_pyodide"}))
+    sys.exit(0)
+
+
 def get_operating_system_and_architecture():
     """Determine the Python interpreter architecture and operating system.
 
@@ -457,73 +555,13 @@ def get_operating_system_and_architecture():
         sys.exit(0)
 
     if operating_system == "linux":
-        # noinspection PyProtectedMember
-        from .packaging._manylinux import _get_glibc_version
-
-        # noinspection PyProtectedMember
-        from .packaging._musllinux import _get_musl_version
-
-        # https://github.com/pypa/packaging/blob/4dc334c86d43f83371b194ca91618ed99e0e49ca/src/packaging/tags.py#L539-L543
-        # https://github.com/astral-sh/uv/issues/9842
-        if struct.calcsize("P") == 4:
-            if architecture == "x86_64":
-                architecture = "i686"
-            elif architecture == "aarch64":
-                architecture = "armv8l"
-
-        musl_version = _get_musl_version(sys.executable)
-        glibc_version = _get_glibc_version()
-
-        if musl_version:
-            operating_system = {
-                "name": "musllinux",
-                "major": musl_version[0],
-                "minor": musl_version[1],
-            }
-        elif glibc_version != (-1, -1):
-            operating_system = {
-                "name": "manylinux",
-                "major": glibc_version[0],
-                "minor": glibc_version[1],
-            }
-        elif hasattr(sys, "getandroidapilevel"):
-            # On Python <3.13, Android reports itself as "linux"
-            # See `operation_system == "android"` branch for Python 3.13+ below
-            operating_system = {
-                "name": "android",
-                "api_level": sys.getandroidapilevel(),
-            }
-        else:
-            print(json.dumps({"result": "error", "kind": "libc_not_found"}))
-            sys.exit(0)
+        operating_system, architecture = _get_linux_platform(architecture)
     elif operating_system == "win":
         operating_system = {
             "name": "windows",
         }
     elif operating_system == "macosx":
-        # Apparently, Mac OS is reporting i386 sometimes in sysconfig.get_platform even
-        # though that's not a thing anymore.
-        # https://github.com/astral-sh/uv/issues/2450
-        version, _, architecture = platform.mac_ver()
-
-        if not version or not architecture:
-            print(json.dumps({"result": "error", "kind": "broken_mac_ver"}))
-            sys.exit(0)
-
-        # https://github.com/pypa/packaging/blob/cc938f984bbbe43c5734b9656c9837ab3a28191f/src/packaging/tags.py#L356-L363
-        is_32bit = struct.calcsize("P") == 4
-        if is_32bit:
-            if architecture.startswith("ppc"):
-                architecture = "ppc"
-            else:
-                architecture = "i386"
-
-        version = version.split(".")
-        operating_system = {
-            "name": "macos",
-            "major": int(version[0]),
-            "minor": int(version[1]),
-        }
+        operating_system, architecture = _get_macos_platform()
     elif operating_system == "ios":
         ios_ver = platform.ios_ver()
         version = ios_ver.release.split(".")
@@ -535,35 +573,7 @@ def get_operating_system_and_architecture():
         }
         [_version, architecture, _platform] = version_arch.split("-")
     elif operating_system == "emscripten":
-        pyemscripten_platform_version = sysconfig.get_config_var(
-            "PYEMSCRIPTEN_PLATFORM_VERSION"
-        )
-        # fallback to PYODIDE_ABI_VERSION for backward compatibility
-        pyodide_abi_version = sysconfig.get_config_var("PYODIDE_ABI_VERSION")
-        if pyemscripten_platform_version:
-            version = pyemscripten_platform_version.split("_")
-            operating_system = {
-                "name": "pyemscripten",
-                "major": int(version[0]),
-                "minor": int(version[1]),
-            }
-        elif pyodide_abi_version:
-            version = pyodide_abi_version.split("_")
-            operating_system = {
-                "name": "pyodide",
-                "major": int(version[0]),
-                "minor": int(version[1]),
-            }
-        else:
-            print(
-                json.dumps(
-                    {
-                        "result": "error",
-                        "kind": "emscripten_not_pyodide",
-                    }
-                )
-            )
-            sys.exit(0)
+        operating_system = _get_emscripten_os()
     elif operating_system == "android":
         # Python 3.13+ supports Android. We map the Android ABIs to our standard architectures.
         #
