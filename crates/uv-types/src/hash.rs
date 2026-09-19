@@ -12,7 +12,7 @@ use uv_distribution_types::{
 };
 use uv_normalize::PackageName;
 use uv_pep440::{Operator, Version};
-use uv_pypi_types::{HashAlgorithm, HashDigest, HashDigests, HashError, ResolverMarkerEnvironment};
+use uv_pypi_types::{HashDigest, HashDigests, HashError, ResolverMarkerEnvironment};
 use uv_redacted::DisplaySafeUrl;
 
 /// Hash collection and verification policies for a resolution.
@@ -92,18 +92,9 @@ impl HashStrategy {
                 Arc::make_mut(hashes)
             }
         };
-        if mode.is_require() {
-            constraint_hashes.retain(|_, digests| {
-                digests.retain(|digest| digest.algorithm() != HashAlgorithm::Md5);
-                !digests.is_empty()
-            });
-        }
         let mut hashes = constraint_hashes.clone();
         for (id, digests) in requirement_hashes.iter() {
-            let mut digests = digests.clone();
-            if mode.is_require() {
-                digests.retain(|digest| digest.algorithm() != HashAlgorithm::Md5);
-            }
+            let digests = digests.clone();
             let digests = if let Some(constraint) = constraints.hashes_for_id(id) {
                 combine_constraint_hashes(id, digests, constraint, id, mode)?
             } else {
@@ -333,10 +324,6 @@ impl HashStrategy {
                 merge_digests(&mut digests, fragment_hashes.iter(), requirement)?;
             }
 
-            if mode.is_require() {
-                digests.retain(|digest| digest.algorithm() != HashAlgorithm::Md5);
-            }
-
             if digests.is_empty() {
                 continue;
             }
@@ -385,14 +372,6 @@ impl HashStrategy {
                 merge_digests(&mut digests, fragment_hashes.iter(), requirement)?;
             }
 
-            let has_md5 = mode.is_require()
-                && digests
-                    .iter()
-                    .any(|digest| digest.algorithm() == HashAlgorithm::Md5);
-            if mode.is_require() {
-                digests.retain(|digest| digest.algorithm() != HashAlgorithm::Md5);
-            }
-
             let digests = if let Some(constraint) = constraint_hashes.remove(&id) {
                 combine_constraint_hashes(&id, digests, &constraint, requirement, mode)?
             } else {
@@ -402,13 +381,6 @@ impl HashStrategy {
             // Under `--require-hashes`, every requirement must include a hash.
             if digests.is_empty() {
                 if mode.is_require() {
-                    if has_md5 {
-                        return Err(HashStrategyError::InsecureHashAlgorithm(
-                            requirement.to_string(),
-                            HashAlgorithm::Md5,
-                            mode,
-                        ));
-                    }
                     return Err(HashStrategyError::MissingHashes(
                         requirement.to_string(),
                         mode,
@@ -686,10 +658,6 @@ pub enum HashStrategyError {
         "In `{1}` mode, all requirements must have their versions pinned with `==`, but found: {0}"
     )]
     UnpinnedRequirement(String, HashCheckingMode),
-    #[error(
-        "`{1}` hashes are insecure and cannot be used with `{2}` but no other hashes are available for: {0}"
-    )]
-    InsecureHashAlgorithm(String, HashAlgorithm, HashCheckingMode),
     #[error("In `{1}` mode, all requirements must have a hash, but none were provided for: {0}")]
     MissingHashes(String, HashCheckingMode),
     #[error(
@@ -877,13 +845,14 @@ mod tests {
         let digest = HashDigest::from_str(
             "sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f",
         )?;
+        let package_digest = HashDigest::from_str(
+            "sha256:f7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a",
+        )?;
         let constraints = HashStrategy::verify(Arc::new(FxHashMap::from_iter([
             (VersionId::from_url(&url), vec![digest.clone()]),
             (
                 VersionId::from_registry(name.clone(), version.clone()),
-                vec![HashDigest::from_str(
-                    "md5:420d85e19168705cdf0223621b18831a",
-                )?],
+                vec![package_digest.clone()],
             ),
         ])));
         for strategy in [
@@ -896,9 +865,9 @@ mod tests {
             );
             assert_eq!(
                 strategy.archive_policy_for_package(&name, &version),
-                ArchiveHashPolicy::Any(&[])
+                ArchiveHashPolicy::Any(slice::from_ref(&package_digest))
             );
-            assert!(!strategy.allows_package(&name, &version));
+            assert!(strategy.allows_package(&name, &version));
         }
         Ok(())
     }
