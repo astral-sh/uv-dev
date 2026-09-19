@@ -1,6 +1,6 @@
 #![expect(clippy::single_match_else)]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, Bound};
 use std::fmt::Write;
 use std::path::Path;
 use std::sync::Arc;
@@ -28,15 +28,17 @@ use uv_normalize::{GroupName, PackageName};
 use uv_pep440::Version;
 use uv_pep508::MarkerTree;
 use uv_preview::{Preview, PreviewFeature};
-use uv_pypi_types::{ConflictKind, Conflicts, SupportedEnvironments};
+use uv_pypi_types::{
+    ConflictItem, ConflictKind, ConflictKindRef, ConflictSet, Conflicts, SupportedEnvironments,
+};
 use uv_python::{
     ConfigDiscovery, Interpreter, PythonDownloads, PythonEnvironment, PythonPreference,
     PythonRequest,
 };
 use uv_requirements::ExtrasResolver;
 use uv_resolver::{
-    FlatIndex, InMemoryIndex, Options, OptionsBuilder, PythonRequirement, ResolverEnvironment,
-    UniversalMarker,
+    FlatIndex, InMemoryIndex, Options, OptionsBuilder, PythonRequirement, ResolveError,
+    ResolverEnvironment, ResolverOutput, UniversalMarker,
 };
 use uv_scripts::Pep723Script;
 use uv_settings::PythonInstallMirrors;
@@ -45,7 +47,7 @@ use uv_types::{
 };
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::{
-    DiscoveryOptions, Editability, VirtualProject, WorkspaceCache, WorkspaceMember,
+    DiscoveryOptions, Editability, VirtualProject, WorkspaceCache, WorkspaceError, WorkspaceMember,
 };
 
 use crate::commands::locked_requirements::{LockedRequirements, read_lock_requirements};
@@ -1055,58 +1057,84 @@ async fn do_lock(
                     }),
             );
 
-            // Resolve the requirements.
-            let (resolution, _) = pip::operations::resolve(
-                ExtrasResolver::new(&hasher, state.index(), database)
-                    .with_reporter(Arc::new(ResolverReporter::from(printer)))
-                    .resolve(target.members_requirements())
-                    .await
-                    .map_err(|err| ProjectError::Operation(err.into()))?
-                    .into_iter()
-                    .chain(target.group_requirements())
-                    .chain(requirements.iter().cloned())
-                    .chain(
-                        dependency_groups
-                            .values()
-                            .flat_map(|requirements| requirements.iter().cloned()),
+            let root_requirements = ExtrasResolver::new(&hasher, state.index(), database)
+                .with_reporter(Arc::new(ResolverReporter::from(printer)))
+                .resolve(target.members_requirements())
+                .await
+                .map_err(|err| ProjectError::Operation(err.into()))?
+                .into_iter()
+                .chain(target.group_requirements())
+                .collect::<Vec<_>>();
+            let resolver_constraints = constraints
+                .iter()
+                .cloned()
+                .map(NameRequirementSpecification::from)
+                .chain(external)
+                .collect::<Vec<_>>();
+            let declared_conflicts = conflicts.clone();
+            let roots = match target {
+                LockTarget::Workspace(workspace) => workspace.resolution_roots(),
+                LockTarget::Script(_) => None,
+            };
+            let resolve = async |selected: Option<&BTreeSet<PackageName>>,
+                                 conflicts: &Conflicts| {
+                let resolver_env = if selected.is_some() || conflicts != &declared_conflicts {
+                    ResolverEnvironment::universal(
+                        environments
+                            .cloned()
+                            .map(SupportedEnvironments::into_markers)
+                            .unwrap_or_default(),
                     )
-                    .map(UnresolvedRequirementSpecification::from)
-                    .collect(),
-                constraints
-                    .iter()
-                    .cloned()
-                    .map(NameRequirementSpecification::from)
-                    .chain(external)
-                    .collect(),
-                Vec::new(),
-                overrides.clone(),
-                excludes.clone(),
-                source_trees,
-                // The root is always null in workspaces, it "depends on" the projects
-                None,
-                packages.keys().cloned().collect(),
-                &extras,
-                &groups,
-                preferences,
-                EmptyInstalledPackages,
-                &hasher,
-                &Reinstall::default(),
-                upgrade,
-                None,
-                resolver_env,
-                python_requirement,
-                interpreter.markers(),
-                conflicts.clone(),
-                &client,
-                &flat_index,
-                state.index(),
-                &build_dispatch,
-                concurrency,
-                options,
-                Box::new(SummaryResolveLogger),
-                printer,
-            )
-            .await?;
+                } else {
+                    resolver_env.clone()
+                };
+                pip::operations::resolve(
+                    root_requirements
+                        .iter()
+                        .filter(|requirement| {
+                            selected.is_none_or(|roots| roots.contains(&requirement.name))
+                        })
+                        .cloned()
+                        .chain(requirements.iter().cloned())
+                        .chain(
+                            dependency_groups
+                                .values()
+                                .flat_map(|requirements| requirements.iter().cloned()),
+                        )
+                        .map(UnresolvedRequirementSpecification::from)
+                        .collect(),
+                    resolver_constraints.clone(),
+                    Vec::new(),
+                    overrides.clone(),
+                    excludes.clone(),
+                    source_trees.clone(),
+                    // The root is always null in workspaces, it "depends on" the projects
+                    None,
+                    packages.keys().cloned().collect(),
+                    &extras,
+                    &groups,
+                    preferences.clone(),
+                    EmptyInstalledPackages,
+                    &hasher,
+                    &Reinstall::default(),
+                    upgrade,
+                    None,
+                    resolver_env,
+                    python_requirement.clone(),
+                    interpreter.markers(),
+                    conflicts.clone(),
+                    &client,
+                    &flat_index,
+                    state.index(),
+                    &build_dispatch,
+                    concurrency,
+                    options.clone(),
+                    Box::new(SummaryResolveLogger),
+                    printer,
+                )
+                .await
+            };
+            let resolution = resolve_workspace_roots(roots, &mut conflicts, resolve).await?;
 
             // Print the success message after completing resolution.
             logger.on_complete(resolution.len(), start, printer)?;
@@ -1155,6 +1183,79 @@ async fn do_lock(
             } else {
                 Ok(LockResult::Changed(previous, lock))
             }
+        }
+    }
+}
+
+/// Infer only pairwise conflicts demonstrated by independently satisfiable workspace roots.
+async fn resolve_workspace_roots(
+    roots: Option<&BTreeSet<PackageName>>,
+    conflicts: &mut Conflicts,
+    resolve: impl for<'a> AsyncFn(
+        Option<&'a BTreeSet<PackageName>>,
+        &'a Conflicts,
+    ) -> Result<(ResolverOutput, HashStrategy), pip::operations::Error>,
+) -> Result<ResolverOutput, ProjectError> {
+    let declared = conflicts.clone();
+    let mut checked_roots = BTreeSet::new();
+    let mut checked_pairs = BTreeSet::new();
+    loop {
+        let error = match resolve(None, conflicts).await {
+            Ok((resolution, _)) => return Ok(resolution),
+            Err(error) => error,
+        };
+        let Some(roots) = roots else {
+            return Err(error.into());
+        };
+        let pip::operations::Error::Resolve(ResolveError::NoSolution(no_solution)) = &error else {
+            return Err(error.into());
+        };
+        let candidates = no_solution
+            .packages()
+            .filter(|package| roots.contains(*package))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut inferred = false;
+        for left in &candidates {
+            if checked_roots.insert(left.clone()) {
+                resolve(Some(&BTreeSet::from([left.clone()])), &declared).await?;
+            }
+            for right in candidates.range((Bound::Excluded(left), Bound::Unbounded)) {
+                if !checked_pairs.insert((left.clone(), right.clone()))
+                    || conflicts.iter().any(|set| {
+                        set.contains(left, ConflictKindRef::Project)
+                            && set.contains(right, ConflictKindRef::Project)
+                    })
+                {
+                    continue;
+                }
+                if checked_roots.insert(right.clone()) {
+                    resolve(Some(&BTreeSet::from([right.clone()])), &declared).await?;
+                }
+                match resolve(
+                    Some(&BTreeSet::from([left.clone(), right.clone()])),
+                    &declared,
+                )
+                .await
+                {
+                    Ok(_) => {}
+                    Err(pip::operations::Error::Resolve(ResolveError::NoSolution(_))) => {
+                        debug!("Inferring conflict between workspace roots `{left}` and `{right}`");
+                        conflicts.push(
+                            ConflictSet::try_from(vec![
+                                ConflictItem::from(left.clone()),
+                                ConflictItem::from(right.clone()),
+                            ])
+                            .map_err(WorkspaceError::from)?,
+                        );
+                        inferred = true;
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }
+        if !inferred {
+            return Err(error.into());
         }
     }
 }
