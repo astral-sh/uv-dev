@@ -69,13 +69,10 @@ impl VersionSpecifiers {
         // TODO(konsti): This seems better than sorting on insert and not getting the size hint,
         // but i haven't measured it.
         //
-        // Tie-break on the operator so semantically equivalent same-version intervals such as
-        // `>=1.4.4,<=1.4.4` and `<=1.4.4,>=1.4.4` normalize to the same representation.
-        specifiers.sort_by(|a, b| {
-            a.version()
-                .cmp(b.version())
-                .then_with(|| a.operator().cmp(b.operator()))
-        });
+        // Tie-break using the full specifier order so equivalent same-version intervals such as
+        // `>=1.4.4,<=1.4.4` and `<=1.4.4,>=1.4.4` normalize to the same representation. This also
+        // accounts for the significant release length of `~=` specifiers.
+        specifiers.sort_by(|a, b| a.version().cmp(b.version()).then_with(|| a.cmp(b)));
         Self(specifiers.into_boxed_slice())
     }
 
@@ -2064,6 +2061,37 @@ mod tests {
 
         assert_eq!(lower_then_upper, upper_then_lower);
         assert_eq!(lower_then_upper.to_string(), "<=1.4.4, >=1.4.4");
+    }
+
+    #[test]
+    fn test_version_specifiers_compatible_release_order() {
+        for (input, expected) in [
+            ("~=1.4.0,~=1.4", "~=1.4, ~=1.4.0"),
+            ("~=1.4.0.0,~=1.4,~=1.4.0", "~=1.4, ~=1.4.0, ~=1.4.0.0"),
+            ("~=1.4.0.post1,~=1.4.post1", "~=1.4.post1, ~=1.4.0.post1"),
+        ] {
+            let specifiers = VersionSpecifiers::from_str(input).unwrap();
+            let expected_specifiers = VersionSpecifiers::from_str(expected).unwrap();
+            let reversed = specifiers
+                .iter()
+                .rev()
+                .cloned()
+                .collect::<VersionSpecifiers>();
+
+            assert_eq!(specifiers, expected_specifiers);
+            assert_eq!(reversed, expected_specifiers);
+            assert_eq!(specifiers.to_string(), expected);
+            assert_eq!(reversed.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn test_version_specifiers_equal_ties_are_stable() {
+        for input in [">=1.4.0, >=1.4", ">=1.4, >=1.4.0"] {
+            let specifiers = VersionSpecifiers::from_str(input).unwrap();
+            assert_eq!(specifiers[0], specifiers[1]);
+            assert_eq!(specifiers.to_string(), input);
+        }
     }
 
     /// These occur in the simple api, e.g.
