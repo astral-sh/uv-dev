@@ -12,7 +12,7 @@ use uv_test::uv_snapshot;
 
 #[test]
 fn audit_invalid_service_url() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.audit()
         .arg("--preview-features")
@@ -30,7 +30,7 @@ fn audit_invalid_service_url() {
 /// The workspace discovered while resolving settings is reused by `uv audit`.
 #[test]
 fn audit_reuses_settings_workspace_discovery() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     context
         .temp_dir
         .child("pyproject.toml")
@@ -123,7 +123,10 @@ fn write_audit_output_project(project_dir: &impl PathChild, index_url: &str) {
 /// Audit a project with no vulnerabilities found.
 #[tokio::test]
 async fn audit_no_vulnerabilities() {
-    let context = uv_test::test_context!("3.12");
+    let _index = uv_test::packse::PackseServer::new("packages/audit.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_index.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -164,8 +167,8 @@ async fn audit_no_vulnerabilities() {
 /// Audit a project with no vulnerabilities found, emitting JSON output.
 #[tokio::test]
 async fn audit_json_no_vulnerabilities() {
-    let context = uv_test::test_context!("3.12");
-    let proxy = crate::pypi_proxy::start().await;
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let proxy = crate::pypi_proxy::start_local().await;
     write_audit_output_project(&context.temp_dir, &proxy.url("/simple"));
 
     let server = MockServer::start().await;
@@ -207,8 +210,8 @@ async fn audit_json_no_vulnerabilities() {
 /// Requesting JSON output warns unless the JSON preview feature is enabled.
 #[tokio::test]
 async fn audit_json_preview_warning() {
-    let context = uv_test::test_context!("3.12");
-    let proxy = crate::pypi_proxy::start().await;
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let proxy = crate::pypi_proxy::start_local().await;
     write_audit_output_project(&context.temp_dir, &proxy.url("/simple"));
 
     let server = MockServer::start().await;
@@ -253,7 +256,10 @@ async fn audit_json_preview_warning() {
 /// Audit a project and find a single vulnerability with summary, fix version, and advisory link.
 #[tokio::test]
 async fn audit_vulnerability_found() {
-    let context = uv_test::test_context!("3.12");
+    let _index = uv_test::packse::PackseServer::new("packages/audit.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_index.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -334,7 +340,7 @@ async fn audit_vulnerability_found() {
 /// Audit a project when OSV returns a malformed vulnerability record.
 #[tokio::test]
 async fn audit_malformed_vulnerability_record() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -401,7 +407,10 @@ async fn audit_malformed_vulnerability_record() {
 /// Audit a project with no dependencies.
 #[tokio::test]
 async fn audit_no_dependencies() {
-    let context = uv_test::test_context!("3.12");
+    let _index = uv_test::packse::PackseServer::new("packages/audit.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_index.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -436,7 +445,10 @@ async fn audit_no_dependencies() {
 /// When a vulnerability has aliases, the best ID (PYSEC > GHSA > CVE) is displayed.
 #[tokio::test]
 async fn audit_best_id_selection() {
-    let context = uv_test::test_context!("3.12");
+    let _index = uv_test::packse::PackseServer::new("packages/audit.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_index.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -503,7 +515,10 @@ async fn audit_best_id_selection() {
 /// A vulnerability without fix versions shows "No fix versions available".
 #[tokio::test]
 async fn audit_no_fix_versions() {
-    let context = uv_test::test_context!("3.12");
+    let _index = uv_test::packse::PackseServer::new("packages/audit.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_index.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -567,7 +582,10 @@ async fn audit_no_fix_versions() {
 /// Multiple vulnerabilities on the same package are grouped together.
 #[tokio::test]
 async fn audit_multiple_vulnerabilities_same_package() {
-    let context = uv_test::test_context!("3.12");
+    let _index = uv_test::packse::PackseServer::new("packages/audit.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_index.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -681,7 +699,10 @@ async fn audit_multiple_vulnerabilities_same_package() {
 /// `--no-dev` excludes dev dependencies from the audit.
 #[tokio::test]
 async fn audit_no_dev() {
-    let context = uv_test::test_context!("3.12");
+    let _index = uv_test::packse::PackseServer::new("packages/audit.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_index.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -740,7 +761,10 @@ async fn audit_no_dev() {
 /// Extras are included in the audit by default, and can be excluded.
 #[tokio::test]
 async fn audit_extras() {
-    let context = uv_test::test_context!("3.12");
+    let _index = uv_test::packse::PackseServer::new("packages/audit.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_index.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -800,7 +824,10 @@ async fn audit_extras() {
 /// Non-default dependency groups are included when explicitly requested.
 #[tokio::test]
 async fn audit_dependency_groups() {
-    let context = uv_test::test_context!("3.12");
+    let _index = uv_test::packse::PackseServer::new("packages/audit.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_index.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -891,7 +918,10 @@ async fn audit_dependency_groups() {
 /// `--ignore` excludes a vulnerability by its primary ID.
 #[tokio::test]
 async fn audit_ignore_by_id() {
-    let context = uv_test::test_context!("3.12");
+    let _index = uv_test::packse::PackseServer::new("packages/audit.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_index.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -984,7 +1014,10 @@ async fn audit_ignore_by_id() {
 /// `--ignore` matches against aliases, not just the primary ID.
 #[tokio::test]
 async fn audit_ignore_by_alias() {
-    let context = uv_test::test_context!("3.12");
+    let _index = uv_test::packse::PackseServer::new("packages/audit.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_index.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -1039,7 +1072,10 @@ async fn audit_ignore_by_alias() {
 /// `--ignore-until-fixed` suppresses a vulnerability only when no fix versions are available.
 #[tokio::test]
 async fn audit_ignore_until_fixed() {
-    let context = uv_test::test_context!("3.12");
+    let _index = uv_test::packse::PackseServer::new("packages/audit.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_index.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -1094,7 +1130,10 @@ async fn audit_ignore_until_fixed() {
 /// `--ignore-until-fixed` stops suppressing once a fix version is available.
 #[tokio::test]
 async fn audit_ignore_until_fixed_with_fix() {
-    let context = uv_test::test_context!("3.12");
+    let _index = uv_test::packse::PackseServer::new("packages/audit.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_index.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -1176,7 +1215,7 @@ async fn audit_ignore_until_fixed_with_fix() {
 #[tokio::test]
 async fn audit_ignore_until_fixed_with_fix_for_other_package() {
     let index = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -1270,7 +1309,10 @@ async fn audit_ignore_until_fixed_with_fix_for_other_package() {
 /// `[tool.uv.audit]` config supports `ignore`.
 #[tokio::test]
 async fn audit_ignore_config() {
-    let context = uv_test::test_context!("3.12");
+    let _index = uv_test::packse::PackseServer::new("packages/audit.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_index.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -1338,7 +1380,10 @@ async fn audit_ignore_config() {
 /// `[tool.uv.audit]` config supports `ignore-until-fixed`.
 #[tokio::test]
 async fn audit_ignore_until_fixed_config() {
-    let context = uv_test::test_context!("3.12");
+    let _index = uv_test::packse::PackseServer::new("packages/audit.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_index.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -1393,7 +1438,10 @@ async fn audit_ignore_until_fixed_config() {
 /// `--ignore` only suppresses the targeted vulnerability, not others.
 #[tokio::test]
 async fn audit_ignore_partial() {
-    let context = uv_test::test_context!("3.12");
+    let _index = uv_test::packse::PackseServer::new("packages/audit.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_index.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -1496,7 +1544,10 @@ async fn audit_ignore_partial() {
 /// `--ignore` warns when the ignored ID doesn't match any vulnerability.
 #[tokio::test]
 async fn audit_ignore_unmatched() {
-    let context = uv_test::test_context!("3.12");
+    let _index = uv_test::packse::PackseServer::new("packages/audit.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_index.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -1541,7 +1592,10 @@ async fn audit_ignore_unmatched() {
 /// `--ignore-until-fixed` warns when the ignored ID doesn't match any vulnerability.
 #[tokio::test]
 async fn audit_ignore_until_fixed_unmatched() {
-    let context = uv_test::test_context!("3.12");
+    let _index = uv_test::packse::PackseServer::new("packages/audit.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_index.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -1586,7 +1640,10 @@ async fn audit_ignore_until_fixed_unmatched() {
 /// `--ignore` with multiple IDs warns only about the unmatched ones.
 #[tokio::test]
 async fn audit_ignore_mixed_matched_unmatched() {
-    let context = uv_test::test_context!("3.12");
+    let _index = uv_test::packse::PackseServer::new("packages/audit.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_index.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -1657,7 +1714,10 @@ async fn audit_ignore_mixed_matched_unmatched() {
 /// Audit a PEP 723 script with a single dependency and no vulnerabilities.
 #[tokio::test]
 async fn audit_script_no_vulnerabilities() {
-    let context = uv_test::test_context!("3.12");
+    let _index = uv_test::packse::PackseServer::new("packages/audit.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_index.index_url());
 
     let script = context.temp_dir.child("script.py");
     script
@@ -1724,7 +1784,10 @@ async fn audit_script_no_vulnerabilities() {
 /// Audit a PEP 723 script and find a vulnerability.
 #[tokio::test]
 async fn audit_script_vulnerability_found() {
-    let context = uv_test::test_context!("3.12");
+    let _index = uv_test::packse::PackseServer::new("packages/audit.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_index.index_url());
 
     let script = context.temp_dir.child("script.py");
     script
@@ -1831,7 +1894,10 @@ async fn audit_script_vulnerability_found() {
 /// Audit a PEP 723 script with no dependencies.
 #[tokio::test]
 async fn audit_script_no_dependencies() {
-    let context = uv_test::test_context!("3.12");
+    let _index = uv_test::packse::PackseServer::new("packages/audit.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_index.index_url());
 
     let script = context.temp_dir.child("script.py");
     script
@@ -1879,7 +1945,10 @@ async fn audit_script_no_dependencies() {
 /// Audit a PEP 723 script with --frozen but no lockfile should error.
 #[tokio::test]
 async fn audit_script_frozen_missing_lockfile() {
-    let context = uv_test::test_context!("3.12");
+    let _index = uv_test::packse::PackseServer::new("packages/audit.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_index.index_url());
 
     let script = context.temp_dir.child("script.py");
     script
@@ -1915,7 +1984,10 @@ async fn audit_script_frozen_missing_lockfile() {
 /// Audit a PEP 723 script with multiple dependencies.
 #[tokio::test]
 async fn audit_script_multiple_dependencies() {
-    let context = uv_test::test_context!("3.12");
+    let _index = uv_test::packse::PackseServer::new("packages/audit.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_index.index_url());
 
     let script = context.temp_dir.child("script.py");
     script
@@ -1996,7 +2068,10 @@ async fn audit_script_multiple_dependencies() {
 /// through those extras must be included in the audit.
 #[tokio::test]
 async fn audit_script_extras() {
-    let context = uv_test::test_context!("3.12");
+    let _index = uv_test::packse::PackseServer::new("packages/audit.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_index.index_url());
 
     // A PEP 723 script that depends on `iniconfig[test]`.
     let script = context.temp_dir.child("script.py");
@@ -2083,8 +2158,8 @@ async fn audit_script_extras() {
 /// with reason) for a lockfile dependency.
 #[tokio::test]
 async fn audit_project_status_deprecated_with_reason() {
-    let context = uv_test::test_context!("3.12");
-    let proxy = crate::pypi_proxy::start().await;
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let proxy = crate::pypi_proxy::start_local().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -2134,8 +2209,8 @@ async fn audit_project_status_deprecated_with_reason() {
 /// Audit a project whose index reports an archived status without a reason.
 #[tokio::test]
 async fn audit_project_status_archived_no_reason() {
-    let context = uv_test::test_context!("3.12");
-    let proxy = crate::pypi_proxy::start().await;
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let proxy = crate::pypi_proxy::start_local().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -2185,8 +2260,8 @@ async fn audit_project_status_archived_no_reason() {
 /// Audit a project whose index reports a quarantined status.
 #[tokio::test]
 async fn audit_project_status_quarantined() {
-    let context = uv_test::test_context!("3.12");
-    let proxy = crate::pypi_proxy::start().await;
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let proxy = crate::pypi_proxy::start_local().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -2236,8 +2311,8 @@ async fn audit_project_status_quarantined() {
 /// An `active` status is not an adverse status and should not be reported.
 #[tokio::test]
 async fn audit_project_status_active_not_reported() {
-    let context = uv_test::test_context!("3.12");
-    let proxy = crate::pypi_proxy::start().await;
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let proxy = crate::pypi_proxy::start_local().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -2282,8 +2357,8 @@ async fn audit_project_status_active_not_reported() {
 /// findings in the same audit run.
 #[tokio::test]
 async fn audit_vulnerability_and_project_status() {
-    let context = uv_test::test_context!("3.12");
-    let proxy = crate::pypi_proxy::start().await;
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let proxy = crate::pypi_proxy::start_local().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml
@@ -2368,8 +2443,8 @@ async fn audit_vulnerability_and_project_status() {
 /// same audit report.
 #[tokio::test]
 async fn audit_json_vulnerability_and_project_status() {
-    let context = uv_test::test_context!("3.12");
-    let proxy = crate::pypi_proxy::start().await;
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let proxy = crate::pypi_proxy::start_local().await;
     write_audit_output_project(&context.temp_dir, &proxy.url("/status/archived/simple"));
 
     let server = MockServer::start().await;
@@ -2462,9 +2537,11 @@ async fn audit_json_vulnerability_and_project_status() {
 /// same audit report.
 #[tokio::test]
 async fn audit_sarif_vulnerability_and_project_status() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filter((uv_version::version(), "[VERSION]"));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((uv_version::version(), "[VERSION]"));
     context.temp_dir.child(".git").create_dir_all()?;
-    let proxy = crate::pypi_proxy::start().await;
+    let proxy = crate::pypi_proxy::start_local().await;
     write_audit_output_project(&context.temp_dir, &proxy.url("/status/archived/simple"));
 
     let server = MockServer::start().await;
@@ -2658,9 +2735,9 @@ async fn audit_sarif_vulnerability_and_project_status() -> Result<()> {
 /// project is selected with `--project` or uv is invoked from the project directory.
 #[tokio::test]
 async fn audit_sarif_project_artifact_uri() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     context.temp_dir.child(".git").create_dir_all()?;
-    let proxy = crate::pypi_proxy::start().await;
+    let proxy = crate::pypi_proxy::start_local().await;
     let project_dir = context.temp_dir.child("packages/project");
     project_dir.create_dir_all()?;
     write_audit_output_project(&project_dir, &proxy.url("/simple"));
