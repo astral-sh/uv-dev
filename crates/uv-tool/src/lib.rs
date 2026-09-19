@@ -15,7 +15,7 @@ use uv_install_wheel::read_record;
 use uv_installer::SitePackages;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
-use uv_python::{BrokenLink, Interpreter, PythonEnvironment};
+use uv_python::{Interpreter, PythonEnvironment};
 use uv_state::{StateBucket, StateStore};
 use uv_static::EnvVars;
 use uv_warnings::warn_user;
@@ -293,22 +293,17 @@ impl InstalledTools {
 
                 Ok(None)
             }
-            Err(uv_python::Error::Query(uv_python::InterpreterError::BrokenLink(BrokenLink {
-                path,
-                unix,
-                venv: _,
-            }))) => {
-                if unix {
-                    let target_path = fs_err::read_link(&path)?;
+            Err(uv_python::Error::Query(uv_python::InterpreterError::BrokenLink(broken_link))) => {
+                if let Some(target_path) = broken_link.missing_target() {
                     warn!(
                         "Ignoring existing virtual environment linked to non-existent Python interpreter: {} -> {}",
-                        path.user_display().cyan(),
+                        broken_link.path.user_display().cyan(),
                         target_path.user_display().cyan(),
                     );
                 } else {
                     warn!(
                         "Ignoring existing virtual environment linked to non-existent Python interpreter: {}",
-                        path.user_display().cyan(),
+                        broken_link.path.user_display().cyan(),
                     );
                 }
 
