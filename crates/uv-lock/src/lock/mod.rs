@@ -41,7 +41,7 @@ use uv_distribution_types::{
     MinimumLibcVersion, Name, NameRequirementSpecification, PYPI_URL, PathBuiltDist,
     PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist, RemoteSource,
     Requirement, RequirementSource, RequiresPython, ResolvedDist, SimplifiedMarkerTree,
-    StaticMetadata, ToUrlError, UrlString, VersionId,
+    StaticMetadata, ToUrlError, UrlString, VersionId, implied_markers,
 };
 use uv_fs::{PortablePath, PortablePathBuf, Simplified, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
@@ -6944,6 +6944,17 @@ impl Package {
                 .fork_markers
                 .iter()
                 .any(|fork_marker| !fork_marker.pep508().is_disjoint(marker))
+    }
+
+    /// Returns whether the locked package contains a wheel for the given environment.
+    pub fn has_wheel_for_marker(
+        &self,
+        marker: MarkerTree,
+        minimum_libc_version: Option<MinimumLibcVersion>,
+    ) -> bool {
+        self.wheels.iter().any(|wheel| {
+            !implied_markers(&wheel.filename, minimum_libc_version).is_disjoint(marker)
+        })
     }
 
     /// Returns the [`IndexUrl`] for the package, if it is a registry source.
