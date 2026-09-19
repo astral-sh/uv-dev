@@ -1277,6 +1277,38 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "non-pep508-extensions")]
+    fn direct_url_display() -> Result<(), Box<dyn std::error::Error>> {
+        const URL: &str = "https://example.invalid/archive.whl?raw=%23#fragment";
+        let mut requirement = crate::UnnamedRequirement::<VerbatimUrl>::from_str(URL)?;
+        let cases: &[(&[&str], &str)] = &[
+            (&[], ""),
+            (&["dev"], "[dev]"),
+            (&["z", "a", "z"], "[z,a,z]"),
+            (&["B", "a_b", "B", "a.b"], "[b,a-b,b,a-b]"),
+        ];
+        for (extras, suffix) in cases {
+            requirement.extras = extras
+                .iter()
+                .map(|name| ExtraName::from_str(name))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_boxed_slice();
+            let expected = format!("{URL}{suffix}");
+            assert_eq!(requirement.to_string(), expected);
+            assert_eq!(requirement.to_string(), expected);
+        }
+
+        let requirement = crate::UnnamedRequirement::<VerbatimUrl>::from_str(
+            "https://user:fake-token@example.invalid/archive.whl?raw=%23#fragment[z,a,z] ; python_full_version >= '3.12'",
+        )?;
+        assert_eq!(
+            requirement.to_string(),
+            "https://user:****@example.invalid/archive.whl?raw=%23#fragment[z,a,z] ; python_full_version >= '3.12'"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn error_extras_eof1() {
         assert_snapshot!(
             parse_pep508_err("black["),
