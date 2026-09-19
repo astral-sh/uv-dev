@@ -1852,6 +1852,67 @@ fn allow_incompatibilities() -> Result<()> {
 }
 
 #[test]
+fn install_extra_without_source() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    context.temp_dir.child("requirements.txt").touch()?;
+
+    uv_snapshot!(context.pip_install()
+        .args(["--offline", "--no-index", "--no-python-downloads"])
+        .args(["-r", "requirements.txt", "--extra", "Foo_Bar"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Requesting extras requires a `pylock.toml`, `pyproject.toml`, `setup.cfg`, or `setup.py` file
+
+    hint: Use `package[foo-bar]` syntax instead
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn install_editable_extra_without_source() {
+    let context = uv_test::test_context_with_versions!(&[]);
+
+    uv_snapshot!(context.pip_install()
+        .args(["--offline", "--no-index", "--no-python-downloads"])
+        .args(["-e", ".", "--extra", "Foo_Bar"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Requesting extras requires a `pylock.toml`, `pyproject.toml`, `setup.cfg`, or `setup.py` file
+
+    hint: Use `<dir>[foo-bar]` syntax or `-r <file>` instead
+    "
+    );
+}
+
+#[test]
+fn install_extras_without_source() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    context.temp_dir.child("requirements.txt").touch()?;
+
+    // Configuration can combine a named extra with `--all-extras`.
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        [pip]
+        extra = ["foo"]
+        all-extras = true
+    "#})?;
+
+    uv_snapshot!(context.pip_install()
+        .args(["--offline", "--no-index", "--no-python-downloads"])
+        .args(["-r", "requirements.txt"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Requesting extras requires a `pylock.toml`, `pyproject.toml`, `setup.cfg`, or `setup.py` file
+
+    hint: Use `package[extra]` syntax instead
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
 fn install_extras() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
