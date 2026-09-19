@@ -455,6 +455,13 @@ fn module_path_from_module_name(src_root: &Path, module_name: &str) -> Result<Pa
     Ok(module_relative)
 }
 
+fn relative_entry_path<'a>(entry: &'a walkdir::DirEntry, root: &Path) -> &'a Path {
+    entry
+        .path()
+        .strip_prefix(root)
+        .expect("walkdir starts with root")
+}
+
 /// Error if we're adding a venv to a distribution.
 pub(crate) fn error_on_venv(file_name: &OsStr, path: &Path) -> Result<(), Error> {
     // On 64-bit Unix, `lib64` is a (compatibility) symlink to lib. If we traverse `lib64` before
