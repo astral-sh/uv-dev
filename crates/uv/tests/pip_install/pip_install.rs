@@ -16868,6 +16868,64 @@ fn abi_compatibility_on_freethreaded_python() {
     ");
 }
 
+#[test]
+fn abi3t_compatibility_on_python_315() -> Result<()> {
+    let mut results = String::new();
+    for python in ["3.15+gil", "3.15t"] {
+        let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+        context
+            .python_install()
+            .arg(if python == "3.15+gil" { "3.15" } else { python })
+            .assert()
+            .success();
+        context
+            .venv()
+            .arg("--python")
+            .arg(python)
+            .assert()
+            .success();
+        for abi in ["cp315", "cp315t", "abi3", "abi3t", "abi3.abi3t"] {
+            let (filename, wheel) = generate_wheel(
+                &format!("abi-wheel-{}", abi.replace('.', "-")).parse()?,
+                &"1.0.0".parse()?,
+                &[],
+                &BTreeMap::default(),
+                None,
+                &format!("cp315-{abi}-manylinux_2_17_x86_64"),
+            );
+            fs::write(context.temp_dir.join(&filename), wheel)?;
+            let output = context
+                .pip_install()
+                .arg("--no-index")
+                .arg("--python-platform")
+                .arg("linux")
+                .arg(&filename)
+                .output()?;
+            writeln!(
+                results,
+                "{python} {abi}: {}",
+                output
+                    .status
+                    .code()
+                    .context("installer terminated without an exit code")?
+            )?;
+        }
+    }
+    assert_snapshot!(results, @"
+    3.15+gil cp315: 0
+    3.15+gil cp315t: 2
+    3.15+gil abi3: 0
+    3.15+gil abi3t: 2
+    3.15+gil abi3.abi3t: 0
+    3.15t cp315: 2
+    3.15t cp315t: 0
+    3.15t abi3: 2
+    3.15t abi3t: 0
+    3.15t abi3.abi3t: 0
+    ");
+    Ok(())
+}
+
 fn build_debug_wheel(context: &TestContext) -> PathBuf {
     // Build a wheel with debug ABI tag (cp314d).
     let package_dir = context.temp_dir.child("cpython_debug_package");

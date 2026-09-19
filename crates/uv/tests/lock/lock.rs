@@ -43279,6 +43279,102 @@ fn lock_supported_environment_abi3_wheel() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_sync_abi3t_across_python_variants() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "abi3t-python-variants"
+        [root]
+        [expected]
+        satisfiable = true
+
+        [packages.versioned.versions."1.0.0"]
+        sdist = false
+        wheel_tags = ["cp315-cp315-manylinux_2_17_x86_64", "cp315-cp315t-manylinux_2_17_x86_64"]
+
+        [packages.stable.versions."1.0.0"]
+        sdist = false
+        wheel_tags = ["cp315-abi3-manylinux_2_17_x86_64", "cp315-abi3t-manylinux_2_17_x86_64"]
+
+        [packages.combined.versions."1.0.0"]
+        sdist = false
+        wheel_tags = ["cp315-abi3.abi3t-manylinux_2_17_x86_64"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    context
+        .python_install()
+        .args(["3.15", "3.15t"])
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.15.0rc2,<3.16"
+        dependencies = ["versioned", "stable", "combined"]
+    "#})?;
+    context
+        .lock()
+        .arg("--python")
+        .arg("3.15+gil")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let lock = context.read("uv.lock");
+
+    for python in ["3.15+gil", "3.15t", "3.15+gil"] {
+        let environment = context.temp_dir.child(format!("venv-{python}"));
+        context
+            .sync()
+            .arg("--locked")
+            .arg("--python")
+            .arg(python)
+            .arg("--python-platform")
+            .arg("linux")
+            .arg("--index-url")
+            .arg(server.index_url())
+            .env(EnvVars::UV_PROJECT_ENVIRONMENT, environment.path())
+            .assert()
+            .success();
+        let mut command = context.run();
+        command.arg("--quiet").arg("--no-sync")
+            .arg("--python").arg(python)
+            .env(EnvVars::UV_PROJECT_ENVIRONMENT, environment.path())
+            .arg("python").arg("-c").arg(indoc! {r"
+                from importlib.metadata import distribution
+                for name in ('versioned', 'stable', 'combined'):
+                    wheel = distribution(name).read_text('WHEEL')
+                    print(name, next(line for line in wheel.splitlines() if line.startswith('Tag: ')))
+            "});
+        if python == "3.15t" {
+            uv_snapshot!(context.filters(), command, @"
+            exit_code: 0 (success)
+            ----- stdout -----
+            versioned Tag: cp315-cp315t-manylinux_2_17_x86_64
+            stable Tag: cp315-abi3t-manylinux_2_17_x86_64
+            combined Tag: cp315-abi3.abi3t-manylinux_2_17_x86_64
+            ");
+        } else {
+            insta::allow_duplicates! {
+            uv_snapshot!(context.filters(), command, @"
+            exit_code: 0 (success)
+            ----- stdout -----
+            versioned Tag: cp315-cp315-manylinux_2_17_x86_64
+            stable Tag: cp315-abi3-manylinux_2_17_x86_64
+            combined Tag: cp315-abi3.abi3t-manylinux_2_17_x86_64
+            ");
+            }
+        }
+        assert_eq!(context.read("uv.lock"), lock);
+    }
+    Ok(())
+}
+
 /// If an index is filtered out (e.g., it's the second `default = true` index defined in the file),
 /// we should still consider the lockfile valid if it's referenced by name, regardless of whether
 /// it's defined in a dependency group or the top-level `project.dependencies` field.
