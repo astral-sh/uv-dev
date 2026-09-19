@@ -4765,6 +4765,27 @@ fn run_remote_pep723_script() {
     ");
 }
 
+#[tokio::test]
+async fn run_remote_script_http_error() {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/script.py"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("print('unexpected execution')"))
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.run().arg(format!("{}/script.py?token=private-token&X-Amz-Credential=credential&X-Amz-Signature=signature&X-Amz-Security-Token=token", server.uri())), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: HTTP status client error (404 Not Found) for url (http://[LOCALHOST]/script.py)
+    ");
+}
+
 #[test]
 fn run_remote_pep723_script_with_nonexistent_ssl_cert_file() {
     let context = uv_test::test_context!("3.12");
