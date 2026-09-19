@@ -2,7 +2,8 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
 use fs_err as fs;
-use rustc_hash::FxHashMap;
+use hashbrown::HashMap;
+use rustc_hash::FxBuildHasher;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uv_fs::{LockedFile, LockedFileError, LockedFileMode};
@@ -238,7 +239,17 @@ struct TomlCredentials {
 /// A credential store with a plain text storage backend.
 #[derive(Debug, Default)]
 pub struct TextCredentialStore {
-    credentials: FxHashMap<(Service, Username), Credentials>,
+    credentials: HashMap<(Service, Username), Credentials, FxBuildHasher>,
+}
+
+/// A borrowed lookup key with the same hash as the stored `(Service, Username)` tuple.
+#[derive(Hash)]
+struct CredentialKeyRef<'a>(&'a DisplaySafeUrl, Option<&'a str>);
+
+impl hashbrown::Equivalent<(Service, Username)> for CredentialKeyRef<'_> {
+    fn equivalent(&self, (service, username): &(Service, Username)) -> bool {
+        self.0 == service.url() && self.1 == username.as_deref()
+    }
 }
 
 impl TextCredentialStore {
@@ -274,7 +285,7 @@ impl TextCredentialStore {
         let content = fs::read_to_string(path)?;
         let credentials: TomlCredentials = toml::from_str(&content)?;
 
-        let credentials: FxHashMap<(Service, Username), Credentials> = credentials
+        let credentials = credentials
             .credentials
             .into_iter()
             .map(|credential| {
@@ -344,21 +355,19 @@ impl TextCredentialStore {
         url: &DisplaySafeUrl,
         username: Option<&str>,
     ) -> Result<Option<&Credentials>, LookupError> {
-        let request_realm = Realm::from(url);
-
-        // Perform an exact lookup first
-        // TODO(zanieb): Consider adding `DisplaySafeUrlRef` so we can avoid this clone
+        // Perform an exact lookup first, normalizing empty usernames as `Username` does.
         // TODO(zanieb): We could also return early here if we can't normalize to a `Service`
-        if let Ok(url_service) = Service::try_from(url.clone()) {
-            if let Some(credential) = self
-                .credentials
-                .get(&(url_service, Username::from(username.map(str::to_string))))
-            {
-                return Ok(Some(credential));
-            }
+        if Service::check_scheme(url).is_ok()
+            && let Some(credential) = self.credentials.get(&CredentialKeyRef(
+                url,
+                username.filter(|name| !name.is_empty()),
+            ))
+        {
+            return Ok(Some(credential));
         }
 
         // If that fails, iterate through to find a prefix match
+        let request_realm = Realm::from(url);
         let mut best: Option<(usize, &Service, &Credentials)> = None;
 
         for ((service, stored_username), credential) in &self.credentials {
@@ -416,12 +425,79 @@ impl TextCredentialStore {
 
 #[cfg(test)]
 mod tests {
+    use std::hash::BuildHasher;
     use std::io::Write;
     use std::str::FromStr;
 
     use tempfile::NamedTempFile;
 
     use super::*;
+
+    #[test]
+    fn test_borrowed_credential_key_hash() -> anyhow::Result<()> {
+        for url in [
+            "https://example.com/",
+            "https://example.com:443/api?query=1#fragment",
+            "https://user:password@example.com/api",
+        ] {
+            let url = DisplaySafeUrl::parse(url)?;
+            for username in [None, Some(""), Some("alice")] {
+                let owned = (
+                    Service::try_from(url.clone())?,
+                    Username::from(username.map(str::to_string)),
+                );
+                let borrowed = CredentialKeyRef(&url, username.filter(|name| !name.is_empty()));
+                assert_eq!(
+                    FxBuildHasher.hash_one(&owned),
+                    FxBuildHasher.hash_one(&borrowed)
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_exact_lookup_preserves_anonymous_username_priority() -> anyhow::Result<()> {
+        let mut store = TextCredentialStore::default();
+        let service = Service::from_str("https://example.com/api?one")?;
+        store.insert(
+            service.clone(),
+            Credentials::basic(None, Some("anonymous".to_string())),
+        );
+        store.insert(
+            service.clone(),
+            Credentials::basic(
+                Some("alice".to_string()),
+                Some("alice-password".to_string()),
+            ),
+        );
+        store.insert(
+            Service::from_str("https://example.com/api?two")?,
+            Credentials::basic(None, Some("other-query".to_string())),
+        );
+
+        let url = service.url();
+        for username in [None, Some("")] {
+            let credentials = store
+                .get_credentials(url, username)?
+                .expect("The anonymous exact match takes priority");
+            assert_eq!(credentials.password(), Some("anonymous"));
+        }
+        let credentials = store
+            .get_credentials(url, Some("alice"))?
+            .expect("The named exact match takes priority");
+        assert_eq!(credentials.password(), Some("alice-password"));
+
+        // An empty username is normalized for exact lookups, but remains a requested username
+        // during prefix matching.
+        let child = DisplaySafeUrl::parse("https://example.com/api/child")?;
+        assert!(store.get_credentials(&child, Some(""))?.is_none());
+        assert_eq!(
+            store.get_credentials(&child, None),
+            Err(LookupError::AmbiguousUsername(child.clone()))
+        );
+        Ok(())
+    }
 
     #[test]
     fn test_toml_serialization() {
