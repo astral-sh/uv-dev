@@ -3814,6 +3814,7 @@ fn preview_features() {
     +            MissingExcludeNewerPackageLock,
     +            BatchExport,
     +            MinimumLibcVersion,
+    +            RemotePythonDownloadMetadata,
     +        ],
          },
          python_preference: Managed,
