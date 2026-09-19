@@ -32,14 +32,12 @@ use crate::{
     error_on_venv, find_roots, write_directory_once, write_file_with_directories,
 };
 
-// Files at or below this size are buffered and written with `write_entry_whole`,
-// which was fastest in wheel-writer benchmarks because it can write final ZIP
-// headers without per-chunk async writes. The 16 MiB limit keeps typical source
-// files on that fast path without buffering very large data files wholesale.
+// Buffer files up to this size and write them with `write_entry_whole`.
+// This method writes final ZIP headers without asynchronous writes for each chunk.
+// The 16 MiB limit keeps typical source files on this fast path without buffering large data files.
 const WHOLE_FILE_ZIP_ENTRY_LIMIT: u64 = 16 * 1024 * 1024;
-// Buffer size for the large-file streaming fallback. 128 KiB was enough to cut
-// down read/write loop overhead compared to the 8 KiB default while remaining a
-// small fixed allocation for entries that are too large for `write_entry_whole`.
+// Use a 128 KiB buffer when streaming large files. This size reduces read and write overhead
+// compared with the 8 KiB default and keeps the fixed allocation small.
 const ZIP_STREAM_BUFFER_SIZE: usize = 128 * 1024;
 
 /// Build a wheel from the source tree and place it in the output directory.
@@ -93,7 +91,7 @@ pub fn build_wheel(
     Ok(filename)
 }
 
-/// List the files that would be included in a source distribution and their origin.
+/// List the files in the wheel and the origin of each file.
 pub fn list_wheel(
     source_tree: &Path,
     uv_version: &str,
@@ -174,8 +172,7 @@ fn write_wheel(
                 );
             }
 
-            // We only want to take the module root, but since excludes start at the source tree root,
-            // we strip higher than we iterate.
+            // Strip the source tree root for exclude matching and the module root for wheel paths.
             let match_path = entry
                 .path()
                 .strip_prefix(source_tree)
@@ -207,7 +204,7 @@ fn write_wheel(
     }
     debug!("Visited {files_visited} files for wheel build");
 
-    // Add the license files
+    // Add the license files.
     if pyproject_toml.license_files_wheel().next().is_some() {
         debug!("Adding license files");
         let license_dir = format!(
@@ -289,7 +286,7 @@ pub fn build_editable(
     let mut wheel_writer = ZipDirectoryWriter::new_wheel(temp_file.as_file());
 
     debug!("Adding pth file to {}", wheel_path.user_display());
-    // Check that a module root exists in the directory we're linking from the `.pth` file
+    // Check that the directory linked from the `.pth` file contains a module root.
     let (src_root, _module_relative) = find_roots(
         source_tree,
         &pyproject_toml,
@@ -329,7 +326,7 @@ pub fn build_editable(
     Ok(filename)
 }
 
-/// Add files configured via `tool.uv.build-backend.data` to a wheel.
+/// Add files from `tool.uv.build-backend.data` to a wheel.
 fn write_data_files<'data>(
     source_tree: &Path,
     pyproject_toml: &PyProjectToml,
@@ -385,7 +382,7 @@ fn write_data_files<'data>(
     Ok(())
 }
 
-/// Build a globset matcher for all files that must be excluded from a wheel.
+/// Build a globset matcher for files to exclude from a wheel.
 fn build_wheel_exclude_matcher(settings: &BuildBackendSettings) -> Result<GlobSet, Error> {
     let defaults = if settings.default_excludes {
         DEFAULT_EXCLUDES
@@ -406,7 +403,7 @@ fn build_wheel_exclude_matcher(settings: &BuildBackendSettings) -> Result<GlobSe
     build_exclude_matcher(excludes)
 }
 
-/// Write the dist-info directory to the output directory without building the wheel.
+/// Write the `.dist-info` directory without building a wheel.
 pub fn metadata(
     source_tree: &Path,
     metadata_directory: &Path,
@@ -449,20 +446,20 @@ pub fn metadata(
 ///
 /// <https://packaging.python.org/en/latest/specifications/recording-installed-packages/#the-record-file>
 struct RecordEntry {
-    /// The path to the file relative to the package root.
+    /// The file path relative to the package root.
     ///
-    /// While the spec would allow backslashes, we always use portable paths with forward slashes.
+    /// The specification allows backslashes. However, uv always uses portable paths with forward
+    /// slashes.
     path: String,
-    /// The urlsafe-base64-nopad encoded SHA256 of the files.
+    /// The SHA-256 file hash, encoded as URL-safe Base64 without padding.
     hash: String,
     /// The size of the file in bytes.
     size: u64,
 }
 
-/// Read the input file and write it both to the hasher and the target file.
+/// Read the input file and write its contents to the hasher and target file.
 ///
-/// We're implementing this tee-ing manually since there is no sync `InspectReader` or std tee
-/// function.
+/// Write to both targets manually because there is no synchronous `InspectReader` or standard tee.
 fn write_hashed(
     path: &str,
     reader: &mut dyn Read,
@@ -478,7 +475,7 @@ fn write_hashed(
             Err(err) => return Err(err),
         };
         if read == 0 {
-            // End of file
+            // Stop at the end of the file.
             break;
         }
         hasher.update(&buffer[..read]);
@@ -509,7 +506,7 @@ fn write_record(
         ])?;
     }
 
-    // We can't compute the hash or size for RECORD without modifying it at the same time.
+    // Leave the `RECORD` hash and size empty because computing them would change the file.
     record_writer.write_record(&[
         format!("{dist_info_dir}/RECORD"),
         String::new(),
@@ -519,7 +516,7 @@ fn write_record(
     Ok(())
 }
 
-/// Build a globset matcher for excludes.
+/// Build a globset matcher for excluded files.
 pub(crate) fn build_exclude_matcher<'a>(
     excludes: impl IntoIterator<Item = &'a str>,
 ) -> Result<GlobSet, Error> {
@@ -530,7 +527,7 @@ pub(crate) fn build_exclude_matcher<'a>(
             continue;
         }
 
-        // Excludes are unanchored
+        // Exclude patterns are unanchored.
         let exclude = if let Some(exclude) = exclude.strip_prefix("/") {
             Cow::Borrowed(exclude)
         } else {
@@ -554,14 +551,13 @@ pub(crate) fn build_exclude_matcher<'a>(
     Ok(exclude_matcher)
 }
 
-/// Add the files and directories matching from the source tree matching any of the globs in the
-/// wheel subdirectory.
+/// Add matching files and directories from the source tree to a wheel subdirectory.
 fn wheel_subdir_from_globs(
     src: &Path,
     target: &str,
     globs: impl IntoIterator<Item = impl AsRef<str>>,
     wheel_writer: &mut impl DirectoryWriter,
-    // For error messages
+    // Use this field name in error messages.
     globs_field: &str,
     exclude_matcher: Option<(&GlobSet, &Path)>,
 ) -> Result<(), Error> {
@@ -604,13 +600,13 @@ fn wheel_subdir_from_globs(
         .sort_by_file_name()
         .into_iter()
         .filter_entry(|entry| {
-            // TODO(konsti): This should be prettier.
+            // TODO(konsti): Simplify this path conversion.
             let relative = entry
                 .path()
                 .strip_prefix(src)
                 .expect("walkdir starts with root");
 
-            // Fast path: Don't descend into a directory that can't be included.
+            // Skip directories that cannot contain included files.
             matcher.match_directory(relative) && !is_excluded(entry.path())
         })
     {
@@ -619,14 +615,13 @@ fn wheel_subdir_from_globs(
             err,
         })?;
 
-        // Skip the root path, which is already included as `target` prior to the loop.
-        // (If `entry.path() == src`, then `relative` is empty, and `relative_licenses` is
-        // `target`.)
+        // Skip the root path because `target` already includes it.
+        // If `entry.path() == src`, `relative` is empty and `relative_licenses` is `target`.
         if entry.path() == src {
             continue;
         }
 
-        // TODO(konsti): This should be prettier.
+        // TODO(konsti): Simplify this path conversion.
         let relative = entry
             .path()
             .strip_prefix(src)
@@ -658,7 +653,7 @@ fn wheel_subdir_from_globs(
 
 /// Add `METADATA` and `entry_points.txt` to the dist-info directory.
 ///
-/// Returns the name of the dist-info directory.
+/// Return the name of the `.dist-info` directory.
 fn write_dist_info(
     writer: &mut dyn DirectoryWriter,
     pyproject_toml: &PyProjectToml,
@@ -708,7 +703,7 @@ fn write_dist_info(
         )?;
     }
 
-    // `RECORD` is added on closing.
+    // Add `RECORD` when the writer closes.
 
     Ok(dist_info_dir)
 }
@@ -743,7 +738,7 @@ impl WheelInfo {
 }
 
 impl Display for WheelInfo {
-    /// Returns the `WHEEL` file contents in its key-value format.
+    /// Return the `WHEEL` file contents in key-value format.
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Wheel-Version: {}", self.wheel_version)?;
         writeln!(f, "Generator: {}", self.generator)?;
@@ -755,7 +750,7 @@ impl Display for WheelInfo {
     }
 }
 
-/// ZIP archive (wheel) writer.
+/// A ZIP archive writer for wheels.
 struct ZipDirectoryWriter<W: AsyncWrite + AsyncSeek + Unpin> {
     writer: ZipFileWriter<W>,
     compression: Compression,
@@ -764,9 +759,8 @@ struct ZipDirectoryWriter<W: AsyncWrite + AsyncSeek + Unpin> {
 }
 
 impl<W: AsyncWrite + AsyncSeek + Unpin> ZipDirectoryWriter<W> {
-    // Include the Unix file type bits because `async_zip` writes this mode
-    // directly to the ZIP external attributes. The sync `zip` crate adds
-    // those bits internally when starting file and directory entries.
+    // Include the Unix file type bits. `async_zip` writes this mode directly to ZIP external
+    // attributes. The synchronous `zip` crate adds these bits when it starts each entry.
     const REGULAR_FILE_MODE: u16 = 0o100_644;
     const EXECUTABLE_FILE_MODE: u16 = 0o100_755;
     const DIRECTORY_MODE: u16 = 0o040_755;
@@ -781,7 +775,7 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> ZipDirectoryWriter<W> {
         path: &str,
         executable_bit: bool,
     ) -> Result<EntryWriter<'slf, W>, Error> {
-        // Set file permissions: 644 (rw-r--r--) for regular files, 755 (rwxr-xr-x) for executables
+        // Set permissions to 644 (`rw-r--r--`) for files or 755 (`rwxr-xr-x`) for executables.
         let mode = if executable_bit {
             Self::EXECUTABLE_FILE_MODE
         } else {
@@ -832,7 +826,7 @@ impl<W: Seek + Unpin> AsyncSeek for SyncWriter<W> {
 }
 
 impl<W: Write + Seek + Unpin> ZipDirectoryWriter<SyncWriter<W>> {
-    /// A wheel writer with deflate compression.
+    /// Create a wheel writer that uses deflate compression.
     fn new_wheel(writer: W) -> Self {
         Self {
             writer: ZipFileWriter::new(SyncWriter::new(writer)),
@@ -841,9 +835,9 @@ impl<W: Write + Seek + Unpin> ZipDirectoryWriter<SyncWriter<W>> {
         }
     }
 
-    /// A wheel writer with no (stored) compression.
+    /// Create a wheel writer without compression.
     ///
-    /// Since editables are temporary, we save time be skipping compression and decompression.
+    /// Editable wheels are temporary. Skip compression and decompression to save time.
     #[expect(dead_code)]
     fn new_editable(writer: W) -> Self {
         Self {
@@ -895,7 +889,7 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> Write for EntryWriter<'_, W> {
 impl<W: AsyncWrite + AsyncSeek + Unpin> DirectoryWriter for ZipDirectoryWriter<W> {
     fn write_bytes(&mut self, path: &str, bytes: &[u8]) -> Result<(), Error> {
         trace!("Adding {}", path);
-        // Set appropriate permissions for metadata files (644 = rw-r--r--)
+        // Set metadata file permissions to 644 (`rw-r--r--`).
         let entry = Self::entry(path, self.compression, Self::REGULAR_FILE_MODE);
         block_on(self.writer.write_entry_whole(entry, bytes))?;
 
@@ -912,13 +906,13 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> DirectoryWriter for ZipDirectoryWriter<W
     fn write_file(&mut self, path: &str, file: &Path) -> Result<(), Error> {
         trace!("Adding {} from {}", path, file.user_display());
         let metadata = file.metadata()?;
-        // Preserve the executable bit, especially for scripts
+        // Preserve executable bits, including those on scripts.
         #[cfg(unix)]
         let executable_bit = {
             use std::os::unix::fs::PermissionsExt;
             metadata.permissions().mode() & 0o111 != 0
         };
-        // Windows has no executable bit
+        // Windows does not have an executable bit.
         #[cfg(not(unix))]
         let executable_bit = false;
         let mode = if executable_bit {
@@ -977,7 +971,7 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> DirectoryWriter for ZipDirectoryWriter<W
 }
 
 struct FilesystemWriter {
-    /// The virtualenv or metadata directory that add file paths are relative to.
+    /// The virtual environment or metadata directory that contains added files.
     root: PathBuf,
     /// The entries in the `RECORD` file.
     record: Vec<RecordEntry>,
@@ -998,7 +992,7 @@ impl FilesystemWriter {
     }
 }
 
-/// File system writer.
+/// Write wheel contents to the file system.
 impl DirectoryWriter for FilesystemWriter {
     fn write_bytes(&mut self, path: &str, bytes: &[u8]) -> Result<(), Error> {
         trace!("Adding {}", path);
@@ -1203,7 +1197,7 @@ mod test {
         ");
     }
 
-    /// Snapshot all files from the prepare metadata hook.
+    /// Snapshot all files from the metadata preparation hook.
     #[test]
     fn test_prepare_metadata() {
         let _preview = uv_preview::test::with_features(&[]);
