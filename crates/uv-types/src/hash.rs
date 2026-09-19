@@ -3,7 +3,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use uv_configuration::{Constraints, HashCheckingMode};
 use uv_distribution_types::{
@@ -607,7 +607,12 @@ fn combine_constraint_hashes(
         | VersionId::Directory(..)
         | VersionId::Unknown(..) => {
             // If there are constraint and requirement hashes, take the intersection.
-            digests.retain(|digest| constraint.contains(digest));
+            if digests.len() <= 32 || constraint.len() <= 32 {
+                digests.retain(|digest| constraint.contains(digest));
+            } else {
+                let constraint = constraint.iter().collect::<FxHashSet<_>>();
+                digests.retain(|digest| constraint.contains(digest));
+            }
             if digests.is_empty() {
                 return Err(HashStrategyError::NoIntersection(
                     requirement.to_string(),
@@ -717,7 +722,7 @@ mod tests {
     use uv_pypi_types::HashDigest;
     use uv_redacted::DisplaySafeUrl;
 
-    use super::{HashStrategy, HashVerification};
+    use super::{HashStrategy, HashStrategyError, HashVerification};
 
     fn requirement(url: &str) -> Requirement {
         Requirement {
@@ -735,6 +740,29 @@ mod tests {
             },
             scope: RequirementScope::Global,
             origin: None,
+        }
+    }
+
+    fn pinned_requirement(marker: &str) -> Requirement {
+        Requirement {
+            name: "anyio".parse().unwrap(),
+            extras: Box::default(),
+            groups: Box::default(),
+            marker: marker.parse().unwrap(),
+            source: RequirementSource::Registry {
+                specifier: "==4.0.0".parse().unwrap(),
+                index: None,
+                conflict: None,
+            },
+            origin: None,
+        }
+    }
+
+    fn digest(value: usize) -> String {
+        if value.is_multiple_of(2) {
+            format!("sha256:{value:064x}")
+        } else {
+            format!("sha512:{value:0128x}")
         }
     }
 
@@ -963,5 +991,97 @@ mod tests {
             assert!(locked.with_constraint_hashes(&conflicting).is_err());
         }
         Ok(())
+    }
+
+    #[test]
+    fn from_requirements_intersects_large_hash_lists_in_requirement_order() {
+        let requirement =
+            UnresolvedRequirement::Named(pinned_requirement("python_version >= '3.8'"));
+        let constraint = pinned_requirement("python_version >= '3.8'");
+        let mut requirement_hashes = (0..64).rev().map(digest).collect::<Vec<_>>();
+        requirement_hashes.insert(8, digest(57));
+        requirement_hashes.push(digest(32));
+        let constraint_hashes = (32..96).map(digest).collect::<Vec<_>>();
+        let expected = requirement_hashes
+            .iter()
+            .filter(|digest| constraint_hashes.contains(digest))
+            .map(|digest| HashDigest::from_str(digest).unwrap())
+            .collect::<Vec<_>>();
+
+        let hasher = HashStrategy::from_requirements(
+            [(&requirement, requirement_hashes.as_slice())].into_iter(),
+            [(&constraint, constraint_hashes.as_slice())].into_iter(),
+            None,
+            HashCheckingMode::Require,
+        )
+        .unwrap();
+
+        assert_eq!(
+            hasher
+                .archive_policy_for_package(&"anyio".parse().unwrap(), &"4.0.0".parse().unwrap(),),
+            ArchiveHashPolicy::Any(expected.as_slice())
+        );
+    }
+
+    #[test]
+    fn from_requirements_rejects_large_hash_lists_with_different_algorithms() {
+        let requirement =
+            UnresolvedRequirement::Named(pinned_requirement("python_version >= '3.8'"));
+        let constraint = pinned_requirement("python_version >= '3.8'");
+        let requirement_hashes = (0..64)
+            .map(|value| format!("sha256:{value:064x}"))
+            .collect::<Vec<_>>();
+        let constraint_hashes = (0..64)
+            .map(|value| format!("sha512:{value:064x}"))
+            .collect::<Vec<_>>();
+
+        let error = HashStrategy::from_requirements(
+            [(&requirement, requirement_hashes.as_slice())].into_iter(),
+            [(&constraint, constraint_hashes.as_slice())].into_iter(),
+            None,
+            HashCheckingMode::Require,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            HashStrategyError::NoIntersection(_, HashCheckingMode::Require)
+        ));
+    }
+
+    #[test]
+    fn from_requirements_uses_last_applicable_constraint_for_large_hash_lists() {
+        let requirement =
+            UnresolvedRequirement::Named(pinned_requirement("python_version >= '3.8'"));
+        let first_constraint = pinned_requirement("python_version >= '3.8'");
+        let inactive_constraint = pinned_requirement("extra == 'unused'");
+        let last_constraint = pinned_requirement("python_version >= '3.8'");
+        let requirement_hashes = (0..64).map(digest).collect::<Vec<_>>();
+        let first_hashes = (64..128).map(digest).collect::<Vec<_>>();
+        let inactive_hashes = ["invalid-hash".to_string()];
+        let last_hashes = (32..96).map(digest).collect::<Vec<_>>();
+        let expected = (32..64)
+            .map(digest)
+            .map(|digest| HashDigest::from_str(&digest).unwrap())
+            .collect::<Vec<_>>();
+
+        let hasher = HashStrategy::from_requirements(
+            [(&requirement, requirement_hashes.as_slice())].into_iter(),
+            [
+                (&first_constraint, first_hashes.as_slice()),
+                (&inactive_constraint, inactive_hashes.as_slice()),
+                (&last_constraint, last_hashes.as_slice()),
+            ]
+            .into_iter(),
+            None,
+            HashCheckingMode::Require,
+        )
+        .unwrap();
+
+        assert_eq!(
+            hasher
+                .archive_policy_for_package(&"anyio".parse().unwrap(), &"4.0.0".parse().unwrap(),),
+            ArchiveHashPolicy::Any(expected.as_slice())
+        );
     }
 }
