@@ -3814,6 +3814,7 @@ fn preview_features() {
     +            MissingExcludeNewerPackageLock,
     +            BatchExport,
     +            MinimumLibcVersion,
+    +            IncludeGroupWorkspace,
     +        ],
          },
          python_preference: Managed,
