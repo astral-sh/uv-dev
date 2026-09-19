@@ -761,6 +761,7 @@ fn resolve_lock_check(
 /// The resolved settings to use for a `run` invocation.
 #[derive(Debug, Clone)]
 pub(crate) struct RunSettings {
+    pub(crate) profile: Option<PathBuf>,
     pub(crate) lock_check: LockCheck,
     pub(crate) frozen: Option<FrozenSource>,
     pub(crate) extras: ExtrasSpecification,
@@ -819,6 +820,8 @@ impl RunSettings {
                     all_groups,
                 },
             module: _,
+            profile,
+            profile_output,
             editable,
             no_editable,
             no_editable_package,
@@ -888,6 +891,8 @@ impl RunSettings {
         let malware_settings = MalwareCheckSettings::resolve(filesystem.as_ref(), &environment);
 
         Ok(Self {
+            profile: profile
+                .then(|| profile_output.unwrap_or_else(|| PathBuf::from("profile.html"))),
             lock_check: locked,
             frozen,
             extras: ExtrasSpecification::from_args(
