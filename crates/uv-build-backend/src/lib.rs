@@ -258,23 +258,13 @@ fn check_metadata_directory(
 /// This does not preserve the order of the elements.
 fn prune_redundant_modules(mut names: Vec<String>) -> Vec<String> {
     names.sort();
-    let mut pruned = Vec::with_capacity(names.len());
-    for name in names {
-        if let Some(last) = pruned.last() {
-            if name == *last {
-                continue;
-            }
-            // This is a more specific (narrow) module name than what came before
-            if name
-                .strip_prefix(last)
+    names.dedup_by(|name, previous| {
+        name == previous
+            || name
+                .strip_prefix(previous.as_str())
                 .is_some_and(|suffix| suffix.starts_with('.'))
-            {
-                continue;
-            }
-        }
-        pruned.push(name);
-    }
-    pruned
+    });
+    names
 }
 
 /// Wraps [`prune_redundant_modules`] with a conditional warning when modules are ignored
