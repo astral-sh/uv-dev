@@ -67,6 +67,12 @@ pub enum Error {
     Io(#[from] io::Error),
     #[error(transparent)]
     LockedFile(#[from] LockedFileError),
+    #[error("Tools directory not found at `{}`", path.user_display())]
+    ToolsDirectoryNotFound {
+        path: PathBuf,
+        #[source]
+        source: LockedFileError,
+    },
     #[error("Failed to update `uv-receipt.toml` at {0}")]
     ReceiptWrite(PathBuf, #[source] Box<toml_edit::ser::Error>),
     #[error("Failed to read `uv-receipt.toml` at {0}")]
@@ -97,6 +103,7 @@ impl Error {
             Self::VirtualEnvError(uv_virtualenv::Error::Io(err)) => Some(err),
             Self::ReceiptWrite(_, _)
             | Self::ReceiptRead(_, _)
+            | Self::ToolsDirectoryNotFound { .. }
             | Self::VirtualEnvError(_)
             | Self::EntrypointRead(_)
             | Self::NoExecutableDirectory
@@ -206,13 +213,34 @@ impl InstalledTools {
     }
 
     /// Grab a file lock for the tools directory to prevent concurrent access across processes.
+    ///
+    /// Returns [`Error::ToolsDirectoryNotFound`] if the tools directory does not exist.
     pub async fn lock(&self) -> Result<LockedFile, Error> {
-        Ok(LockedFile::acquire(
+        match LockedFile::acquire(
             self.root.join(".lock"),
             LockedFileMode::Exclusive,
             self.root.user_display(),
         )
-        .await?)
+        .await
+        {
+            Ok(lock) => Ok(lock),
+            // A missing lockfile target does not imply that the tools directory is missing.
+            Err(source)
+                if matches!(
+                    &source,
+                    LockedFileError::CreateTemporary(err)
+                        | LockedFileError::PersistTemporary { source: err, .. }
+                        | LockedFileError::Io(err)
+                        if err.kind() == io::ErrorKind::NotFound
+                ) && matches!(fs::metadata(&self.root), Err(err) if err.kind() == io::ErrorKind::NotFound) =>
+            {
+                Err(Error::ToolsDirectoryNotFound {
+                    path: self.root.clone(),
+                    source,
+                })
+            }
+            Err(err) => Err(err.into()),
+        }
     }
 
     /// Add a receipt for a tool.
