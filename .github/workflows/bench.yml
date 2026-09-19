@@ -110,6 +110,9 @@ jobs:
           run: uv run --only-dev cargo codspeed run
           mode: walltime
           upload-url: ${{ steps.profiles.outputs.upload-url }}
+          # The CodSpeed macro runner already provides perf, so no instrument
+          # cache is written.
+          cache-instruments: false
 
       - name: "Finish profile capture"
         if: ${{ always() && steps.profiles.outcome == 'success' }}
