@@ -1,6 +1,14 @@
-use std::{borrow::Cow, sync::Arc};
+use std::{
+    borrow::Cow,
+    fmt::{Debug, Formatter},
+    sync::Arc,
+};
+
+use rustc_hash::FxHashSet;
 
 use uv_normalize::{DefaultExtras, ExtraName};
+
+const EXTRA_INDEX_THRESHOLD: usize = 8;
 
 /// Manager of all extra decisions and settings history.
 ///
@@ -9,12 +17,16 @@ use uv_normalize::{DefaultExtras, ExtraName};
 pub struct ExtrasSpecification(Arc<ExtrasSpecificationInner>);
 
 /// Manager of all dependency-group decisions and settings history.
-#[derive(Debug, Default, Clone)]
+#[derive(Default, Clone)]
 pub struct ExtrasSpecificationInner {
     /// Extras to include.
     include: IncludeExtras,
+    /// An optional index for multi-extra includes.
+    include_index: Option<FxHashSet<ExtraName>>,
     /// Extras to exclude (always wins over include).
     exclude: Vec<ExtraName>,
+    /// An optional index for multi-extra excludes.
+    exclude_index: Option<FxHashSet<ExtraName>>,
     /// Whether an `--only` flag was passed.
     ///
     /// If true, users of this API should refrain from looking at packages
@@ -67,9 +79,23 @@ impl ExtrasSpecification {
             }
         };
 
+        let include_index = match &include {
+            IncludeExtras::Some(extras) if extras.len() > EXTRA_INDEX_THRESHOLD => {
+                Some(extras.iter().cloned().collect())
+            }
+            IncludeExtras::Some(_) | IncludeExtras::All => None,
+        };
+        let exclude_index = if no_extra.len() > EXTRA_INDEX_THRESHOLD {
+            Some(no_extra.iter().cloned().collect())
+        } else {
+            None
+        };
+
         Self(Arc::new(ExtrasSpecificationInner {
             include,
+            include_index,
             exclude: no_extra,
+            exclude_index,
             only_extras,
             history,
         }))
@@ -112,6 +138,10 @@ impl ExtrasSpecification {
 
     /// Apply defaults to a base [`ExtrasSpecification`].
     pub fn with_defaults(&self, defaults: DefaultExtras) -> ExtrasSpecificationWithDefaults {
+        if self.0.history.defaults == defaults {
+            return ExtrasSpecificationWithDefaults { cur: self.clone() };
+        }
+
         // Explicitly clone the inner history and set the defaults, then remake the result.
         let mut history = self.0.history.clone();
         history.defaults = defaults;
@@ -145,7 +175,18 @@ impl ExtrasSpecificationInner {
     /// Returns `true` if the specification includes the given extra.
     pub fn contains(&self, extra: &ExtraName) -> bool {
         // exclude always trumps include
-        !self.exclude.contains(extra) && self.include.contains(extra)
+        let excluded = self.exclude_index.as_ref().map_or_else(
+            || self.exclude.contains(extra),
+            |index| index.contains(extra),
+        );
+        if excluded {
+            return false;
+        }
+
+        self.include_index.as_ref().map_or_else(
+            || self.include.contains(extra),
+            |index| index.contains(extra),
+        )
     }
 
     /// Returns an iterator over all extras that are included in the specification,
@@ -183,6 +224,22 @@ impl ExtrasSpecificationInner {
     /// Get the raw history for diagnostics
     pub fn history(&self) -> &ExtrasSpecificationHistory {
         &self.history
+    }
+}
+
+#[expect(
+    clippy::missing_fields_in_debug,
+    reason = "lookup indexes are implementation details and must not change diagnostics"
+)]
+impl Debug for ExtrasSpecificationInner {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ExtrasSpecificationInner")
+            .field("include", &self.include)
+            .field("exclude", &self.exclude)
+            .field("only_extras", &self.only_extras)
+            .field("history", &self.history)
+            .finish()
     }
 }
 
@@ -288,5 +345,143 @@ impl IncludeExtras {
 impl Default for IncludeExtras {
     fn default() -> Self {
         Self::Some(Vec::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use uv_normalize::{DefaultExtras, ExtraName};
+
+    use super::ExtrasSpecification;
+
+    fn extra(name: &str) -> ExtraName {
+        ExtraName::from_str(name).expect("valid extra name")
+    }
+
+    #[test]
+    fn indexed_extras_preserve_precedence_and_history() {
+        let extras = ExtrasSpecification::from_args(
+            vec![
+                extra("Feature_A"),
+                extra("feature-a"),
+                extra("feature-b"),
+                extra("include-0"),
+                extra("include-1"),
+                extra("include-2"),
+                extra("include-3"),
+                extra("include-4"),
+                extra("include-5"),
+                extra("include-6"),
+            ],
+            vec![
+                extra("FEATURE_A"),
+                extra("disabled"),
+                extra("exclude-0"),
+                extra("exclude-1"),
+                extra("exclude-2"),
+                extra("exclude-3"),
+                extra("exclude-4"),
+                extra("exclude-5"),
+                extra("exclude-6"),
+            ],
+            false,
+            Vec::new(),
+            false,
+        )
+        .with_defaults(DefaultExtras::List(vec![extra("default-c")]));
+
+        assert!(extras.cur.0.include_index.is_some());
+        assert!(extras.cur.0.exclude_index.is_some());
+        assert!(!extras.contains(&extra("feature-a")));
+        assert!(extras.contains(&extra("FEATURE_B")));
+        assert!(extras.contains(&extra("default-c")));
+        assert!(!extras.contains(&extra("disabled")));
+        assert!(!extras.contains(&extra("missing")));
+        assert_eq!(
+            extras
+                .explicit_names()
+                .map(ExtraName::as_str)
+                .collect::<Vec<_>>(),
+            vec![
+                "feature-a",
+                "feature-a",
+                "feature-b",
+                "include-0",
+                "include-1",
+                "include-2",
+                "include-3",
+                "include-4",
+                "include-5",
+                "include-6",
+                "feature-a",
+                "disabled",
+                "exclude-0",
+                "exclude-1",
+                "exclude-2",
+                "exclude-3",
+                "exclude-4",
+                "exclude-5",
+                "exclude-6",
+            ],
+        );
+        assert_eq!(
+            extras.history().as_flags_pretty(),
+            ["--extra", "--no-extra"],
+        );
+    }
+
+    #[test]
+    fn indexed_extras_preserve_all_and_only_semantics() {
+        let all = ExtrasSpecification::from_args(
+            Vec::new(),
+            vec![extra("disabled-a"), extra("disabled-b")],
+            false,
+            Vec::new(),
+            true,
+        );
+        assert!(all.contains(&extra("other")));
+        assert!(!all.contains(&extra("DISABLED_A")));
+
+        let default_all = ExtrasSpecification::default().with_defaults(DefaultExtras::All);
+        assert!(default_all.contains(&extra("other")));
+
+        let only = ExtrasSpecification::from_args(
+            Vec::new(),
+            Vec::new(),
+            false,
+            vec![extra("only-a"), extra("only-b")],
+            false,
+        )
+        .with_defaults(DefaultExtras::List(vec![extra("default-c")]));
+        assert!(only.contains(&extra("ONLY_A")));
+        assert!(!only.contains(&extra("default-c")));
+
+        let replaced = default_all.with_defaults(DefaultExtras::default());
+        assert!(!replaced.contains(&extra("other")));
+    }
+
+    #[test]
+    fn extra_index_debug_is_hidden() {
+        let extras = ExtrasSpecification::from_args(
+            (0..9)
+                .map(|index| extra(&format!("included-{index}")))
+                .collect(),
+            (0..9)
+                .map(|index| extra(&format!("excluded-{index}")))
+                .collect(),
+            false,
+            Vec::new(),
+            false,
+        );
+        let debug = format!("{extras:?}");
+
+        assert!(debug.contains("include: Some([ExtraName(\"included-0\")"));
+        assert!(debug.contains("ExtraName(\"included-8\")])"));
+        assert!(debug.contains("exclude: [ExtraName(\"excluded-0\")"));
+        assert!(debug.contains("ExtraName(\"excluded-8\")]"));
+        assert!(!debug.contains("include_index"));
+        assert!(!debug.contains("exclude_index"));
     }
 }
