@@ -246,6 +246,18 @@ impl RequiresPython {
         }
     }
 
+    /// Return the exact supported Python versions, including excluded release ranges.
+    pub fn to_exact_marker_tree(&self) -> MarkerTree {
+        self.specifiers
+            .iter()
+            .fold(MarkerTree::TRUE, |marker, specifier| {
+                marker.and(MarkerTree::expression(MarkerExpression::Version {
+                    key: MarkerValueVersion::PythonFullVersion,
+                    specifier: specifier.clone(),
+                }))
+            })
+    }
+
     /// Returns `true` if the `Requires-Python` is compatible with the given version.
     ///
     /// N.B. This operation should primarily be used when evaluating compatibility of Python

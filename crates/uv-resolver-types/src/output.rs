@@ -3,14 +3,15 @@ use indexmap::IndexSet;
 use petgraph::{
     Directed,
     graph::{Graph, NodeIndex},
+    visit::EdgeRef,
 };
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use uv_configuration::{BuildOptions, Constraints, Overrides};
 use uv_distribution_types::{
-    BuiltDist, Dist, Edge, Identifier, Name, Node, Requirement, RequiresPython,
-    ResolutionDiagnostic, ResolvedDist, SourceDist,
+    BuiltDist, Dist, DistributionMetadata, Edge, Identifier, Name, Node, Requirement,
+    RequiresPython, ResolutionDiagnostic, ResolvedDist, SourceDist,
 };
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifier};
@@ -94,6 +95,81 @@ impl Display for ResolutionGraphNode {
 }
 
 impl ResolverOutput {
+    /// Scope this independently resolved graph to a workspace root.
+    pub fn scope_to_root(&mut self, root: &PackageName) {
+        let mut marker = UniversalMarker::for_root(root);
+        marker.and(UniversalMarker::from_combined(
+            self.requires_python.to_exact_marker_tree(),
+        ));
+        for node in self.graph.node_weights_mut() {
+            if let ResolutionGraphNode::Dist(dist) = node {
+                dist.marker.and(marker);
+            }
+        }
+        for edge in self.graph.edge_weights_mut() {
+            edge.and(marker);
+        }
+        if self.fork_markers.is_empty() {
+            self.fork_markers.push(marker);
+        } else {
+            for fork in &mut self.fork_markers {
+                fork.and(marker);
+            }
+        }
+    }
+
+    /// Merge an independently resolved graph, deduplicating identical distributions.
+    pub fn merge(&mut self, other: Self) {
+        let key = |dist: &AnnotatedDist| {
+            (
+                dist.dist.version_id(),
+                dist.index().cloned(),
+                dist.version.clone(),
+                dist.extra.clone(),
+                dist.group.clone(),
+            )
+        };
+        let mut inverse = FxHashMap::default();
+        let mut root = None;
+        for index in self.graph.node_indices() {
+            match &self.graph[index] {
+                ResolutionGraphNode::Root => root = Some(index),
+                ResolutionGraphNode::Dist(dist) => {
+                    inverse.insert(key(dist), index);
+                }
+            }
+        }
+        let root = root.unwrap_or_else(|| self.graph.add_node(ResolutionGraphNode::Root));
+        let mut indices = FxHashMap::default();
+        for index in other.graph.node_indices() {
+            let merged = match &other.graph[index] {
+                ResolutionGraphNode::Root => root,
+                ResolutionGraphNode::Dist(dist) => {
+                    let existing = inverse.entry(key(dist)).or_insert_with(|| {
+                        self.graph.add_node(ResolutionGraphNode::Dist(dist.clone()))
+                    });
+                    if let ResolutionGraphNode::Dist(existing_dist) = &mut self.graph[*existing] {
+                        existing_dist.marker.or(dist.marker);
+                    }
+                    *existing
+                }
+            };
+            indices.insert(index, merged);
+        }
+        for edge in other.graph.edge_references() {
+            let source = indices[&edge.source()];
+            let target = indices[&edge.target()];
+            if let Some(existing) = self.graph.find_edge(source, target) {
+                self.graph[existing].or(*edge.weight());
+            } else {
+                self.graph.add_edge(source, target, *edge.weight());
+            }
+        }
+        self.fork_markers.extend(other.fork_markers);
+        self.diagnostics.extend(other.diagnostics);
+        self.requirements.extend(other.requirements);
+    }
+
     /// Returns an iterator over the distinct packages in the graph.
     fn dists(&self) -> impl Iterator<Item = &AnnotatedDist> {
         self.graph
