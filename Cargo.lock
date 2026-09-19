@@ -6362,6 +6362,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "syn 3.0.3",
  "tagu",
  "tempfile",
  "textwrap",

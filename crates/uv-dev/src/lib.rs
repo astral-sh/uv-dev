@@ -6,6 +6,7 @@ use tracing::instrument;
 
 use uv_settings::EnvironmentOptions;
 
+use crate::check_env_var_annotations::Args as CheckEnvVarAnnotationsArgs;
 use crate::clear_compile::ClearCompileArgs;
 use crate::compile::CompileArgs;
 use crate::generate_all::Args as GenerateAllArgs;
@@ -23,6 +24,7 @@ use crate::render_benchmarks::RenderBenchmarksArgs;
 use crate::validate_zip::ValidateZipArgs;
 use crate::wheel_metadata::WheelMetadataArgs;
 
+mod check_env_var_annotations;
 mod clear_compile;
 mod compile;
 mod generate_all;
@@ -51,6 +53,8 @@ enum Cli {
     Compile(CompileArgs),
     /// Remove all `.pyc` in the tree.
     ClearCompile(ClearCompileArgs),
+    /// Check that new environment variables are marked for the next release.
+    CheckEnvVarAnnotations(CheckEnvVarAnnotationsArgs),
     /// List all packages from a Simple API index.
     ListPackages(ListPackagesArgs),
     /// Run all code and documentation generation steps.
@@ -88,6 +92,7 @@ pub async fn run() -> Result<()> {
         Cli::ValidateZip(args) => validate_zip::validate_zip(args, environment).await?,
         Cli::Compile(args) => compile::compile(args).await?,
         Cli::ClearCompile(args) => clear_compile::clear_compile(&args)?,
+        Cli::CheckEnvVarAnnotations(args) => check_env_var_annotations::main(&args)?,
         Cli::ListPackages(args) => list_packages::list_packages(args, environment).await?,
         Cli::GenerateAll(args) => generate_all::main(&args).await?,
         Cli::GenerateJSONSchema(args) => generate_json_schema::main(&args)?,
