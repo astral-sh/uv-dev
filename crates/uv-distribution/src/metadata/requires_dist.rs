@@ -2,14 +2,14 @@ use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
 use std::slice;
 
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use uv_auth::CredentialsCache;
 use uv_cache::Cache;
 use uv_configuration::NoSources;
 use uv_distribution_types::{IndexLocations, Requirement};
 use uv_normalize::{ExtraName, GroupName, PackageName};
-use uv_pep508::MarkerTree;
+use uv_pep508::{MarkerOperator, MarkerTree};
 use uv_workspace::dependency_groups::FlatDependencyGroups;
 use uv_workspace::pyproject::{Sources, ToolUvSources};
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, ProjectWorkspace, WorkspaceCache};
@@ -367,6 +367,19 @@ impl FlatRequiresDist {
             return Self(requirements);
         }
 
+        // Index the requirements for each extra, preserving their original order.
+        let mut requirements_by_extra = FxHashMap::<_, Vec<usize>>::default();
+        for (index, requirement) in requirements.iter().enumerate() {
+            requirement.marker.visit_extras(|operator, extra| {
+                if operator == MarkerOperator::Equal {
+                    let indices = requirements_by_extra.entry(extra.clone()).or_default();
+                    if indices.last() != Some(&index) {
+                        indices.push(index);
+                    }
+                }
+            });
+        }
+
         // Transitively process all extras that are recursively included.
         let mut flattened = requirements.to_vec();
         let mut seen = FxHashSet::<(ExtraName, MarkerTree)>::default();
@@ -382,7 +395,8 @@ impl FlatRequiresDist {
 
             // Find the optional portion of each requirement for this extra. A requirement can
             // also apply in production, as in `sys_platform == 'win32' or extra == 'base'`.
-            for requirement in &requirements {
+            for index in requirements_by_extra.get(&extra).into_iter().flatten() {
+                let requirement = &requirements[*index];
                 let production_marker = requirement.marker.simplify_not_extras_with(|_| true);
                 let extra_marker = requirement
                     .marker
@@ -862,6 +876,81 @@ mod test {
                 Requirement::from_str("black; extra == 'test' and sys_platform == 'win32'")
                     .unwrap()
                     .into(),
+            ]
+            .into(),
+        );
+
+        let actual = FlatRequiresDist::from_requirements(requirements.into(), &name);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_flat_requires_dist_recursive_markers_and_order() {
+        let name = PackageName::from_str("pkg").unwrap();
+        let requirements = [
+            Requirement::from_str("pkg[mid]; extra == 'root' and sys_platform == 'linux'")
+                .unwrap()
+                .into(),
+            Requirement::from_str("first; extra == 'leaf'")
+                .unwrap()
+                .into(),
+            Requirement::from_str("unrelated; extra == 'other'")
+                .unwrap()
+                .into(),
+            Requirement::from_str("pkg[leaf]; extra == 'mid' and python_version >= '3.12'")
+                .unwrap()
+                .into(),
+            Requirement::from_str("second; extra == 'leaf' and implementation_name == 'cpython'")
+                .unwrap()
+                .into(),
+            Requirement::from_str("first; extra == 'leaf'")
+                .unwrap()
+                .into(),
+        ];
+
+        let expected = FlatRequiresDist(
+            [
+                Requirement::from_str("first; extra == 'leaf'")
+                    .unwrap()
+                    .into(),
+                Requirement::from_str("unrelated; extra == 'other'")
+                    .unwrap()
+                    .into(),
+                Requirement::from_str(
+                    "second; extra == 'leaf' and implementation_name == 'cpython'",
+                )
+                .unwrap()
+                .into(),
+                Requirement::from_str("first; extra == 'leaf'")
+                    .unwrap()
+                    .into(),
+                Requirement::from_str("first; extra == 'mid' and python_version >= '3.12'")
+                    .unwrap()
+                    .into(),
+                Requirement::from_str(
+                    "second; extra == 'mid' and python_version >= '3.12' and implementation_name == 'cpython'",
+                )
+                .unwrap()
+                .into(),
+                Requirement::from_str("first; extra == 'mid' and python_version >= '3.12'")
+                    .unwrap()
+                    .into(),
+                Requirement::from_str(
+                    "first; extra == 'root' and sys_platform == 'linux' and python_version >= '3.12'",
+                )
+                .unwrap()
+                .into(),
+                Requirement::from_str(
+                    "second; extra == 'root' and sys_platform == 'linux' and python_version >= '3.12' and implementation_name == 'cpython'",
+                )
+                .unwrap()
+                .into(),
+                Requirement::from_str(
+                    "first; extra == 'root' and sys_platform == 'linux' and python_version >= '3.12'",
+                )
+                .unwrap()
+                .into(),
             ]
             .into(),
         );
