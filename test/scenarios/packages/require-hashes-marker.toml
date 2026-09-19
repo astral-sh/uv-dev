@@ -1,0 +1,20 @@
+name = "require-hashes-marker"
+description = "A marked requirement and its transitive dependency for hash verification."
+
+[root]
+requires = ["hash-parent"]
+
+[expected]
+satisfiable = true
+
+[packages.hash-parent.versions."1.0.0"]
+requires_python = ">=3.8"
+requires = ["hash-dependency>=1"]
+sdist_backend = "in-tree"
+
+[packages.hash-dependency.versions."1.0.0"]
+requires_python = ">=3.8"
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true
