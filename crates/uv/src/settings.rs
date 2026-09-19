@@ -1998,6 +1998,7 @@ impl SyncSettings {
             no_frozen,
             active,
             no_active,
+            system: _,
             dry_run,
             installer,
             build,

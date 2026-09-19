@@ -3,6 +3,21 @@ use uv_static::EnvVars;
 use uv_test::uv_snapshot;
 
 #[test]
+fn sync_system_suggests_project_environment() {
+    let context = uv_test::test_context_with_versions!(&[]);
+
+    uv_snapshot!(context.filters(), context.command()
+        .args(["--offline", "--no-python-downloads", "--no-config", "sync", "--no-index", "--system"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The `--system` flag is not supported by `uv sync` (set `UV_PROJECT_ENVIRONMENT` to the target environment path instead)
+    ");
+
+    assert!(!context.temp_dir.path().join(".venv").exists());
+    assert!(!context.temp_dir.path().join("uv.lock").exists());
+}
+
+#[test]
 fn cert_is_limited_to_pip() {
     let context = uv_test::test_context_with_versions!(&[]);
 
