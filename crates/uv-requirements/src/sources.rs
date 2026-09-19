@@ -128,6 +128,23 @@ impl RequirementsSource {
 
     /// Parse a [`RequirementsSource`] from a `constraints.txt` file.
     pub fn from_constraints_txt(input: RequirementsInput) -> Result<Self> {
+        let filename = match &input {
+            RequirementsInput::Stdin => None,
+            RequirementsInput::Local(path) => path.file_name().and_then(OsStr::to_str),
+            RequirementsInput::Remote(url) => url.path_segments().and_then(Iterator::last),
+        };
+        if filename.is_some_and(is_pylock_toml) {
+            return Ok(Self::PylockToml(input));
+        } else if filename
+            .and_then(|filename| filename.rsplit_once('.'))
+            .filter(|(stem, _)| !stem.is_empty())
+            .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("toml"))
+        {
+            return Err(anyhow::anyhow!(
+                "The file `{}` appears to be a TOML file, but constraints must be specified in `requirements.txt` format or as a `pylock.toml` file",
+                input.user_display(),
+            ));
+        }
         Self::from_requirements_txt_kind(input, "constraints")
     }
 
