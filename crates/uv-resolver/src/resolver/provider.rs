@@ -66,7 +66,7 @@ pub trait ResolverProvider {
 }
 
 /// The main IO backend for the resolver, which does cached requests network requests using the
-/// [`RegistryClient`] and [`DistributionDatabase`].
+/// [`uv_client::RegistryClient`] and [`DistributionDatabase`].
 pub struct DefaultResolverProvider<'a, Context: BuildContext> {
     /// The [`DistributionDatabase`] used to build source distributions.
     fetcher: DistributionDatabase<'a, Context>,
