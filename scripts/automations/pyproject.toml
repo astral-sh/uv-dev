@@ -1,0 +1,26 @@
+[project]
+name = "uv-automations"
+version = "0.0.1"
+description = "Internal GitHub automation for uv"
+requires-python = ">=3.14"
+dependencies = []
+
+[project.scripts]
+uv-automations = "uv_automations.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13"]
+build-backend = "uv_build"
+
+[tool.uv]
+no-build = true
+no-binary-package = ["uv-automations"]
+build-constraint-dependencies = ["uv-build==0.12.3"]
+exclude-newer = "P7D"
+
+[tool.ruff]
+extend = "../../ruff.toml"
+target-version = "py314"
+
+[tool.ty.rules]
+all = "error"
