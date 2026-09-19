@@ -3,9 +3,7 @@ use tracing::debug;
 
 use uv_client::{MetadataFormat, RegistryClient, VersionFiles};
 use uv_distribution_filename::DistFilename;
-use uv_distribution_types::{
-    File, IndexCapabilities, IndexLocations, IndexMetadataRef, IndexUrl, RequiresPython,
-};
+use uv_distribution_types::{File, IndexCapabilities, IndexMetadataRef, IndexUrl, RequiresPython};
 use uv_normalize::PackageName;
 use uv_platform_tags::Tags;
 use uv_resolver::{ExcludeNewer, Prerelease, PrereleaseMode};
@@ -21,7 +19,6 @@ pub(crate) struct LatestClient<'env> {
     pub(crate) capabilities: &'env IndexCapabilities,
     pub(crate) prerelease: &'env Prerelease,
     pub(crate) exclude_newer: &'env ExcludeNewer,
-    pub(crate) index_locations: &'env IndexLocations,
     pub(crate) tags: Option<&'env Tags>,
     pub(crate) requires_python: Option<&'env RequiresPython>,
 }
@@ -32,8 +29,10 @@ impl LatestClient<'_> {
         package: &PackageName,
         index: &IndexUrl,
     ) -> Option<jiff::Timestamp> {
-        self.exclude_newer
-            .exclude_newer_package_for_index(package, self.index_locations.exclude_newer_for(index))
+        self.exclude_newer.exclude_newer_package_for_index(
+            package,
+            self.client.index_lookup().exclude_newer_for(index),
+        )
     }
 
     fn consider_candidate(
