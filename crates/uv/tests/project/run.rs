@@ -4335,8 +4335,7 @@ fn run_gui_script_explicit_windows() -> Result<()> {
 }
 
 #[test]
-#[cfg(windows)]
-fn run_gui_script_explicit_stdin_windows() -> Result<()> {
+fn run_gui_script_explicit_stdin() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let test_script = context.temp_dir.child("script");
@@ -4704,39 +4703,6 @@ fn run_active_script_environment_non_virtualenv() -> Result<()> {
     active_environment
         .child("important.txt")
         .assert(predicate::path::missing());
-
-    Ok(())
-}
-
-#[test]
-#[cfg(not(windows))]
-fn run_gui_script_explicit_stdin_unix() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let test_script = context.temp_dir.child("script");
-    test_script.write_str(indoc! { r#"
-        # /// script
-        # requires-python = ">=3.11"
-        # dependencies = [
-        #   "iniconfig",
-        # ]
-        # ///
-        import iniconfig
-        print("Hello, world!")
-       "#
-    })?;
-
-    uv_snapshot!(context.filters(), context.run().arg("--gui-script").arg("-").stdin(std::fs::File::open(test_script)?), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Hello, world!
-
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
-    ");
 
     Ok(())
 }
