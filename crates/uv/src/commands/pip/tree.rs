@@ -364,7 +364,7 @@ impl<'env> DisplayDependencyGraph<'env> {
     fn visit(
         &self,
         cursor: &Cursor,
-        visited: &mut FxHashMap<&'env PackageName, Vec<PackageName>>,
+        visited: &mut FxHashMap<&'env PackageName, bool>,
         path: &mut Vec<&'env PackageName>,
     ) -> Vec<String> {
         // Short-circuit if the current path is longer than the provided depth.
@@ -410,9 +410,9 @@ impl<'env> DisplayDependencyGraph<'env> {
         // Skip the traversal if:
         // 1. The package is in the current traversal path (i.e., a dependency cycle).
         // 2. The package has been visited and de-duplication is enabled (default).
-        if let Some(requirements) = visited.get(package_name) {
+        if let Some(&is_leaf) = visited.get(package_name) {
             if !self.no_dedupe || path.contains(&package_name) {
-                return if requirements.is_empty() {
+                return if is_leaf {
                     vec![line]
                 } else {
                     vec![format!("{} (*)", line)]
@@ -451,16 +451,7 @@ impl<'env> DisplayDependencyGraph<'env> {
         let mut lines = vec![line];
 
         // Keep track of the dependency path to avoid cycles.
-        visited.insert(
-            package_name,
-            dependencies
-                .iter()
-                .map(|node| {
-                    let metadata = &self.graph[node.node()];
-                    metadata.name.clone()
-                })
-                .collect(),
-        );
+        visited.insert(package_name, dependencies.is_empty());
         path.push(package_name);
 
         for (index, dep) in dependencies.iter().enumerate() {
