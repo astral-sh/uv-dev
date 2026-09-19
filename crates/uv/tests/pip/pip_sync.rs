@@ -1269,7 +1269,7 @@ fn mismatched_version() -> Result<()> {
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
         .arg("--strict"), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]

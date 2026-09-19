@@ -1399,6 +1399,9 @@ pub(crate) enum Error {
     #[error(transparent)]
     Prepare(#[from] uv_installer::PrepareError),
 
+    #[error(transparent)]
+    Install(#[from] uv_installer::InstallError),
+
     #[error("{header}")]
     NoSolution {
         header: NoSolutionHeader,
@@ -1450,6 +1453,7 @@ impl Error {
                 source,
             },
             error @ (Self::Prepare(_)
+            | Self::Install(_)
             | Self::NoSolution { .. }
             | Self::Resolve(_)
             | Self::Uninstall(_)
@@ -1475,6 +1479,7 @@ impl Error {
                 Self::RequirementsWithContext { context, source }
             }
             error @ (Self::Prepare(_)
+            | Self::Install(_)
             | Self::Resolve(_)
             | Self::Uninstall(_)
             | Self::Hash(_)
@@ -1489,6 +1494,7 @@ impl Error {
     pub(crate) fn is_user_failure(&self) -> bool {
         match self {
             Self::Prepare(error) => error.is_user_failure(),
+            Self::Install(error) => error.is_user_failure(),
             Self::NoSolution { .. } => true,
             Self::Resolve(error) => error.is_user_failure(),
             Self::Hash(_) | Self::OutdatedEnvironment(_) => true,
@@ -1543,6 +1549,7 @@ impl uv_errors::Hinted for Error {
                 uv_errors::Hints::none()
             }
             Self::Prepare(_)
+            | Self::Install(_)
             | Self::Uninstall(_)
             | Self::Hash(_)
             | Self::Io(_)
