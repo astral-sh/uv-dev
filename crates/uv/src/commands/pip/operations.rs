@@ -14,8 +14,8 @@ use tracing::debug;
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClient};
 use uv_configuration::{
-    BuildOptions, Concurrency, Constraints, DependencyGroups, DryRun, ExcludeDependency, Excludes,
-    ExtrasSpecification, Override, Overrides, Reinstall, Upgrade,
+    BuildOptions, ConcurrencyState, Constraints, DependencyGroups, DryRun, ExcludeDependency,
+    Excludes, ExtrasSpecification, Override, Overrides, Reinstall, Upgrade,
 };
 use uv_dispatch::BuildDispatch;
 use uv_distribution::{DistributionDatabase, SourcedDependencyGroups};
@@ -127,7 +127,7 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
     flat_index: &FlatIndex,
     index: &InMemoryIndex,
     build_dispatch: &BuildDispatch<'_>,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     options: Options,
     logger: Box<dyn ResolveLogger>,
     printer: Printer,
@@ -158,7 +158,7 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
                     DistributionDatabase::new(
                         client,
                         build_dispatch,
-                        concurrency.downloads_semaphore.clone(),
+                        concurrency.downloads_semaphore(),
                     ),
                 )
                 .with_reporter(Arc::new(ResolverReporter::from(printer)))
@@ -176,7 +176,7 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
                 DistributionDatabase::new(
                     client,
                     build_dispatch,
-                    concurrency.downloads_semaphore.clone(),
+                    concurrency.downloads_semaphore(),
                 ),
             )
             .with_reporter(Arc::new(ResolverReporter::from(printer)))
@@ -305,7 +305,7 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
                     DistributionDatabase::new(
                         client,
                         build_dispatch,
-                        concurrency.downloads_semaphore.clone(),
+                        concurrency.downloads_semaphore(),
                     ),
                 )
                 .with_reporter(Arc::new(ResolverReporter::from(printer)))
@@ -348,7 +348,7 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
                 DistributionDatabase::new(
                     client,
                     build_dispatch,
-                    concurrency.downloads_semaphore.clone(),
+                    concurrency.downloads_semaphore(),
                 ),
             )
             .with_reporter(Arc::new(ResolverReporter::from(printer)))
@@ -399,11 +399,7 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
             &hasher,
             build_dispatch,
             installed_packages,
-            DistributionDatabase::new(
-                client,
-                build_dispatch,
-                concurrency.downloads_semaphore.clone(),
-            ),
+            DistributionDatabase::new(client, build_dispatch, concurrency.downloads_semaphore()),
         )?
         .with_reporter(Arc::new(reporter));
 
@@ -697,7 +693,7 @@ pub(crate) async fn install(
     tags: &Tags,
     client: &RegistryClient,
     in_flight: &InFlight,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     build_dispatch: &BuildDispatch<'_>,
     cache: &Cache,
     venv: &PythonEnvironment,
@@ -760,7 +756,7 @@ impl InstallationPlan {
         tags: &Tags,
         client: &RegistryClient,
         in_flight: &InFlight,
-        concurrency: &Concurrency,
+        concurrency: &ConcurrencyState,
         build_dispatch: &BuildDispatch<'_>,
         cache: &Cache,
         venv: &PythonEnvironment,
@@ -1047,7 +1043,7 @@ async fn execute_plan(
     tags: &Tags,
     client: &RegistryClient,
     in_flight: &InFlight,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     build_dispatch: &BuildDispatch<'_>,
     cache: &Cache,
     venv: &PythonEnvironment,
@@ -1074,11 +1070,7 @@ async fn execute_plan(
             tags,
             hasher,
             build_options,
-            DistributionDatabase::new(
-                client,
-                build_dispatch,
-                concurrency.downloads_semaphore.clone(),
-            ),
+            DistributionDatabase::new(client, build_dispatch, concurrency.downloads_semaphore()),
         )
         .with_reporter(Arc::new(
             PrepareReporter::from(printer).with_length(remote.len() as u64),

@@ -12,7 +12,7 @@ use tracing::debug;
 use uv_cache::{Cache, Refresh};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
-    ActiveEnvironment, Concurrency, Constraints, DependencyGroupsWithDefaults, DryRun,
+    ActiveEnvironment, ConcurrencyState, Constraints, DependencyGroupsWithDefaults, DryRun,
     ExcludeDependency, ExtrasSpecification, Override, PackageOverride, Reinstall, Upgrade,
 };
 use uv_dispatch::BuildDispatch;
@@ -100,7 +100,7 @@ pub(crate) async fn lock(
     script: Option<ScriptPath>,
     python_preference: PythonPreference,
     python_downloads: PythonDownloads,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
@@ -298,7 +298,7 @@ pub(crate) struct LockOperation<'env> {
     client_builder: &'env BaseClientBuilder<'env>,
     state: &'env UniversalState,
     logger: Box<dyn ResolveLogger>,
-    concurrency: &'env Concurrency,
+    concurrency: &'env ConcurrencyState,
     cache: &'env Cache,
     workspace_cache: &'env WorkspaceCache,
     printer: Printer,
@@ -313,7 +313,7 @@ impl<'env> LockOperation<'env> {
         client_builder: &'env BaseClientBuilder<'env>,
         state: &'env UniversalState,
         logger: Box<dyn ResolveLogger>,
-        concurrency: &'env Concurrency,
+        concurrency: &'env ConcurrencyState,
         cache: &'env Cache,
         workspace_cache: &'env WorkspaceCache,
         printer: Printer,
@@ -494,7 +494,7 @@ async fn do_lock(
     client_builder: &BaseClientBuilder<'_>,
     state: &UniversalState,
     logger: Box<dyn ResolveLogger>,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     printer: Printer,
@@ -924,7 +924,7 @@ async fn do_lock(
         let database = DistributionDatabase::new(
             &client,
             &validation_build_dispatch,
-            concurrency.downloads_semaphore.clone(),
+            concurrency.downloads_semaphore(),
         );
         match Box::pin(ValidatedLock::validate(
             existing_lock,
@@ -999,7 +999,7 @@ async fn do_lock(
             let database = DistributionDatabase::new(
                 &client,
                 &build_dispatch,
-                concurrency.downloads_semaphore.clone(),
+                concurrency.downloads_semaphore(),
             );
 
             // Determine whether we can reuse the existing package versions.

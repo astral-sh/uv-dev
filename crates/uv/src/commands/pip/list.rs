@@ -14,7 +14,7 @@ use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
 use uv_cli::ListFormat;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
-use uv_configuration::{Concurrency, IndexStrategy, KeyringProviderType};
+use uv_configuration::{ConcurrencyState, IndexStrategy, KeyringProviderType};
 use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{
     DependencyMetadata, Diagnostic, IndexCapabilities, IndexLocations, Name, RequiresPython,
@@ -44,7 +44,7 @@ pub(crate) async fn pip_list(
     index_strategy: IndexStrategy,
     keyring_provider: KeyringProviderType,
     client_builder: &BaseClientBuilder<'_>,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     strict: bool,
     exclude_newer: ExcludeNewer,
     dependency_metadata: &DependencyMetadata,
@@ -115,7 +115,7 @@ pub(crate) async fn pip_list(
         .markers(environment.interpreter().markers())
         .platform(environment.interpreter().platform())
         .build()?;
-        let download_concurrency = concurrency.downloads_semaphore.clone();
+        let download_concurrency = concurrency.downloads_semaphore();
 
         // Determine the platform tags.
         let interpreter = environment.interpreter();
@@ -144,7 +144,7 @@ pub(crate) async fn pip_list(
                     .await?;
                 Ok::<(&PackageName, Option<DistFilename>), uv_client::Error>((dist.name(), latest))
             })
-            .buffer_unordered(concurrency.downloads);
+            .buffer_unordered(concurrency.limits().downloads);
 
         let mut map = FxHashMap::default();
         while let Some((package, version)) = fetches.next().await.transpose()? {

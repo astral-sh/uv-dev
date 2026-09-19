@@ -14,7 +14,7 @@ use uv_cache::{Cache, CacheBucket};
 use uv_cache_key::{cache_digest, cache_name};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
-    ActiveEnvironment, Concurrency, Constraints, DependencyGroupsWithDefaults, DryRun,
+    ActiveEnvironment, ConcurrencyState, Constraints, DependencyGroupsWithDefaults, DryRun,
     ExtrasSpecification, GitLfsSetting, HashCheckingMode, Override, PackageOverride, Reinstall,
     TargetTriple, Upgrade,
 };
@@ -2288,7 +2288,7 @@ pub(crate) async fn resolve_names(
     build_constraints: &Constraints,
     client_builder: &BaseClientBuilder<'_>,
     state: &SharedState,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     printer: Printer,
@@ -2430,11 +2430,7 @@ pub(crate) async fn resolve_names(
         NamedRequirementsResolver::new(
             &hasher,
             state.index(),
-            DistributionDatabase::new(
-                &client,
-                &build_dispatch,
-                concurrency.downloads_semaphore.clone(),
-            ),
+            DistributionDatabase::new(&client, &build_dispatch, concurrency.downloads_semaphore()),
         )
         .with_reporter(Arc::new(ResolverReporter::from(printer)))
         .resolve(unnamed.into_iter())
@@ -2501,7 +2497,7 @@ pub(crate) async fn resolve_environment(
     client_builder: &BaseClientBuilder<'_>,
     state: &PlatformState,
     logger: Box<dyn ResolveLogger>,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     printer: Printer,
@@ -2742,7 +2738,7 @@ pub(crate) async fn sync_environment(
     state: &PlatformState,
     logger: Box<dyn InstallLogger>,
     installer_metadata: bool,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     cache: &Cache,
     printer: Printer,
     preview: Preview,
@@ -2898,7 +2894,7 @@ pub(crate) async fn update_environment(
     resolve: Box<dyn ResolveLogger>,
     install: Box<dyn InstallLogger>,
     installer_metadata: bool,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     dry_run: DryRun,
