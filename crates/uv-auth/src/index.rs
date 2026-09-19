@@ -124,7 +124,10 @@ impl Indexes {
     }
 
     fn find_prefix_index(&self, url: &Url) -> Option<&Index> {
-        self.0.iter().find(|&index| index.is_prefix_for(url))
+        self.0
+            .iter()
+            .filter(|index| index.is_prefix_for(url))
+            .max_by_key(|index| index.root_url.path().len())
     }
 }
 
@@ -166,5 +169,25 @@ mod tests {
                 "Should not match URL with partial path segment: {url}"
             );
         }
+    }
+
+    #[test]
+    fn test_most_specific_index_wins() {
+        let indexes = Indexes::from_indexes([
+            index("https://example.com/", AuthPolicy::Never),
+            index("https://example.com/team-a/", AuthPolicy::Always),
+        ]);
+        let request = Url::parse("https://example.com/team-a/simple/package")
+            .expect("request URL should be valid");
+
+        assert_eq!(
+            indexes
+                .index_for(&request)
+                .expect("request should match an index")
+                .root_url
+                .as_str(),
+            "https://example.com/team-a/"
+        );
+        assert_eq!(indexes.auth_policy_for(&request), AuthPolicy::Always);
     }
 }
