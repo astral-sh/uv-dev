@@ -20,13 +20,13 @@ use crate::{InMemoryIndex, MetadataResponse, ResolveError, ResolverEnvironment, 
 
 /// The resolution from a single fork including the virtual packages and the edges between them.
 #[derive(Debug)]
-pub(crate) struct Resolution<'index> {
+pub(crate) struct Resolution {
     pub(crate) nodes: FxHashMap<ResolutionPackage, Version>,
     /// The directed connections between the nodes, where the marker is the node weight. We don't
     /// store the requirement itself, but it can be retrieved from the package metadata.
     pub(crate) edges: Vec<ResolutionDependencyEdge>,
     /// Map each package name, version tuple from `packages` to a distribution.
-    pub(crate) pins: FilePins<'index>,
+    pub(crate) pins: FilePins,
     /// The environment setting this resolution was found under.
     pub(crate) env: ResolverEnvironment,
 }
@@ -65,7 +65,7 @@ impl SelectedDistribution {
     fn new(
         package: &ResolutionPackage,
         version: Version,
-        pins: &FilePins<'_>,
+        pins: &FilePins,
         index: &InMemoryIndex,
         git: &GitResolver,
     ) -> Result<Self, ResolveError> {
@@ -138,7 +138,7 @@ impl SelectedDistribution {
     }
 }
 
-impl Resolution<'_> {
+impl Resolution {
     /// Recover selected artifacts and metadata once before constructing the merged output graph.
     pub(crate) fn finalize(
         self,

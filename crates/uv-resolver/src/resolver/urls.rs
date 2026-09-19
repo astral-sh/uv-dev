@@ -153,6 +153,21 @@ impl Urls {
         self.overrides.contains_key(name) || self.get_regular(name).is_some()
     }
 
+    /// Whether any manifest-wide URL override exists for this package.
+    pub(crate) fn has_overrides(&self, name: &PackageName) -> bool {
+        self.overrides.contains_key(name)
+    }
+
+    /// Whether URL overrides impose this source throughout the entire universal fork.
+    pub(crate) fn is_fixed_override(
+        &self,
+        name: &PackageName,
+        env: &ResolverEnvironment,
+        url: &VerbatimParsedUrl,
+    ) -> bool {
+        self.overrides.is_fixed(name, env, url)
+    }
+
     /// Return the allowed [`VerbatimUrl`]s for given package from regular requirements and
     /// constraints (but not overrides), if any.
     ///

@@ -28918,6 +28918,729 @@ fn lock_fork_strategy_with_python_environments() -> Result<()> {
     Ok(())
 }
 
+/// A dependency chain delays a later fork's constraint until an earlier fork can finish selecting
+/// the newest shared dependency. The `fewest` strategy should revisit the earlier decision when
+/// both forks can use the older version.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_fewest_coordinated_backtracking() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("fork/coordinated-backtracking.toml");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.11,<3.13"
+        dependencies = [
+            "flexible ; python_version < '3.12'",
+            "delayed ; python_version >= '3.12'",
+        ]
+
+        [tool.uv]
+        fork-strategy = "fewest"
+        environments = [
+            "python_version == '3.11'",
+            "python_version == '3.12'",
+        ]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 7 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    constrained==1.0.0 ; python_full_version >= '3.12'
+    delay-one==1.0.0 ; python_full_version >= '3.12'
+    delay-two==1.0.0 ; python_full_version >= '3.12'
+    delayed==1.0.0 ; python_full_version >= '3.12'
+    flexible==1.0.0 ; python_full_version < '3.12'
+    shared==1.0.0
+    ");
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--locked")
+        .arg("--offline")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 7 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Sharing a dependency can require rejecting an earlier parent version, whose dependency range
+/// excludes the common version. Retrying only the shared package's current range is insufficient.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_fewest_coordinated_backtracking_parent() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("fork/coordinated-backtracking.toml");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.11,<3.13"
+        dependencies = [
+            "switchable ; python_version < '3.12'",
+            "delayed ; python_version >= '3.12'",
+        ]
+
+        [tool.uv]
+        fork-strategy = "fewest"
+        environments = [
+            "python_version == '3.11'",
+            "python_version == '3.12'",
+        ]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 7 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    constrained==1.0.0 ; python_full_version >= '3.12'
+    delay-one==1.0.0 ; python_full_version >= '3.12'
+    delay-two==1.0.0 ; python_full_version >= '3.12'
+    delayed==1.0.0 ; python_full_version >= '3.12'
+    shared==1.0.0
+    switchable==1.0.0 ; python_full_version < '3.12'
+    ");
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--locked")
+        .arg("--offline")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 7 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// A common version allowed by the immediate range can still have incompatible transitive
+/// dependencies. Failed coordination must retain the valid resolutions on both sides.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_fewest_coordinated_backtracking_transitive_conflict() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("fork/coordinated-backtracking-transitive-conflict.toml");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.11,<3.13"
+        dependencies = [
+            "flexible ; python_version < '3.12'",
+            "leaf==2.0.0 ; python_version < '3.12'",
+            "delayed ; python_version >= '3.12'",
+        ]
+
+        [tool.uv]
+        fork-strategy = "fewest"
+        environments = [
+            "python_version == '3.11'",
+            "python_version == '3.12'",
+        ]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 10 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    constrained==1.0.0 ; python_full_version >= '3.12'
+    delay-one==1.0.0 ; python_full_version >= '3.12'
+    delay-two==1.0.0 ; python_full_version >= '3.12'
+    delayed==1.0.0 ; python_full_version >= '3.12'
+    flexible==1.0.0 ; python_full_version < '3.12'
+    leaf==1.0.0 ; python_full_version >= '3.12'
+    leaf==2.0.0 ; python_full_version < '3.12'
+    shared==1.0.0 ; python_full_version >= '3.12'
+    shared==2.0.0 ; python_full_version < '3.12'
+    ");
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--locked")
+        .arg("--offline")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 10 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// A parent downgrade can change the source of a package whose registry metadata is already
+/// cached in the completed fork. That trial must not reuse the registry dependencies for a
+/// different wheel with the same name and version.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_fewest_coordinated_backtracking_source_change() -> Result<()> {
+    let direct_scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "coordinated-backtracking-direct-source"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.cached.versions."1.0.0"]
+        requires_python = ">=3.11"
+        requires = ["url-only"]
+    "#})?;
+    let direct_server = PackseServer::from_scenario(&direct_scenario);
+    let cached_url = direct_server.file_url("cached-1.0.0-py3-none-any.whl");
+    let scenario = toml::from_str::<Scenario>(&formatdoc! {r#"
+        name = "coordinated-backtracking-source-change"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.switchable.versions."1.0.0"]
+        requires_python = ">=3.11"
+        requires = ["shared==1.0.0", "cached @ {cached_url}"]
+
+        [packages.switchable.versions."2.0.0"]
+        requires_python = ">=3.11"
+        requires = ["shared==2.0.0", "cached==1.0.0"]
+
+        [packages.cached.versions."1.0.0"]
+        requires_python = ">=3.11"
+        requires = ["registry-only"]
+
+        [packages.registry-only.versions."1.0.0"]
+        requires_python = ">=3.11"
+
+        [packages.url-only.versions."1.0.0"]
+        requires_python = ">=3.11"
+
+        [packages.delayed.versions."1.0.0"]
+        requires_python = ">=3.11"
+        requires = ["delay-one"]
+
+        [packages.delay-one.versions."1.0.0"]
+        requires_python = ">=3.11"
+        requires = ["delay-two"]
+
+        [packages.delay-two.versions."1.0.0"]
+        requires_python = ">=3.11"
+        requires = ["constrained"]
+
+        [packages.constrained.versions."1.0.0"]
+        requires_python = ">=3.11"
+        requires = ["shared==1.0.0"]
+
+        [packages.shared.versions."1.0.0"]
+        requires_python = ">=3.11"
+
+        [packages.shared.versions."2.0.0"]
+        requires_python = ">=3.11"
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let pyproject = formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.11,<3.13"
+        dependencies = [
+            "switchable ; python_version < '3.12'",
+            "delayed ; python_version >= '3.12'",
+        ]
+
+        [tool.uv]
+        fork-strategy = "fewest"
+        environments = [
+            "python_version == '3.11'",
+            "python_version == '3.12'",
+        ]
+        constraint-dependencies = ["cached @ {cached_url} ; python_version >= '3.12'"]
+    "#};
+
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&pyproject)?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 10 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cached==1.0.0 ; python_full_version < '3.12'
+    constrained==1.0.0 ; python_full_version >= '3.12'
+    delay-one==1.0.0 ; python_full_version >= '3.12'
+    delay-two==1.0.0 ; python_full_version >= '3.12'
+    delayed==1.0.0 ; python_full_version >= '3.12'
+    registry-only==1.0.0 ; python_full_version < '3.12'
+    shared==1.0.0 ; python_full_version >= '3.12'
+    shared==2.0.0 ; python_full_version < '3.12'
+    switchable==2.0.0 ; python_full_version < '3.12'
+    ");
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--locked")
+        .arg("--offline")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 10 packages in [TIME]
+    ");
+
+    // A clean resolution can use the older parent and must read the direct wheel's metadata.
+    let control = uv_test::test_context!("3.12");
+    control
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&pyproject.replace("switchable ;", "switchable==1.0.0 ;"))?;
+
+    uv_snapshot!(control.filters(), control.lock().arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 9 packages in [TIME]
+    ");
+
+    uv_snapshot!(control.filters(), control.export()
+        .args(["--frozen", "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cached @ http://[LOCALHOST]/files/cached-1.0.0-py3-none-any.whl ; python_full_version < '3.12'
+    constrained==1.0.0 ; python_full_version >= '3.12'
+    delay-one==1.0.0 ; python_full_version >= '3.12'
+    delay-two==1.0.0 ; python_full_version >= '3.12'
+    delayed==1.0.0 ; python_full_version >= '3.12'
+    shared==1.0.0
+    switchable==1.0.0 ; python_full_version < '3.12'
+    url-only==1.0.0 ; python_full_version < '3.12'
+    ");
+
+    Ok(())
+}
+
+/// A metadata request that is needed only by a speculative parent downgrade can fail without
+/// invalidating the completed sibling resolutions.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_fewest_coordinated_backtracking_metadata_error() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("fork/coordinated-backtracking.toml");
+    let error_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/unavailable/"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(1..)
+        .mount(&error_server)
+        .await;
+    let error_index = format!("{}/simple/", error_server.uri());
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.11,<3.13"
+        dependencies = [
+            "fallible-switchable ; python_version < '3.12'",
+            "delayed ; python_version >= '3.12'",
+        ]
+
+        [tool.uv]
+        fork-strategy = "fewest"
+        environments = [
+            "python_version == '3.11'",
+            "python_version == '3.12'",
+        ]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .arg("--extra-index-url").arg(&error_index)
+        .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    ");
+    error_server.verify().await;
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    constrained==1.0.0 ; python_full_version >= '3.12'
+    delay-one==1.0.0 ; python_full_version >= '3.12'
+    delay-two==1.0.0 ; python_full_version >= '3.12'
+    delayed==1.0.0 ; python_full_version >= '3.12'
+    fallible-switchable==2.0.0 ; python_full_version < '3.12'
+    shared==1.0.0 ; python_full_version >= '3.12'
+    shared==2.0.0 ; python_full_version < '3.12'
+    ");
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--locked")
+        .arg("--offline")
+        .arg("--index-url").arg(server.index_url())
+        .arg("--extra-index-url").arg(&error_index), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// A rejected trial's implicit-index miss must not mark a package unavailable to a real sibling
+/// that later requests the same name from an explicit index.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_fewest_coordinated_backtracking_index_miss() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("fork/coordinated-backtracking-index-miss.toml");
+    let alternate_scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "coordinated-backtracking-explicit-index"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.q.versions."1.0.0"]
+        requires_python = ">=3.11"
+    "#})?;
+    let alternate = PackseServer::from_scenario(&alternate_scenario);
+    let observer = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/implicit/q/"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1..)
+        .mount(&observer)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/explicit/q/"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("Location", format!("{}q/", alternate.index_url())),
+        )
+        .expect(1..)
+        .mount(&observer)
+        .await;
+    let implicit_index = format!("{}/implicit/", observer.uri());
+    let explicit_index = format!("{}/explicit/", observer.uri());
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.11,<3.14"
+        dependencies = [
+            "index-switchable ; python_version < '3.12'",
+            "delayed ; python_version >= '3.12'",
+            "real-delayed ; python_version >= '3.13'",
+        ]
+
+        [tool.uv]
+        fork-strategy = "fewest"
+        environments = [
+            "python_version == '3.11'",
+            "python_version == '3.12'",
+            "python_version == '3.13'",
+        ]
+        constraint-dependencies = ["q>=1.0.0 ; python_version >= '3.13'"]
+
+        [tool.uv.sources]
+        q = {{ index = "alternate", marker = "python_version >= '3.13'" }}
+
+        [[tool.uv.index]]
+        name = "alternate"
+        url = "{explicit_index}"
+        explicit = true
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .arg("--extra-index-url").arg(&implicit_index), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 14 packages in [TIME]
+    ");
+    observer.verify().await;
+
+    let requests = observer
+        .received_requests()
+        .await
+        .ok_or_else(|| anyhow!("index observer did not record requests"))?;
+    let mut q_requests: Vec<_> = requests
+        .iter()
+        .map(|request| request.url.path())
+        .filter(|path| *path == "/implicit/q/" || *path == "/explicit/q/")
+        .collect();
+    q_requests.dedup();
+    assert_snapshot!(q_requests.join("\n"), @"
+    /implicit/q/
+    /explicit/q/
+    ");
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    constrained==1.0.0 ; python_full_version >= '3.12'
+    delay-one==1.0.0 ; python_full_version >= '3.12'
+    delay-two==1.0.0 ; python_full_version >= '3.12'
+    delayed==1.0.0 ; python_full_version >= '3.12'
+    index-switchable==2.0.0 ; python_full_version < '3.12'
+    q==1.0.0 ; python_full_version >= '3.13'
+    real-delay-four==1.0.0 ; python_full_version >= '3.13'
+    real-delay-one==1.0.0 ; python_full_version >= '3.13'
+    real-delay-three==1.0.0 ; python_full_version >= '3.13'
+    real-delay-two==1.0.0 ; python_full_version >= '3.13'
+    real-delayed==1.0.0 ; python_full_version >= '3.13'
+    shared==1.0.0 ; python_full_version >= '3.12'
+    shared==2.0.0 ; python_full_version < '3.12'
+    ");
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--locked")
+        .arg("--offline")
+        .arg("--index-url").arg(server.index_url())
+        .arg("--extra-index-url").arg(&implicit_index), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 14 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Incompatible requirements in disjoint environments still need separate versions under
+/// `fewest`; sharing a preference must not turn a valid universal resolution into a conflict.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_fewest_coordinated_backtracking_incompatible() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("fork/coordinated-backtracking.toml");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.11,<3.13"
+        dependencies = [
+            "incompatible ; python_version < '3.12'",
+            "constrained ; python_version >= '3.12'",
+        ]
+
+        [tool.uv]
+        fork-strategy = "fewest"
+        environments = [
+            "python_version == '3.11'",
+            "python_version == '3.12'",
+        ]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    constrained==1.0.0 ; python_full_version >= '3.12'
+    incompatible==1.0.0 ; python_full_version < '3.12'
+    shared==1.0.0 ; python_full_version >= '3.12'
+    shared==2.0.0 ; python_full_version < '3.12'
+    ");
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--locked")
+        .arg("--offline")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Relaxing one fork's requirement does not opt into changing valid lockfile preferences. An
+/// explicit upgrade can discard those preferences and coordinate on a single shared version.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_fewest_coordinated_backtracking_preserves_preferences() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("fork/coordinated-backtracking.toml");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    let pyproject = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.11,<3.13"
+        dependencies = [
+            "incompatible ; python_version < '3.12'",
+            "constrained ; python_version >= '3.12'",
+        ]
+
+        [tool.uv]
+        fork-strategy = "fewest"
+        environments = [
+            "python_version == '3.11'",
+            "python_version == '3.12'",
+        ]
+    "#};
+    pyproject_toml.write_str(pyproject)?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    constrained==1.0.0 ; python_full_version >= '3.12'
+    incompatible==1.0.0 ; python_full_version < '3.12'
+    shared==1.0.0 ; python_full_version >= '3.12'
+    shared==2.0.0 ; python_full_version < '3.12'
+    ");
+
+    pyproject_toml.write_str(&pyproject.replace("incompatible ;", "flexible ;"))?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    Added flexible v1.0.0
+    Removed incompatible v1.0.0
+    ");
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    constrained==1.0.0 ; python_full_version >= '3.12'
+    flexible==1.0.0 ; python_full_version < '3.12'
+    shared==1.0.0 ; python_full_version >= '3.12'
+    shared==2.0.0 ; python_full_version < '3.12'
+    ");
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--upgrade")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Updated shared v1.0.0, v2.0.0 -> v1.0.0
+    ");
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    constrained==1.0.0 ; python_full_version >= '3.12'
+    flexible==1.0.0 ; python_full_version < '3.12'
+    shared==1.0.0
+    ");
+
+    Ok(())
+}
+
+/// The default `requires-python` strategy favors newer versions in the higher Python fork,
+/// even when that fork could also use the version required by a lower Python fork.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_requires_python_without_coordinated_backtracking() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("fork/coordinated-backtracking.toml");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.11,<3.13"
+        dependencies = [
+            "constrained ; python_version < '3.12'",
+            "flexible ; python_version >= '3.12'",
+        ]
+
+        [tool.uv]
+        environments = [
+            "python_version == '3.11'",
+            "python_version == '3.12'",
+        ]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    constrained==1.0.0 ; python_full_version < '3.12'
+    flexible==1.0.0 ; python_full_version >= '3.12'
+    shared==1.0.0 ; python_full_version < '3.12'
+    shared==2.0.0 ; python_full_version >= '3.12'
+    ");
+
+    Ok(())
+}
+
 /// Correctly narrow the Python requirement when upper bounds are present.
 ///
 /// See: <https://github.com/astral-sh/uv/issues/6911>
