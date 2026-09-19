@@ -19,6 +19,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+cache-mode: none
+
 env:
   ACTIONS_CACHE_MODE: none
   # Build the AWS-LC version pinned in Cargo.lock, not a system installation.

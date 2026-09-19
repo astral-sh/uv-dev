@@ -31,6 +31,8 @@ on:
         description: "Whether to publish the saved development images"
         value: ${{ inputs.push-dev && jobs.docker-plan.outputs.push == 'true' }}
 
+cache-mode: none
+
 env:
   ACTIONS_CACHE_MODE: none
   DEPOT_PROJECT_PROD_UV: 7hd4vdzmw5 # prod/uv
