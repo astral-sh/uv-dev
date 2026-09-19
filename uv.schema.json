@@ -2771,6 +2771,14 @@
           "items": {
             "$ref": "#/definitions/SerdePattern"
           }
+        },
+        "roots": {
+          "description": "Workspace members to use as resolution roots.\n\nOther discovered members remain available to workspace sources, but only participate in\nresolution when reached through a dependency. When omitted, every member is a root.",
+          "type": ["array", "null"],
+          "items": {
+            "$ref": "#/definitions/PackageName"
+          },
+          "uniqueItems": true
         }
       },
       "additionalProperties": false
