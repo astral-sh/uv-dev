@@ -3692,6 +3692,7 @@ impl Lock {
     /// Return a [`SatisfiesResult`] if the given requirements do not match the [`Package`] metadata.
     fn satisfies_requires_dist<'lock>(
         &self,
+        name: &PackageName,
         requires_dist: Box<[Requirement]>,
         provides_extra: &[ExtraName],
         dependency_groups: BTreeMap<GroupName, Box<[Requirement]>>,
@@ -3707,6 +3708,13 @@ impl Lock {
         root: &Path,
         allow_missing_package_metadata: bool,
     ) -> Result<SatisfiesResult<'lock>, LockError> {
+        if name != &package.id.name {
+            return Ok(SatisfiesResult::MismatchedPackageName(
+                &package.id.name,
+                name.clone(),
+            ));
+        }
+
         let missing_metadata = allow_missing_package_metadata && !package.has_metadata();
         let indexes = requires_dist
             .iter()
@@ -4519,6 +4527,7 @@ impl Lock {
 
                         // Validate that the static requirements are unchanged.
                         match self.satisfies_requires_dist(
+                            &metadata.name,
                             metadata.requires_dist,
                             &metadata.provides_extra,
                             metadata.dependency_groups,
@@ -4586,6 +4595,7 @@ impl Lock {
 
                     // Validate that the requirements are unchanged.
                     match self.satisfies_requires_dist(
+                        &metadata.name,
                         metadata.requires_dist,
                         &metadata.provides_extra,
                         metadata.dependency_groups,
@@ -4657,6 +4667,7 @@ impl Lock {
 
                     // Validate that the requirements are unchanged.
                     match self.satisfies_requires_dist(
+                        &metadata.name,
                         metadata.requires_dist,
                         &metadata.provides_extra,
                         metadata.dependency_groups,
@@ -4723,6 +4734,7 @@ impl Lock {
 
                     // Validate that the requirements are unchanged.
                     match self.satisfies_requires_dist(
+                        &metadata.name,
                         metadata.requires_dist,
                         &metadata.provides_extra,
                         metadata.dependency_groups,
@@ -5907,6 +5919,8 @@ pub enum SatisfiesResult<'lock> {
     MissingRemoteIndex(&'lock PackageName, &'lock Version, &'lock UrlString),
     /// The lockfile referenced a local index that was not provided
     MissingLocalIndex(&'lock PackageName, &'lock Version, &'lock Path),
+    /// A package's refreshed metadata reports a different name from its locked identity.
+    MismatchedPackageName(&'lock PackageName, PackageName),
     /// A package in the lockfile contains different `requires-dist` metadata than expected.
     MismatchedPackageRequirements(
         &'lock PackageName,
