@@ -167,6 +167,30 @@ fn install_wheel_cache_incompatible_with_older_uv() -> Result<()> {
 }
 
 #[test]
+fn trace_installed_requirement() {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .pip_install()
+        .arg("ok==1.0.0")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(context.workspace_root.join("test/links"))
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("ok>=0.9")
+        .arg("--offline")
+        .env(EnvVars::RUST_LOG, "uv_installer::satisfies=trace"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    TRACE Comparing installed distribution with source distribution=ok==1.0.0 source=>=0.9
+    Checked 1 package in [TIME]
+    ");
+}
+
+#[test]
 fn missing_requirements_txt() {
     let context = uv_test::test_context!("3.12");
     let requirements_txt = context.temp_dir.child("requirements.txt");
