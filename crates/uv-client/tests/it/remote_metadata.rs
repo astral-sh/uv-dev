@@ -507,6 +507,48 @@ async fn remote_metadata_redirect_range_forbidden() -> Result<()> {
     assert_wheel_metadata_readable(&source_server).await
 }
 
+/// A server may reject range requests while allowing a full download. Metadata should be read after
+/// retrying the same URL without a `Range` header.
+#[tokio::test]
+async fn remote_metadata_range_forbidden() -> Result<()> {
+    let server = MockServer::start().await;
+    let wheel = wheel()?;
+    // The initial `HEAD` response should advertise range support and the artifact length.
+    Mock::given(method("HEAD"))
+        .and(path("/artifact"))
+        .and(basic_auth("source-user", "source-password"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header(ACCEPT_RANGES, "bytes")
+                .insert_header(CONTENT_LENGTH, wheel.len().to_string()),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    // The metadata range request should be rejected despite the advertised range support.
+    Mock::given(method("GET"))
+        .and(path("/artifact"))
+        .and(basic_auth("source-user", "source-password"))
+        .and(header_exists(RANGE.as_str()))
+        .respond_with(ResponseTemplate::new(403))
+        .expect(1)
+        .named("forbidden range request")
+        .mount(&server)
+        .await;
+    // The streaming retry should omit the `Range` header and download the same artifact.
+    Mock::given(method("GET"))
+        .and(path("/artifact"))
+        .and(basic_auth("source-user", "source-password"))
+        .and(header_missing(RANGE))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(wheel, "application/octet-stream"))
+        .expect(1)
+        .named("streaming fallback after range rejection")
+        .mount(&server)
+        .await;
+
+    assert_wheel_metadata_readable(&server).await
+}
+
 #[derive(Debug)]
 struct HeaderMissing(HeaderName);
 
