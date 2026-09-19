@@ -143,6 +143,61 @@ fn run_with_python_version() -> Result<()> {
 }
 
 #[test]
+#[cfg(unix)]
+fn run_with_python_executable_name() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+        [project]
+        name = "foo"
+        version = "1.0.0"
+        requires-python = ">=3.11"
+        dependencies = []
+        "#
+        })?;
+
+    context
+        .run()
+        .arg("-p")
+        .arg("3.12")
+        .arg("python")
+        .arg("--version")
+        .assert()
+        .success();
+
+    let python_dir = context.temp_dir.child("python-bin");
+    python_dir.create_dir_all()?;
+    python_dir
+        .child("requested-python")
+        .symlink_to_file(&context.python_versions[1].1)?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("-p")
+        .arg("requested-python")
+        .arg("python")
+        .arg("--version")
+        .env(EnvVars::PATH, python_dir.as_os_str())
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, python_dir.as_os_str()), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    Python 3.11.[X]
+
+    ----- stderr -----
+    Using CPython 3.11.[X] interpreter at: python-bin/requested-python
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+
+    Ok(())
+}
+
+#[test]
 fn run_args() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filter((
