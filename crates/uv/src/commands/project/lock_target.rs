@@ -19,7 +19,7 @@ use uv_distribution_types::{
 };
 use uv_lock::Lock;
 use uv_normalize::{GroupName, PackageName};
-use uv_pep508::RequirementOrigin;
+use uv_pep508::{MarkerTree, RequirementOrigin};
 use uv_pypi_types::{Conflicts, SupportedEnvironments, VerbatimParsedUrl};
 use uv_scripts::Pep723Script;
 use uv_workspace::dependency_groups::{
@@ -187,6 +187,19 @@ impl<'lock> LockTarget<'lock> {
         }
     }
 
+    /// Return the Python markers attached to explicitly configured resolution roots.
+    pub(crate) fn resolution_root_markers(self) -> Option<BTreeMap<PackageName, MarkerTree>> {
+        match self {
+            Self::Workspace(workspace) => workspace.resolution_roots().map(|_| {
+                workspace
+                    .members_requirements()
+                    .map(|requirement| (requirement.name, requirement.marker))
+                    .collect()
+            }),
+            Self::Script(_) => None,
+        }
+    }
+
     /// Returns the set of all dependency groups within the target.
     pub(crate) fn group_requirements(self) -> impl Iterator<Item = Requirement> + 'lock {
         match self {
@@ -199,6 +212,9 @@ impl<'lock> LockTarget<'lock> {
     pub(crate) fn members(self) -> Vec<PackageName> {
         match self {
             Self::Workspace(workspace) => {
+                if let Some(roots) = workspace.resolution_roots() {
+                    return roots.iter().cloned().collect();
+                }
                 let mut members = workspace.packages().keys().cloned().collect::<Vec<_>>();
                 members.sort();
 
@@ -373,7 +389,11 @@ impl<'lock> LockTarget<'lock> {
 
         // Check if the discovered workspace members match the locked workspace members.
         if let Self::Workspace(workspace) = self {
-            for package_name in workspace.packages().keys() {
+            for package_name in workspace.packages().keys().filter(|name| {
+                workspace
+                    .resolution_roots()
+                    .is_none_or(|roots| roots.contains(*name))
+            }) {
                 existing
                     .find_by_name(package_name)
                     .map_err(|_| ProjectError::LockWorkspaceMismatch(package_name.clone(), source))?

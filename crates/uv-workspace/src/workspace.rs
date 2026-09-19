@@ -23,7 +23,7 @@ use uv_fs::{CWD, Simplified, normalize_path};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, GroupName, PackageName};
 use uv_once_map::OnceMap;
 use uv_pep440::VersionSpecifiers;
-use uv_pep508::{MarkerTree, VerbatimUrl};
+use uv_pep508::{MarkerExpression, MarkerTree, MarkerValueVersion, VerbatimUrl};
 use uv_pypi_types::{ConflictError, Conflicts, SupportedEnvironments, VerbatimParsedUrl};
 use uv_static::EnvVars;
 use uv_warnings::warn_user_once;
@@ -201,6 +201,10 @@ impl Error for WorkspaceError {
 
 #[derive(thiserror::Error, Debug)]
 pub enum WorkspaceErrorKind {
+    #[error("`tool.uv.workspace.roots` must contain at least one member")]
+    EmptyResolutionRoots,
+    #[error("Workspace resolution root `{0}` is not a workspace member")]
+    UnknownResolutionRoot(PackageName),
     // Workspace structure errors.
     #[error("No `pyproject.toml` found in current directory or any parent directory")]
     MissingPyprojectToml,
@@ -554,15 +558,53 @@ impl Workspace {
             .any(|member| *member.root() == self.install_path)
     }
 
-    /// Returns the set of all workspace members.
+    /// Returns the explicitly configured workspace resolution roots, if any.
+    pub fn resolution_roots(&self) -> Option<&BTreeSet<PackageName>> {
+        self.pyproject_toml
+            .tool
+            .as_ref()
+            .and_then(|tool| tool.uv.as_ref())
+            .and_then(|uv| uv.workspace.as_ref())
+            .and_then(|workspace| workspace.roots.as_ref())
+    }
+
+    fn is_resolution_root(&self, name: &PackageName) -> bool {
+        self.resolution_roots()
+            .is_none_or(|roots| roots.contains(name))
+    }
+
+    /// Limit an explicit root to the Python versions supported by that project.
+    fn resolution_root_marker(&self, member: &WorkspaceMember) -> MarkerTree {
+        if self.resolution_roots().is_none() {
+            return MarkerTree::TRUE;
+        }
+        member
+            .pyproject_toml()
+            .project
+            .as_ref()
+            .and_then(|project| project.requires_python.as_ref())
+            .into_iter()
+            .flat_map(|specifiers| specifiers.iter())
+            .fold(MarkerTree::TRUE, |marker, specifier| {
+                marker.and(MarkerTree::expression(MarkerExpression::Version {
+                    key: MarkerValueVersion::PythonFullVersion,
+                    specifier: specifier.clone(),
+                }))
+            })
+    }
+
+    /// Returns the workspace members that are resolution roots.
     pub fn members_requirements(&self) -> impl Iterator<Item = Requirement> + '_ {
         self.packages.iter().filter_map(|(name, member)| {
+            if !self.is_resolution_root(name) {
+                return None;
+            }
             let url = VerbatimUrl::from_absolute_path(&member.root).expect("path is valid URL");
             Some(Requirement {
                 name: member.pyproject_toml.project.as_ref()?.name.clone(),
                 extras: Box::new([]),
                 groups: Box::new([]),
-                marker: MarkerTree::TRUE,
+                marker: self.resolution_root_marker(member),
                 source: if member
                     .pyproject_toml()
                     .is_package(!self.is_required_member(name))
@@ -673,6 +715,9 @@ impl Workspace {
     /// Returns the set of all workspace member dependency groups.
     pub fn group_requirements(&self) -> impl Iterator<Item = Requirement> + '_ {
         self.packages.iter().filter_map(|(name, member)| {
+            if !self.is_resolution_root(name) {
+                return None;
+            }
             let url = VerbatimUrl::from_absolute_path(&member.root).expect("path is valid URL");
 
             let groups = {
@@ -707,7 +752,7 @@ impl Workspace {
                 name: member.pyproject_toml.project.as_ref()?.name.clone(),
                 extras: Box::new([]),
                 groups: groups.into_boxed_slice(),
-                marker: MarkerTree::TRUE,
+                marker: self.resolution_root_marker(member),
                 source: if member.pyproject_toml().is_package(!is_required_member) {
                     RequirementSource::Directory {
                         install_path: member.root.clone().into_boxed_path(),
@@ -781,9 +826,29 @@ impl Workspace {
         &self,
         groups: &DependencyGroupsWithDefaults,
     ) -> Result<RequiresPythonSources, DependencyGroupError> {
+        self.requires_python_matching(groups, |name| self.is_resolution_root(name))
+    }
+
+    /// Returns the Python requirements for a selected set of workspace members.
+    pub fn requires_python_for(
+        &self,
+        groups: &DependencyGroupsWithDefaults,
+        packages: &[PackageName],
+    ) -> Result<RequiresPythonSources, DependencyGroupError> {
+        self.requires_python_matching(groups, |name| packages.contains(name))
+    }
+
+    fn requires_python_matching(
+        &self,
+        groups: &DependencyGroupsWithDefaults,
+        includes: impl Fn(&PackageName) -> bool,
+    ) -> Result<RequiresPythonSources, DependencyGroupError> {
         let mut requires = RequiresPythonSources::new();
         for (name, member) in self.packages() {
-            // Get the top-level requires-python for this package, which is always active
+            if !includes(name) {
+                continue;
+            }
+            // Get the top-level requires-python for this resolution root, which is always active
             //
             // Arguably we could check groups.prod() to disable this, since, the requires-python
             // of the project is *technically* not relevant if you're doing `--only-group`, but,
@@ -1146,6 +1211,18 @@ impl Workspace {
             indexes: workspace_indexes,
             pyproject_toml: workspace_pyproject_toml,
         };
+        if options.members == MemberDiscovery::All
+            && let Some(roots) = workspace.resolution_roots()
+        {
+            if roots.is_empty() {
+                return Err(WorkspaceErrorKind::EmptyResolutionRoots.into());
+            }
+            for root in roots {
+                if !workspace.packages.contains_key(root) {
+                    return Err(WorkspaceErrorKind::UnknownResolutionRoot(root.clone()).into());
+                }
+            }
+        }
         Ok(Arc::new(workspace))
     }
 
@@ -2439,6 +2516,96 @@ mod tests {
         .map_err(|error| (error, root_escaped.clone()))?;
 
         Ok((project, root_escaped))
+    }
+
+    #[tokio::test]
+    async fn explicit_resolution_roots() -> Result<()> {
+        let temp_dir = tempfile::TempDir::new()?;
+        let root = ChildPath::new(temp_dir.path());
+        root.child("pyproject.toml").write_str(
+            r#"
+            [project]
+            name = "root"
+            version = "1.0.0"
+            requires-python = ">=3.12"
+            dependencies = ["leaf"]
+
+            [tool.uv.workspace]
+            members = ["leaf", "unused"]
+            roots = ["root"]
+
+            [tool.uv.sources]
+            leaf = { workspace = true }
+            "#,
+        )?;
+        for (name, requires_python) in [("leaf", ">=3.12"), ("unused", ">=3.14")] {
+            root.child(name)
+                .child("pyproject.toml")
+                .write_str(&format!(
+                    r#"
+                [project]
+                name = "{name}"
+                version = "1.0.0"
+                requires-python = "{requires_python}"
+                "#,
+                ))?;
+        }
+
+        let cache = Cache::from_path(root.join(".cache"));
+        let workspace = Workspace::discover(
+            root.as_ref(),
+            &DiscoveryOptions::default(),
+            &cache,
+            &WorkspaceCache::default(),
+        )
+        .await?;
+        assert_json_snapshot!(workspace.packages().keys().collect::<Vec<_>>(), @r#"
+        [
+          "leaf",
+          "root",
+          "unused"
+        ]
+        "#);
+        assert_json_snapshot!(
+            workspace.members_requirements().map(|requirement| requirement.name).collect::<Vec<_>>(),
+            @r#"
+        [
+          "root"
+        ]
+        "#);
+
+        for (roots, expected) in [
+            (
+                "[]",
+                "`tool.uv.workspace.roots` must contain at least one member",
+            ),
+            (
+                r#"["missing"]"#,
+                "Workspace resolution root `missing` is not a workspace member",
+            ),
+        ] {
+            root.child("pyproject.toml").write_str(&format!(
+                r#"
+                [project]
+                name = "root"
+                version = "1.0.0"
+
+                [tool.uv.workspace]
+                members = ["leaf", "unused"]
+                roots = {roots}
+                "#,
+            ))?;
+            let error = Workspace::discover(
+                root.as_ref(),
+                &DiscoveryOptions::default(),
+                &cache,
+                &WorkspaceCache::default(),
+            )
+            .await
+            .expect_err("invalid resolution roots");
+            assert_eq!(error.to_string(), expected);
+        }
+        Ok(())
     }
 
     #[tokio::test]

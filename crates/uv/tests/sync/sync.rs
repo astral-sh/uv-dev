@@ -51,6 +51,213 @@ fn sync() -> Result<()> {
     Ok(())
 }
 
+/// A project environment must satisfy every selected root, not the workspace-wide union.
+#[test]
+fn explicit_workspace_roots_python_intersection() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["members/*"]
+        roots = ["root-a", "root-b"]
+    "#})?;
+    for (name, requires_python) in [
+        ("root-a", ">=3.12,<3.14"),
+        ("root-b", ">=3.13,<3.14"),
+        ("unused", "==3.11.*"),
+    ] {
+        context
+            .temp_dir
+            .child(format!("members/{name}/pyproject.toml"))
+            .write_str(&formatdoc! {r#"
+            [project]
+            name = "{name}"
+            version = "0.1.0"
+            requires-python = "{requires_python}"
+
+            [tool.uv]
+            package = false
+        "#})?;
+    }
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--no-index").arg("--python").arg("3.12"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--frozen").arg("--package").arg("root-a").arg("--package").arg("root-b")
+        .arg("--python").arg("3.12"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `==3.13.*` (from workspace member `root-b`'s `project.requires-python`).
+    ");
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--frozen").arg("--package").arg("root-a").arg("--package").arg("root-b")
+        .arg("--python").arg("3.13"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Creating virtual environment at: .venv
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--frozen").arg("--all-packages")
+        .arg("--").arg("python").arg("-c").arg("import sys; print(sys.version_info[:2])"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (3, 13)
+
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--frozen").arg("--isolated").arg("--package").arg("root-b")
+        .arg("--").arg("python").arg("-c").arg("import sys; print(sys.version_info[:2])"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (3, 13)
+
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.run()
+        .current_dir(context.temp_dir.child("members/root-a"))
+        .arg("--frozen").arg("--python").arg("3.12")
+        .arg("--").arg("python").arg("-c").arg("import sys; print(sys.version_info[:2])"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (3, 12)
+
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Removed virtual environment at: [VENV]/
+    Creating virtual environment at: [VENV]/
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Checked in [TIME]
+    ");
+    Ok(())
+}
+
+/// Default and explicitly selected dependency groups constrain the selected member's Python.
+#[test]
+fn explicit_workspace_roots_python_dependency_groups() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-a"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+
+        [tool.uv]
+        package = false
+        default-groups = []
+
+        [tool.uv.workspace]
+        members = ["root-b"]
+        roots = ["root-a", "root-b"]
+    "#})?;
+    context
+        .temp_dir
+        .child("root-b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-b"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+
+        [dependency-groups]
+        typing = [{ include-group = "type-check" }]
+        type-check = []
+
+        [tool.uv]
+        package = false
+        default-groups = ["typing"]
+
+        [tool.uv.dependency-groups]
+        type-check = { requires-python = ">=3.13" }
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--no-index").arg("--python").arg("3.12"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--no-index").arg("--package").arg("root-b").arg("--python").arg("3.13"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Creating virtual environment at: .venv
+    Resolved 2 packages in [TIME]
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--frozen").arg("--package").arg("root-b")
+        .arg("--no-default-groups").arg("--python").arg("3.12")
+        .arg("--").arg("python").arg("-c").arg("import sys; print(sys.version_info[:2])"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (3, 12)
+
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--frozen").arg("--package").arg("root-b").arg("--python").arg("3.12"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `==3.13.*` (from workspace member `root-b`'s `tool.uv.dependency-groups.typing.requires-python`).
+    ");
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--frozen").arg("--package").arg("root-b")
+        .arg("--only-group").arg("typing").arg("--python").arg("3.12"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `==3.13.*` (from workspace member `root-b`'s `tool.uv.dependency-groups.typing.requires-python`).
+    ");
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--frozen").arg("--package").arg("root-b")
+        .arg("--only-group").arg("typing").arg("--python").arg("3.13"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--frozen").arg("--python").arg("3.12"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Checked in [TIME]
+    ");
+    Ok(())
+}
+
 /// Explicit lock modes override conflicting environment variables without updating the lockfile.
 #[test]
 fn sync_lock_flags_override_environment() -> Result<()> {
@@ -5711,6 +5918,45 @@ fn no_install_project() -> Result<()> {
     error: No `pyproject.toml` found in current directory or any parent directory
     ");
 
+    Ok(())
+}
+
+/// Frozen sync can select explicit roots whose project metadata is absent.
+#[test]
+fn frozen_sync_missing_explicit_root_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "root-a"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [tool.uv]
+        package = false
+        [tool.uv.workspace]
+        members = ["root-b"]
+        roots = ["root-a", "root-b"]
+    "#,
+    )?;
+    let member = context.temp_dir.child("root-b/pyproject.toml");
+    member.write_str(
+        r#"
+        [project]
+        name = "root-b"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [tool.uv]
+        package = false
+    "#,
+    )?;
+    context.lock().arg("--no-index").assert().success();
+    fs_err::remove_file(member.path())?;
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen")
+        .arg("--package").arg("root-b").arg("--no-install-workspace"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
     Ok(())
 }
 
