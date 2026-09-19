@@ -1,0 +1,97 @@
+name: Instrumented PGO final-binary comparison
+"on":
+  push:
+    branches:
+      - zb/ci-instrumented-pgo-lto-20260909
+    paths:
+      - .github/runner-experiments/pgo_runtime.py
+      - .github/workflows/instrumented-pgo-runtime-experiment.yml
+permissions:
+  contents: read
+  actions: read
+jobs:
+  compare:
+    name: ${{ matrix.platform.id }} / ${{ matrix.replica }}
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      TARGET: ${{ matrix.platform.target }}
+      ACTIONS_CACHE_MODE: none
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        replica:
+          - 1
+          - 2
+          - 3
+          - 4
+          - 5
+        platform:
+          - id: windows
+            target: x86_64-pc-windows-msvc
+            runner: namespace-profile-windows-2022-x86-64-16x32
+            arch: x64
+          - id: macos
+            target: aarch64-apple-darwin
+            runner: namespace-profile-macos-15
+            arch: arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Verify the build source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(gh api repos/astral-sh/uv-dev/actions/runs/34388846438 --jq .head_sha)" = 588f62da212f4a66ef9f8b5dcd9ac76db8ced733
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          cache: ""
+          python-version: "3.11"
+          architecture: ${{ matrix.platform.arch }}
+      - name: Download fat-trained binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: artifacts-${{ matrix.platform.target }}-fat-${{ matrix.replica }}
+          path: pgo-binaries/fat
+          repository: astral-sh/uv-dev
+          run-id: 34388846438
+          github-token: ${{ github.token }}
+      - name: Download thin-trained binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: artifacts-${{ matrix.platform.target }}-thin-${{ matrix.replica }}
+          path: pgo-binaries/thin
+          repository: astral-sh/uv-dev
+          run-id: 34388846438
+          github-token: ${{ github.token }}
+      - name: Extract final binaries
+        run: |
+          for variant in fat thin; do
+            directory="$GITHUB_WORKSPACE/pgo-binaries/$variant"
+            mkdir -p "$directory/extracted"
+            if [ "$RUNNER_OS" = Windows ]; then
+              7z x "$directory/uv-$TARGET.zip" "-o$directory/extracted"
+            else
+              tar -xzf "$directory/uv-$TARGET.tar.gz" -C "$directory/extracted"
+            fi
+          done
+      - name: Compare offline ecosystem workloads
+        run: |
+          python .github/runner-experiments/pgo_runtime.py \
+            --fat pgo-binaries/fat/extracted \
+            --thin pgo-binaries/thin/extracted \
+            --scratch "$RUNNER_TEMP/uv-pgo-runtime" \
+            --output results/runtime.json
+      - name: Upload runtime measurements
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pgo-runtime-${{ matrix.platform.id }}-${{ matrix.replica }}
+          path: results/
+          if-no-files-found: error
+          retention-days: 14
