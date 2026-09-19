@@ -34047,6 +34047,83 @@ fn lock_dynamic_version_path_dependency() -> Result<()> {
     Ok(())
 }
 
+/// Hatchling 1.32.3 emits malformed metadata when a dynamic version includes a trailing newline.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_dynamic_version_hatchling_trailing_newline() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2026-09-18T00:00:00Z");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        requires-python = ">=3.12"
+        dynamic = ["version"]
+        dependencies = ["anyio==4.3.0", "idna==3.6"]
+
+        [dependency-groups]
+        dev = ["iniconfig==2.0.0"]
+
+        [build-system]
+        requires = ["hatchling==1.32.3"]
+        build-backend = "hatchling.build"
+
+        [tool.hatch.version]
+        path = "VERSION"
+        pattern = "(?P<version>[^']+)"
+        "#})?;
+    context.temp_dir.child("VERSION").write_str("0.1.0\n")?;
+
+    // Dropping declared runtime dependencies makes the lockfile incomplete; see astral-sh/uv#21824.
+    uv_snapshot!(context.filters(), context.lock().arg("--upgrade"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    let lock = context.read("uv.lock");
+
+    insta::with_settings!({
+        filters => context.filters(),
+    }, {
+        assert_snapshot!(lock, @r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+
+        [options]
+        exclude-newer = "2026-09-18T00:00:00Z"
+
+        [[package]]
+        name = "iniconfig"
+        version = "2.0.0"
+        source = { registry = "https://pypi.org/simple" }
+        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
+        wheels = [
+            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        source = { editable = "." }
+
+        [package.dev-dependencies]
+        dev = [
+            { name = "iniconfig" },
+        ]
+
+        [package.metadata]
+
+        [package.metadata.requires-dev]
+        dev = [{ name = "iniconfig", specifier = "==2.0.0" }]
+        "#);
+    });
+
+    Ok(())
+}
+
 /// See: <https://github.com/astral-sh/uv/issues/10776>
 ///
 /// N.B. `hatchling` "flattens" recursive extras.
