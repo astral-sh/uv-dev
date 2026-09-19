@@ -4,9 +4,10 @@ use std::{collections::BTreeMap, num::NonZeroUsize};
 use url::Url;
 
 use uv_configuration::{
-    AnnotationStyle, BuildIsolation, ExcludeNewer, ExcludeNewerPackage, ExportFormat, ForkStrategy,
-    IndexStrategy, KeyringProviderType, NoSources, PrereleaseMode, PrereleasePackage, ProxyUrl,
-    Reinstall, RequiredVersion, ResolutionMode, TargetTriple, TrustedPublishing, Upgrade,
+    AnnotationStyle, BuildIsolation, BuildPolicy, BuildPolicyPackage, ExcludeNewer,
+    ExcludeNewerPackage, ExportFormat, ForkStrategy, IndexStrategy, KeyringProviderType, NoSources,
+    PrereleaseMode, PrereleasePackage, ProxyUrl, Reinstall, RequiredVersion, ResolutionMode,
+    TargetTriple, TrustedPublishing, Upgrade,
 };
 use uv_distribution_types::{
     ConfigSettings, ExcludeNewerOverride, ExcludeNewerValue, ExtraBuildVariables, Index, IndexUrl,
@@ -90,6 +91,7 @@ macro_rules! impl_combine_or {
 
 impl_combine_or!(AddBoundsKind);
 impl_combine_or!(AnnotationStyle);
+impl_combine_or!(BuildPolicy);
 impl_combine_or!(ExcludeNewer);
 impl_combine_or!(ExcludeNewerOverride);
 impl_combine_or!(ExcludeNewerValue);
@@ -170,6 +172,21 @@ impl Combine for Option<ExcludeNewerPackage> {
 }
 
 impl Combine for Option<PrereleasePackage> {
+    /// Merge package-specific policies, retaining the higher-precedence value for duplicates.
+    fn combine(self, other: Self) -> Self {
+        match (self, other) {
+            (Some(mut current), Some(fallback)) => {
+                for (package, mode) in fallback {
+                    current.entry(package).or_insert(mode);
+                }
+                Some(current)
+            }
+            (current, fallback) => current.or(fallback),
+        }
+    }
+}
+
+impl Combine for Option<BuildPolicyPackage> {
     /// Merge package-specific policies, retaining the higher-precedence value for duplicates.
     fn combine(self, other: Self) -> Self {
         match (self, other) {
