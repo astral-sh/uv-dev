@@ -2551,6 +2551,66 @@ fn init_requires_python_version_file() -> Result<()> {
     Ok(())
 }
 
+/// Run `uv init --script`, respecting `--pin-python` when discovering `.python-version`.
+#[test]
+fn init_script_requires_python_version_file() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.9"]);
+
+    context.temp_dir.child(".python-version").write_str("3.9")?;
+
+    let pinned = context.temp_dir.child("pinned.py");
+    uv_snapshot!(context.filters(), context.init().arg("--script").arg("pinned.py"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Initialized script at `pinned.py`
+    ");
+
+    insta::assert_snapshot!(fs_err::read_to_string(&pinned)?, @r#"
+    # /// script
+    # requires-python = ">=3.9"
+    # dependencies = []
+    # ///
+
+
+    def main() -> None:
+        print("Hello from pinned.py!")
+
+
+    if __name__ == "__main__":
+        main()
+    "#);
+
+    let unpinned = context.temp_dir.child("unpinned.py");
+    uv_snapshot!(context.filters(), context.init().arg("--script").arg("--no-pin-python").arg("unpinned.py"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Initialized script at `unpinned.py`
+    ");
+
+    insta::assert_snapshot!(fs_err::read_to_string(&unpinned)?, @r#"
+    # /// script
+    # requires-python = ">=3.12"
+    # dependencies = []
+    # ///
+
+
+    def main() -> None:
+        print("Hello from unpinned.py!")
+
+
+    if __name__ == "__main__":
+        main()
+    "#);
+
+    Ok(())
+}
+
 /// Run `uv init`, inferring the Python version from an existing `.venv`
 #[test]
 fn init_existing_environment() -> Result<()> {
