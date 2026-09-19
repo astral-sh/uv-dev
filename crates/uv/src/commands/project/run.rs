@@ -30,7 +30,7 @@ use uv_fs::which::is_executable;
 use uv_fs::{PythonExt, Simplified, create_symlink};
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_lock::{Installable, Lock};
-use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
+use uv_normalize::{DefaultExtras, DefaultGroups, GroupName, PackageName};
 use uv_preview::Preview;
 use uv_python::{
     ConfigDiscovery, EnvironmentPreference, Interpreter, PyVenvConfiguration, PythonDownloads,
@@ -69,7 +69,9 @@ use crate::commands::pip::loggers::{
 use crate::commands::pip::operations::Modifications;
 use crate::commands::project::environment::{CachedEnvironment, EphemeralEnvironment};
 use crate::commands::project::install_target::InstallTarget;
-use crate::commands::project::lock::LockMode;
+use crate::commands::project::lock::{
+    LockMode, command_workspace_group, select_workspace_group_lock, workspace_selection_members,
+};
 use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
     EnvironmentSpecification, LinkErrorReporting, PreferenceLocation, ProjectEnvironment,
@@ -100,6 +102,7 @@ pub(crate) async fn run(
     isolated: bool,
     all_packages: bool,
     package: Option<PackageName>,
+    workspace_group: Option<GroupName>,
     no_project: bool,
     config_discovery: ConfigDiscovery,
     extras: ExtrasSpecification,
@@ -182,6 +185,9 @@ pub(crate) async fn run(
     // Determine whether the command to execute is a PEP 723 script.
     let temp_dir;
     let script_interpreter = if let Some(script) = script {
+        if workspace_group.is_some() {
+            bail!("Workspace groups are not supported for scripts");
+        }
         match &script {
             Pep723Item::Script(script) => {
                 debug!(
@@ -621,7 +627,47 @@ pub(crate) async fn run(
             }
         }
 
+        if project.is_none() && workspace_group.is_some() {
+            bail!("Workspace groups require a project");
+        }
         if let Some(project) = project {
+            let mut selection_members =
+                workspace_selection_members(&project, package.as_slice(), all_packages);
+            let explicit_workspace_group = workspace_group.is_some();
+            let workspace_group = command_workspace_group(
+                project.workspace(),
+                workspace_group.as_ref(),
+                &selection_members,
+                frozen,
+                &settings.resolver.sources,
+            )
+            .await
+            .map_err(UvError::from)?;
+            let select_group_roots = workspace_group
+                .as_ref()
+                .is_some_and(|group| explicit_workspace_group || group.definition.default);
+            if select_group_roots
+                && package.is_none()
+                && let Some(group) = &workspace_group
+            {
+                selection_members.clone_from(&group.definition.members);
+            }
+            let group_workspace = workspace_group.as_ref().map(|group| {
+                project
+                    .workspace()
+                    .with_workspace_groups(std::slice::from_ref(group))
+            });
+            let environment_workspace = group_workspace
+                .as_ref()
+                .unwrap_or_else(|| project.workspace());
+            let group_members = workspace_group
+                .as_ref()
+                .filter(|_| select_group_roots)
+                .map(|group| group.definition.members.iter().cloned().collect::<Vec<_>>());
+            let selected_workspace_group = workspace_group
+                .as_ref()
+                .filter(|_| select_group_roots)
+                .map(|group| &group.definition.name);
             if let Some(project_name) = project.project_name() {
                 debug!(
                     "Discovered project `{project_name}` at: {}",
@@ -652,7 +698,7 @@ pub(crate) async fn run(
                     requires_python,
                 } = WorkspacePython::from_request(
                     python.as_deref().map(PythonRequest::parse),
-                    Some(project.workspace()),
+                    Some(environment_workspace),
                     &groups,
                     project_dir,
                     config_discovery,
@@ -677,7 +723,7 @@ pub(crate) async fn run(
                 if let Some(requires_python) = requires_python.as_ref() {
                     validate_project_requires_python(
                         &interpreter,
-                        Some(project.workspace()),
+                        Some(environment_workspace),
                         &groups,
                         requires_python,
                         &source,
@@ -702,7 +748,7 @@ pub(crate) async fn run(
                 // If we're not isolating the environment, reuse the base environment for the
                 // project.
                 ProjectEnvironment::get_or_init(
-                    project.workspace(),
+                    environment_workspace,
                     &groups,
                     python.as_deref().map(PythonRequest::parse),
                     &install_mirrors,
@@ -727,12 +773,21 @@ pub(crate) async fn run(
                 // If we're not syncing, we should still attempt to respect the locked preferences
                 // in any `--with` requirements.
                 if !isolated && !requirements.is_empty() {
-                    base_lock = LockTarget::from(project.workspace())
+                    if let Some(lock) = LockTarget::from(project.workspace())
                         .read()
                         .await
                         .ok()
                         .flatten()
-                        .map(|lock| (lock, project.workspace().install_path().to_owned()));
+                    {
+                        base_lock = Some((
+                            select_workspace_group_lock(
+                                lock,
+                                selected_workspace_group,
+                                &selection_members,
+                            )?,
+                            project.workspace().install_path().to_owned(),
+                        ));
+                    }
                 }
                 // `--with` may still build an overlay under `--no-sync`. Unless explicitly frozen,
                 // use the current project build constraints, not those recorded in `uv.lock`.
@@ -788,50 +843,62 @@ pub(crate) async fn run(
                 )
                 .await
                 {
-                    Ok(result) => result,
+                    Ok(result) => result
+                        .select_workspace_group(selected_workspace_group, &selection_members)?,
                     Err(err) => return Err(UvError::from(err).into()),
                 };
 
                 // Identify the installation target.
-                let target = match &project {
-                    VirtualProject::Project(project) => {
-                        if all_packages {
-                            InstallTarget::Workspace {
-                                workspace: project.workspace(),
-                                lock: result.lock(),
-                            }
-                        } else if let Some(package) = package.as_ref() {
-                            InstallTarget::Project {
-                                workspace: project.workspace(),
-                                name: package,
-                                lock: result.lock(),
-                            }
-                        } else {
-                            // By default, install the root package.
-                            InstallTarget::Project {
-                                workspace: project.workspace(),
-                                name: project.project_name(),
-                                lock: result.lock(),
+                let target = if let Some(names) = group_members.as_deref()
+                    && package.is_none()
+                    && !all_packages
+                {
+                    InstallTarget::Projects {
+                        workspace: project.workspace(),
+                        names,
+                        lock: result.lock(),
+                    }
+                } else {
+                    match &project {
+                        VirtualProject::Project(project) => {
+                            if all_packages {
+                                InstallTarget::Workspace {
+                                    workspace: project.workspace(),
+                                    lock: result.lock(),
+                                }
+                            } else if let Some(package) = package.as_ref() {
+                                InstallTarget::Project {
+                                    workspace: project.workspace(),
+                                    name: package,
+                                    lock: result.lock(),
+                                }
+                            } else {
+                                // By default, install the root package.
+                                InstallTarget::Project {
+                                    workspace: project.workspace(),
+                                    name: project.project_name(),
+                                    lock: result.lock(),
+                                }
                             }
                         }
-                    }
-                    VirtualProject::NonProject(workspace) => {
-                        if all_packages {
-                            InstallTarget::NonProjectWorkspace {
-                                workspace,
-                                lock: result.lock(),
-                            }
-                        } else if let Some(package) = package.as_ref() {
-                            InstallTarget::Project {
-                                workspace,
-                                name: package,
-                                lock: result.lock(),
-                            }
-                        } else {
-                            // By default, install the entire workspace.
-                            InstallTarget::NonProjectWorkspace {
-                                workspace,
-                                lock: result.lock(),
+                        VirtualProject::NonProject(workspace) => {
+                            if all_packages {
+                                InstallTarget::NonProjectWorkspace {
+                                    workspace,
+                                    lock: result.lock(),
+                                }
+                            } else if let Some(package) = package.as_ref() {
+                                InstallTarget::Project {
+                                    workspace,
+                                    name: package,
+                                    lock: result.lock(),
+                                }
+                            } else {
+                                // By default, install the entire workspace.
+                                InstallTarget::NonProjectWorkspace {
+                                    workspace,
+                                    lock: result.lock(),
+                                }
                             }
                         }
                     }

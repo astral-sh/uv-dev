@@ -13,7 +13,8 @@ use uv_cache::{Cache, Refresh};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
     ActiveEnvironment, Concurrency, Constraints, DependencyGroupsWithDefaults, DryRun,
-    ExcludeDependency, ExtrasSpecification, Override, PackageOverride, Reinstall, Upgrade,
+    ExcludeDependency, ExtrasSpecification, NoSources, Override, PackageOverride, Reinstall,
+    Upgrade,
 };
 use uv_dispatch::BuildDispatch;
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
@@ -23,9 +24,10 @@ use uv_distribution_types::{
 };
 use uv_git::ResolvedRepositoryReference;
 use uv_git_types::GitOid;
-use uv_lock::{Lock, Package, ResolverManifest, SatisfiesResult};
+use uv_lock::{Lock, Package, ResolverManifest, SatisfiesResult, implicit_constraints_marker};
 use uv_normalize::{GroupName, PackageName};
 use uv_pep440::Version;
+use uv_pep508::MarkerTree;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictKind, Conflicts, SupportedEnvironments};
 use uv_python::{
@@ -34,8 +36,8 @@ use uv_python::{
 };
 use uv_requirements::ExtrasResolver;
 use uv_resolver::{
-    FlatIndex, InMemoryIndex, Options, OptionsBuilder, PythonRequirement, ResolverEnvironment,
-    UniversalMarker,
+    FlatIndex, InMemoryIndex, Options, OptionsBuilder, PythonRequirement, ResolveError,
+    ResolverEnvironment, UniversalMarker,
 };
 use uv_scripts::Pep723Script;
 use uv_settings::PythonInstallMirrors;
@@ -44,7 +46,8 @@ use uv_types::{
 };
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::{
-    DiscoveryOptions, Editability, VirtualProject, WorkspaceCache, WorkspaceMember,
+    DiscoveryOptions, Editability, ResolvedWorkspaceGroup, VirtualProject, Workspace,
+    WorkspaceCache, WorkspaceMember,
 };
 
 use crate::commands::locked_requirements::{LockedRequirements, read_lock_requirements};
@@ -71,6 +74,26 @@ pub(crate) enum LockResult {
 }
 
 impl LockResult {
+    pub(crate) fn select_workspace_group(
+        self,
+        name: Option<&GroupName>,
+        members: &BTreeSet<PackageName>,
+    ) -> Result<Self, ProjectError> {
+        Ok(match self {
+            Self::Unchanged(lock) => {
+                Self::Unchanged(select_workspace_group_lock(lock, name, members)?)
+            }
+            Self::Changed(previous, lock) => {
+                let previous = match previous {
+                    Some(previous) if !previous.workspace_groups().is_empty() => {
+                        select_workspace_group_lock(previous, name, members).ok()
+                    }
+                    previous => previous,
+                };
+                Self::Changed(previous, select_workspace_group_lock(lock, name, members)?)
+            }
+        })
+    }
     pub(crate) fn lock(&self) -> &Lock {
         match self {
             Self::Unchanged(lock) => lock,
@@ -84,6 +107,204 @@ impl LockResult {
             Self::Changed(_, lock) => lock,
         }
     }
+}
+
+pub(crate) fn select_workspace_group_lock(
+    lock: Lock,
+    name: Option<&GroupName>,
+    members: &BTreeSet<PackageName>,
+) -> Result<Lock, ProjectError> {
+    if lock.workspace_groups().is_empty() {
+        return if let Some(name) = name {
+            Err(ProjectError::MissingWorkspaceGroupLock(name.clone()))
+        } else {
+            Ok(lock)
+        };
+    }
+    let members = if members.is_empty() {
+        lock.members()
+    } else {
+        members
+    };
+    let name = name.or_else(|| {
+        lock.workspace_groups()
+            .iter()
+            .find(|group| group.definition.default)
+            .map(|group| &group.definition.name)
+    });
+    if let Some(name) = name {
+        let selected = lock
+            .select_workspace_group(name)?
+            .ok_or_else(|| ProjectError::MissingWorkspaceGroupLock(name.clone()))?;
+        if selected.select_workspace_members(members)?.is_none() {
+            return Err(ProjectError::WorkspaceGroupTarget(name.clone()));
+        }
+        return Ok(selected);
+    }
+    let mut candidates = Vec::new();
+    let mut covered = BTreeSet::new();
+    for group in lock.workspace_groups() {
+        let Some(candidate) = lock.select_workspace_group(&group.definition.name)? else {
+            continue;
+        };
+        let available = candidate
+            .packages()
+            .iter()
+            .map(Package::name)
+            .collect::<BTreeSet<_>>();
+        let contained = members
+            .iter()
+            .filter(|name| available.contains(name))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if contained.is_empty() {
+            continue;
+        }
+        let Some(candidate) = candidate.select_workspace_members(&contained)? else {
+            continue;
+        };
+        covered.extend(contained);
+        candidates.push(candidate);
+    }
+    if covered != *members {
+        return Err(ProjectError::WorkspaceGroupUncovered);
+    }
+    Lock::merge_workspace_resolutions(candidates)?.ok_or(ProjectError::WorkspaceGroupRequired)
+}
+
+/// The ordinary project target, before applying a named workspace-group default.
+pub(crate) fn workspace_selection_members(
+    project: &VirtualProject,
+    packages: &[PackageName],
+    all_packages: bool,
+) -> BTreeSet<PackageName> {
+    if all_packages || (packages.is_empty() && project.is_non_project()) {
+        project.workspace().packages().keys().cloned().collect()
+    } else if packages.is_empty() {
+        project.project_name().into_iter().cloned().collect()
+    } else {
+        packages.iter().cloned().collect()
+    }
+}
+
+/// Select group metadata for Python discovery, using only the lock in frozen mode.
+pub(crate) async fn command_workspace_group(
+    workspace: &Workspace,
+    name: Option<&GroupName>,
+    members: &BTreeSet<PackageName>,
+    frozen: Option<FrozenSource>,
+    no_sources: &NoSources,
+) -> Result<Option<ResolvedWorkspaceGroup>, ProjectError> {
+    if let Some(frozen) = frozen {
+        let lock = LockTarget::Workspace(workspace)
+            .read_frozen(frozen.into())
+            .await?;
+        if lock.workspace_groups().is_empty() {
+            return if let Some(name) = name {
+                Err(ProjectError::MissingWorkspaceGroupLock(name.clone()))
+            } else {
+                Ok(None)
+            };
+        }
+        let members = if members.is_empty() {
+            lock.members()
+        } else {
+            members
+        };
+        if let Some(group) = name
+            .and_then(|name| {
+                lock.workspace_groups()
+                    .iter()
+                    .find(|group| group.definition.name == *name)
+            })
+            .or_else(|| {
+                name.is_none()
+                    .then(|| {
+                        lock.workspace_groups()
+                            .iter()
+                            .find(|group| group.definition.default)
+                    })
+                    .flatten()
+            })
+        {
+            return Ok(Some(ResolvedWorkspaceGroup {
+                definition: group.definition.clone(),
+                requires_python: group.effective_requires_python.clone(),
+                environments: group.effective_environment(),
+            }));
+        }
+        if let Some(name) = name {
+            return Err(ProjectError::MissingWorkspaceGroupLock(name.clone()));
+        }
+        let selected = select_workspace_group_lock(lock.clone(), None, members)?;
+        // This synthetic view is only used for interpreter discovery. Ordinary targeting
+        // keeps the union of compatible contexts instead of choosing one by name.
+        for group in lock.workspace_groups() {
+            if let Some(candidate) = lock.select_workspace_group(&group.definition.name)?
+                && candidate
+                    .packages()
+                    .iter()
+                    .any(|package| members.contains(package.name()))
+            {
+                let mut definition = group.definition.clone();
+                definition.members.clone_from(members);
+                definition.requires_python = None;
+                definition.default = false;
+                return Ok(Some(ResolvedWorkspaceGroup {
+                    definition,
+                    requires_python: selected.requires_python().clone(),
+                    environments: implicit_constraints_marker(
+                        selected.requires_python().to_exact_marker_tree(),
+                        selected.supported_environments(),
+                    ),
+                }));
+            }
+        }
+        return Ok(None);
+    }
+    let groups = workspace.workspace_groups_with_sources(no_sources)?;
+    if let Some(name) = name {
+        return groups
+            .into_iter()
+            .find(|group| group.definition.name == *name)
+            .map(Some)
+            .ok_or_else(|| {
+                uv_workspace::WorkspaceError::from(
+                    uv_workspace::WorkspaceErrorKind::UnknownWorkspaceGroup(name.clone()),
+                )
+                .into()
+            });
+    }
+    if let Some(group) = groups.iter().find(|group| group.definition.default) {
+        return Ok(Some(group.clone()));
+    }
+    let mut candidates = groups
+        .iter()
+        .filter(|group| members.is_subset(&group.definition.members))
+        .cloned()
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        candidates = groups;
+    }
+    let Some(requires_python) =
+        RequiresPython::union(candidates.iter().map(|group| &group.requires_python))
+    else {
+        return Ok(None);
+    };
+    let environments = candidates
+        .iter()
+        .fold(MarkerTree::FALSE, |environment, group| {
+            environment.or(group.environments)
+        });
+    let Some(mut group) = candidates.into_iter().next() else {
+        return Ok(None);
+    };
+    group.definition.members.clone_from(members);
+    group.definition.requires_python = None;
+    group.definition.default = false;
+    group.requires_python = requires_python;
+    group.environments = environments;
+    Ok(Some(group))
 }
 
 /// Resolve the project requirements into a lockfile.
@@ -152,7 +373,12 @@ pub(crate) async fn lock(
     } else {
         interpreter = match target {
             LockTarget::Workspace(workspace) => {
-                // Don't enable any groups' requires-python for interpreter discovery
+                let workspace_groups =
+                    workspace.workspace_groups_with_sources(&settings.sources)?;
+                let grouped_workspace = (!workspace_groups.is_empty())
+                    .then(|| workspace.with_workspace_groups(&workspace_groups));
+                let workspace = grouped_workspace.as_ref().unwrap_or(workspace);
+                // Don't enable dependency groups' requires-python for interpreter discovery.
                 let groups = DependencyGroupsWithDefaults::none();
                 let workspace_python = WorkspacePython::from_request(
                     python.as_deref().map(PythonRequest::parse),
@@ -481,6 +707,153 @@ impl<'env> LockOperation<'env> {
     }
 }
 
+/// Resolve named root sets together, splitting a failed shared solve into smaller contexts.
+async fn do_lock_workspace_groups(
+    workspace: &Workspace,
+    mut groups: Vec<ResolvedWorkspaceGroup>,
+    interpreter: &Interpreter,
+    existing_lock: Option<Lock>,
+    mode: LockMode<'_>,
+    check_lockfile_contents: Option<String>,
+    external: Vec<NameRequirementSpecification>,
+    refresh: Option<&Refresh>,
+    settings: &ResolverSettings,
+    client_builder: &BaseClientBuilder<'_>,
+    state: &UniversalState,
+    logger: Box<dyn ResolveLogger>,
+    concurrency: &Concurrency,
+    cache: &Cache,
+    workspace_cache: &WorkspaceCache,
+    printer: Printer,
+    preview: Preview,
+) -> Result<LockResult, ProjectError> {
+    let start = std::time::Instant::now();
+    for group in &mut groups {
+        if group.requires_python.specifiers().is_empty() {
+            let default =
+                RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());
+            warn_user_once!(
+                "No `requires-python` value found in workspace group `{}`. Defaulting to `{default}`.",
+                group.definition.name
+            );
+            group.environments = group.environments.and(default.to_exact_marker_tree());
+            group.requires_python = RequiresPython::from_marker_tree(group.environments)
+                .ok_or_else(|| {
+                    uv_workspace::WorkspaceError::from(
+                        uv_workspace::WorkspaceErrorKind::DisjointWorkspaceGroupPython(
+                            group.definition.name.clone(),
+                        ),
+                    )
+                })?;
+        }
+    }
+    let mut pending = vec![groups.clone()];
+    let mut resolutions = Vec::new();
+    let mut preference_lock = None;
+    while let Some(batch) = pending.pop() {
+        let scoped = workspace.with_workspace_groups(&batch);
+        let previous = if let Some(existing) = &existing_lock {
+            if existing.workspace_groups().is_empty() {
+                Some(existing.clone())
+            } else {
+                let contexts = batch
+                    .iter()
+                    .map(|group| existing.select_workspace_group(&group.definition.name))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>();
+                let fallback = contexts.first().cloned();
+                Lock::merge_workspace_group_preferences(contexts)?.or(fallback)
+            }
+        } else {
+            None
+        }
+        .or_else(|| preference_lock.clone());
+        let result = Box::pin(do_lock(
+            LockTarget::Workspace(&scoped),
+            interpreter,
+            previous,
+            mode,
+            None,
+            external.clone(),
+            refresh,
+            settings,
+            client_builder,
+            state,
+            Box::new(SummaryResolveLogger),
+            concurrency,
+            cache,
+            workspace_cache,
+            printer,
+            preview,
+        ))
+        .await;
+        match result {
+            Ok(result) => {
+                let lock = result.into_lock();
+                preference_lock = Some(lock.clone());
+                resolutions.push((
+                    batch
+                        .into_iter()
+                        .map(|group| group.definition.name)
+                        .collect(),
+                    lock,
+                ));
+            }
+            Err(error) if batch.len() > 1 && workspace_group_conflict(&error) => {
+                debug!("Splitting {} incompatible workspace groups", batch.len());
+                let midpoint = batch.len() / 2;
+                pending.push(batch[midpoint..].to_vec());
+                pending.push(batch[..midpoint].to_vec());
+            }
+            Err(error) => {
+                if let [group] = batch.as_slice() {
+                    return Err(ProjectError::WorkspaceGroupResolution(
+                        group.definition.name.clone(),
+                        Box::new(error),
+                    ));
+                }
+                return Err(error);
+            }
+        }
+    }
+    let lock = Lock::from_workspace_groups(groups, resolutions)?
+        .ok_or(ProjectError::MissingWorkspaceGroupResolution)?;
+    logger.on_complete(lock.len(), start, printer)?;
+    let unchanged = if let Some(contents) = check_lockfile_contents {
+        existing_lock.is_some() && contents == lock.to_toml()?
+    } else if let Some(existing) = &existing_lock {
+        existing.to_toml()? == lock.to_toml()?
+    } else {
+        false
+    };
+    Ok(if unchanged {
+        LockResult::Unchanged(lock)
+    } else {
+        LockResult::Changed(existing_lock, lock)
+    })
+}
+
+/// Only incompatibilities in the dependency graph justify another resolution context.
+fn workspace_group_conflict(error: &ProjectError) -> bool {
+    fn resolver_conflict(error: &ResolveError) -> bool {
+        match error {
+            ResolveError::Dependencies(source, ..) => resolver_conflict(source),
+            ResolveError::NoSolution(_)
+            | ResolveError::ConflictingUrls { .. }
+            | ResolveError::ConflictingIndexesForEnvironment { .. }
+            | ResolveError::ConflictingIndexes(..) => true,
+            _ => false,
+        }
+    }
+    match error {
+        ProjectError::Operation(pip::operations::Error::NoSolution { .. }) => true,
+        ProjectError::Operation(pip::operations::Error::Resolve(error)) => resolver_conflict(error),
+        _ => false,
+    }
+}
+
 /// Lock the project requirements into a lockfile.
 async fn do_lock(
     target: LockTarget<'_>,
@@ -500,6 +873,33 @@ async fn do_lock(
     printer: Printer,
     preview: Preview,
 ) -> Result<LockResult, ProjectError> {
+    if let LockTarget::Workspace(workspace) = target
+        && !workspace.is_workspace_group_resolution()
+    {
+        let groups = workspace.workspace_groups_with_sources(&settings.sources)?;
+        if !groups.is_empty() {
+            return Box::pin(do_lock_workspace_groups(
+                workspace,
+                groups,
+                interpreter,
+                existing_lock,
+                mode,
+                check_lockfile_contents,
+                external,
+                refresh,
+                settings,
+                client_builder,
+                state,
+                logger,
+                concurrency,
+                cache,
+                workspace_cache,
+                printer,
+                preview,
+            ))
+            .await;
+        }
+    }
     let start = std::time::Instant::now();
 
     // Extract the project settings.
@@ -920,6 +1320,23 @@ async fn do_lock(
 
     // If any of the resolution-determining settings changed, invalidate the lock.
     let existing_lock = if let Some(existing_lock) = existing_lock {
+        let scoped_packages;
+        let packages = if matches!(target, LockTarget::Workspace(workspace) if workspace.is_workspace_group_resolution())
+        {
+            let names = existing_lock
+                .packages()
+                .iter()
+                .map(Package::name)
+                .collect::<BTreeSet<_>>();
+            scoped_packages = packages
+                .iter()
+                .filter(|(name, _)| names.contains(name) || members.contains(name))
+                .map(|(name, member)| (name.clone(), member.clone()))
+                .collect();
+            &scoped_packages
+        } else {
+            packages
+        };
         let validation_build_dispatch = build_dispatch.fork(&locked_build_hasher);
         let database = DistributionDatabase::new(
             &client,

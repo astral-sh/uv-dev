@@ -47,7 +47,7 @@ use uv_distribution_types::{
     MinimumLibcVersion, NameRequirementSpecification, PackageConfigSettings, Requirement,
 };
 use uv_install_wheel::LinkMode;
-use uv_normalize::{ExtraName, PackageName, PipGroupName};
+use uv_normalize::{ExtraName, GroupName, PackageName, PipGroupName};
 use uv_pep440::Version;
 use uv_pep508::{MarkerTree, RequirementOrigin};
 use uv_preview::Preview;
@@ -761,6 +761,7 @@ fn resolve_lock_check(
 /// The resolved settings to use for a `run` invocation.
 #[derive(Debug, Clone)]
 pub(crate) struct RunSettings {
+    pub(crate) workspace_group: Option<GroupName>,
     pub(crate) lock_check: LockCheck,
     pub(crate) frozen: Option<FrozenSource>,
     pub(crate) extras: ExtrasSpecification,
@@ -803,6 +804,7 @@ impl RunSettings {
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let RunArgs {
+            workspace_group,
             extra,
             all_extras,
             no_extra,
@@ -936,6 +938,7 @@ impl RunSettings {
             show_resolution,
             all_packages,
             package,
+            workspace_group,
             no_project,
             no_sync: no_sync.is_enabled(),
             active: flag(active, no_active, "active")?.into(),
@@ -1935,6 +1938,7 @@ impl PythonPinSettings {
 #[expect(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct SyncSettings {
+    pub(super) workspace_group: Option<GroupName>,
     pub(super) lock_check: LockCheck,
     pub(super) frozen: Option<FrozenSource>,
     pub(super) dry_run: DryRun,
@@ -1964,6 +1968,7 @@ impl SyncSettings {
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let SyncArgs {
+            workspace_group,
             extra,
             all_extras,
             no_extra,
@@ -2140,6 +2145,7 @@ impl SyncSettings {
             all_packages,
             package,
             python: python.and_then(Maybe::into_option),
+            workspace_group,
             python_platform,
             refresh: Refresh::try_from(refresh)?,
             settings,
@@ -2937,6 +2943,7 @@ impl TreeSettings {
 #[expect(clippy::struct_excessive_bools, dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct ExportSettings {
+    pub(super) workspace_group: Option<GroupName>,
     pub(super) format: Option<ExportFormat>,
     pub(super) all_packages: bool,
     pub(super) package: Vec<PackageName>,
@@ -2969,6 +2976,7 @@ impl ExportSettings {
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let ExportArgs {
+            workspace_group,
             format,
             all_packages,
             package,
@@ -3056,6 +3064,7 @@ impl ExportSettings {
 
         Ok(Self {
             format,
+            workspace_group,
             all_packages,
             package,
             prune,

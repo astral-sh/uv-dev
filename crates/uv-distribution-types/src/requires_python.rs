@@ -1,4 +1,4 @@
-use std::collections::Bound;
+use std::collections::{BTreeMap, Bound};
 
 use version_ranges::Ranges;
 
@@ -7,7 +7,9 @@ use uv_pep440::{
     LowerBound, UpperBound, Version, VersionSpecifier, VersionSpecifiers,
     release_specifiers_to_ranges,
 };
-use uv_pep508::{MarkerExpression, MarkerTree, MarkerValueVersion};
+use uv_pep508::{
+    CanonicalMarkerValueVersion, MarkerExpression, MarkerTree, MarkerTreeKind, MarkerValueVersion,
+};
 use uv_platform_tags::{AbiTag, CPythonAbiVariants, LanguageTag};
 
 /// The `Requires-Python` requirement specifier.
@@ -81,6 +83,98 @@ impl RequiresPython {
         let range = RequiresPythonRange::from_range(&range);
 
         Some(Self { specifiers, range })
+    }
+
+    /// Returns the union of the given Python requirements.
+    pub fn union<'a>(requirements: impl Iterator<Item = &'a Self>) -> Option<Self> {
+        let range = requirements
+            .map(|requires_python| release_specifiers_to_ranges(requires_python.specifiers.clone()))
+            .reduce(|left, right| left.union(&right))?;
+        Some(Self {
+            specifiers: VersionSpecifiers::from_release_only_bounds(range.iter()),
+            range: RequiresPythonRange::from_range(&range),
+        })
+    }
+
+    /// Project an environment marker onto the Python versions it can support.
+    pub fn from_marker_tree(marker: MarkerTree) -> Option<Self> {
+        fn project(
+            marker: MarkerTree,
+            memo: &mut BTreeMap<MarkerTree, Ranges<Version>>,
+        ) -> Ranges<Version> {
+            if let Some(range) = memo.get(&marker) {
+                return range.clone();
+            }
+            let mut range = Ranges::empty();
+            match marker.kind() {
+                MarkerTreeKind::True => range = Ranges::full(),
+                MarkerTreeKind::False => {}
+                MarkerTreeKind::Version(node) => {
+                    for (edge, child) in node.edges() {
+                        let child = project(child, memo);
+                        let child = match node.key() {
+                            CanonicalMarkerValueVersion::PythonFullVersion => {
+                                edge.intersection(&child)
+                            }
+                            CanonicalMarkerValueVersion::ImplementationVersion => child,
+                        };
+                        range = range.union(&child);
+                    }
+                }
+                MarkerTreeKind::VersionString(node) => {
+                    for (_, child) in node.edges() {
+                        range = range.union(&project(child, memo));
+                    }
+                }
+                MarkerTreeKind::String(node) => {
+                    for (_, child) in node.children() {
+                        range = range.union(&project(child, memo));
+                    }
+                }
+                MarkerTreeKind::In(node) => {
+                    for (_, child) in node.children() {
+                        range = range.union(&project(child, memo));
+                    }
+                }
+                MarkerTreeKind::Contains(node) => {
+                    for (_, child) in node.children() {
+                        range = range.union(&project(child, memo));
+                    }
+                }
+                MarkerTreeKind::List(node) => {
+                    for (_, child) in node.children() {
+                        range = range.union(&project(child, memo));
+                    }
+                }
+                MarkerTreeKind::Extra(node) => {
+                    for (_, child) in node.children() {
+                        range = range.union(&project(child, memo));
+                    }
+                }
+            }
+            memo.insert(marker, range.clone());
+            range
+        }
+        let range = project(marker, &mut BTreeMap::new());
+        if range.is_empty() {
+            return None;
+        }
+        Some(Self {
+            specifiers: VersionSpecifiers::from_release_only_bounds(range.iter()),
+            range: RequiresPythonRange::from_range(&range),
+        })
+    }
+
+    /// Convert the complete declaration, including excluded versions, to a marker.
+    pub fn to_exact_marker_tree(&self) -> MarkerTree {
+        self.specifiers
+            .iter()
+            .fold(MarkerTree::TRUE, |marker, specifier| {
+                marker.and(MarkerTree::expression(MarkerExpression::Version {
+                    key: MarkerValueVersion::PythonFullVersion,
+                    specifier: specifier.clone(),
+                }))
+            })
     }
 
     /// Split the [`RequiresPython`] at the given version.
@@ -627,8 +721,37 @@ mod tests {
 
     use uv_distribution_filename::WheelFilename;
     use uv_pep440::{LowerBound, UpperBound, Version, VersionSpecifiers};
+    use uv_pep508::MarkerTree;
 
     use crate::RequiresPython;
+
+    #[test]
+    fn marker_python_projection() -> Result<(), Box<dyn std::error::Error>> {
+        let marker = MarkerTree::from_str(
+            "(sys_platform == 'win32' and python_version == '3.12') or (sys_platform != 'win32' and python_version >= '3.14')",
+        )?;
+        let requires_python = RequiresPython::from_marker_tree(marker).expect("nonempty domain");
+        assert_eq!(
+            requires_python.to_exact_marker_tree(),
+            MarkerTree::from_str("python_version == '3.12' or python_version >= '3.14'")?
+        );
+        let marker = MarkerTree::from_str(
+            "platform_release >= '24.0.0' and python_version >= '3.12'",
+        )?;
+        let requires_python = RequiresPython::from_marker_tree(marker).expect("nonempty domain");
+        assert_eq!(
+            requires_python.to_exact_marker_tree(),
+            MarkerTree::from_str("python_version >= '3.12'")?
+        );
+        assert!(RequiresPython::from_marker_tree(MarkerTree::FALSE).is_none());
+        assert!(
+            RequiresPython::from_marker_tree(MarkerTree::TRUE)
+                .expect("all versions")
+                .to_exact_marker_tree()
+                .is_true()
+        );
+        Ok(())
+    }
 
     #[test]
     fn requires_python_included() {
