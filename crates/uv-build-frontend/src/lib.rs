@@ -35,7 +35,7 @@ use uv_distribution::BuildRequires;
 use uv_distribution_types::{
     ConfigSettings, ExtraBuildRequirement, ExtraBuildRequires, IndexLocations, Requirement,
 };
-use uv_fs::{LockedFile, LockedFileMode};
+use uv_fs::{ClearNonVirtualenv, LockedFile, LockedFileMode};
 use uv_fs::{PythonExt, Simplified};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
@@ -374,9 +374,10 @@ impl SourceBuild {
                 interpreter.clone(),
                 uv_virtualenv::Prompt::None,
                 false,
-                uv_virtualenv::OnExisting::Remove(
-                    uv_virtualenv::RemovalReason::TemporaryEnvironment,
-                ),
+                uv_virtualenv::OnExisting::Replace {
+                    reason: uv_virtualenv::RemovalReason::TemporaryEnvironment,
+                    clear_non_virtualenv: ClearNonVirtualenv::Allow,
+                },
                 false,
                 uv_virtualenv::Seed::Disabled,
                 false,
