@@ -1633,7 +1633,11 @@ pub struct PipCompileArgs {
 
     /// Install the specified dependency group from a `pyproject.toml`.
     ///
-    /// If no path is provided, the `pyproject.toml` in the working directory is used.
+    /// Use `--group path/to/pyproject.toml:group` to select a group from a specific file. If no path
+    /// is provided, the `pyproject.toml` in the project directory is used. The project directory
+    /// defaults to the working directory and can be set with `--project`.
+    ///
+    /// Groups are sourced independently of other requirement sources.
     ///
     /// May be provided multiple times.
     #[arg(long, group = "sources")]
@@ -1988,8 +1992,13 @@ pub struct PipSyncArgs {
 
     /// Install the specified dependency group from a `pylock.toml` or `pyproject.toml`.
     ///
-    /// If no path is provided, the `pylock.toml` or `pyproject.toml` in the working directory is
-    /// used.
+    /// Use `--group path/to/pyproject.toml:group` to select a group from a specific file. If no path
+    /// is provided, the `pyproject.toml` in the project directory is used. The project directory
+    /// defaults to the working directory and can be set with `--project`.
+    ///
+    /// Groups are sourced independently of other requirement sources. However, when a
+    /// `pylock.toml` file is provided as an input, all groups refer to that file and paths are not
+    /// allowed.
     ///
     /// May be provided multiple times.
     #[arg(long, group = "sources")]
@@ -2321,8 +2330,13 @@ pub struct PipInstallArgs {
 
     /// Install the specified dependency group from a `pylock.toml` or `pyproject.toml`.
     ///
-    /// If no path is provided, the `pylock.toml` or `pyproject.toml` in the working directory is
-    /// used.
+    /// Use `--group path/to/pyproject.toml:group` to select a group from a specific file. If no path
+    /// is provided, the `pyproject.toml` in the project directory is used. The project directory
+    /// defaults to the working directory and can be set with `--project`.
+    ///
+    /// Groups are sourced independently of other requirement sources. However, when a
+    /// `pylock.toml` file is provided as an input, all groups refer to that file and paths are not
+    /// allowed.
     ///
     /// May be provided multiple times.
     #[arg(long, group = "sources")]
