@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use uv_normalize::GroupName;
+use uv_toml::deserialize_unique_map_with_expectation;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DependencyGroups(BTreeMap<GroupName, Vec<DependencyGroupSpecifier>>);
@@ -46,40 +47,12 @@ impl<'de> serde::de::Deserialize<'de> for DependencyGroups {
     where
         D: Deserializer<'de>,
     {
-        struct GroupVisitor;
-
-        impl<'de> serde::de::Visitor<'de> for GroupVisitor {
-            type Value = DependencyGroups;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("a table with unique dependency group names")
-            }
-
-            fn visit_map<M>(self, mut access: M) -> Result<Self::Value, M::Error>
-            where
-                M: serde::de::MapAccess<'de>,
-            {
-                let mut sources = BTreeMap::new();
-                while let Some((key, value)) =
-                    access.next_entry::<GroupName, Vec<DependencyGroupSpecifier>>()?
-                {
-                    match sources.entry(key) {
-                        std::collections::btree_map::Entry::Occupied(entry) => {
-                            return Err(serde::de::Error::custom(format!(
-                                "duplicate dependency group: `{}`",
-                                entry.key()
-                            )));
-                        }
-                        std::collections::btree_map::Entry::Vacant(entry) => {
-                            entry.insert(value);
-                        }
-                    }
-                }
-                Ok(DependencyGroups(sources))
-            }
-        }
-
-        deserializer.deserialize_map(GroupVisitor)
+        deserialize_unique_map_with_expectation(
+            deserializer,
+            "a table with unique dependency group names",
+            |key: &GroupName| format!("duplicate dependency group: `{key}`"),
+        )
+        .map(Self)
     }
 }
 
@@ -147,5 +120,125 @@ impl<'de> Deserialize<'de> for DependencyGroupSpecifier {
         }
 
         deserializer.deserialize_any(Visitor)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DependencyGroupSpecifier, DependencyGroups};
+    use serde::Deserialize;
+    use std::str::FromStr;
+    use uv_normalize::GroupName;
+
+    #[test]
+    fn dependency_groups_preserve_order_and_values() {
+        let json =
+            r#"{"z": ["zebra"], "Foo_Bar": ["foo>=1"], "a": [{"include-group": "Foo_Bar"}]}"#;
+        let toml = r#"
+z = ["zebra"]
+Foo_Bar = ["foo>=1"]
+a = [{include-group = "Foo_Bar"}]
+"#;
+
+        let json_groups: DependencyGroups = serde_json::from_str(json).unwrap();
+        let toml_groups: DependencyGroups = toml_edit::de::from_str(toml).unwrap();
+        assert_eq!(json_groups, toml_groups);
+        assert_eq!(
+            json_groups
+                .keys()
+                .map(GroupName::as_str)
+                .collect::<Vec<_>>(),
+            ["a", "foo-bar", "z"]
+        );
+        assert_eq!(
+            json_groups.get(&GroupName::from_str("a").unwrap()).unwrap(),
+            &[DependencyGroupSpecifier::IncludeGroup {
+                include_group: GroupName::from_str("foo-bar").unwrap(),
+            }]
+        );
+        assert_eq!(
+            json_groups
+                .get(&GroupName::from_str("foo-bar").unwrap())
+                .unwrap(),
+            &[DependencyGroupSpecifier::Requirement("foo>=1".to_owned())]
+        );
+    }
+
+    #[test]
+    fn dependency_groups_json_errors() {
+        let errors = [
+            r#"{"Foo_Bar": [], "foo-bar": []}"#,
+            "[]",
+            "null",
+            r#"{"foo-bar": [], "foo_bar": [1]}"#,
+        ]
+        .into_iter()
+        .map(|input| {
+            let error = serde_json::from_str::<DependencyGroups>(input).unwrap_err();
+            format!("{input}\n{error}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+        insta::assert_snapshot!(errors, @r#"
+        {"Foo_Bar": [], "foo-bar": []}
+        duplicate dependency group: `foo-bar` at line 1 column 30
+
+        []
+        invalid type: sequence, expected a table with unique dependency group names at line 1 column 0
+
+        null
+        invalid type: null, expected a table with unique dependency group names at line 1 column 4
+
+        {"foo-bar": [], "foo_bar": [1]}
+        invalid type: integer `1`, expected a string or a map with the `include-group` key at line 1 column 29
+        "#);
+    }
+
+    #[test]
+    fn dependency_groups_toml_errors() {
+        #[derive(Debug, Deserialize)]
+        struct Document {
+            groups: DependencyGroups,
+        }
+
+        let empty: Document = toml_edit::de::from_str("groups = {}").unwrap();
+        assert_eq!(empty.groups.keys().count(), 0);
+
+        let errors = [
+            "groups = { Foo_Bar = [], foo-bar = [] }",
+            "groups = []",
+            "groups = { foo-bar = [], foo_bar = [1] }",
+        ]
+        .into_iter()
+        .map(|input| {
+            let error = toml_edit::de::from_str::<Document>(input).unwrap_err();
+            format!("{input}\n{error}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+        insta::assert_snapshot!(errors, @r"
+        groups = { Foo_Bar = [], foo-bar = [] }
+        TOML parse error at line 1, column 10
+          |
+        1 | groups = { Foo_Bar = [], foo-bar = [] }
+          |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        duplicate dependency group: `foo-bar`
+
+
+        groups = []
+        TOML parse error at line 1, column 10
+          |
+        1 | groups = []
+          |          ^^
+        invalid type: sequence, expected a table with unique dependency group names
+
+
+        groups = { foo-bar = [], foo_bar = [1] }
+        TOML parse error at line 1, column 37
+          |
+        1 | groups = { foo-bar = [], foo_bar = [1] }
+          |                                     ^
+        invalid type: integer `1`, expected a string or a map with the `include-group` key
+        ");
     }
 }
