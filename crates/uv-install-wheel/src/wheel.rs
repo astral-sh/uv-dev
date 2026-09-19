@@ -9,7 +9,7 @@ use fs_err as fs;
 use fs_err::{DirEntry, File};
 use itertools::Itertools;
 use mailparse::parse_headers;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use sha2::{Digest, Sha256};
 use tracing::{debug, instrument, trace, warn};
 use walkdir::WalkDir;
@@ -384,6 +384,37 @@ pub(crate) fn write_script_entrypoints(
     Ok(())
 }
 
+/// Reject entry points that normalize to the same final script destination.
+pub(crate) fn validate_script_entrypoints(
+    layout: &Layout,
+    console_scripts: &[Script],
+    gui_scripts: &[Script],
+) -> Result<(), Error> {
+    let mut destinations = FxHashMap::default();
+    for script in console_scripts.iter().chain(gui_scripts) {
+        let validated = ValidatedScript::try_from_script(script, layout)?;
+        let destination = script_destination_key(validated.as_path());
+        if let Some(previous) = destinations.insert(destination, script.name.as_str()) {
+            let mut entry_points = [previous, script.name.as_str()];
+            entry_points.sort_unstable();
+            return Err(Error::InvalidWheel(format!(
+                "Wheel entry points `{}` and `{}` install to the same destination",
+                entry_points[0], entry_points[1]
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Return a key for a final script destination, accounting for common case-insensitive layouts.
+fn script_destination_key(path: &Path) -> Vec<u8> {
+    if cfg!(any(windows, target_os = "macos")) {
+        path.to_string_lossy().to_lowercase().into_bytes()
+    } else {
+        path.as_os_str().as_encoded_bytes().to_vec()
+    }
+}
+
 /// A parsed `WHEEL` file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WheelFile(FxHashMap<String, Vec<String>>);
@@ -724,6 +755,12 @@ pub(crate) fn install_data(
     gui_scripts: &[Script],
     record: &mut [RecordEntry],
 ) -> Result<(), Error> {
+    let mut script_destinations = FxHashSet::default();
+    for script in console_scripts.iter().chain(gui_scripts) {
+        let validated = ValidatedScript::try_from_script(script, layout)?;
+        script_destinations.insert(script_destination_key(validated.as_path()));
+    }
+
     for entry in fs::read_dir(data_dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -767,6 +804,9 @@ pub(crate) fn install_data(
                         .iter()
                         .chain(gui_scripts)
                         .any(|script| script.name == match_name)
+                        || script_destinations.contains(&script_destination_key(
+                            &layout.scheme.scripts.join(file.file_name()),
+                        ))
                     {
                         continue;
                     }
