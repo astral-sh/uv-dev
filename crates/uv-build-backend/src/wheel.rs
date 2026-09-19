@@ -855,40 +855,27 @@ impl<W: Write + Seek + Unpin> ZipDirectoryWriter<SyncWriter<W>> {
 }
 
 struct EntryWriter<'writer, W: AsyncWrite + AsyncSeek + Unpin> {
-    writer: Option<EntrySeekableWriter<'writer, W>>,
+    writer: EntrySeekableWriter<'writer, W>,
 }
 
 impl<'writer, W: AsyncWrite + AsyncSeek + Unpin> EntryWriter<'writer, W> {
     fn new(writer: EntrySeekableWriter<'writer, W>) -> Self {
-        Self {
-            writer: Some(writer),
-        }
+        Self { writer }
     }
 
-    fn close(mut self) -> Result<(), Error> {
-        let Some(writer) = self.writer.take() else {
-            return Ok(());
-        };
-        block_on(writer.close())?;
+    fn close(self) -> Result<(), Error> {
+        block_on(self.writer.close())?;
         Ok(())
     }
 }
 
 impl<W: AsyncWrite + AsyncSeek + Unpin> Write for EntryWriter<'_, W> {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        let Some(writer) = self.writer.as_mut() else {
-            return Err(io::Error::other(
-                "wheel ZIP entry writer was already closed",
-            ));
-        };
-        block_on(writer.write(buffer))
+        block_on(self.writer.write(buffer))
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        let Some(writer) = self.writer.as_mut() else {
-            return Ok(());
-        };
-        block_on(writer.flush())
+        block_on(self.writer.flush())
     }
 }
 
