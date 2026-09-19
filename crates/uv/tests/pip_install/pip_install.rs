@@ -38,9 +38,45 @@ use uv_test::find_links::FindLinksServer;
 use uv_test::packse::generate_wheel_with_files;
 use uv_test::packse::{PackseServer, generate_wheel};
 use uv_test::{
-    DEFAULT_PYTHON_VERSION, TestContext, apply_filters, download_to_disk, get_bin, uv_snapshot,
-    venv_bin_path,
+    DEFAULT_PYTHON_VERSION, TestContext, apply_filters, download_local_to_disk, get_bin,
+    uv_snapshot, venv_bin_path,
 };
+
+fn write_tar_gz_with_symlink(
+    context: &TestContext,
+    archive: &Path,
+    entries: &[(&str, &str)],
+    symlink: (&str, &str),
+) -> Result<()> {
+    context
+        .python_command()
+        .arg("-c")
+        .arg(indoc! {r#"
+            import io
+            import json
+            import sys
+            import tarfile
+
+            entries, (link_name, link_target) = json.loads(sys.argv[2])
+            with tarfile.open(sys.argv[1], "w:gz") as archive:
+                for name, contents in entries:
+                    data = contents.encode()
+                    info = tarfile.TarInfo(name)
+                    info.size = len(data)
+                    info.mode = 0o644
+                    archive.addfile(info, io.BytesIO(data))
+                info = tarfile.TarInfo(link_name)
+                info.type = tarfile.SYMTYPE
+                info.linkname = link_target
+                info.mode = 0o777
+                archive.addfile(info)
+        "#})
+        .arg(archive)
+        .arg(serde_json::to_string(&(entries, symlink))?)
+        .assert()
+        .success();
+    Ok(())
+}
 
 fn write_many_files_wheel(path: &Path, source_files: usize) -> Result<()> {
     let mut writer = ZipFileWriter::new(Vec::new());
@@ -86,7 +122,7 @@ fn write_many_files_wheel(path: &Path, source_files: usize) -> Result<()> {
 /// Hash the entire HTTP response even when extraction stops before trailing bytes.
 #[test]
 fn install_http_wheel_hashes_trailing_bytes() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let filename = "ok-1.0.0-py3-none-any.whl";
     let wheel = context.temp_dir.join(filename);
     let mut bytes = fs::read(context.workspace_root.join("test/links").join(filename))?;
@@ -139,7 +175,7 @@ fn install_wheel_cache_incompatible_with_older_uv() -> Result<()> {
             // Pin the release's checksum manifest so all supported platforms use the actual
             // published binary, independently of the package index.
             let manifest = context.temp_dir.join("sha256.sum");
-            download_to_disk(&format!("{release}/sha256.sum"), &manifest);
+            download_local_to_disk(&format!("{release}/sha256.sum"), &manifest);
             assert_eq!(hex::encode(Sha256::digest(fs::read(&manifest)?)), manifest_hash);
             let manifest = fs::read_to_string(&manifest)?;
             let expected_hash = manifest
@@ -148,7 +184,7 @@ fn install_wheel_cache_incompatible_with_older_uv() -> Result<()> {
                 .find_map(|(hash, name)| (name == filename).then_some(hash))
                 .context("uv release is missing the current platform")?;
             let archive = context.temp_dir.join(&filename);
-            download_to_disk(&format!("{release}/{filename}"), &archive);
+            download_local_to_disk(&format!("{release}/{filename}"), &archive);
             assert_eq!(hex::encode(Sha256::digest(fs::read(&archive)?)), expected_hash);
 
             let executable = context.temp_dir.join(format!("uv{}", std::env::consts::EXE_SUFFIX));
@@ -217,7 +253,7 @@ fn install_wheel_cache_incompatible_with_older_uv() -> Result<()> {
 
 #[test]
 fn missing_requirements_txt() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_txt = context.temp_dir.child("requirements.txt");
 
     uv_snapshot!(context.filters(), context.pip_install()
@@ -235,11 +271,11 @@ fn missing_requirements_txt() {
 
 #[test]
 fn empty_requirements_txt() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.touch()?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
@@ -258,7 +294,7 @@ fn empty_requirements_txt() -> Result<()> {
 fn compile_bytecode_for_installed_distributions() -> Result<()> {
     const SOURCE_FILES: usize = 16;
 
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let wheel = context.temp_dir.join("large_wheel-1.0.0-py3-none-any.whl");
     // This exceeds the one-worker compilation queue capacity, exercising producer backpressure.
     write_many_files_wheel(&wheel, SOURCE_FILES)?;
@@ -283,7 +319,7 @@ fn compile_bytecode_for_installed_distributions() -> Result<()> {
     Resolved 3 packages in [TIME]
     Prepared 2 packages in [TIME]
     Installed 2 packages in [TIME]
-    Bytecode compiled 45 files in [TIME]
+    Bytecode compiled 2 files in [TIME]
      + anyio==3.7.1
      + idna==3.6
     "
@@ -358,7 +394,7 @@ fn compile_bytecode_for_installed_distributions() -> Result<()> {
     Prepared 1 package in [TIME]
     Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
-    Bytecode compiled 5 files in [TIME]
+    Bytecode compiled 1 file in [TIME]
      ~ sniffio==1.3.1
     "
     );
@@ -379,7 +415,7 @@ fn compile_bytecode_for_installed_distributions() -> Result<()> {
 #[test]
 #[cfg(unix)]
 fn compile_bytecode_with_symlink_link_mode() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.pip_install()
         .arg("sniffio==1.3.1")
@@ -391,7 +427,7 @@ fn compile_bytecode_with_symlink_link_mode() {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-    Bytecode compiled 5 files in [TIME]
+    Bytecode compiled 1 file in [TIME]
      + sniffio==1.3.1
     "
     );
@@ -410,6 +446,7 @@ fn compile_bytecode_with_symlink_link_mode() {
 #[test]
 fn compile_bytecode_for_relative_install_root() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix();
@@ -425,7 +462,7 @@ fn compile_bytecode_for_relative_install_root() {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-    Bytecode compiled 5 files in [TIME]
+    Bytecode compiled 1 file in [TIME]
      + sniffio==1.3.1
     "
     );
@@ -450,7 +487,7 @@ fn compile_bytecode_for_relative_install_root() {
     Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
     Resolved 1 package in [TIME]
     Installed 1 package in [TIME]
-    Bytecode compiled 5 files in [TIME]
+    Bytecode compiled 1 file in [TIME]
      + sniffio==1.3.1
     "
     );
@@ -465,13 +502,14 @@ fn compile_bytecode_for_relative_install_root() {
                 .is_some_and(|extension| extension == "pyc")
         })
         .count();
-    assert_eq!(compiled, 5);
+    assert_eq!(compiled, 1);
 }
 
 /// Install into the current directory via `--target`.
 #[test]
 fn install_target_current_directory() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix();
@@ -493,9 +531,9 @@ fn install_target_current_directory() {
 
 #[test]
 fn missing_pyproject_toml() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("pyproject.toml"), @"
     exit_code: 2 (failure)
@@ -507,7 +545,9 @@ fn missing_pyproject_toml() {
 
 #[test]
 fn missing_find_links() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_missing_file_error();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_missing_file_error();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("flask")?;
 
@@ -529,7 +569,9 @@ fn missing_find_links() -> Result<()> {
 
 #[test]
 fn missing_find_links_from_requirements_file() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_missing_file_error();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_missing_file_error();
     let requirements_dir = context.temp_dir.child("requirements");
     requirements_dir.create_dir_all()?;
     requirements_dir
@@ -555,11 +597,11 @@ fn missing_find_links_from_requirements_file() -> Result<()> {
 
 #[test]
 fn invalid_pyproject_toml_syntax() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str("123 - 456")?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("pyproject.toml"), @"
     exit_code: 2 (failure)
@@ -586,7 +628,7 @@ fn invalid_pyproject_toml_syntax() -> Result<()> {
 
 #[test]
 fn invalid_pyproject_toml_project_schema() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str("[project]")?;
 
@@ -609,7 +651,7 @@ fn invalid_pyproject_toml_project_schema() -> Result<()> {
 
 #[test]
 fn invalid_pyproject_toml_option_schema() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r"
         [tool.uv]
@@ -639,10 +681,12 @@ fn invalid_pyproject_toml_option_schema() -> Result<()> {
 
 #[test]
 fn invalid_pyproject_toml_option_unknown_field() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filter((
-        "expected one of `required-version`, `native-tls`, .*",
-        "expected one of `required-version`, `native-tls`, [...]",
-    ));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((
+            "expected one of `required-version`, `native-tls`, .*",
+            "expected one of `required-version`, `native-tls`, [...]",
+        ));
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
         [tool.uv]
@@ -675,8 +719,9 @@ fn invalid_pyproject_toml_option_unknown_field() -> Result<()> {
 
 #[test]
 fn pyproject_required_version_preempts_settings_discovery_warning() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((uv_version::version(), "[UV_VERSION]"));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((uv_version::version(), "[UV_VERSION]"));
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
         [tool.uv]
@@ -697,8 +742,9 @@ fn pyproject_required_version_preempts_settings_discovery_warning() -> Result<()
 
 #[test]
 fn uv_toml_required_version_preempts_parse_error() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((uv_version::version(), "[UV_VERSION]"));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((uv_version::version(), "[UV_VERSION]"));
     let uv_toml = context.temp_dir.child("uv.toml");
     uv_toml.write_str(indoc! {r#"
         required-version = ">=9999"
@@ -718,8 +764,9 @@ fn uv_toml_required_version_preempts_parse_error() -> Result<()> {
 
 #[test]
 fn uv_toml_required_version_preempts_pyproject_only_field() -> Result<()> {
-    let context =
-        uv_test::test_context!("3.12").with_filter((uv_version::version(), "[UV_VERSION]"));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((uv_version::version(), "[UV_VERSION]"));
     let uv_toml = context.temp_dir.child("uv.toml");
     uv_toml.write_str(indoc! {r#"
         required-version = ">=9999"
@@ -741,7 +788,7 @@ fn uv_toml_required_version_preempts_pyproject_only_field() -> Result<()> {
 
 #[test]
 fn invalid_toml_filename() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let test_toml = context.temp_dir.child("test.toml");
     test_toml.touch()?;
 
@@ -759,7 +806,7 @@ fn invalid_toml_filename() -> Result<()> {
 
 #[test]
 fn invalid_pylock_toml_filename() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     context.temp_dir.child("pylock..toml").touch()?;
     context.temp_dir.child("pylock.foo.bar.toml").touch()?;
 
@@ -786,7 +833,7 @@ fn invalid_pylock_toml_filename() -> Result<()> {
 
 #[test]
 fn invalid_uv_toml_option_disallowed_automatic_discovery() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let uv_toml = context.temp_dir.child("uv.toml");
     uv_toml.write_str(indoc! {r"
         managed = true
@@ -805,7 +852,7 @@ fn invalid_uv_toml_option_disallowed_automatic_discovery() -> Result<()> {
 
 #[test]
 fn invalid_uv_toml_option_disallowed_command_line() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let uv_toml = context.temp_dir.child("foo.toml");
     uv_toml.write_str(indoc! {r"
         managed = true
@@ -826,8 +873,8 @@ fn invalid_uv_toml_option_disallowed_command_line() -> Result<()> {
 
 #[tokio::test]
 async fn cache_uv_toml_credentials() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let proxy = crate::pypi_proxy::start().await;
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let proxy = crate::pypi_proxy::start_local().await;
     let uv_toml = context.temp_dir.child("uv.toml");
     uv_toml.write_str(&format!(
         indoc::indoc! {r#"
@@ -867,7 +914,7 @@ async fn cache_uv_toml_credentials() -> Result<()> {
 /// fields. See: <https://hatch.pypa.io/latest/config/context/>
 #[test]
 fn invalid_pyproject_toml_requirement_indirect() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let pyproject_toml = context.temp_dir.child("path_dep/pyproject.toml");
     pyproject_toml.write_str(
         r#"[project]
@@ -948,7 +995,7 @@ dependencies = ["flask==1.0.x"]
 
 #[test]
 fn invalid_python_version() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("flask")
@@ -980,7 +1027,7 @@ fn missing_pip() {
 
 #[test]
 fn no_solution() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.pip_install()
         .arg("flask>=3.0.2")
@@ -997,9 +1044,9 @@ fn no_solution() {
 /// Install a package from the command line into a virtual environment.
 #[test]
 fn install_package() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
-    // Install Flask.
+    // Install the locally generated wheel with malformed optional dependency metadata.
     uv_snapshot!(context.pip_install()
         .arg("Flask")
         .arg("--strict"), @"
@@ -1024,7 +1071,7 @@ fn install_package() {
 /// Install a package from a `requirements.txt` into a virtual environment.
 #[test]
 fn install_requirements_txt() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Install Flask.
     let requirements_txt = context.temp_dir.child("requirements.txt");
@@ -1077,7 +1124,7 @@ fn install_requirements_txt() -> Result<()> {
 #[test]
 #[expect(clippy::disallowed_types)]
 fn install_from_stdin() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Install Flask.
     let requirements_txt = context.temp_dir.child("requirements.txt");
@@ -1112,7 +1159,7 @@ fn install_from_stdin() -> Result<()> {
 #[cfg(not(windows))]
 #[expect(clippy::disallowed_types)]
 fn install_from_dev_stdin() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Install Flask.
     let requirements_txt = context.temp_dir.child("requirements.txt");
@@ -1145,7 +1192,7 @@ fn install_from_dev_stdin() -> Result<()> {
 /// Install a package from a remote `requirements.txt` into a virtual environment.
 #[tokio::test]
 async fn install_remote_requirements_txt() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let username = "user";
     let password = "password";
@@ -1304,7 +1351,7 @@ async fn start_requirements_server(
 /// Warn (but don't fail) when unsupported flags are set in the `requirements.txt`.
 #[test]
 fn install_unsupported_flag() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc! {r"
@@ -1334,7 +1381,7 @@ fn install_unsupported_flag() -> Result<()> {
 /// Enable `--require-hashes` from the `requirements.txt`.
 #[test]
 fn install_require_hashes_in_requirements_txt() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc! {r"
@@ -1376,7 +1423,7 @@ fn install_require_hashes_in_requirements_txt() -> Result<()> {
 /// This is likely to occur in the real world when compiled on one platform then installed on another.
 #[test]
 fn install_requirements_txt_conflicting_pins() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
 
@@ -1410,7 +1457,7 @@ werkzeug==3.0.1
 
 #[test]
 fn install_with_dependencies_from_script() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! {r#"
         # /// script
@@ -1470,7 +1517,7 @@ fn install_with_dependencies_from_script() -> Result<()> {
 /// Install a `pyproject.toml` file with a `poetry` section.
 #[test]
 fn install_pyproject_toml_poetry() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"[tool.poetry]
@@ -1516,7 +1563,7 @@ build-backend = "poetry.core.masonry.api"
 /// Respect installed versions when resolving.
 #[test]
 fn respect_installed_and_reinstall() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Install Flask.
     let requirements_txt = context.temp_dir.child("requirements.txt");
@@ -1626,7 +1673,7 @@ fn respect_installed_and_reinstall() -> Result<()> {
 /// Respect installed versions when resolving.
 #[test]
 fn reinstall_extras() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Install httpx.
     let requirements_txt = context.temp_dir.child("requirements.txt");
@@ -1680,7 +1727,7 @@ fn reinstall_extras() -> Result<()> {
 /// Warn, but don't fail, when uninstalling incomplete packages.
 #[test]
 fn reinstall_incomplete() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Install anyio.
     let requirements_txt = context.temp_dir.child("requirements.txt");
@@ -1727,7 +1774,9 @@ fn reinstall_incomplete() -> Result<()> {
 
 #[test]
 fn exact_install_removes_extraneous_packages() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_counts();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_counts();
     // Install anyio
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("anyio==3.7.0")?;
@@ -1835,7 +1884,7 @@ fn exact_install_removes_extraneous_packages() -> Result<()> {
 /// Like `pip`, we (unfortunately) allow incompatible environments.
 #[test]
 fn allow_incompatibilities() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Install Flask, which relies on `Werkzeug>=3.0.0`.
     let requirements_txt = context.temp_dir.child("requirements.txt");
@@ -1902,7 +1951,7 @@ fn allow_incompatibilities() -> Result<()> {
 
 #[test]
 fn install_extras() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Request extras for an editable path
     uv_snapshot!(context.filters(), context.pip_install()
@@ -1973,7 +2022,7 @@ dependencies = ["anyio==3.7.0"]
 
 #[test]
 fn install_editable() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Install the editable package.
     uv_snapshot!(context.filters(), context.pip_install()
@@ -2029,7 +2078,7 @@ fn install_editable() {
 
 #[test]
 fn install_no_editable() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let package = context.workspace_root.join("test/packages/executable_file");
 
     uv_snapshot!(context.filters(), context.pip_install()
@@ -2051,7 +2100,7 @@ fn install_no_editable() {
 
 #[test]
 fn install_no_editable_package() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let executable_file = context.workspace_root.join("test/packages/executable_file");
     let black = context.workspace_root.join("test/packages/black_editable");
 
@@ -2078,7 +2127,7 @@ fn install_no_editable_package() {
 
 #[test]
 fn install_no_editable_requirements_txt() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let package = context.workspace_root.join("test/packages/executable_file");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
@@ -2105,7 +2154,7 @@ fn install_no_editable_requirements_txt() -> Result<()> {
 
 #[test]
 fn install_no_editable_env_var() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let package = context.workspace_root.join("test/packages/executable_file");
 
     uv_snapshot!(context.filters(), context.pip_install()
@@ -2127,7 +2176,7 @@ fn install_no_editable_env_var() {
 
 #[test]
 fn install_editable_and_registry() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Install the registry-based version of Black.
     uv_snapshot!(context.filters(), context.pip_install()
@@ -2190,7 +2239,7 @@ fn install_editable_and_registry() {
 
 #[test]
 fn install_editable_no_binary() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Install the editable package with no-binary enabled
     uv_snapshot!(context.filters(), context.pip_install()
@@ -2210,7 +2259,7 @@ fn install_editable_no_binary() {
 
 #[test]
 fn install_editable_compatible_constraint() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let constraints_txt = context.temp_dir.child("constraints.txt");
     constraints_txt.write_str("black==0.1.0")?;
@@ -2235,7 +2284,7 @@ fn install_editable_compatible_constraint() -> Result<()> {
 
 #[test]
 fn install_editable_incompatible_constraint_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let constraints_txt = context.temp_dir.child("constraints.txt");
     constraints_txt.write_str("black>0.1.0")?;
@@ -2258,10 +2307,14 @@ fn install_editable_incompatible_constraint_version() -> Result<()> {
 
 #[test]
 fn install_editable_incompatible_constraint_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let constraints_txt = context.temp_dir.child("constraints.txt");
-    constraints_txt.write_str("black @ https://files.pythonhosted.org/packages/0f/89/294c9a6b6c75a08da55e9d05321d0707e9418735e3062b12ef0f54c33474/black-24.4.2-py3-none-any.whl")?;
+    constraints_txt.write_str(&format!(
+        "black @ {}",
+        artifacts.file_url("black-24.4.2-py3-none-any.whl")
+    ))?;
 
     // Install the editable package with an incompatible constraint.
     uv_snapshot!(context.filters(), context.pip_install()
@@ -2273,7 +2326,7 @@ fn install_editable_incompatible_constraint_url() -> Result<()> {
     ----- stderr -----
     error: Requirements contain conflicting URLs for package `black`:
     - file://[WORKSPACE]/test/packages/black_editable (editable)
-    - https://files.pythonhosted.org/packages/0f/89/294c9a6b6c75a08da55e9d05321d0707e9418735e3062b12ef0f54c33474/black-24.4.2-py3-none-any.whl
+    - http://[LOCALHOST]/files/black-24.4.2-py3-none-any.whl
     "
     );
 
@@ -2282,7 +2335,7 @@ fn install_editable_incompatible_constraint_url() -> Result<()> {
 
 #[test]
 fn install_editable_pep_508_requirements_txt() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&indoc::formatdoc! {r"
@@ -2360,7 +2413,7 @@ fn install_editable_pep_508_requirements_txt() -> Result<()> {
 
 #[test]
 fn install_editable_pep_508_cli() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("-e")
@@ -2384,7 +2437,7 @@ fn install_editable_pep_508_cli() {
 
 #[test]
 fn install_editable_bare_cli() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let packages_dir = context.workspace_root.join("test/packages");
 
@@ -2405,7 +2458,7 @@ fn install_editable_bare_cli() {
 
 #[test]
 fn install_editable_unnamed_no_build() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let editable_dir = context.temp_dir.child("editable");
     editable_dir.child("setup.py").write_str(indoc! {r#"
@@ -2432,7 +2485,7 @@ fn install_editable_unnamed_no_build() -> Result<()> {
 
 #[test]
 fn install_editable_bare_requirements_txt() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("-e black_editable")?;
@@ -2458,7 +2511,7 @@ fn install_editable_bare_requirements_txt() -> Result<()> {
 
 #[test]
 fn invalid_editable_no_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("-e black==0.1.0")?;
@@ -2480,7 +2533,7 @@ fn invalid_editable_no_url() -> Result<()> {
 
 #[test]
 fn invalid_editable_unnamed_remote_url_requirements_txt() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
@@ -2503,7 +2556,7 @@ fn invalid_editable_unnamed_remote_url_requirements_txt() -> Result<()> {
 
 #[test]
 fn invalid_editable_unnamed_remote_url_cli() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("-e")
@@ -2520,7 +2573,7 @@ fn invalid_editable_unnamed_remote_url_cli() {
 
 #[test]
 fn invalid_editable_named_https_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc! {"
@@ -2549,16 +2602,18 @@ fn invalid_editable_named_https_url() -> Result<()> {
 /// that the `flit` install and the source distribution build don't conflict.
 #[test]
 fn reinstall_build_system() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc! {r"
+    requirements_txt.write_str(&formatdoc! {r"
         flit_core<4.0.0
-        flask @ https://files.pythonhosted.org/packages/d8/09/c1a7354d3925a3c6c8cfdebf4245bae67d633ffda1ba415add06ffc839c5/flask-3.0.0.tar.gz
-        "
+        flask @ {flask_url}
+        ",
+        flask_url = artifacts.file_url("flask-3.0.0.tar.gz"),
     })?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("--reinstall")
         .arg("-r")
         .arg("requirements.txt")
@@ -2570,7 +2625,7 @@ fn reinstall_build_system() -> Result<()> {
     Installed 8 packages in [TIME]
      + blinker==1.7.0
      + click==8.1.7
-     + flask==3.0.0 (from https://files.pythonhosted.org/packages/d8/09/c1a7354d3925a3c6c8cfdebf4245bae67d633ffda1ba415add06ffc839c5/flask-3.0.0.tar.gz)
+     + flask==3.0.0 (from http://[LOCALHOST]/files/flask-3.0.0.tar.gz)
      + flit-core==3.9.0
      + itsdangerous==2.1.2
      + jinja2==3.1.3
@@ -2585,7 +2640,7 @@ fn reinstall_build_system() -> Result<()> {
 /// Install a package without using the remote index
 #[test]
 fn install_no_index() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.pip_install()
         .arg("Flask")
@@ -2606,7 +2661,7 @@ fn install_no_index() {
 /// Covers a case where the user requests a version which should be included in the error
 #[test]
 fn install_no_index_version() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.pip_install()
         .arg("Flask==3.0.0")
@@ -2638,28 +2693,25 @@ fn install_no_index_version() {
 /// Ref: <https://github.com/astral-sh/uv/issues/1600>
 #[test]
 fn install_extra_index_url_has_priority() {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2024-03-09T00:00:00Z");
+    let primary_index = PackseServer::new("packages/pip-commands.toml");
+    let preferred_index = PackseServer::new("packages/pip-compile-index-strategy-extra.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.pip_install()
         .arg("--index-url")
-        .arg("https://test.pypi.org/simple")
+        .arg(primary_index.index_url())
         .arg("--extra-index-url")
-        .arg("https://pypi.org/simple")
-        // This tests what we want because BOTH of the following
-        // are true: `black` is on pypi.org and test.pypi.org, AND
-        // `black==24.2.0` is on pypi.org and NOT test.pypi.org. So
-        // this would previously check for `black` on test.pypi.org,
-        // find it, but then not find a compatible version. After
-        // the fix, uv will check pypi.org first since it is given
-        // priority via --extra-index-url.
-        .arg("black==24.2.0")
+        .arg(preferred_index.index_url())
+        // The package exists on both indexes, but only the extra index has the
+        // requested version. The resolver must check the extra index first.
+        .arg("index-strategy-package==2.0.0")
         .arg("--no-deps"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + black==24.2.0
+     + index-strategy-package==2.0.0
     "
     );
 
@@ -2669,13 +2721,15 @@ fn install_extra_index_url_has_priority() {
 /// Ensure that the index is fetched only once when duplicate indices are specified
 #[tokio::test]
 async fn install_deduplicated_indices() {
-    let context = uv_test::test_context!("3.12");
+    let index = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let redirect_server = MockServer::start().await;
 
     Mock::given(method("GET"))
         .respond_with(
-            ResponseTemplate::new(302).insert_header("Location", "https://pypi.org/simple/sniffio"),
+            ResponseTemplate::new(302)
+                .insert_header("Location", format!("{}sniffio/", index.index_url())),
         )
         .expect(1)
         .mount(&redirect_server)
@@ -2704,7 +2758,7 @@ async fn install_deduplicated_indices() {
 #[test]
 #[cfg(feature = "test-git")]
 fn install_git_public_https() {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_local_index();
 
     uv_snapshot!(
         context
@@ -2726,7 +2780,7 @@ fn install_git_public_https() {
 #[test]
 #[cfg(feature = "test-git")]
 fn install_git_workspace_build_requirement() -> Result<()> {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_local_index();
 
     let repository = context.temp_dir.child("repository");
     repository.child("pyproject.toml").write_str(indoc! {r#"
@@ -2829,7 +2883,7 @@ fn install_git_workspace_build_requirement() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn install_git_full_commit_ignores_same_named_branch() -> Result<()> {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_local_index();
 
     let repository = context.temp_dir.child("repository");
     repository.child("pyproject.toml").write_str(indoc! {r#"
@@ -2975,7 +3029,7 @@ fn install_git_full_commit_ignores_same_named_branch() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn install_implicit_git_public_https() {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_local_index();
 
     uv_snapshot!(
         context
@@ -2997,14 +3051,14 @@ fn install_implicit_git_public_https() {
 #[test]
 #[cfg(feature = "test-git")]
 fn install_git_percent_encoded_ref() -> Result<()> {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_local_index();
 
     let repository = context.temp_dir.child("repository");
     repository
-        .child("packages/example/example")
+        .child("packages/example/src/example")
         .create_dir_all()?;
     repository
-        .child("packages/example/example/__init__.py")
+        .child("packages/example/src/example/__init__.py")
         .write_str(r#"__version__ = "0.1.0""#)?;
     repository
         .child("packages/example/pyproject.toml")
@@ -3015,8 +3069,8 @@ fn install_git_percent_encoded_ref() -> Result<()> {
         requires-python = ">=3.12"
 
         [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
     "#})?;
 
     Command::new("git")
@@ -3080,7 +3134,7 @@ fn install_git_percent_encoded_ref() -> Result<()> {
 /// Reject an ambiguous Git URL when the ref contains an unescaped `@`.
 #[test]
 fn install_git_unescaped_ref() {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_local_index();
 
     uv_snapshot!(context.filters(), context
         .pip_install()
@@ -3098,7 +3152,7 @@ fn install_git_unescaped_ref() {
 #[test]
 #[cfg(feature = "test-git")]
 fn update_ref_git_public_https() {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_local_index();
 
     uv_snapshot!(
         context
@@ -3141,6 +3195,7 @@ fn update_ref_git_public_https() {
 fn install_git_public_https_missing_branch_or_tag() {
     // Windows does not style the command the same as Unix, so we must omit it from the snapshot
     let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION)
+        .with_local_index()
         .with_filter(("`.*/git(.exe)? fetch .*`", "`git fetch [...]`"))
         .with_filter(("exit status", "exit code"));
 
@@ -3162,7 +3217,7 @@ fn install_git_public_https_missing_branch_or_tag() {
 #[tokio::test]
 #[cfg(feature = "test-git")]
 async fn install_git_public_rejects_mismatched_github_api_commit() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     context
         .temp_dir
         .child("pyproject.toml")
@@ -3211,7 +3266,7 @@ async fn install_git_public_rejects_mismatched_github_api_commit() -> Result<()>
 #[tokio::test]
 #[cfg(feature = "test-git")]
 async fn install_git_public_rate_limited_by_github_rest_api_403_response() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -3238,7 +3293,7 @@ async fn install_git_public_rate_limited_by_github_rest_api_403_response() {
 async fn install_git_public_rate_limited_by_github_rest_api_429_response() {
     use uv_client::DEFAULT_RETRIES;
 
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -3267,6 +3322,7 @@ async fn install_git_public_rate_limited_by_github_rest_api_429_response() {
 fn install_git_public_https_missing_commit() {
     // Windows does not style the command the same as Unix, so we must omit it from the snapshot
     let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION)
+        .with_local_index()
         .with_filter(("`.*/git(.exe)? fetch .*`", "`git fetch [...]`"))
         .with_filter(("exit status", "exit code"))
         // There are flakes on Windows where this irrelevant error is appended
@@ -3294,7 +3350,7 @@ fn install_git_public_https_missing_commit() {
 #[test]
 #[cfg(feature = "test-git")]
 fn install_git_public_https_exact_commit() {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_local_index();
 
     // `uv pip install` a Git dependency with an exact commit.
     uv_snapshot!(context.filters(), context.pip_install()
@@ -3338,7 +3394,7 @@ fn install_git_public_https_exact_commit() {
 fn install_git_private_https_pat() {
     use uv_test::decode_token;
 
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_local_index();
     let token = decode_token(uv_test::READ_ONLY_GITHUB_TOKEN);
     let package = format!(
         "uv-private-pypackage@ git+https://{token}@github.com/astral-test/uv-private-pypackage"
@@ -3362,7 +3418,7 @@ fn install_git_private_https_pat() {
 #[test]
 #[cfg(all(not(windows), feature = "test-git"))]
 fn install_git_private_https_pat_mixed_with_public() {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_local_index();
     let token = decode_token(uv_test::READ_ONLY_GITHUB_TOKEN);
 
     let package = format!(
@@ -3387,7 +3443,7 @@ fn install_git_private_https_pat_mixed_with_public() {
 #[test]
 #[cfg(all(not(windows), feature = "test-git"))]
 fn install_git_private_https_multiple_pat() {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_local_index();
     let token_1 = decode_token(uv_test::READ_ONLY_GITHUB_TOKEN);
     let token_2 = decode_token(uv_test::READ_ONLY_GITHUB_TOKEN_2);
 
@@ -3416,7 +3472,7 @@ fn install_git_private_https_multiple_pat() {
 #[test]
 #[cfg(feature = "test-git")]
 fn install_git_private_https_pat_at_ref() {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_local_index();
     let token = decode_token(uv_test::READ_ONLY_GITHUB_TOKEN);
 
     let mut filters = context.filters();
@@ -3451,7 +3507,9 @@ fn install_git_private_https_pat_at_ref() {
 #[test]
 #[cfg(feature = "test-git")]
 fn install_git_private_https_pat_and_username() {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_unset_git_credential_helper();
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION)
+        .with_local_index()
+        .with_unset_git_credential_helper();
     let token = decode_token(uv_test::READ_ONLY_GITHUB_TOKEN);
     let user = "astral-test-bot";
 
@@ -3473,6 +3531,7 @@ fn install_git_private_https_pat_and_username() {
 #[cfg(all(not(windows), feature = "test-git"))]
 fn install_git_private_https_pat_not_authorized() {
     let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION)
+        .with_local_index()
         .with_filter(("`.*/git fetch (.*)`", "`git fetch $1`"));
 
     // A revoked token
@@ -3501,7 +3560,7 @@ fn install_git_private_https_pat_not_authorized() {
 #[test]
 #[cfg(not(windows))]
 fn install_github_artifact_private_https_pat_mixed_with_public() {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_local_index();
     let token = decode_token(uv_test::READ_ONLY_GITHUB_TOKEN);
 
     let private_package = format!(
@@ -3528,7 +3587,7 @@ fn install_github_artifact_private_https_pat_mixed_with_public() {
 #[test]
 #[cfg(not(windows))]
 fn install_github_artifact_private_https_multiple_pat() {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_local_index();
     let token_1 = decode_token(uv_test::READ_ONLY_GITHUB_TOKEN);
     let token_2 = decode_token(uv_test::READ_ONLY_GITHUB_TOKEN_2);
 
@@ -3559,7 +3618,7 @@ fn install_github_artifact_private_https_multiple_pat() {
 #[test]
 #[cfg(feature = "test-git")]
 fn install_git_private_https_interactive() {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_local_index();
 
     let package = "uv-private-pypackage@ git+https://github.com/astral-test/uv-private-pypackage";
 
@@ -3586,7 +3645,7 @@ fn install_git_private_https_interactive() {
 /// Install a package without using pre-built wheels.
 #[test]
 fn reinstall_no_binary() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("simple/single-package.toml");
 
     // The first installation should use a pre-built wheel
@@ -3658,7 +3717,7 @@ fn reinstall_no_binary() {
 /// Overlapping usage of `--no-binary` and `--only-binary`
 #[test]
 fn install_no_binary_overrides_only_binary_all() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // The specific `--no-binary` should override the less specific `--only-binary`
     let mut command = context.pip_install();
@@ -3689,7 +3748,7 @@ fn install_no_binary_overrides_only_binary_all() {
 /// Accept comma-separated values for `--no-binary` (pip compatibility)
 #[test]
 fn install_no_binary_comma_separated() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Use comma-separated format for `--no-binary`
     let mut command = context.pip_install();
@@ -3718,7 +3777,7 @@ fn install_no_binary_comma_separated() {
 /// TODO(zanieb): This is not yet implemented
 #[test]
 fn install_no_binary_env() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let mut command = context.pip_install();
     command.arg("anyio").env(EnvVars::UV_NO_BINARY, "1");
@@ -3785,7 +3844,7 @@ fn install_no_binary_env() {
 /// Overlapping usage of `--no-binary` and `--only-binary`
 #[test]
 fn install_only_binary_overrides_no_binary_all() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("simple/single-package.toml");
 
     // The specific `--only-binary` should override the less specific `--no-binary`
@@ -3798,6 +3857,9 @@ fn install_only_binary_overrides_no_binary_all() {
         .arg(":all:")
         .arg("--only-binary")
         .arg("a")
+        // Packse source distributions use the vendored Hatchling wheels as their build backend.
+        .arg("--only-binary")
+        .arg("hatchling,editables,packaging,pathspec,pluggy,trove-classifiers")
         .arg("--strict");
     uv_snapshot!(
         command,
@@ -3817,7 +3879,7 @@ fn install_only_binary_overrides_no_binary_all() {
 /// Accept comma-separated values for `--only-binary` (pip compatibility)
 #[test]
 fn install_only_binary_comma_separated() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Use comma-separated format for `--only-binary`
     let mut command = context.pip_install();
@@ -3846,7 +3908,7 @@ fn install_only_binary_comma_separated() {
 // TODO(zanieb): We should have a better error message here
 #[test]
 fn install_only_binary_all_and_no_binary_all() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // With both as `:all:` we can't install
     let mut command = context.pip_install();
@@ -3875,7 +3937,7 @@ fn install_only_binary_all_and_no_binary_all() {
 /// Cached registry wheels should respect `--no-build` and `--no-binary`.
 #[test]
 fn install_build_policy_cache() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Install a binary distribution.
     uv_snapshot!(
@@ -3967,7 +4029,7 @@ fn install_build_policy_cache() {
 /// Respect `--only-binary` flags in `requirements.txt`
 #[test]
 fn only_binary_requirements_txt() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
@@ -3995,7 +4057,7 @@ fn only_binary_requirements_txt() {
 /// `--only-binary` does not apply to editable requirements
 #[test]
 fn only_binary_editable() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Install the editable package.
     uv_snapshot!(context.filters(), context.pip_install()
@@ -4016,7 +4078,7 @@ fn only_binary_editable() {
 /// `--only-binary` does not apply to editable requirements that depend on each other
 #[test]
 fn only_binary_dependent_editables() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let root_path = context
         .workspace_root
         .join("test/packages/dependent_locals");
@@ -4043,7 +4105,7 @@ fn only_binary_dependent_editables() {
 /// `--only-binary` does not apply to editable requirements, with a `setup.py` config
 #[test]
 fn only_binary_editable_setup_py() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Install the editable package.
     uv_snapshot!(context.filters(), context.pip_install()
@@ -4073,7 +4135,9 @@ fn only_binary_editable_setup_py() {
 #[test]
 fn no_prerelease_hint_source_builds() -> Result<()> {
     // Use an explicit UTC timestamp so the snapshot is stable across host time zones.
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2018-10-09T00:00:00Z");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_exclude_newer("2018-10-09T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -4095,9 +4159,9 @@ fn no_prerelease_hint_source_builds() -> Result<()> {
     error: Failed to build `project @ file://[TEMP_DIR]/`
       cause: Failed to resolve requirements from `setup.py` build
       cause: No solution found when resolving: `setuptools>=40.8.0`
-      cause: Because only setuptools<=40.4.3 is available and you require setuptools>=40.8.0, we can conclude that your requirements are unsatisfiable.
+      cause: Because only setuptools==40.4.3 is available and you require setuptools>=40.8.0, we can conclude that your requirements are unsatisfiable.
 
-    hint: `setuptools` was filtered by `exclude-newer` to only include packages uploaded before 2018-10-09T00:00:00Z. The latest version satisfying the requirement is v69.2.0, published at 2024-03-13T11:20:54.103Z. Consider using `exclude-newer-package` to override the cutoff for this package.
+    hint: `setuptools` was filtered by `exclude-newer` to only include packages uploaded before 2018-10-09T00:00:00Z. The latest version satisfying the requirement is v69.2.0, published at 2024-03-24T00:00:00Z. Consider using `exclude-newer-package` to override the cutoff for this package.
     "
     );
 
@@ -4106,7 +4170,7 @@ fn no_prerelease_hint_source_builds() -> Result<()> {
 
 #[test]
 fn cache_priority() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Install a specific `idna` version.
     uv_snapshot!(
@@ -4158,7 +4222,7 @@ fn cache_priority() {
 /// This test uses the default link semantics. (On macOS, this is `clone`.)
 #[test]
 fn install_executable() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.pip_install()
         .arg("pylint==3.0.0"), @"
@@ -4189,7 +4253,7 @@ fn install_executable() {
 /// executable permissions are retained.
 #[test]
 fn install_executable_copy() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.pip_install()
         .arg("pylint==3.0.0")
@@ -4300,7 +4364,7 @@ fn install_copy_long_paths() -> Result<()> {
 /// executable permissions are retained.
 #[test]
 fn install_executable_hardlink() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.pip_install()
         .arg("pylint==3.0.0")
@@ -4337,7 +4401,10 @@ fn install_executable_hardlink() {
 /// See: <https://github.com/astral-sh/uv/issues/18181>
 #[test]
 fn install_executable_clone() -> anyhow::Result<()> {
-    let Some(context) = uv_test::test_context!("3.12").with_cache_on_cow_fs()? else {
+    let Some(context) = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_cache_on_cow_fs()?
+    else {
         return Ok(());
     };
     let Some(context) = context.with_working_dir_on_cow_fs()? else {
@@ -4385,7 +4452,7 @@ fn install_executable_clone() -> anyhow::Result<()> {
 /// Install a package from the command line into a virtual environment, ignoring its dependencies.
 #[test]
 fn no_deps() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Install Flask.
     uv_snapshot!(context.pip_install()
@@ -4398,11 +4465,11 @@ fn no_deps() {
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + flask==3.0.2
-    warning: The package `flask` requires `werkzeug>=3.0.0`, but it's not installed
-    warning: The package `flask` requires `jinja2>=3.1.2`, but it's not installed
-    warning: The package `flask` requires `itsdangerous>=2.1.2`, but it's not installed
-    warning: The package `flask` requires `click>=8.1.3`, but it's not installed
     warning: The package `flask` requires `blinker>=1.6.2`, but it's not installed
+    warning: The package `flask` requires `click>=8.1.3`, but it's not installed
+    warning: The package `flask` requires `itsdangerous>=2.1.2`, but it's not installed
+    warning: The package `flask` requires `jinja2>=3.1.2`, but it's not installed
+    warning: The package `flask` requires `werkzeug>=3.0.0`, but it's not installed
     "
     );
 
@@ -4413,7 +4480,7 @@ fn no_deps() {
 /// retaining diagnostics in strict mode.
 #[test]
 fn no_deps_installed() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let wheel = indoc! {"
         Wheel-Version: 1.0
         Root-Is-Purelib: true
@@ -4513,7 +4580,7 @@ fn no_deps_installed() -> Result<()> {
 /// dependencies.
 #[test]
 fn no_deps_editable() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Install the editable version of Black. This should remove the registry-based version.
     uv_snapshot!(context.filters(), context.pip_install()
@@ -4536,7 +4603,7 @@ fn no_deps_editable() {
 /// Avoid downgrading already-installed packages when `--upgrade` is provided.
 #[test]
 fn install_no_downgrade() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Create a local package named `idna`.
     let idna = context.temp_dir.child("idna");
@@ -4621,7 +4688,7 @@ fn install_no_downgrade() -> Result<()> {
 /// Upgrade a package.
 #[test]
 fn install_upgrade() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Install an old version of anyio and httpcore.
     uv_snapshot!(context.pip_install()
@@ -4703,7 +4770,7 @@ fn install_upgrade() {
 /// `--upgrade` takes precedence over `upgrade-package` in configuration.
 #[test]
 fn install_upgrade_overrides_configured_upgrade_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Install old versions of two packages.
     uv_snapshot!(context.filters(), context.pip_install()
@@ -4751,7 +4818,7 @@ fn install_upgrade_overrides_configured_upgrade_package() -> Result<()> {
 /// Install a package from a `requirements.txt` file, with a `constraints.txt` file.
 #[test]
 fn install_constraints_txt() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("anyio==3.7.0")?;
 
@@ -4781,7 +4848,7 @@ fn install_constraints_txt() -> Result<()> {
 #[test]
 #[expect(clippy::disallowed_types)]
 fn install_constraints_txt_from_stdin() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("anyio==3.7.0")?;
 
@@ -4811,7 +4878,7 @@ fn install_constraints_txt_from_stdin() -> Result<()> {
 /// Check that `tool.uv.constraint-dependencies` in `pyproject.toml` is respected.
 #[test]
 fn install_constraints_from_pyproject() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"[project]
@@ -4848,7 +4915,7 @@ fn install_constraints_from_pyproject() -> Result<()> {
 /// Install a package from a `requirements.txt` file, with an inline constraint.
 #[test]
 fn install_constraints_inline() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirementstxt = context.temp_dir.child("requirements.txt");
     requirementstxt.write_str("anyio==3.7.0\n-c constraints.txt")?;
 
@@ -4875,7 +4942,7 @@ fn install_constraints_inline() -> Result<()> {
 /// Install a package from a `constraints.txt` file on a remote http server.
 #[test]
 fn install_constraints_remote() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.pip_install()
             .arg("-c")
@@ -4895,7 +4962,7 @@ fn install_constraints_remote() {
 /// to a remote http server.
 #[test]
 fn install_constraints_inline_remote() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirementstxt = context.temp_dir.child("requirements.txt");
     requirementstxt.write_str("typing-extensions>=4.0\n-c https://raw.githubusercontent.com/apache/airflow/constraints-2-6/constraints-3.11.txt")?;
 
@@ -4917,7 +4984,7 @@ fn install_constraints_inline_remote() -> Result<()> {
 /// Constrain a package that's included via an extra.
 #[test]
 fn install_constraints_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("flask[dotenv]")?;
@@ -4951,7 +5018,7 @@ fn install_constraints_extra() -> Result<()> {
 
 #[test]
 fn install_constraints_respects_offline_mode() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.pip_install()
             .arg("--offline")
@@ -4967,7 +5034,7 @@ fn install_constraints_respects_offline_mode() {
 #[test]
 #[cfg(feature = "test-git")]
 fn install_git_source_respects_offline_mode() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install()
             .arg("--offline")
@@ -4985,7 +5052,7 @@ fn install_git_source_respects_offline_mode() {
 /// Transitive pre-releases should be enabled when resolving isolated build requirements.
 #[test]
 fn build_transitive_prerelease() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("prereleases/transitive-package-only-prereleases-in-range.toml");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -5024,7 +5091,7 @@ fn build_transitive_prerelease() -> Result<()> {
 /// specifier.
 #[test]
 fn explicit_prerelease_does_not_fall_back_if_necessary() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("prereleases/package-only-prereleases-in-range.toml");
 
     uv_snapshot!(context.filters(), context.pip_install()
@@ -5045,7 +5112,7 @@ fn explicit_prerelease_does_not_fall_back_if_necessary() {
 /// specifier.
 #[test]
 fn explicit_prerelease_allows_direct_marker() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new(
         "prereleases/package-prerelease-specified-only-prerelease-available.toml",
     );
@@ -5070,7 +5137,7 @@ fn explicit_prerelease_allows_direct_marker() {
 /// requirement with a pre-release specifier.
 #[test]
 fn explicit_prerelease_prefers_stable_for_direct_marker() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("prereleases/package-prerelease-specified-mixed-available.toml");
 
     uv_snapshot!(context.filters(), context.pip_install()
@@ -5096,7 +5163,7 @@ fn prerelease_index_strategy_ordering() {
     let private = PackseServer::new("prereleases/package-only-prereleases.toml");
     let public = PackseServer::new("prereleases/package-stable-prerelease-candidates.toml");
 
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--index-url")
         .arg(public.index_url())
@@ -5113,7 +5180,7 @@ fn prerelease_index_strategy_ordering() {
     ");
     context.assert_installed("a", "1.0.0a1");
 
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--index-url")
         .arg(public.index_url())
@@ -5135,7 +5202,7 @@ fn prerelease_index_strategy_ordering() {
 /// specifier.
 #[test]
 fn explicit_prerelease_disallows_transitive_marker() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("prereleases/transitive-prerelease-and-stable-dependency.toml");
 
     uv_snapshot!(context.filters(), context.pip_install()
@@ -5158,7 +5225,7 @@ fn explicit_prerelease_disallows_transitive_marker() {
 /// subject to the global policy.
 #[test]
 fn prerelease_package_allows_transitive_prerelease() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("prereleases/transitive-prerelease-and-stable-dependency.toml");
 
     uv_snapshot!(context.filters(), context.pip_install()
@@ -5185,7 +5252,7 @@ fn prerelease_package_allows_transitive_prerelease() {
 /// Package-specific policies can tighten a globally permissive pre-release policy.
 #[test]
 fn prerelease_package_disallows_transitive_prerelease() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("prereleases/transitive-prerelease-and-stable-dependency.toml");
 
     uv_snapshot!(context.filters(), context.pip_install()
@@ -5212,7 +5279,7 @@ fn prerelease_package_disallows_transitive_prerelease() {
 /// duplicate package names.
 #[test]
 fn prerelease_package_combines_with_top_level_configuration() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("prereleases/transitive-prerelease-and-stable-dependency.toml");
 
     context
@@ -5247,7 +5314,7 @@ fn prerelease_package_combines_with_top_level_configuration() -> Result<()> {
 /// Package-specific pre-release policies are supported in standalone `uv.toml` files.
 #[test]
 fn prerelease_package_combines_with_uv_toml() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("prereleases/transitive-prerelease-and-stable-dependency.toml");
 
     context.temp_dir.child("uv.toml").write_str(indoc! {r#"
@@ -5278,10 +5345,12 @@ fn prerelease_package_combines_with_uv_toml() -> Result<()> {
 /// Package-specific pre-release policies are intentionally not accepted in `[tool.uv.pip]`.
 #[test]
 fn prerelease_package_rejected_in_pip_configuration() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filter((
-        "unknown field `prerelease-package`, expected one of .*",
-        "unknown field `prerelease-package`, expected one of [...]",
-    ));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((
+            "unknown field `prerelease-package`, expected one of .*",
+            "unknown field `prerelease-package`, expected one of [...]",
+        ));
     let server = PackseServer::new("prereleases/package-only-prereleases-in-range.toml");
 
     context
@@ -5318,7 +5387,7 @@ fn prerelease_package_rejected_in_pip_configuration() -> Result<()> {
 /// Report malformed package-specific pre-release policies at the CLI boundary.
 #[test]
 fn prerelease_package_invalid_mode() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--prerelease-package")
@@ -5335,7 +5404,7 @@ fn prerelease_package_invalid_mode() {
 /// `--prerelease=if-necessary-or-explicit` should warn and behave like `if-necessary`.
 #[test]
 fn if_necessary_or_explicit_is_deprecated_alias() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("prereleases/package-only-prereleases-in-range.toml");
 
     uv_snapshot!(context.filters(), context.pip_install()
@@ -5358,7 +5427,7 @@ fn if_necessary_or_explicit_is_deprecated_alias() {
 /// Deprecated package-specific pre-release modes should warn and behave like `if-necessary`.
 #[test]
 fn prerelease_package_if_necessary_or_explicit_is_deprecated_alias() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("prereleases/package-only-prereleases-in-range.toml");
 
     uv_snapshot!(context.filters(), context.pip_install()
@@ -5384,7 +5453,7 @@ fn prerelease_package_if_necessary_or_explicit_is_deprecated_alias() {
 /// pre-releases.
 #[test]
 fn disallow_transitive_prerelease() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = PackseServer::new("prereleases/transitive-prerelease-and-stable-dependency.toml");
 
     uv_snapshot!(context.filters(), context.pip_install()
@@ -5410,13 +5479,13 @@ fn disallow_transitive_prerelease() {
 /// skip resolution entirely).
 #[test]
 fn install_constraints_with_markers() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("pytest")?;
+    requirements_txt.write_str("iniconfig")?;
 
     // Create a constraints file with a marker that is not relevant to the current environment.
     let constraints_txt = context.temp_dir.child("constraints.txt");
-    constraints_txt.write_str("pytest==8.0.0; sys_platform == 'nonexistent-platform'")?;
+    constraints_txt.write_str("iniconfig==2.0.0; sys_platform == 'nonexistent-platform'")?;
 
     uv_snapshot!(context.pip_install()
         .arg("-r")
@@ -5425,13 +5494,10 @@ fn install_constraints_with_markers() -> Result<()> {
         .arg("constraints.txt"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
      + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
     "
     );
 
@@ -5461,7 +5527,7 @@ fn install_constraints_with_markers() -> Result<()> {
 /// See: <https://github.com/astral-sh/uv/issues/1477>
 #[test]
 fn install_pinned_polars_invalid_metadata() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Install Flask.
     uv_snapshot!(context.pip_install()
@@ -5483,11 +5549,15 @@ fn install_pinned_polars_invalid_metadata() {
 /// requirements aren't resolved at their lowest compatible version.
 #[test]
 fn install_sdist_resolution_lowest() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_in = context.temp_dir.child("requirements.in");
-    requirements_in.write_str("anyio @ https://files.pythonhosted.org/packages/2d/b8/7333d87d5f03247215d86a86362fd3e324111788c6cdd8d2e6196a6ba833/anyio-4.2.0.tar.gz")?;
+    requirements_in.write_str(&format!(
+        "anyio @ {}",
+        artifacts.file_url("anyio-4.2.0.tar.gz")
+    ))?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
             .arg("-r")
             .arg("requirements.in")
             .arg("--resolution=lowest-direct"), @"
@@ -5496,7 +5566,7 @@ fn install_sdist_resolution_lowest() -> Result<()> {
     Resolved 3 packages in [TIME]
     Prepared 3 packages in [TIME]
     Installed 3 packages in [TIME]
-     + anyio==4.2.0 (from https://files.pythonhosted.org/packages/2d/b8/7333d87d5f03247215d86a86362fd3e324111788c6cdd8d2e6196a6ba833/anyio-4.2.0.tar.gz)
+     + anyio==4.2.0 (from http://[LOCALHOST]/files/anyio-4.2.0.tar.gz)
      + idna==3.6
      + sniffio==1.3.1
     "
@@ -5511,26 +5581,24 @@ fn install_sdist_resolution_lowest() -> Result<()> {
 /// See: <https://github.com/astral-sh/uv/issues/1453>
 #[test]
 fn direct_url_zip_file_bunk_permissions() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(
         "opensafely-pipeline @ https://github.com/opensafely-core/pipeline/archive/refs/tags/v2023.11.06.145820.zip",
     )?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Prepared 5 packages in [TIME]
-    Installed 6 packages in [TIME]
-     + distro==1.9.0
+    Resolved 4 packages in [TIME]
+    Prepared 4 packages in [TIME]
+    Installed 4 packages in [TIME]
      + opensafely-pipeline==2023.11.6.145820 (from https://github.com/opensafely-core/pipeline/archive/refs/tags/v2023.11.06.145820.zip)
      + pydantic==1.10.14
      + ruyaml==0.91.0
-     + setuptools==69.2.0
      + typing-extensions==4.10.0
     "
     );
@@ -5540,7 +5608,7 @@ fn direct_url_zip_file_bunk_permissions() -> Result<()> {
 
 #[test]
 fn launcher() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let project_root = fs_err::canonicalize(std::env::current_dir()?.join("../.."))?;
 
     let filters = [
@@ -5580,7 +5648,7 @@ fn launcher() -> Result<()> {
 
 #[test]
 fn launcher_with_symlink() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let project_root = fs_err::canonicalize(std::env::current_dir()?.join("../.."))?;
 
     let filters = [
@@ -5641,7 +5709,7 @@ fn launcher_with_symlink() -> Result<()> {
 
 #[test]
 fn config_settings_registry() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Install with a `-C` flag. In this case, the flag has no impact on the build, but uv should
     // respect it anyway.
@@ -5708,7 +5776,7 @@ fn config_settings_registry() {
 
 #[test]
 fn config_settings_path() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -5770,10 +5838,10 @@ fn config_settings_path() -> Result<()> {
 fn reinstall_duplicate() -> Result<()> {
     use uv_fs::copy_dir_all;
 
-    // Sync a version of `pip` into a virtual environment.
-    let context1 = uv_test::test_context!("3.12");
+    // Sync a version of `iniconfig` into a virtual environment.
+    let context1 = uv_test::test_context!("3.12").with_local_index();
     let requirements_txt = context1.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("pip==21.3.1")?;
+    requirements_txt.write_str("iniconfig==1.1.1")?;
 
     // Run `pip sync`.
     context1
@@ -5783,10 +5851,10 @@ fn reinstall_duplicate() -> Result<()> {
         .assert()
         .success();
 
-    // Sync a different version of `pip` into a virtual environment.
-    let context2 = uv_test::test_context!("3.12");
+    // Sync a different version of `iniconfig` into a virtual environment.
+    let context2 = uv_test::test_context!("3.12").with_local_index();
     let requirements_txt = context2.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("pip==22.1.1")?;
+    requirements_txt.write_str("iniconfig==2.0.0")?;
 
     // Run `pip sync`.
     context2
@@ -5798,13 +5866,13 @@ fn reinstall_duplicate() -> Result<()> {
 
     // Copy the virtual environment to a new location.
     copy_dir_all(
-        context2.site_packages().join("pip-22.1.1.dist-info"),
-        context1.site_packages().join("pip-22.1.1.dist-info"),
+        context2.site_packages().join("iniconfig-2.0.0.dist-info"),
+        context1.site_packages().join("iniconfig-2.0.0.dist-info"),
     )?;
 
     // Run `pip install`.
     uv_snapshot!(context1.pip_install()
-        .arg("pip")
+        .arg("iniconfig")
         .arg("--no-deps")
         .arg("--reinstall"),
         @"
@@ -5814,9 +5882,8 @@ fn reinstall_duplicate() -> Result<()> {
     Prepared 1 package in [TIME]
     Uninstalled 2 packages in [TIME]
     Installed 1 package in [TIME]
-     - pip==21.3.1
-     - pip==22.1.1
-     + pip==24.0
+     - iniconfig==1.1.1
+     ~ iniconfig==2.0.0
     "
     );
 
@@ -5881,7 +5948,7 @@ fn install_symlink() -> Result<()> {
 
 #[test]
 fn invalidate_editable_on_change() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("-e ./editable")?;
@@ -5959,7 +6026,7 @@ requires-python = ">=3.8"
 
 #[test]
 fn editable_dynamic() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("-e ./editable")?;
@@ -6014,7 +6081,7 @@ dependencies = {file = ["dependencies.txt"]}
 
 #[test]
 fn invalidate_path_on_change() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("example @ ./editable")?;
@@ -6092,7 +6159,7 @@ requires-python = ">=3.8"
 
 #[test]
 fn invalidate_path_on_cache_key() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("example @ ./editable")?;
@@ -6256,7 +6323,7 @@ fn invalidate_path_on_cache_key() -> Result<()> {
 
 #[test]
 fn invalidate_path_on_worktree_packed_commit() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("example @ ./editable")?;
@@ -6345,7 +6412,7 @@ fn invalidate_path_on_worktree_packed_commit() -> Result<()> {
 
 #[test]
 fn invalidate_path_on_env_var() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(".")?;
@@ -6412,7 +6479,7 @@ fn invalidate_path_on_env_var() -> Result<()> {
 /// Install from a direct path (wheel) with changed versions in the file name.
 #[test]
 fn path_name_version_change() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg(context.workspace_root.join("test/links/ok-1.0.0-py3-none-any.whl")), @"
@@ -6480,7 +6547,7 @@ fn path_name_version_change() {
 /// Install from a direct path (wheel) with the same name at a different path.
 #[test]
 fn path_changes_with_same_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let wheel = context
         .workspace_root
@@ -6527,7 +6594,7 @@ fn path_changes_with_same_name() -> Result<()> {
 /// Ignore a URL dependency with a non-matching marker.
 #[test]
 fn editable_url_with_marker() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let editable_dir = context.temp_dir.child("editable");
     editable_dir.create_dir_all()?;
@@ -6566,7 +6633,7 @@ requires-python = ">=3.11,<3.13"
 /// Raise an error when an editable's `Requires-Python` constraint is not met.
 #[test]
 fn requires_python_editable() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Create an editable package with a `Requires-Python` constraint that is not met.
     let editable_dir = context.temp_dir.child("editable");
@@ -6602,7 +6669,7 @@ requires-python = ">=3.13"
 /// target is what matters.
 #[test]
 fn requires_python_source_dist_installed_incompatible() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Create a source distribution with `requires-python >= 3.13`.
     let child_dir = context.temp_dir.child("child");
@@ -6647,7 +6714,9 @@ build-backend = "hatchling.build"
 /// (`iniconfig`) instead of a direct URL, with `--no-binary` to force building from source.
 #[test]
 fn requires_python_source_dist_installed_incompatible_registry() {
-    let context = uv_test::test_context!("3.9").with_exclude_newer("2025-11-01T00:00:00Z");
+    let context = uv_test::test_context!("3.9")
+        .with_local_index()
+        .with_exclude_newer("2025-11-01T00:00:00Z");
 
     // `--python-version 3.10` satisfies `requires-python >= 3.10`, so resolution succeeds
     // even though the installed interpreter is 3.9. This should arguably fail, and some build
@@ -6670,9 +6739,13 @@ fn requires_python_source_dist_installed_incompatible_registry() {
 /// Install with `--no-build-isolation`, to disable isolation during PEP 517 builds.
 #[test]
 fn no_build_isolation() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_in = context.temp_dir.child("requirements.in");
-    requirements_in.write_str("anyio @ https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz")?;
+    requirements_in.write_str(&format!(
+        "requests @ {}",
+        artifacts.file_url("requests-1.2.0.tar.gz")
+    ))?;
 
     // We expect the build to fail, because `setuptools` is not installed.
     uv_snapshot!(context.filters(), context.pip_install()
@@ -6681,19 +6754,19 @@ fn no_build_isolation() -> Result<()> {
         .arg("--no-build-isolation"), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Failed to build `anyio @ https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz`
+    error: Failed to build `requests @ http://[LOCALHOST]/files/requests-1.2.0.tar.gz`
       cause: The build backend returned an error
-      cause: Call to `setuptools.build_meta.prepare_metadata_for_build_wheel` failed (exit status: 1)
+      cause: Call to `setuptools.build_meta:__legacy__.prepare_metadata_for_build_wheel` failed (exit status: 1)
 
              [stderr]
              Traceback (most recent call last):
                File "<string>", line 8, in <module>
              ModuleNotFoundError: No module named 'setuptools'
 
-    hint: This error likely indicates that `anyio` depends on `setuptools`, but doesn't declare it as a build dependency. If `anyio` is a first-party package, consider adding `setuptools` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
+    hint: This error likely indicates that `requests` depends on `setuptools`, but doesn't declare it as a build dependency. If `requests` is a first-party package, consider adding `setuptools` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
 
     [tool.uv.extra-build-dependencies]
-    anyio = ["setuptools"]
+    requests = ["setuptools"]
 
     or `uv pip install setuptools` into the environment and re-run with `--no-build-isolation`.
     "#
@@ -6709,22 +6782,20 @@ fn no_build_isolation() -> Result<()> {
     Prepared 2 packages in [TIME]
     Installed 2 packages in [TIME]
      + setuptools==69.2.0
-     + wheel==0.43.0
+     + wheel==0.42.0
     ");
 
     // We expect the build to succeed, since `setuptools` is now installed.
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("requirements.in")
         .arg("--no-build-isolation"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==0.0.0 (from https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz)
-     + idna==3.6
-     + sniffio==1.3.1
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + requests==1.2.0 (from http://[LOCALHOST]/files/requests-1.2.0.tar.gz)
     "
     );
 
@@ -6734,9 +6805,13 @@ fn no_build_isolation() -> Result<()> {
 /// Ensure that `UV_NO_BUILD_ISOLATION` env var does the same as the `--no-build-isolation` flag
 #[test]
 fn respect_no_build_isolation_env_var() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_in = context.temp_dir.child("requirements.in");
-    requirements_in.write_str("anyio @ https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz")?;
+    requirements_in.write_str(&format!(
+        "requests @ {}",
+        artifacts.file_url("requests-1.2.0.tar.gz")
+    ))?;
 
     // We expect the build to fail, because `setuptools` is not installed.
     uv_snapshot!(context.filters(), context.pip_install()
@@ -6745,19 +6820,19 @@ fn respect_no_build_isolation_env_var() -> Result<()> {
         .env(EnvVars::UV_NO_BUILD_ISOLATION, "yes"), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Failed to build `anyio @ https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz`
+    error: Failed to build `requests @ http://[LOCALHOST]/files/requests-1.2.0.tar.gz`
       cause: The build backend returned an error
-      cause: Call to `setuptools.build_meta.prepare_metadata_for_build_wheel` failed (exit status: 1)
+      cause: Call to `setuptools.build_meta:__legacy__.prepare_metadata_for_build_wheel` failed (exit status: 1)
 
              [stderr]
              Traceback (most recent call last):
                File "<string>", line 8, in <module>
              ModuleNotFoundError: No module named 'setuptools'
 
-    hint: This error likely indicates that `anyio` depends on `setuptools`, but doesn't declare it as a build dependency. If `anyio` is a first-party package, consider adding `setuptools` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
+    hint: This error likely indicates that `requests` depends on `setuptools`, but doesn't declare it as a build dependency. If `requests` is a first-party package, consider adding `setuptools` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
 
     [tool.uv.extra-build-dependencies]
-    anyio = ["setuptools"]
+    requests = ["setuptools"]
 
     or `uv pip install setuptools` into the environment and re-run with `--no-build-isolation`.
     "#
@@ -6773,22 +6848,20 @@ fn respect_no_build_isolation_env_var() -> Result<()> {
     Prepared 2 packages in [TIME]
     Installed 2 packages in [TIME]
      + setuptools==69.2.0
-     + wheel==0.43.0
+     + wheel==0.42.0
     ");
 
     // We expect the build to succeed, since `setuptools` is now installed.
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("requirements.in")
         .env(EnvVars::UV_NO_BUILD_ISOLATION, "yes"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==0.0.0 (from https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz)
-     + idna==3.6
-     + sniffio==1.3.1
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + requests==1.2.0 (from http://[LOCALHOST]/files/requests-1.2.0.tar.gz)
     "
     );
 
@@ -6800,7 +6873,9 @@ fn respect_no_build_isolation_env_var() -> Result<()> {
 /// Ref: <https://github.com/astral-sh/uv/issues/2276>
 #[test]
 fn install_utf16le_requirements() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-01T00:00:00Z");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_exclude_newer("2025-01-01T00:00:00Z");
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_binary(&utf8_to_utf16_with_bom_le("tomli<=2.0.1"))?;
 
@@ -6823,7 +6898,9 @@ fn install_utf16le_requirements() -> Result<()> {
 /// Ref: <https://github.com/astral-sh/uv/issues/2276>
 #[test]
 fn install_utf16be_requirements() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-01T00:00:00Z");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_exclude_newer("2025-01-01T00:00:00Z");
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_binary(&utf8_to_utf16_with_bom_be("tomli<=2.0.1"))?;
 
@@ -6863,7 +6940,7 @@ fn utf8_to_utf16_with_bom_be(s: &str) -> Vec<u8> {
 
 #[test]
 fn dry_run_install() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("httpx==0.25.1")?;
 
@@ -6892,11 +6969,15 @@ fn dry_run_install() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 fn dry_run_install_url_dependency() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let context = uv_test::test_context!("3.12");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio @ https://files.pythonhosted.org/packages/2d/b8/7333d87d5f03247215d86a86362fd3e324111788c6cdd8d2e6196a6ba833/anyio-4.2.0.tar.gz")?;
+    requirements_txt.write_str(&format!(
+        "anyio @ {}",
+        artifacts.file_url("anyio-4.2.0.tar.gz")
+    ))?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("requirements.txt")
         .arg("--dry-run")
@@ -6906,7 +6987,7 @@ fn dry_run_install_url_dependency() -> std::result::Result<(), Box<dyn std::erro
     Resolved 3 packages in [TIME]
     Would download 3 packages
     Would install 3 packages
-     + anyio @ https://files.pythonhosted.org/packages/2d/b8/7333d87d5f03247215d86a86362fd3e324111788c6cdd8d2e6196a6ba833/anyio-4.2.0.tar.gz
+     + anyio @ http://[LOCALHOST]/files/anyio-4.2.0.tar.gz
      + idna==3.6
      + sniffio==1.3.1
     "
@@ -6917,12 +6998,16 @@ fn dry_run_install_url_dependency() -> std::result::Result<(), Box<dyn std::erro
 
 #[test]
 fn dry_run_uninstall_url_dependency() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let context = uv_test::test_context!("3.12");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio @ https://files.pythonhosted.org/packages/2d/b8/7333d87d5f03247215d86a86362fd3e324111788c6cdd8d2e6196a6ba833/anyio-4.2.0.tar.gz")?;
+    requirements_txt.write_str(&format!(
+        "anyio @ {}",
+        artifacts.file_url("anyio-4.2.0.tar.gz")
+    ))?;
 
     // Install the URL dependency
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
@@ -6931,7 +7016,7 @@ fn dry_run_uninstall_url_dependency() -> std::result::Result<(), Box<dyn std::er
     Resolved 3 packages in [TIME]
     Prepared 3 packages in [TIME]
     Installed 3 packages in [TIME]
-     + anyio==4.2.0 (from https://files.pythonhosted.org/packages/2d/b8/7333d87d5f03247215d86a86362fd3e324111788c6cdd8d2e6196a6ba833/anyio-4.2.0.tar.gz)
+     + anyio==4.2.0 (from http://[LOCALHOST]/files/anyio-4.2.0.tar.gz)
      + idna==3.6
      + sniffio==1.3.1
     "
@@ -6939,7 +7024,7 @@ fn dry_run_uninstall_url_dependency() -> std::result::Result<(), Box<dyn std::er
 
     // Then switch to a registry dependency
     requirements_txt.write_str("anyio")?;
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("requirements.txt")
         .arg("--upgrade-package")
@@ -6952,7 +7037,7 @@ fn dry_run_uninstall_url_dependency() -> std::result::Result<(), Box<dyn std::er
     Would download 1 package
     Would uninstall 1 package
     Would install 1 package
-     - anyio==4.2.0 (from https://files.pythonhosted.org/packages/2d/b8/7333d87d5f03247215d86a86362fd3e324111788c6cdd8d2e6196a6ba833/anyio-4.2.0.tar.gz)
+     - anyio==4.2.0 (from http://[LOCALHOST]/files/anyio-4.2.0.tar.gz)
      + anyio==4.3.0
     "
     );
@@ -6962,7 +7047,7 @@ fn dry_run_uninstall_url_dependency() -> std::result::Result<(), Box<dyn std::er
 
 #[test]
 fn dry_run_install_already_installed() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("httpx==0.25.1")?;
 
@@ -7005,7 +7090,7 @@ fn dry_run_install_already_installed() -> std::result::Result<(), Box<dyn std::e
 #[test]
 fn dry_run_install_transitive_dependency_already_installed()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("httpcore==1.0.2")?;
@@ -7050,7 +7135,7 @@ fn dry_run_install_transitive_dependency_already_installed()
 
 #[test]
 fn dry_run_install_then_upgrade() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("httpx==0.25.0")?;
 
@@ -7097,7 +7182,7 @@ fn dry_run_install_then_upgrade() -> std::result::Result<(), Box<dyn std::error:
 /// Raise an error when a direct URL's `Requires-Python` constraint is not met.
 #[test]
 fn requires_python_direct_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Create an editable package with a `Requires-Python` constraint that is not met.
     let editable_dir = context.temp_dir.child("editable");
@@ -7130,8 +7215,8 @@ requires-python = ">=3.13"
 /// Install a package from an index that requires authentication
 #[tokio::test]
 async fn install_package_basic_auth_from_url() {
-    let context = uv_test::test_context!("3.12");
-    let proxy = crate::pypi_proxy::start().await;
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let proxy = crate::pypi_proxy::start_local().await;
     let index_url = proxy.authenticated_url("public", "heron", "/basic-auth/simple");
 
     uv_snapshot!(context.filters(), context.pip_install()
@@ -7156,7 +7241,7 @@ async fn install_package_basic_auth_from_url() {
 /// Reject credentials that are not valid UTF-8.
 #[test]
 fn install_package_basic_auth_invalid_utf8() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("anyio")
@@ -7174,8 +7259,8 @@ fn install_package_basic_auth_invalid_utf8() {
 /// Install a package from an index that requires authentication
 #[tokio::test]
 async fn install_package_basic_auth_from_netrc_default() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let proxy = crate::pypi_proxy::start().await;
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let proxy = crate::pypi_proxy::start_local().await;
     let netrc = context.temp_dir.child(".netrc");
     netrc.write_str("default login public password heron")?;
 
@@ -7204,8 +7289,8 @@ async fn install_package_basic_auth_from_netrc_default() -> Result<()> {
 /// Install a package from an index that requires authentication
 #[tokio::test]
 async fn install_package_basic_auth_from_netrc() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let proxy = crate::pypi_proxy::start().await;
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let proxy = crate::pypi_proxy::start_local().await;
     let netrc = context.temp_dir.child(".netrc");
     netrc.write_str(&format!(
         "machine {} login public password heron",
@@ -7238,8 +7323,8 @@ async fn install_package_basic_auth_from_netrc() -> Result<()> {
 /// Define the `--index-url` in the requirements file
 #[tokio::test]
 async fn install_package_basic_auth_from_netrc_index_in_requirements() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let proxy = crate::pypi_proxy::start().await;
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let proxy = crate::pypi_proxy::start_local().await;
     let netrc = context.temp_dir.child(".netrc");
     netrc.write_str(&format!(
         "machine {} login public password heron",
@@ -7276,8 +7361,8 @@ async fn install_package_basic_auth_from_netrc_index_in_requirements() -> Result
 /// Install a package from an index that provides relative links
 #[tokio::test]
 async fn install_index_with_relative_links() {
-    let context = uv_test::test_context!("3.12");
-    let proxy = crate::pypi_proxy::start().await;
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let proxy = crate::pypi_proxy::start_local().await;
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("anyio")
@@ -7301,14 +7386,22 @@ async fn install_index_with_relative_links() {
 /// Install a package from an index that requires authentication from the keyring.
 #[tokio::test]
 async fn install_package_basic_auth_from_keyring() {
-    let context = uv_test::test_context!("3.12");
-    let proxy = crate::pypi_proxy::start().await;
+    let keyring_context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let proxy = crate::pypi_proxy::start_local().await;
 
     // Install our keyring plugin
-    context
+    keyring_context
         .pip_install()
         .arg(
-            context
+            keyring_context
+                .workspace_root
+                .join("test")
+                .join("packages")
+                .join("keyring_stub"),
+        )
+        .arg(
+            keyring_context
                 .workspace_root
                 .join("test")
                 .join("packages")
@@ -7325,7 +7418,7 @@ async fn install_package_basic_auth_from_keyring() {
         .arg("subprocess")
         .arg("--strict")
         .env(EnvVars::KEYRING_TEST_CREDENTIALS, format!(r#"{{"{host}": {{"public": "heron"}}}}"#, host = proxy.host_port()))
-        .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
+        .env(EnvVars::PATH, venv_bin_path(&keyring_context.venv)), @"
     exit_code: 0 (success)
     ----- stderr -----
     Keyring request for public@http://[LOCALHOST]/basic-auth/simple
@@ -7346,14 +7439,22 @@ async fn install_package_basic_auth_from_keyring() {
 /// but the keyring has the wrong password
 #[tokio::test]
 async fn install_package_basic_auth_from_keyring_wrong_password() {
-    let context = uv_test::test_context!("3.12");
-    let proxy = crate::pypi_proxy::start().await;
+    let keyring_context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let proxy = crate::pypi_proxy::start_local().await;
 
     // Install our keyring plugin
-    context
+    keyring_context
         .pip_install()
         .arg(
-            context
+            keyring_context
+                .workspace_root
+                .join("test")
+                .join("packages")
+                .join("keyring_stub"),
+        )
+        .arg(
+            keyring_context
                 .workspace_root
                 .join("test")
                 .join("packages")
@@ -7370,7 +7471,7 @@ async fn install_package_basic_auth_from_keyring_wrong_password() {
         .arg("subprocess")
         .arg("--strict")
         .env(EnvVars::KEYRING_TEST_CREDENTIALS, format!(r#"{{"{host}": {{"public": "foobar"}}}}"#, host = proxy.host_port()))
-        .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
+        .env(EnvVars::PATH, venv_bin_path(&keyring_context.venv)), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Keyring request for public@http://[LOCALHOST]/basic-auth/simple
@@ -7387,14 +7488,22 @@ async fn install_package_basic_auth_from_keyring_wrong_password() {
 /// but the keyring has the wrong username
 #[tokio::test]
 async fn install_package_basic_auth_from_keyring_wrong_username() {
-    let context = uv_test::test_context!("3.12");
-    let proxy = crate::pypi_proxy::start().await;
+    let keyring_context = uv_test::test_context!("3.12").with_local_index();
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let proxy = crate::pypi_proxy::start_local().await;
 
     // Install our keyring plugin
-    context
+    keyring_context
         .pip_install()
         .arg(
-            context
+            keyring_context
+                .workspace_root
+                .join("test")
+                .join("packages")
+                .join("keyring_stub"),
+        )
+        .arg(
+            keyring_context
                 .workspace_root
                 .join("test")
                 .join("packages")
@@ -7411,7 +7520,7 @@ async fn install_package_basic_auth_from_keyring_wrong_username() {
         .arg("subprocess")
         .arg("--strict")
         .env(EnvVars::KEYRING_TEST_CREDENTIALS, format!(r#"{{"{host}": {{"other": "heron"}}}}"#, host = proxy.host_port()))
-        .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
+        .env(EnvVars::PATH, venv_bin_path(&keyring_context.venv)), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Keyring request for public@http://[LOCALHOST]/basic-auth/simple
@@ -7428,8 +7537,8 @@ async fn install_package_basic_auth_from_keyring_wrong_username() {
 /// Install a package from an index that provides relative links and requires authentication
 #[tokio::test]
 async fn install_index_with_relative_links_authenticated() {
-    let context = uv_test::test_context!("3.12");
-    let proxy = crate::pypi_proxy::start().await;
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let proxy = crate::pypi_proxy::start_local().await;
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("anyio")
@@ -7456,7 +7565,7 @@ async fn install_index_with_relative_links_authenticated() {
 fn install_site_packages_mtime_updated() -> Result<()> {
     use std::os::unix::fs::MetadataExt;
 
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let site_packages = context.site_packages();
 
@@ -7496,25 +7605,99 @@ fn install_site_packages_mtime_updated() -> Result<()> {
 /// entry (because we want to ignore the entire cache from outside), ignoring all python source
 /// files.
 #[test]
-fn deptry_gitignore() {
-    let context = uv_test::test_context!("3.12");
+fn deptry_gitignore() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_local_index();
 
-    let source_dist_dir = context
-        .workspace_root
-        .join("test/packages/deptry_reproducer");
+    let source_dist = context.temp_dir.child("deptry_reproducer-0.1.0.tar.gz");
+    write_tar_gz(
+        File::create(source_dist.path())?,
+        &[
+            (
+                "deptry_reproducer-0.1.0/pyproject.toml",
+                indoc! {r#"
+                [build-system]
+                requires = []
+                build-backend = "build_backend"
+                backend-path = ["."]
+
+                [project]
+                name = "deptry-reproducer"
+                version = "0.1.0"
+                requires-python = ">=3.8"
+                dependencies = ["cffi"]
+                "#},
+            ),
+            (
+                "deptry_reproducer-0.1.0/build_backend.py",
+                indoc! {r#"
+                import pathlib
+                import zipfile
+
+
+                ROOT = pathlib.Path(__file__).parent
+                DIST_INFO = "deptry_reproducer-0.1.0.dist-info"
+                WHEEL_NAME = "deptry_reproducer-0.1.0-py3-none-any.whl"
+
+
+                def _gitignored(path):
+                    for parent in [path.parent, *path.parents]:
+                        gitignore = parent / ".gitignore"
+                        if gitignore.is_file() and gitignore.read_text().strip() == "*":
+                            return True
+                        if (parent / ".git").exists():
+                            return False
+                    return False
+
+
+                def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+                    wheel_path = pathlib.Path(wheel_directory, WHEEL_NAME)
+                    source_root = ROOT / "src"
+                    module_root = source_root / "deptry_reproducer"
+
+                    with zipfile.ZipFile(wheel_path, "w") as wheel:
+                        for path in module_root.rglob("*.py"):
+                            if not _gitignored(path):
+                                wheel.write(path, path.relative_to(source_root))
+                        wheel.writestr(
+                            f"{DIST_INFO}/METADATA",
+                            "Metadata-Version: 2.3\n"
+                            "Name: deptry-reproducer\n"
+                            "Version: 0.1.0\n"
+                            "Requires-Dist: cffi\n",
+                        )
+                        wheel.writestr(
+                            f"{DIST_INFO}/WHEEL",
+                            "Wheel-Version: 1.0\n"
+                            "Generator: uv-test\n"
+                            "Root-Is-Purelib: true\n"
+                            "Tag: py3-none-any\n",
+                        )
+                        wheel.writestr(f"{DIST_INFO}/RECORD", "")
+
+                    return WHEEL_NAME
+                "#},
+            ),
+            (
+                "deptry_reproducer-0.1.0/src/deptry_reproducer/__init__.py",
+                "",
+            ),
+            (
+                "deptry_reproducer-0.1.0/src/deptry_reproducer/foo.py",
+                "value = 42\n",
+            ),
+        ],
+    )?;
 
     uv_snapshot!(context.filters(), context.pip_install()
-        .arg(format!("deptry_reproducer @ {}", source_dist_dir.join("deptry_reproducer-0.1.0.tar.gz").simplified_display()))
-        .arg("--strict")
-        .current_dir(source_dist_dir), @"
+        .arg(format!("deptry_reproducer @ {}", source_dist.simplified_display()))
+        .arg("--strict"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Using Python 3.12.[X] environment at: [VENV]/
     Resolved 3 packages in [TIME]
     Prepared 3 packages in [TIME]
     Installed 3 packages in [TIME]
      + cffi==1.16.0
-     + deptry-reproducer==0.1.0 (from file://[WORKSPACE]/test/packages/deptry_reproducer/deptry_reproducer-0.1.0.tar.gz)
+     + deptry-reproducer==0.1.0 (from file://[TEMP_DIR]/deptry_reproducer-0.1.0.tar.gz)
      + pycparser==2.21
     "
     );
@@ -7523,12 +7706,14 @@ fn deptry_gitignore() {
     context
         .assert_command("import deptry_reproducer.foo")
         .success();
+
+    Ok(())
 }
 
 /// Reinstall an installed package with `--no-index`
 #[test]
 fn reinstall_no_index() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Install anyio
     uv_snapshot!(context.pip_install()
@@ -7576,7 +7761,7 @@ fn reinstall_no_index() {
 
 #[test]
 fn already_installed_remote_dependencies() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Install anyio's dependencies.
     uv_snapshot!(context.pip_install()
@@ -7610,7 +7795,7 @@ fn already_installed_remote_dependencies() {
 /// Install an editable package that depends on a previously installed editable package.
 #[test]
 fn already_installed_dependent_editable() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let vendor = FindLinksServer::vendor();
     let root_path = context
         .workspace_root
@@ -7702,7 +7887,7 @@ fn already_installed_dependent_editable() {
 /// Install a local package that depends on a previously installed local package.
 #[test]
 fn already_installed_local_path_dependent() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let vendor = FindLinksServer::vendor();
     let root_path = context
         .workspace_root
@@ -7848,7 +8033,7 @@ fn already_installed_local_path_dependent() {
 /// A local version of a package shadowing a remote package is installed.
 #[test]
 fn already_installed_local_version_of_remote_package() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let root_path = context.workspace_root.join("test/packages");
 
     // Install the local anyio first
@@ -7988,7 +8173,7 @@ fn already_installed_multiple_versions() -> Result<()> {
         context.pip_install().arg("anyio==3.7.0").assert().success();
 
         // Install another version into another environment
-        let context_duplicate = uv_test::test_context!("3.12");
+        let context_duplicate = uv_test::test_context!("3.12").with_local_index();
         context_duplicate
             .pip_install()
             .arg("anyio==4.0.0")
@@ -8006,7 +8191,7 @@ fn already_installed_multiple_versions() -> Result<()> {
         Ok(())
     }
 
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     prepare(&context)?;
 
@@ -8050,7 +8235,7 @@ fn already_installed_multiple_versions() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn already_installed_remote_url() {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_local_index();
 
     // First, install from the remote URL
     uv_snapshot!(context.filters(), context.pip_install().arg("uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage"), @"
@@ -8149,7 +8334,7 @@ fn already_installed_remote_url() {
 /// Sync using `--find-links` with a local directory.
 #[test]
 fn find_links() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("tqdm")
@@ -8168,7 +8353,7 @@ fn find_links() {
 /// Install from a local `--find-links` HTML file containing a relative wheel URL.
 #[test]
 fn find_links_local_html() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let wheel_filename = "tqdm-1000.0.0-py3-none-any.whl";
 
     let links = context.temp_dir.child("links");
@@ -8228,7 +8413,7 @@ fn find_links_local_html() -> Result<()> {
 /// Install from a requirements-file `--find-links` URL with an uppercase `file` scheme.
 #[test]
 fn find_links_uppercase_file_url_from_requirements_file() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let links_url = Url::from_directory_path(context.workspace_root.join("test/links"))
         .map_err(|()| anyhow!("Failed to convert links directory to URL"))?;
     let links_url = links_url.as_str().replacen("file://", "FILE://", 1);
@@ -8259,7 +8444,7 @@ fn find_links_uppercase_file_url_from_requirements_file() -> Result<()> {
 /// Install from a requirements-file `--find-links` URL with an uppercase `http` scheme.
 #[tokio::test]
 async fn find_links_uppercase_http_url_from_requirements_file() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = MockServer::start().await;
     let wheel_filename = "ok-1.0.0-py3-none-any.whl";
     let wheel_url = Url::from_file_path(
@@ -8308,7 +8493,7 @@ async fn find_links_uppercase_http_url_from_requirements_file() -> Result<()> {
 #[test]
 #[cfg(unix)]
 fn find_links_directory_with_url_scheme() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let links_dir = context.temp_dir.child("https:links");
     links_dir.create_dir_all()?;
     fs::copy(
@@ -8345,7 +8530,7 @@ fn find_links_directory_with_url_scheme() -> Result<()> {
 /// Install from a `--find-links` directory relative to the containing requirements file.
 #[test]
 fn find_links_relative_to_requirements_file() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_dir = context.temp_dir.child("requirements");
     let links_dir = requirements_dir.child("links");
     links_dir.create_dir_all()?;
@@ -8381,7 +8566,9 @@ fn find_links_relative_to_requirements_file() -> Result<()> {
 /// Install from a `--find-links` directory relative to the working directory.
 #[test]
 fn find_links_relative_to_working_directory() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_missing_file_error();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_missing_file_error();
     let links_dir = context.temp_dir.child("links");
     links_dir.create_dir_all()?;
     fs::copy(
@@ -8416,7 +8603,7 @@ fn find_links_relative_to_working_directory() -> Result<()> {
 /// Install the latest version across multiple `--find-links` directories.
 #[test]
 fn find_links_multiple() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let links_dir = context.workspace_root.join("test/links");
 
     let first_links_dir = context.temp_dir.child("first-links");
@@ -8456,7 +8643,7 @@ fn find_links_multiple() -> Result<()> {
 /// Install from a `--find-links` HTML page with uppercase tag and attribute names.
 #[tokio::test]
 async fn find_links_uppercase_html() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = MockServer::start().await;
     let wheel_filename = "tqdm-1000.0.0-py3-none-any.whl";
     let wheel_url = Url::from_file_path(
@@ -8498,7 +8685,7 @@ async fn find_links_uppercase_html() -> Result<()> {
 /// Treat an incorrect wheel size from the Simple API as advisory.
 #[tokio::test]
 async fn registry_wheel_size_is_advisory() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = MockServer::start().await;
     let wheel_filename = "tqdm-1000.0.0-py3-none-any.whl";
     let wheel_path = context
@@ -8562,7 +8749,7 @@ async fn registry_wheel_size_is_advisory() -> Result<()> {
 /// reading metadata from the wheel archive.
 #[tokio::test]
 async fn reject_wheel_with_multiple_dist_info_directories() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let server = MockServer::start().await;
     let wheel_filename = "validation-3.0.0-py3-none-any.whl";
     let wheel_path = context
@@ -8623,7 +8810,7 @@ async fn reject_wheel_with_multiple_dist_info_directories() -> Result<()> {
 /// Sync using `--find-links` with a local directory, with wheels disabled.
 #[test]
 fn find_links_no_binary() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("tqdm")
@@ -8636,7 +8823,7 @@ fn find_links_no_binary() {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + tqdm==999.0.0
+     + tqdm==1000.0.0
     "
     );
 }
@@ -8682,7 +8869,7 @@ fn require_hashes() -> Result<()> {
 #[test]
 fn require_hashes_build_dependencies() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Write to a requirements file.
     let requirements_txt = context.temp_dir.child("requirements.txt");
@@ -8818,7 +9005,7 @@ fn require_hashes_mismatch() -> Result<()> {
 /// Omit a transitive dependency in `--require-hashes`.
 #[test]
 fn require_hashes_missing_dependency() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Write to a requirements file.
     let requirements_txt = context.temp_dir.child("requirements.txt");
@@ -8843,7 +9030,7 @@ fn require_hashes_missing_dependency() -> Result<()> {
 /// We disallow `--require-hashes` for editables' dependencies.
 #[test]
 fn require_hashes_editable() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&indoc::formatdoc! {r"
@@ -9123,7 +9310,7 @@ fn require_hashes_unnamed_repeated() -> Result<()> {
 /// TODO(charlie): This _should_ be allowed. It's a bug.
 #[test]
 fn require_hashes_override() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Include the hash in the override file.
     let requirements_txt = context.temp_dir.child("requirements.txt");
@@ -9174,7 +9361,7 @@ fn require_hashes_override() -> Result<()> {
 #[test]
 #[expect(clippy::disallowed_types)]
 fn install_with_overrides_from_stdin() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let overrides_txt = context.temp_dir.child("overrides.txt");
     overrides_txt.write_str("anyio==4.0.0")?;
@@ -9202,7 +9389,7 @@ fn install_with_overrides_from_stdin() -> Result<()> {
 #[test]
 #[expect(clippy::disallowed_types)]
 fn install_with_excludes_from_stdin() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let excludes_txt = context.temp_dir.child("excludes.txt");
     excludes_txt.write_str("anyio")?;
@@ -9222,7 +9409,7 @@ fn install_with_excludes_from_stdin() -> Result<()> {
 }
 
 /// Provide valid hashes for all dependencies with `--require-hashes` with accompanying markers.
-/// Critically, one package (`requests`) depends on another (`urllib3`).
+/// The marked parent has a transitive dependency that also requires a matching hash.
 #[test]
 fn require_hashes_marker() -> Result<()> {
     let artifacts = PackseServer::new("packages/require-hashes-marker.toml");
@@ -9260,23 +9447,21 @@ fn require_hashes_marker() -> Result<()> {
 /// Provide valid hashes for all dependencies with `--require-hashes`.
 #[test]
 fn verify_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Write to a requirements file.
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc::indoc! {r"
+    requirements_txt.write_str(&indoc::formatdoc!{r"
         anyio==4.0.0 \
-            --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f \
-            --hash=sha256:f7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a
+            --hash=sha256:{artifact_hash_0}
         idna==3.6 \
-            --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-            --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+            --hash=sha256:{artifact_hash_1}
             # via anyio
         sniffio==1.3.1 \
-            --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-            --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+            --hash=sha256:{artifact_hash_2}
             # via anyio
-    "})?;
+    ", artifact_hash_0 = registry_artifacts.file_hash("anyio-4.0.0-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_1 = registry_artifacts.file_hash("idna-3.6-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_2 = registry_artifacts.file_hash("sniffio-1.3.1-py3-none-any.whl").expect("fixture distribution should exist") })?;
 
     uv_snapshot!(context.pip_install()
         .arg("-r")
@@ -9299,23 +9484,22 @@ fn verify_hashes() -> Result<()> {
 /// Omit a pinned version with `--verify-hashes`.
 #[test]
 fn verify_hashes_missing_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Write to a requirements file.
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc::indoc! {r"
+    requirements_txt.write_str(&indoc::formatdoc!{r"
         anyio \
             --hash=sha256:afdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f \
             --hash=sha256:a7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a
         idna==3.6 \
-            --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-            --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+            --hash=sha256:{artifact_hash_0}
             # via anyio
         sniffio==1.3.1 \
-            --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2 \
-            --hash=sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
+            --hash=sha256:{artifact_hash_1}
             # via anyio
-    "})?;
+    ", artifact_hash_0 = registry_artifacts.file_hash("idna-3.6-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_1 = registry_artifacts.file_hash("sniffio-1.3.1-py3-none-any.whl").expect("fixture distribution should exist") })?;
 
     uv_snapshot!(context.pip_install()
         .arg("-r")
@@ -9338,7 +9522,7 @@ fn verify_hashes_missing_version() -> Result<()> {
 /// Provide the wrong hash with `--verify-hashes`.
 #[test]
 fn verify_hashes_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc::indoc! {r"
@@ -9364,7 +9548,7 @@ fn verify_hashes_mismatch() -> Result<()> {
                sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc
 
              Computed:
-               sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+               sha256:e80025850eafa8760055fd6f2f6e83f84bf13d4a844fe81abb2b499e3a3e8af0
     "
     );
 
@@ -9388,7 +9572,7 @@ fn verify_hashes_mismatch() -> Result<()> {
 /// Verify hashes on arbitrary-equality pins in both checking modes.
 #[test]
 fn verify_hashes_exact_equal() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(
@@ -9425,7 +9609,7 @@ fn verify_hashes_exact_equal() -> Result<()> {
 /// A public version pin's hash must also protect a selected local version.
 #[test]
 fn verify_hashes_public_pin_local_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let name = "hash-probe".parse()?;
     let public_version = "1.0.0".parse()?;
     let local_version = "1.0.0+local".parse()?;
@@ -9508,14 +9692,15 @@ fn verify_hashes_public_pin_local_version() -> Result<()> {
 /// Provide the correct hash with `--verify-hashes`.
 #[test]
 fn verify_hashes_match() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc::indoc! {r"
+    requirements_txt.write_str(&indoc::formatdoc!{r"
         idna==3.6 \
-            --hash=sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca \
-            --hash=sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
-    "})?;
+            --hash=sha256:{artifact_hash_0} \
+            --hash=sha256:{artifact_hash_1}
+    ", artifact_hash_0 = registry_artifacts.file_hash("idna-3.6.tar.gz").expect("fixture distribution should exist"), artifact_hash_1 = registry_artifacts.file_hash("idna-3.6-py3-none-any.whl").expect("fixture distribution should exist") })?;
 
     uv_snapshot!(context.pip_install()
         .arg("--no-deps")
@@ -9536,13 +9721,17 @@ fn verify_hashes_match() -> Result<()> {
 /// Omit a transitive dependency in `--verify-hashes`. This is allowed.
 #[test]
 fn verify_hashes_omit_dependency() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Write to a requirements file.
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(
-        "anyio==4.0.0 --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f",
-    )?;
+    requirements_txt.write_str(&format!(
+        "anyio==4.0.0 --hash=sha256:{artifact_hash_0}",
+        artifact_hash_0 = registry_artifacts
+            .file_hash("anyio-4.0.0-py3-none-any.whl")
+            .expect("fixture distribution should exist")
+    ))?;
 
     // Install without error when `--require-hashes` is omitted.
     uv_snapshot!(context.pip_install()
@@ -9566,7 +9755,7 @@ fn verify_hashes_omit_dependency() -> Result<()> {
 /// We allow `--verify-hashes` for editable dependencies.
 #[test]
 fn verify_hashes_editable() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&indoc::formatdoc! {r"
@@ -9602,7 +9791,7 @@ fn verify_hashes_editable() -> Result<()> {
 /// Allow arguments within a `requirements.txt` file to be quoted or unquoted, as in the CLI.
 #[test]
 fn double_quoted_arguments() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let constraints_in = context.temp_dir.child("constraints.in");
     constraints_in.write_str(indoc::indoc! {r"
@@ -9634,7 +9823,7 @@ fn double_quoted_arguments() -> Result<()> {
 /// Allow arguments within a `requirements.txt` file to be quoted or unquoted, as in the CLI.
 #[test]
 fn single_quoted_arguments() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let constraints_in = context.temp_dir.child("constraints.in");
     constraints_in.write_str(indoc::indoc! {r"
@@ -9666,7 +9855,7 @@ fn single_quoted_arguments() -> Result<()> {
 /// Allow arguments within a `requirements.txt` file to be quoted or unquoted, as in the CLI.
 #[test]
 fn unquoted_arguments() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let constraints_in = context.temp_dir.child("constraints.in");
     constraints_in.write_str(indoc::indoc! {r"
@@ -9698,7 +9887,7 @@ fn unquoted_arguments() -> Result<()> {
 /// Allow arguments within a `requirements.txt` file to be quoted or unquoted, as in the CLI.
 #[test]
 fn concatenated_quoted_arguments() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let constraints_in = context.temp_dir.child("constraints.in");
     constraints_in.write_str(indoc::indoc! {r"
@@ -9730,36 +9919,101 @@ fn concatenated_quoted_arguments() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn tool_uv_sources() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((r"@[0-9a-f]{40}", "@[COMMIT]"));
+    let git_source = |name: &str| -> Result<(String, String)> {
+        let repository = context.temp_dir.child(name);
+        repository
+            .child("pyproject.toml")
+            .write_str(&formatdoc! {r#"
+            [project]
+            name = "{name}"
+            version = "1.0.0"
+            requires-python = ">=3.8"
+
+            [build-system]
+            requires = ["hatchling"]
+            build-backend = "hatchling.build"
+        "#})?;
+        repository
+            .child(format!("src/{}/__init__.py", name.replace('-', "_")))
+            .write_str("")?;
+        Command::new("git")
+            .arg("init")
+            .arg(repository.path())
+            .assert()
+            .success();
+        Command::new("git")
+            .arg("-C")
+            .arg(repository.path())
+            .args(["-c", "core.autocrlf=false", "add", "."])
+            .assert()
+            .success();
+        Command::new("git")
+            .arg("-C")
+            .arg(repository.path())
+            .args([
+                "-c",
+                "user.name=ferris",
+                "-c",
+                "user.email=ferris@example.com",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-m",
+                "Initial commit",
+            ])
+            .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
+            .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
+            .assert()
+            .success();
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repository.path())
+            .args(["rev-parse", "HEAD"])
+            .output()?;
+        output.clone().assert().success();
+        let revision = String::from_utf8(output.stdout)?.trim().to_owned();
+        let url = Url::from_directory_path(repository.path())
+            .map_err(|()| anyhow!("failed to convert repository path to a file URL"))?;
+        Ok((url.as_str().trim_end_matches('/').to_owned(), revision))
+    };
+    let (direct_git_url, direct_git_rev) = git_source("direct-git-package")?;
+    let (override_git_url, override_git_rev) = git_source("source-override-package")?;
     // Use a subdir to test path normalization.
     let require_path = "some_dir/pyproject.toml";
     let pyproject_toml = context.temp_dir.child(require_path);
-    pyproject_toml.write_str(indoc! {r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "foo"
         version = "0.0.0"
         dependencies = [
           "tqdm>4,<=5",
-          "packaging @ git+https://github.com/pypa/packaging@32deafe8668a2130a3366b98154914d188f3718e",
+          "direct-git-package @ git+{direct_git_url}@{direct_git_rev}",
           "poetry_editable",
-          "urllib3 @ https://files.pythonhosted.org/packages/a2/73/a68704750a7679d0b6d3ad7aa8d4da8e14e151ae82e6fee774e6e0d05ec8/urllib3-2.2.1-py3-none-any.whl",
+          "urllib3 @ {urllib3_url}",
           # Windows consistency
           "colorama>0.4,<5",
         ]
 
         [project.optional-dependencies]
         utils = [
-            "charset-normalizer==3.4.0"
+            "source-override-package==1.0.0"
         ]
         dont_install_me = [
             "broken @ https://example.org/does/not/exist.tar.gz"
         ]
 
         [tool.uv.sources]
-        tqdm = { url = "https://files.pythonhosted.org/packages/a5/d6/502a859bac4ad5e274255576cd3e15ca273cdb91731bc39fb840dd422ee9/tqdm-4.66.0-py3-none-any.whl" }
-        charset-normalizer = { git = "https://github.com/jawah/charset_normalizer", rev = "ffdf7f5f08beb0ceb92dc0637e97382ba27cecfa" }
-        poetry_editable = { path = "../poetry_editable", editable = true }
-    "#})?;
+        tqdm = {{ url = "{tqdm_url}" }}
+        source-override-package = {{ git = "{override_git_url}", rev = "{override_git_rev}" }}
+        poetry_editable = {{ path = "../poetry_editable", editable = true }}
+    "#,
+        tqdm_url = artifacts.file_url("tqdm-4.66.0-py3-none-any.whl"),
+        urllib3_url = artifacts.file_url("urllib3-2.2.1-py3-none-any.whl"),
+    })?;
 
     let project_root = fs_err::canonicalize(std::env::current_dir()?.join("../.."))?;
     fs_err::create_dir_all(context.temp_dir.join("poetry_editable/poetry_editable"))?;
@@ -9786,14 +10040,14 @@ fn tool_uv_sources() -> Result<()> {
     Prepared 9 packages in [TIME]
     Installed 9 packages in [TIME]
      + anyio==4.3.0
-     + charset-normalizer==3.4.1 (from git+https://github.com/jawah/charset_normalizer@ffdf7f5f08beb0ceb92dc0637e97382ba27cecfa)
      + colorama==0.4.6
+     + direct-git-package==1.0.0 (from git+file://[TEMP_DIR]/direct-git-package@[COMMIT])
      + idna==3.6
-     + packaging==24.1.dev0 (from git+https://github.com/pypa/packaging@32deafe8668a2130a3366b98154914d188f3718e)
      + poetry-editable==0.1.0 (from file://[TEMP_DIR]/poetry_editable)
      + sniffio==1.3.1
-     + tqdm==4.66.0 (from https://files.pythonhosted.org/packages/a5/d6/502a859bac4ad5e274255576cd3e15ca273cdb91731bc39fb840dd422ee9/tqdm-4.66.0-py3-none-any.whl)
-     + urllib3==2.2.1 (from https://files.pythonhosted.org/packages/a2/73/a68704750a7679d0b6d3ad7aa8d4da8e14e151ae82e6fee774e6e0d05ec8/urllib3-2.2.1-py3-none-any.whl)
+     + source-override-package==1.0.0 (from git+file://[TEMP_DIR]/source-override-package@[COMMIT])
+     + tqdm==4.66.0 (from http://[LOCALHOST]/files/tqdm-4.66.0-py3-none-any.whl)
+     + urllib3==2.2.1 (from http://[LOCALHOST]/files/urllib3-2.2.1-py3-none-any.whl)
     "
     );
 
@@ -9814,19 +10068,24 @@ fn tool_uv_sources() -> Result<()> {
 
 #[test]
 fn tool_uv_sources_is_in_preview() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
+    let iniconfig_url = artifacts.file_url("iniconfig-2.0.0-py3-none-any.whl");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(indoc! {r#"
-        [project]
-        name = "foo"
-        version = "0.0.0"
-        dependencies = [
-          "iniconfig>1,<=2",
-        ]
+    pyproject_toml.write_str(
+        &indoc! {r#"
+            [project]
+            name = "foo"
+            version = "0.0.0"
+            dependencies = [
+              "iniconfig>1,<=2",
+            ]
 
-        [tool.uv.sources]
-        iniconfig = { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl" }
-    "#})?;
+            [tool.uv.sources]
+            iniconfig = { url = "[INICONFIG_URL]" }
+        "#}
+        .replace("[INICONFIG_URL]", &iniconfig_url),
+    )?;
 
     // Install the editable packages.
     uv_snapshot!(context.filters(), context.pip_install()
@@ -9837,7 +10096,7 @@ fn tool_uv_sources_is_in_preview() -> Result<()> {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + iniconfig==2.0.0 (from https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl)
+     + iniconfig==2.0.0 (from http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl)
     "
     );
 
@@ -9847,23 +10106,31 @@ fn tool_uv_sources_is_in_preview() -> Result<()> {
 /// Allow transitive URLs via recursive extras.
 #[test]
 fn recursive_extra_transitive_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
+    let build_dependencies = PackseServer::empty();
+    let iniconfig_url = artifacts.file_url("iniconfig-2.0.0-py3-none-any.whl");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&build_dependencies.index_url());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(indoc! {r#"
-        [project]
-        name = "project"
-        version = "0.0.0"
-        dependencies = []
+    pyproject_toml.write_str(
+        &indoc! {r#"
+            [project]
+            name = "project"
+            version = "0.0.0"
+            dependencies = []
 
-        [project.optional-dependencies]
-        all = [
-            "project[docs]",
-        ]
-        docs = [
-            "iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl",
-        ]
-    "#})?;
+            [project.optional-dependencies]
+            all = [
+                "project[docs]",
+            ]
+            docs = [
+                "iniconfig @ [INICONFIG_URL]",
+            ]
+        "#}
+        .replace("[INICONFIG_URL]", &iniconfig_url),
+    )?;
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg(".[all]"), @"
@@ -9872,7 +10139,7 @@ fn recursive_extra_transitive_url() -> Result<()> {
     Resolved 2 packages in [TIME]
     Prepared 2 packages in [TIME]
     Installed 2 packages in [TIME]
-     + iniconfig==2.0.0 (from https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl)
+     + iniconfig==2.0.0 (from http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl)
      + project==0.0.0 (from file://[TEMP_DIR]/)
     ");
 
@@ -9882,7 +10149,7 @@ fn recursive_extra_transitive_url() -> Result<()> {
 /// If a package is requested as both editable and non-editable, always install it as editable.
 #[test]
 fn prefer_editable() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("-e")
@@ -9901,7 +10168,7 @@ fn prefer_editable() -> Result<()> {
     let path = context.site_packages().join("black.pth");
     assert!(path.is_file());
 
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -9962,7 +10229,7 @@ fn create_local_index_with_tqdm(context: &TestContext, root: &Path) -> Result<()
 /// Resolve against a local directory laid out as a PEP 503-compatible index.
 #[test]
 fn local_index_absolute() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let root = context.temp_dir.child("simple-html");
     create_local_index_with_tqdm(&context, root.path())?;
@@ -9988,7 +10255,7 @@ fn local_index_absolute() -> Result<()> {
 /// relative path on the CLI.
 #[test]
 fn local_index_relative() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let root = context.temp_dir.child("simple-html");
     create_local_index_with_tqdm(&context, root.path())?;
@@ -10014,7 +10281,7 @@ fn local_index_relative() -> Result<()> {
 /// `requirements.txt` file.
 #[test]
 fn local_index_requirements_txt_absolute() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let root = context.temp_dir.child("simple-html");
     create_local_index_with_tqdm(&context, root.path())?;
@@ -10045,7 +10312,7 @@ fn local_index_requirements_txt_absolute() -> Result<()> {
 /// relative path in a `requirements.txt` file.
 #[test]
 fn local_index_requirements_txt_relative() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let root = context.temp_dir.child("simple-html");
     create_local_index_with_tqdm(&context, root.path())?;
@@ -10078,7 +10345,7 @@ fn local_index_requirements_txt_relative() -> Result<()> {
 /// the default index.
 #[test]
 fn local_index_fallback() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let root = context.temp_dir.child("simple-html");
     fs_err::create_dir_all(&root)?;
@@ -10119,7 +10386,9 @@ fn local_index_fallback() -> Result<()> {
 
 #[test]
 fn accept_existing_prerelease() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_counts();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_counts();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("Flask==2.0.0rc1")?;
 
@@ -10157,7 +10426,7 @@ fn accept_existing_prerelease() -> Result<()> {
 /// Allow `pip install` of an unmanaged project.
 #[test]
 fn unmanaged() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"[project]
@@ -10190,7 +10459,7 @@ fn unmanaged() -> Result<()> {
 
 #[test]
 fn install_relocatable() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Remake the venv as relocatable
     context
@@ -10254,7 +10523,7 @@ fn install_relocatable() -> Result<()> {
 #[cfg(unix)]
 #[test]
 fn install_script_with_symlinked_lib() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let lib = context.venv.join("lib");
     let usr = context.venv.join("usr");
@@ -10285,7 +10554,7 @@ fn install_script_with_symlinked_lib() -> Result<()> {
 /// Install requesting Python 3.12 when the virtual environment uses 3.11
 #[test]
 fn install_incompatible_python_version() {
-    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]).with_local_index();
 
     // Initialize the virtual environment with 3.11
     context.reset_venv();
@@ -10307,7 +10576,7 @@ fn install_incompatible_python_version() {
 fn install_incompatible_python_version_interpreter_broken_in_path() -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
-    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]).with_local_index();
 
     // Initialize the virtual environment with 3.11
     context.reset_venv();
@@ -10376,7 +10645,7 @@ fn install_incompatible_python_version_interpreter_broken_in_path() -> Result<()
 /// Emit dedicated error message when installing Conda `environment.yml`
 #[test]
 fn install_unsupported_environment_yml() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let environment_yml = context.temp_dir.child("environment.yml");
     environment_yml.write_str(indoc! {r"
@@ -10399,7 +10668,7 @@ fn install_unsupported_environment_yml() -> Result<()> {
 /// Include a `build_constraints.txt` file with an incompatible constraint.
 #[test]
 fn incompatible_build_constraint() -> Result<()> {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_local_index();
 
     let constraints_txt = context.temp_dir.child("build_constraints.txt");
     constraints_txt.write_str("setuptools==1")?;
@@ -10424,7 +10693,7 @@ fn incompatible_build_constraint() -> Result<()> {
 #[test]
 #[expect(clippy::disallowed_types)]
 fn incompatible_build_constraint_from_stdin() -> Result<()> {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_local_index();
 
     let constraints_txt = context.temp_dir.child("build_constraints.txt");
     constraints_txt.write_str("setuptools==1")?;
@@ -10449,7 +10718,7 @@ fn incompatible_build_constraint_from_stdin() -> Result<()> {
 /// Include a `build_constraints.txt` file with a compatible constraint.
 #[test]
 fn compatible_build_constraint() -> Result<()> {
-    let context = uv_test::test_context!("3.9");
+    let context = uv_test::test_context!("3.9").with_local_index();
 
     let constraints_txt = context.temp_dir.child("build_constraints.txt");
     constraints_txt.write_str("setuptools>=40")?;
@@ -10473,7 +10742,7 @@ fn compatible_build_constraint() -> Result<()> {
 /// Include `build-constraint-dependencies` in pyproject.toml with an incompatible constraint.
 #[test]
 fn incompatible_build_constraint_in_pyproject_toml() -> Result<()> {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -10502,13 +10771,13 @@ build-constraint-dependencies = [
 #[cfg(feature = "test-python-eol")]
 #[test]
 fn compatible_build_constraint_in_pyproject_toml() -> Result<()> {
-    let context = uv_test::test_context!("3.8");
+    let context = uv_test::test_context!("3.8").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"[tool.uv]
 build-constraint-dependencies = [
-    "setuptools==40.8.0",
+    "setuptools==69.0.2",
 ]
 "#,
     )?;
@@ -10530,7 +10799,7 @@ build-constraint-dependencies = [
 /// Merge `build_constraints.txt` with `build-constraint-dependencies` in pyproject.toml with an incompatible constraint.
 #[test]
 fn incompatible_build_constraint_merged_with_pyproject_toml() -> Result<()> {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_local_index();
 
     // Incompatible setuptools version in pyproject.toml, compatible in build_constraints.txt.
     let constraints_txt = context.temp_dir.child("build_constraints.txt");
@@ -10588,7 +10857,7 @@ build-constraint-dependencies = [
 /// Merge `build_constraints.txt` with `build-constraint-dependencies` in pyproject.toml with a compatible constraint.
 #[test]
 fn compatible_build_constraint_merged_with_pyproject_toml() -> Result<()> {
-    let context = uv_test::test_context!("3.9");
+    let context = uv_test::test_context!("3.9").with_local_index();
 
     let constraints_txt = context.temp_dir.child("build_constraints.txt");
     constraints_txt.write_str("setuptools>=40")?;
@@ -10618,79 +10887,83 @@ build-constraint-dependencies = [
 
 #[test]
 fn install_build_isolation_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Create a package.
     let package = context.temp_dir.child("project");
-    package.child("pyproject.toml").write_str(
+    package.child("pyproject.toml").write_str(&formatdoc! {
         r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = [
-            "iniconfig @ https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz",
+            "source-distribution @ {source_distribution_url}",
         ]
         "#,
-    )?;
+        source_distribution_url = artifacts.file_url("source_distribution-0.0.3.tar.gz"),
+    })?;
 
-    // Running `uv pip install` should fail for iniconfig.
+    // Running `uv pip install` should fail for `source-distribution`.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--no-build-isolation-package")
-        .arg("iniconfig")
+        .arg("source-distribution")
         .arg(package.path()), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Failed to build `iniconfig @ https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz`
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+    error: Failed to build `source-distribution @ http://[LOCALHOST]/files/source_distribution-0.0.3.tar.gz`
       cause: The build backend returned an error
-      cause: Call to `hatchling.build.prepare_metadata_for_build_wheel` failed (exit status: 1)
+      cause: Call to `hatchling.build.build_wheel` failed (exit status: 1)
 
              [stderr]
              Traceback (most recent call last):
                File "<string>", line 8, in <module>
              ModuleNotFoundError: No module named 'hatchling'
 
-    hint: This error likely indicates that `iniconfig` depends on `hatchling`, but doesn't declare it as a build dependency. If `iniconfig` is a first-party package, consider adding `hatchling` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
+    hint: `source-distribution` was included because `project` (v0.1.0) depends on `source-distribution`
+
+    hint: This error likely indicates that `source-distribution@0.0.3` depends on `hatchling`, but doesn't declare it as a build dependency. If `source-distribution` is a first-party package, consider adding `hatchling` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
 
     [tool.uv.extra-build-dependencies]
-    iniconfig = ["hatchling"]
+    source-distribution = ["hatchling"]
 
     or `uv pip install hatchling` into the environment and re-run with `--no-build-isolation`.
     "#
     );
 
-    // Install `hatchinling`, `hatch-vs` for iniconfig
-    uv_snapshot!(context.filters(), context.pip_install().arg("hatchling").arg("hatch-vcs"), @"
+    // Install `hatchling` for `source-distribution`.
+    uv_snapshot!(context.filters(), context.pip_install().arg("hatchling"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 9 packages in [TIME]
-    Prepared 9 packages in [TIME]
-    Installed 9 packages in [TIME]
-     + hatch-vcs==0.4.0
+    Resolved 5 packages in [TIME]
+    Prepared 5 packages in [TIME]
+    Installed 5 packages in [TIME]
      + hatchling==1.22.4
      + packaging==24.0
      + pathspec==0.12.1
      + pluggy==1.4.0
-     + setuptools==69.2.0
-     + setuptools-scm==8.0.4
      + trove-classifiers==2024.3.3
-     + typing-extensions==4.10.0
     ");
 
     // Running `uv pip install` should succeed.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--no-build-isolation-package")
-        .arg("iniconfig")
+        .arg("source-distribution")
         .arg(package.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
     Prepared 1 package without build isolation in [TIME]
     Installed 1 package in [TIME]
-     + iniconfig==2.0.0 (from https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz)
-     + project==0.1.0 (from file://[TEMP_DIR]/project)
+     ~ project==0.1.0 (from file://[TEMP_DIR]/project)
+     + source-distribution==0.0.3 (from http://[LOCALHOST]/files/source_distribution-0.0.3.tar.gz)
     ");
 
     Ok(())
@@ -10699,7 +10972,7 @@ fn install_build_isolation_package() -> Result<()> {
 /// Install a package with an unsupported extension.
 #[test]
 fn invalid_extension() {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("ruff @ https://files.pythonhosted.org/packages/f7/69/96766da2cdb5605e6a31ef2734aff0be17901cefb385b885c2ab88896d76/ruff-0.5.6.tar.baz")
@@ -10716,7 +10989,7 @@ fn invalid_extension() {
 /// Install a package without unsupported extension.
 #[test]
 fn no_extension() {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("ruff @ https://files.pythonhosted.org/packages/f7/69/96766da2cdb5605e6a31ef2734aff0be17901cefb385b885c2ab88896d76/ruff-0.5.6")
@@ -10733,7 +11006,7 @@ fn no_extension() {
 /// Regression test for: <https://github.com/astral-sh/uv/pull/6646>
 #[test]
 fn switch_python_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("iniconfig ; python_version == '3.12'")?;
@@ -10776,7 +11049,7 @@ fn switch_python_version() -> Result<()> {
 #[test]
 #[cfg(feature = "test-slow")]
 fn stale_egg_info() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Create a project with dynamic metadata (version).
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -10842,7 +11115,7 @@ fn stale_egg_info() -> Result<()> {
 /// See: <https://github.com/astral-sh/uv/issues/12273>
 #[test]
 fn avoid_cached_wheel() {
-    let context = uv_test::test_context_with_versions!(&["3.10", "3.11"]);
+    let context = uv_test::test_context_with_versions!(&["3.10", "3.11"]).with_local_index();
 
     // Create a Python 3.10 environment.
     context
@@ -10899,7 +11172,7 @@ fn avoid_cached_wheel() {
 /// uninstall the second "version", we can't find the `egg-info` directory.
 #[test]
 fn missing_top_level() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("suds-community==0.8.5"), @"
@@ -10928,7 +11201,7 @@ fn missing_top_level() {
 /// Show a dedicated error when the user attempts to install `sklearn`.
 #[test]
 fn sklearn() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install().arg("sklearn"), @"
     exit_code: 1 (failure)
@@ -10963,7 +11236,9 @@ fn sklearn() {
 
 #[test]
 fn resolve_derivation_chain() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filter((r"[/\\].*[/\\]src", "/[TMP]/src"));
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filter((r"[/\\].*[/\\]src", "/[TMP]/src"));
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -11014,7 +11289,7 @@ fn resolve_derivation_chain() -> Result<()> {
 /// Ensure that `UV_NO_INSTALLER_METADATA` env var is respected.
 #[test]
 fn respect_no_installer_metadata_env_var() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Install urllib3.
     uv_snapshot!(context.pip_install()
@@ -11043,7 +11318,7 @@ fn respect_no_installer_metadata_env_var() {
 /// Check that we error if a source dist lies about its built wheel version.
 #[test]
 fn test_dynamic_version_sdist_wrong_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Write a source dist that has a version in its name, a dynamic version in pyproject.toml,
     // but reports the wrong version when built.
@@ -11092,7 +11367,7 @@ fn test_dynamic_version_sdist_wrong_version() -> Result<()> {
 /// should choose the wheel with the highest build tag.
 #[test]
 fn build_tag() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("build-tag")
@@ -11119,7 +11394,7 @@ fn build_tag() {
 
 #[test]
 fn missing_git_prefix() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.touch()?;
 
@@ -11140,7 +11415,7 @@ fn missing_git_prefix() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn missing_subdirectory_git() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.touch()?;
 
@@ -11158,16 +11433,18 @@ fn missing_subdirectory_git() -> Result<()> {
 
 #[test]
 fn missing_subdirectory_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
+    let source_distribution_url = artifacts.file_url("source_distribution-0.0.3.tar.gz");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.touch()?;
 
-    uv_snapshot!(context.pip_install()
-        .arg("source-distribution @ https://files.pythonhosted.org/packages/1f/e5/5b016c945d745f8b108e759d428341488a6aee8f51f07c6c4e33498bb91f/source_distribution-0.0.3.tar.gz#subdirectory=missing"), @"
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg(format!("source-distribution @ {source_distribution_url}#subdirectory=missing")), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Failed to download and build `source-distribution @ https://files.pythonhosted.org/packages/1f/e5/5b016c945d745f8b108e759d428341488a6aee8f51f07c6c4e33498bb91f/source_distribution-0.0.3.tar.gz#subdirectory=missing`
-      cause: The source distribution `https://files.pythonhosted.org/packages/1f/e5/5b016c945d745f8b108e759d428341488a6aee8f51f07c6c4e33498bb91f/source_distribution-0.0.3.tar.gz#subdirectory=missing` has no subdirectory `missing`
+    error: Failed to download and build `source-distribution @ http://[LOCALHOST]/files/source_distribution-0.0.3.tar.gz#subdirectory=missing`
+      cause: The source distribution `http://[LOCALHOST]/files/source_distribution-0.0.3.tar.gz#subdirectory=missing` has no subdirectory `missing`
     "
     );
 
@@ -11228,7 +11505,7 @@ fn bad_crc32() -> Result<()> {
 
 #[test]
 fn static_metadata_pyproject_toml() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context.temp_dir.child("pyproject.toml").write_str(
         r#"
@@ -11264,7 +11541,7 @@ fn static_metadata_pyproject_toml() -> Result<()> {
 
 #[test]
 fn static_metadata_source_tree() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context.temp_dir.child("pyproject.toml").write_str(
         r#"
@@ -11302,21 +11579,26 @@ fn static_metadata_source_tree() -> Result<()> {
 /// Regression test for: <https://github.com/astral-sh/uv/issues/18778>
 #[test]
 fn direct_url_hash_source_tree_dependency() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
-    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+    context.temp_dir.child("pyproject.toml").write_str(&indoc! {r#"
         [project]
         name = "pylock"
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = [
-          "protobug @ https://files.pythonhosted.org/packages/f2/cc/db26b91cddffbcf0c6df7834fd642578f737fe34197635ae8ea64643a35f/protobug-0.3.0-py3-none-any.whl#sha256=ee81583f376bb38e5e7af425d2453e5e8d4b57bfbf45e5dba1a75329c2026520",
+          "iniconfig @ [INICONFIG_WHEEL_URL]#sha256=c5185871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374",
         ]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
-    "#})?;
+    "#}
+    .replace(
+        "[INICONFIG_WHEEL_URL]",
+        &artifacts.file_url("iniconfig-2.0.0-py3-none-any.whl"),
+    ))?;
     context
         .temp_dir
         .child("src")
@@ -11329,16 +11611,16 @@ fn direct_url_hash_source_tree_dependency() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    error: Failed to download `protobug @ https://files.pythonhosted.org/packages/f2/cc/db26b91cddffbcf0c6df7834fd642578f737fe34197635ae8ea64643a35f/protobug-0.3.0-py3-none-any.whl#sha256=ee81583f376bb38e5e7af425d2453e5e8d4b57bfbf45e5dba1a75329c2026520`
-      cause: Hash mismatch for `protobug @ https://files.pythonhosted.org/packages/f2/cc/db26b91cddffbcf0c6df7834fd642578f737fe34197635ae8ea64643a35f/protobug-0.3.0-py3-none-any.whl#sha256=ee81583f376bb38e5e7af425d2453e5e8d4b57bfbf45e5dba1a75329c2026520`
+    error: Failed to download `iniconfig @ http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl#sha256=c5185871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374`
+      cause: Hash mismatch for `iniconfig @ http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl#sha256=c5185871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374`
 
              Expected:
-               sha256:ee81583f376bb38e5e7af425d2453e5e8d4b57bfbf45e5dba1a75329c2026520
+               sha256:c5185871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374
 
              Computed:
-               sha256:ee81583f376bb38e5e7af425d2453e5e8d4b57bfbf45e5dba1a75329c202652e
+               sha256:8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c
 
-    hint: `protobug` (v0.3.0) was included because `pylock` (v0.1.0) depends on `protobug`
+    hint: `iniconfig` (v2.0.0) was included because `pylock` (v0.1.0) depends on `iniconfig`
     "
     );
 
@@ -11347,22 +11629,26 @@ fn direct_url_hash_source_tree_dependency() -> Result<()> {
 
 #[test]
 fn direct_url_hash_source_tree_dependency_conflict() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let vendor =
+        uv_test::find_links::FindLinksServer::new(&context.workspace_root.join("test/vendor"));
+    let packaging_wheel_url = format!("{}/packaging-23.2-py3-none-any.whl", vendor.url());
 
-    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+    context.temp_dir.child("pyproject.toml").write_str(&indoc! {r#"
         [project]
         name = "pylock"
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = [
-          "anyio @ https://files.pythonhosted.org/packages/36/55/ad4de788d84a630656ece71059665e01ca793c04294c463fd84132f40fe6/anyio-4.0.0-py3-none-any.whl#sha256=cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f",
-          "anyio @ https://files.pythonhosted.org/packages/36/55/ad4de788d84a630656ece71059665e01ca793c04294c463fd84132f40fe6/anyio-4.0.0-py3-none-any.whl#sha256=f7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a",
+          "packaging @ [PACKAGING_WHEEL_URL]#sha256=8c491190033a9af7e1d931d0b5dacc2ef47509b34dd0de67ed209b5203fc88c7",
+          "packaging @ [PACKAGING_WHEEL_URL]#sha256=048fb0e9405036518eaaf48a55953c750c11e1a1b68e0dd1a9d62ed0c092cfc5",
         ]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
-    "#})?;
+    "#}
+    .replace("[PACKAGING_WHEEL_URL]", &packaging_wheel_url))?;
     context
         .temp_dir
         .child("src")
@@ -11370,11 +11656,11 @@ fn direct_url_hash_source_tree_dependency_conflict() -> Result<()> {
         .child("__init__.py")
         .touch()?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install()
         .arg("."), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Conflicting archive URL hashes for `anyio @ https://files.pythonhosted.org/packages/36/55/ad4de788d84a630656ece71059665e01ca793c04294c463fd84132f40fe6/anyio-4.0.0-py3-none-any.whl#sha256=f7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a`: `sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f` conflicts with `sha256:f7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a`
+    error: Conflicting archive URL hashes for `packaging @ http://[LOCALHOST]/packaging-23.2-py3-none-any.whl#sha256=048fb0e9405036518eaaf48a55953c750c11e1a1b68e0dd1a9d62ed0c092cfc5`: `sha256:8c491190033a9af7e1d931d0b5dacc2ef47509b34dd0de67ed209b5203fc88c7` conflicts with `sha256:048fb0e9405036518eaaf48a55953c750c11e1a1b68e0dd1a9d62ed0c092cfc5`
     "
     );
 
@@ -11383,22 +11669,26 @@ fn direct_url_hash_source_tree_dependency_conflict() -> Result<()> {
 
 #[test]
 fn direct_url_hash_source_tree_dependency_multiple_hash_algorithms() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let vendor =
+        uv_test::find_links::FindLinksServer::new(&context.workspace_root.join("test/vendor"));
+    let packaging_wheel_url = format!("{}/packaging-23.2-py3-none-any.whl", vendor.url());
 
-    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+    context.temp_dir.child("pyproject.toml").write_str(&indoc! {r#"
         [project]
         name = "pylock"
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = [
-          "anyio @ https://files.pythonhosted.org/packages/36/55/ad4de788d84a630656ece71059665e01ca793c04294c463fd84132f40fe6/anyio-4.0.0-py3-none-any.whl#sha256=cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f",
-          "anyio @ https://files.pythonhosted.org/packages/36/55/ad4de788d84a630656ece71059665e01ca793c04294c463fd84132f40fe6/anyio-4.0.0-py3-none-any.whl#sha512=f30761c1e8725b49c498273b90dba4b05c0fd157811994c806183062cb6647e773364ce45f0e1ff0b10e32fe6d0232ea5ad39476ccf37109d6b49603a09c11c2",
+          "packaging @ [PACKAGING_WHEEL_URL]#sha256=8c491190033a9af7e1d931d0b5dacc2ef47509b34dd0de67ed209b5203fc88c7",
+          "packaging @ [PACKAGING_WHEEL_URL]#sha512=656015f5cc2c04aa0653ee5609c39a7e5f0b6a58c84fe26b20bd070c52d20b4effb810132f7fb771168483e9fd975cc3302837dd7a1a687ee058b0460c857cc4",
         ]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
-    "#})?;
+    "#}
+    .replace("[PACKAGING_WHEEL_URL]", &packaging_wheel_url))?;
     context
         .temp_dir
         .child("src")
@@ -11410,13 +11700,11 @@ fn direct_url_hash_source_tree_dependency_multiple_hash_algorithms() -> Result<(
         .arg("."), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + anyio==4.0.0 (from https://files.pythonhosted.org/packages/36/55/ad4de788d84a630656ece71059665e01ca793c04294c463fd84132f40fe6/anyio-4.0.0-py3-none-any.whl#sha512=f30761c1e8725b49c498273b90dba4b05c0fd157811994c806183062cb6647e773364ce45f0e1ff0b10e32fe6d0232ea5ad39476ccf37109d6b49603a09c11c2)
-     + idna==3.6
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + packaging==23.2 (from http://[LOCALHOST]/packaging-23.2-py3-none-any.whl#sha512=656015f5cc2c04aa0653ee5609c39a7e5f0b6a58c84fe26b20bd070c52d20b4effb810132f7fb771168483e9fd975cc3302837dd7a1a687ee058b0460c857cc4)
      + pylock==0.1.0 (from file://[TEMP_DIR]/)
-     + sniffio==1.3.1
     "
     );
 
@@ -11426,7 +11714,7 @@ fn direct_url_hash_source_tree_dependency_multiple_hash_algorithms() -> Result<(
 /// Regression test for: <https://github.com/astral-sh/uv/issues/10239#issuecomment-2565663046>
 #[test]
 fn static_metadata_already_installed() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context.temp_dir.child("pyproject.toml").write_str(
         r#"
@@ -11476,16 +11764,14 @@ fn static_metadata_already_installed() -> Result<()> {
 /// `circular-one` was a runtime dependency.
 #[test]
 fn cyclic_build_dependency() {
-    let context = uv_test::test_context!("3.13").with_exclude_newer("2025-01-02T00:00:00Z");
+    let context = uv_test::test_context!("3.13")
+        .with_local_index()
+        .with_exclude_newer("2025-01-02T00:00:00Z");
 
     // Installing with `--no-binary circular-one` should fail, since we'll end up in a recursive
     // build.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("circular-one")
-        .arg("--extra-index-url")
-        .arg("https://test.pypi.org/simple")
-        .arg("--index-strategy")
-        .arg("unsafe-best-match")
         .arg("--no-binary")
         .arg("circular-one"), @"
     exit_code: 1 (failure)
@@ -11499,11 +11785,7 @@ fn cyclic_build_dependency() {
 
     // Installing without `--no-binary circular-one` should succeed, since we can use the wheel.
     uv_snapshot!(context.filters(), context.pip_install()
-        .arg("circular-one")
-        .arg("--extra-index-url")
-        .arg("https://test.pypi.org/simple")
-        .arg("--index-strategy")
-        .arg("unsafe-best-match"), @"
+        .arg("circular-one"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -11517,7 +11799,7 @@ fn cyclic_build_dependency() {
 #[test]
 #[cfg(feature = "test-git")]
 fn direct_url_json_git_preserves_repository_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(
         "uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage.git",
@@ -11552,7 +11834,7 @@ fn direct_url_json_git_preserves_repository_url() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn direct_url_json_git_tag() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(
         "uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@0.0.1",
@@ -11627,7 +11909,7 @@ fn direct_url_json_direct_url() -> Result<()> {
 fn dependency_group() -> Result<()> {
     // testing basic `uv pip install --group` functionality
     fn new_context(server: &PackseServer) -> Result<TestContext> {
-        let context = uv_test::test_context!("3.12");
+        let context = uv_test::test_context!("3.12").with_local_index();
 
         let pyproject_toml = context.temp_dir.child("pyproject.toml");
         pyproject_toml.write_str(
@@ -11764,7 +12046,7 @@ fn dependency_group() -> Result<()> {
 
 #[test]
 fn recursive_dependency_group() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Test a self-referencing group.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -11829,7 +12111,7 @@ fn virtual_dependency_group() -> Result<()> {
     // testing basic `uv pip install --group` functionality
     // when the pyproject.toml is virtual
     fn new_context() -> Result<TestContext> {
-        let context = uv_test::test_context!("3.12");
+        let context = uv_test::test_context!("3.12").with_local_index();
 
         let pyproject_toml = context.temp_dir.child("pyproject.toml");
         pyproject_toml.write_str(
@@ -11862,7 +12144,7 @@ fn virtual_dependency_group() -> Result<()> {
 fn many_pyproject_group() -> Result<()> {
     // `uv pip install --group` tests with multiple projects
     fn new_context() -> Result<TestContext> {
-        let context = uv_test::test_context!("3.12");
+        let context = uv_test::test_context!("3.12").with_local_index();
 
         let pyproject_toml = context.temp_dir.child("pyproject.toml");
         pyproject_toml.write_str(
@@ -11943,7 +12225,7 @@ fn many_pyproject_group() -> Result<()> {
 fn other_sources_group() -> Result<()> {
     // `uv pip install --group` tests just slamming random other sources like -e and .
     fn new_context() -> Result<TestContext> {
-        let context = uv_test::test_context!("3.12");
+        let context = uv_test::test_context!("3.12").with_local_index();
 
         let pyproject_toml = context.temp_dir.child("pyproject.toml");
         pyproject_toml.write_str(
@@ -11983,17 +12265,14 @@ fn other_sources_group() -> Result<()> {
     // and install an editable
     context = new_context()?;
     uv_snapshot!(context.filters(), context.pip_install()
-        .arg("-e").arg(context.workspace_root.join("test/packages/poetry_editable"))
+        .arg("-e").arg(context.workspace_root.join("test/packages/black_editable"))
         .arg("--group").arg("foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 5 packages in [TIME]
-    Prepared 5 packages in [TIME]
-    Installed 5 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + poetry-editable==0.1.0 (from file://[WORKSPACE]/test/packages/poetry_editable)
-     + sniffio==1.3.1
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + black==0.1.0 (from file://[WORKSPACE]/test/packages/black_editable)
      + sortedcontainers==2.4.0
     ");
 
@@ -12005,7 +12284,7 @@ fn suspicious_group() -> Result<()> {
     // uv pip compile --group tests, where the invocations are suspicious
     // and we might want to add warnings
     fn new_context() -> Result<TestContext> {
-        let context = uv_test::test_context!("3.12");
+        let context = uv_test::test_context!("3.12").with_local_index();
 
         let pyproject_toml = context.temp_dir.child("pyproject.toml");
         pyproject_toml.write_str(
@@ -12110,7 +12389,7 @@ fn suspicious_group() -> Result<()> {
 fn invalid_group() -> Result<()> {
     // uv pip compile --group tests, where the invocations should fail
     fn new_context() -> Result<TestContext> {
-        let context = uv_test::test_context!("3.12");
+        let context = uv_test::test_context!("3.12").with_local_index();
 
         let pyproject_toml = context.temp_dir.child("pyproject.toml");
         pyproject_toml.write_str(
@@ -12194,7 +12473,7 @@ fn invalid_group() -> Result<()> {
 fn project_and_group() -> Result<()> {
     // Checking that --project is handled properly with --group
     fn new_context() -> Result<TestContext> {
-        let context = uv_test::test_context!("3.12");
+        let context = uv_test::test_context!("3.12").with_local_index();
 
         let pyproject_toml = context.temp_dir.child("pyproject.toml");
         pyproject_toml.write_str(
@@ -12300,7 +12579,7 @@ fn project_and_group() -> Result<()> {
 fn directory_and_group() -> Result<()> {
     // Checking that --directory is handled properly with --group
     fn new_context() -> Result<TestContext> {
-        let context = uv_test::test_context!("3.12");
+        let context = uv_test::test_context!("3.12").with_local_index();
 
         let pyproject_toml = context.temp_dir.child("pyproject.toml");
         pyproject_toml.write_str(
@@ -12401,7 +12680,7 @@ fn directory_and_group() -> Result<()> {
 /// we ignore them.
 #[test]
 fn no_sources_workspace_discovery() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     context.temp_dir.child("pyproject.toml").write_str(indoc! {
         r#"
         [project]
@@ -12550,7 +12829,7 @@ fn no_sources_workspace_discovery() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn pip_install_no_sources_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     context.temp_dir.child("pyproject.toml").write_str(indoc! {
         r#"
         [project]
@@ -12598,7 +12877,7 @@ fn pip_install_no_sources_package() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn install_git_with_git_envs_set() {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_local_index();
 
     uv_snapshot!(context.filters(), context
         .pip_install()
@@ -12623,7 +12902,7 @@ fn install_git_with_git_envs_set() {
 
 #[test]
 fn unsupported_git_scheme() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("git+fantasy://foo"), @"
     exit_code: 2 (failure)
@@ -12640,7 +12919,7 @@ fn unsupported_git_scheme() {
 #[cfg(unix)]
 #[cfg(feature = "test-git")]
 fn install_git_submodule_relative_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let temp_dir = &context.temp_dir;
     let utilities_dir = temp_dir.child("utilities");
     utilities_dir.create_dir_all()?;
@@ -12806,7 +13085,7 @@ def main():
 fn install_git_submodule_remote() {
     const TEST_REPO: &str = "astral-test/uv-submodule-pypackage.git";
     const TEST_REV: &str = "d2c44b87eef25896dd30a6e55d4689b918180c7b";
-    let context = uv_test::test_context!("3.13");
+    let context = uv_test::test_context!("3.13").with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg(format!("git+https://github.com/{TEST_REPO}@{TEST_REV}")), @r"
@@ -12826,7 +13105,7 @@ fn install_git_submodule_remote() {
 fn install_git_submodule_remote_relative() {
     const TEST_REPO: &str = "astral-test/uv-submodule-pypackage.git";
     const TEST_REV: &str = "377720a1a7f48279bbfc17988454132f13644e84";
-    let context = uv_test::test_context!("3.13");
+    let context = uv_test::test_context!("3.13").with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg(format!("git+https://github.com/{TEST_REPO}@{TEST_REV}")), @r"
@@ -12842,7 +13121,7 @@ fn install_git_submodule_remote_relative() {
 /// Modify a project to use a `src` layout.
 #[test]
 fn change_layout_src() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("-e .")?;
@@ -12924,7 +13203,7 @@ fn change_layout_src() -> Result<()> {
 /// Modify a custom directory in the cache keys.
 #[test]
 fn change_layout_custom_directory() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("-e .")?;
@@ -13025,7 +13304,7 @@ fn change_layout_custom_directory() -> Result<()> {
 
 #[test]
 fn pep_751_install_registry_wheel() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -13077,7 +13356,9 @@ fn pep_751_install_registry_wheel() -> Result<()> {
 
 #[test]
 fn pep_751_install_registry_sdist() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-29T00:00:00Z");
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_exclude_newer("2025-01-29T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -13124,7 +13405,7 @@ fn pep_751_install_registry_sdist() -> Result<()> {
 
 #[test]
 fn pep_751_install_invalid_artifact_urls() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pylock_toml = context.temp_dir.child("pylock.toml");
     pylock_toml.write_str(
@@ -13182,7 +13463,7 @@ fn pep_751_install_invalid_artifact_urls() -> Result<()> {
 
 #[test]
 fn pep_751_install_invalid_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let pylock_toml = context.temp_dir.child("pylock.toml");
 
     pylock_toml.write_str(
@@ -13220,7 +13501,7 @@ fn pep_751_install_invalid_hashes() -> Result<()> {
 
 #[test]
 fn pep_751_install_directory() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Create a local dependency in a subdirectory.
     let pyproject_toml = context.temp_dir.child("foo").child("pyproject.toml");
@@ -13295,7 +13576,7 @@ fn pep_751_install_directory() -> Result<()> {
 
 #[test]
 fn pep_751_install_require_hashes_directory() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("foo").child("pyproject.toml");
     pyproject_toml.write_str(
@@ -13348,7 +13629,7 @@ fn pep_751_install_require_hashes_directory() -> Result<()> {
 #[test]
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 fn pep_751_install_git_rejects_mismatched_exact_revision() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
         lock-version = "1.0"
@@ -13393,7 +13674,7 @@ fn pep_751_install_git_rejects_mismatched_exact_revision() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn pep_751_install_git() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -13440,18 +13721,19 @@ fn pep_751_install_git() -> Result<()> {
 
 #[test]
 fn pep_751_install_url_wheel() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["anyio @ https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl"]
+        dependencies = ["anyio @ {anyio_wheel_url}"]
         "#,
-    )?;
+        anyio_wheel_url = artifacts.file_url("anyio-4.3.0-py3-none-any.whl"),
+    })?;
 
     context
         .export()
@@ -13468,7 +13750,7 @@ fn pep_751_install_url_wheel() -> Result<()> {
     ----- stderr -----
     Prepared 2 packages in [TIME]
     Installed 3 packages in [TIME]
-     + anyio==4.3.0 (from https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl)
+     + anyio==4.3.0 (from http://[LOCALHOST]/files/anyio-4.3.0-py3-none-any.whl)
      + idna==3.6
      + sniffio==1.3.1
     "
@@ -13490,7 +13772,7 @@ fn pep_751_install_url_wheel() -> Result<()> {
 #[test]
 fn pep_751_install_url_sdist() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc! {
@@ -13544,12 +13826,13 @@ fn pep_751_install_url_sdist() -> Result<()> {
 
 #[test]
 fn pep_751_install_path_wheel() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Download the source.
     let archive = context.temp_dir.child("iniconfig-2.0.0-py3-none-any.whl");
-    download_to_disk(
-        "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl",
+    download_local_to_disk(
+        &artifacts.file_url("iniconfig-2.0.0-py3-none-any.whl"),
         &archive,
     );
 
@@ -13590,7 +13873,7 @@ fn pep_751_install_path_wheel() -> Result<()> {
         [[packages]]
         name = "iniconfig"
         version = "2.0.0"
-        archive = { path = "iniconfig-2.0.0-py3-none-any.whl", hashes = { sha256 = "b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374" } }
+        archive = { path = "iniconfig-2.0.0-py3-none-any.whl", hashes = { sha256 = "8a0fc44e516906bdecc91af1c3bc12134c9d1647a482446edc62f2f72191416c" } }
         "#
         );
     });
@@ -13621,7 +13904,7 @@ fn pep_751_install_path_wheel() -> Result<()> {
 
 #[test]
 fn pep_751_prefers_path_over_url() -> Result<()> {
-    let context = uv_test::test_context!("3.13");
+    let context = uv_test::test_context!("3.13").with_local_index();
 
     for wheel in [
         "ok-1.0.0-py3-none-any.whl",
@@ -13669,14 +13952,12 @@ fn pep_751_prefers_path_over_url() -> Result<()> {
 
 #[test]
 fn pep_751_install_path_sdist() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Download the source.
     let archive = context.temp_dir.child("iniconfig-2.0.0.tar.gz");
-    download_to_disk(
-        "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz",
-        &archive,
-    );
+    download_local_to_disk(&artifacts.file_url("iniconfig-2.0.0.tar.gz"), &archive);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -13726,7 +14007,7 @@ fn pep_751_install_path_sdist() -> Result<()> {
 
 #[test]
 fn pep_751_empty_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let pylock_toml = context.temp_dir.child("pylock.toml");
 
     allow_duplicates! {
@@ -13769,7 +14050,7 @@ fn pep_751_empty_hashes() -> Result<()> {
 
 #[test]
 fn pep_751_missing_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
         lock-version = "1.0"
         created-by = "uv"
@@ -13803,7 +14084,7 @@ fn pep_751_missing_hashes() -> Result<()> {
 
 #[test]
 fn pep_751_empty_hashes_unselected_artifacts() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     fs::copy(
         context
             .workspace_root
@@ -13849,7 +14130,7 @@ fn pep_751_empty_hashes_unselected_artifacts() -> Result<()> {
 
 #[test]
 fn pep_751_unsupported_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
         lock-version = "1.0"
         created-by = "uv"
@@ -13899,7 +14180,7 @@ fn pep_751_hash_mismatch() -> Result<()> {
 
     // Download the source.
     let archive = context.temp_dir.child("iniconfig-2.0.0-py3-none-any.whl");
-    uv_test::download_local_to_disk(
+    download_local_to_disk(
         &artifacts.file_url("iniconfig-2.0.0-py3-none-any.whl"),
         &archive,
     );
@@ -14058,7 +14339,7 @@ fn pep_751_rejects_mismatched_wheel_identity() -> Result<()> {
 
 #[test]
 fn pep_751_mix() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -14129,7 +14410,7 @@ fn pep_751_mix() -> Result<()> {
 
 #[test]
 fn pep_751_multiple_sources() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pylock_toml = context.temp_dir.child("pylock.toml");
     pylock_toml.write_str(r#"
@@ -14163,11 +14444,13 @@ fn pep_751_multiple_sources() -> Result<()> {
 
 #[test]
 fn pep_751_groups() -> Result<()> {
-    let context = uv_test::test_context!("3.13");
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.13").with_local_index();
 
     let pylock_toml = context.temp_dir.child("pylock.toml");
     pylock_toml.write_str(
-        r#"
+        &format!(r#"
 lock-version = "1.0"
 requires-python = "==3.13.*"
 environments = [
@@ -14179,11 +14462,10 @@ default-groups = ["default"]
 created-by = "pdm"
 [[packages]]
 name = "anyio"
-version = "4.9.0"
-requires-python = ">=3.9"
-sdist = {name = "anyio-4.9.0.tar.gz", url = "https://files.pythonhosted.org/packages/95/7d/4c1bd541d4dffa1b52bd83fb8527089e097a106fc90b467a7313b105f840/anyio-4.9.0.tar.gz", hashes = {sha256 = "673c0c244e15788651a4ff38710fea9675823028a6f08a5eda409e0c9840a028"}}
+version = "4.3.0"
+requires-python = ">=3.8"
 wheels = [
-    {name = "anyio-4.9.0-py3-none-any.whl",url = "https://files.pythonhosted.org/packages/a1/ee/48ca1a7c89ffec8b6a0c5d02b89c305671d5ffd8d3c94acf8b8c408575bb/anyio-4.9.0-py3-none-any.whl",hashes = {sha256 = "9f76d541cad6e36af7beb62e978876f3b41e3e04f2c1fbf0884604c0a9c4d93c"}},
+    {{name = "anyio-4.3.0-py3-none-any.whl",url = "[ANYIO_WHEEL_URL]",hashes = {{sha256 = "{artifact_hash_0}"}}}},
 ]
 marker = "\"async\" in extras"
 
@@ -14197,11 +14479,10 @@ dependencies = [
 
 [[packages]]
 name = "blinker"
-version = "1.9.0"
-requires-python = ">=3.9"
-sdist = {name = "blinker-1.9.0.tar.gz", url = "https://files.pythonhosted.org/packages/21/28/9b3f50ce0e048515135495f198351908d99540d69bfdc8c1d15b73dc55ce/blinker-1.9.0.tar.gz", hashes = {sha256 = "b4ce2265a7abece45e7cc896e98dbebe6cead56bcf805a3d23136d145f5445bf"}}
+version = "1.7.0"
+requires-python = ">=3.12"
 wheels = [
-    {name = "blinker-1.9.0-py3-none-any.whl",url = "https://files.pythonhosted.org/packages/10/cb/f2ad4230dc2eb1a74edf38f1a38b9b52277f75bef262d8908e60d957e13c/blinker-1.9.0-py3-none-any.whl",hashes = {sha256 = "ba0efaa9080b619ff2f3459d1d500c57bddea4a6b424b60a91141db6fd2f08bc"}},
+    {{name = "blinker-1.7.0-py3-none-any.whl",url = "[BLINKER_WHEEL_URL]",hashes = {{sha256 = "{artifact_hash_1}"}}}},
 ]
 marker = "\"dev\" in extras"
 
@@ -14210,11 +14491,10 @@ dependencies = []
 
 [[packages]]
 name = "idna"
-version = "3.10"
+version = "3.6"
 requires-python = ">=3.6"
-sdist = {name = "idna-3.10.tar.gz", url = "https://files.pythonhosted.org/packages/f1/70/7703c29685631f5a7590aa73f1f1d3fa9a380e654b86af429e0934a32f7d/idna-3.10.tar.gz", hashes = {sha256 = "12f65c9b470abda6dc35cf8e63cc574b1c52b11df2c86030af0ac09b01b13ea9"}}
 wheels = [
-    {name = "idna-3.10-py3-none-any.whl",url = "https://files.pythonhosted.org/packages/76/c6/c88e154df9c4e1a2a66ccf0005a88dfb2650c1dffb6f5ce603dfbd452ce3/idna-3.10-py3-none-any.whl",hashes = {sha256 = "946d195a0d259cbba61165e88e65941f16e9b36ea6ddb97f00452bae8b1287d3"}},
+    {{name = "idna-3.6-py3-none-any.whl",url = "[IDNA_WHEEL_URL]",hashes = {{sha256 = "{artifact_hash_2}"}}}},
 ]
 marker = "\"async\" in extras"
 
@@ -14223,11 +14503,10 @@ dependencies = []
 
 [[packages]]
 name = "iniconfig"
-version = "2.1.0"
+version = "2.0.0"
 requires-python = ">=3.8"
-sdist = {name = "iniconfig-2.1.0.tar.gz", url = "https://files.pythonhosted.org/packages/f2/97/ebf4da567aa6827c909642694d71c9fcf53e5b504f2d96afea02718862f3/iniconfig-2.1.0.tar.gz", hashes = {sha256 = "3abbd2e30b36733fee78f9c7f7308f2d0050e88f0087fd25c2645f63c773e1c7"}}
 wheels = [
-    {name = "iniconfig-2.1.0-py3-none-any.whl",url = "https://files.pythonhosted.org/packages/2c/e1/e6716421ea10d38022b952c159d5161ca1193197fb744506875fbb87ea7b/iniconfig-2.1.0-py3-none-any.whl",hashes = {sha256 = "9deba5723312380e77435581c6bf4935c94cbfab9b1ed33ef8d238ea168eb760"}},
+    {{name = "iniconfig-2.0.0-py3-none-any.whl",url = "[INICONFIG_WHEEL_URL]",hashes = {{sha256 = "{artifact_hash_3}"}}}},
 ]
 marker = "\"default\" in dependency_groups"
 
@@ -14235,12 +14514,11 @@ marker = "\"default\" in dependency_groups"
 dependencies = []
 
 [[packages]]
-name = "pygments"
-version = "2.19.2"
+name = "typing-extensions"
+version = "4.10.0"
 requires-python = ">=3.8"
-sdist = {name = "pygments-2.19.2.tar.gz", url = "https://files.pythonhosted.org/packages/b0/77/a5b8c569bf593b0140bde72ea885a803b82086995367bf2037de0159d924/pygments-2.19.2.tar.gz", hashes = {sha256 = "636cb2477cec7f8952536970bc533bc43743542f70392ae026374600add5b887"}}
 wheels = [
-    {name = "pygments-2.19.2-py3-none-any.whl",url = "https://files.pythonhosted.org/packages/c7/21/705964c7812476f378728bdf590ca4b771ec72385c533964653c68e86bdc/pygments-2.19.2-py3-none-any.whl",hashes = {sha256 = "86540386c03d588bb81d44bc3928634ff26449851e99741617ecb9037ee5ec0b"}},
+    {{name = "typing_extensions-4.10.0-py3-none-any.whl",url = "[TYPING_EXTENSIONS_WHEEL_URL]",hashes = {{sha256 = "{artifact_hash_4}"}}}},
 ]
 marker = "\"test\" in dependency_groups"
 
@@ -14251,9 +14529,8 @@ dependencies = []
 name = "sniffio"
 version = "1.3.1"
 requires-python = ">=3.7"
-sdist = {name = "sniffio-1.3.1.tar.gz", url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hashes = {sha256 = "f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc"}}
 wheels = [
-    {name = "sniffio-1.3.1-py3-none-any.whl",url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl",hashes = {sha256 = "2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2"}},
+    {{name = "sniffio-1.3.1-py3-none-any.whl",url = "[SNIFFIO_WHEEL_URL]",hashes = {{sha256 = "{artifact_hash_5}"}}}},
 ]
 marker = "\"async\" in extras"
 
@@ -14261,11 +14538,35 @@ marker = "\"async\" in extras"
 dependencies = []
 
 [tool.pdm]
-hashes = {sha256 = "51795362d337720c28bd6c3a26eb33751f2b69590261f599ffb4172ee2c441c6"}
+hashes = {{sha256 = "51795362d337720c28bd6c3a26eb33751f2b69590261f599ffb4172ee2c441c6"}}
 
 [[tool.pdm.targets]]
 requires_python = "==3.13.*"
-        "#,
+        "#, artifact_hash_0 = registry_artifacts.file_hash("anyio-4.3.0-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_1 = registry_artifacts.file_hash("blinker-1.7.0-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_2 = registry_artifacts.file_hash("idna-3.6-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_3 = registry_artifacts.file_hash("iniconfig-2.0.0-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_4 = registry_artifacts.file_hash("typing_extensions-4.10.0-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_5 = registry_artifacts.file_hash("sniffio-1.3.1-py3-none-any.whl").expect("fixture distribution should exist"))
+        .replace(
+            "[ANYIO_WHEEL_URL]",
+            &artifacts.file_url("anyio-4.3.0-py3-none-any.whl"),
+        )
+        .replace(
+            "[BLINKER_WHEEL_URL]",
+            &artifacts.file_url("blinker-1.7.0-py3-none-any.whl"),
+        )
+        .replace(
+            "[IDNA_WHEEL_URL]",
+            &artifacts.file_url("idna-3.6-py3-none-any.whl"),
+        )
+        .replace(
+            "[INICONFIG_WHEEL_URL]",
+            &artifacts.file_url("iniconfig-2.0.0-py3-none-any.whl"),
+        )
+        .replace(
+            "[TYPING_EXTENSIONS_WHEEL_URL]",
+            &artifacts.file_url("typing_extensions-4.10.0-py3-none-any.whl"),
+        )
+        .replace(
+            "[SNIFFIO_WHEEL_URL]",
+            &artifacts.file_url("sniffio-1.3.1-py3-none-any.whl"),
+        ),
     )?;
 
     // By default, only `iniconfig` should be installed, since it's in the default group.
@@ -14277,7 +14578,7 @@ requires_python = "==3.13.*"
     ----- stderr -----
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + iniconfig==2.1.0
+     + iniconfig==2.0.0
     "
     );
 
@@ -14292,13 +14593,13 @@ requires_python = "==3.13.*"
     ----- stderr -----
     Prepared 3 packages in [TIME]
     Installed 3 packages in [TIME]
-     + anyio==4.9.0
-     + idna==3.10
+     + anyio==4.3.0
+     + idna==3.6
      + sniffio==1.3.1
     "
     );
 
-    // With `--group test`, `pygments` should be installed.
+    // With `--group test`, `typing-extensions` should be installed.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--preview")
         .arg("-r")
@@ -14309,7 +14610,7 @@ requires_python = "==3.13.*"
     ----- stderr -----
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + pygments==2.19.2
+     + typing-extensions==4.10.0
     "
     );
 
@@ -14323,7 +14624,7 @@ requires_python = "==3.13.*"
     ----- stderr -----
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + blinker==1.9.0
+     + blinker==1.7.0
     "
     );
 
@@ -14347,7 +14648,7 @@ requires_python = "==3.13.*"
 
 #[test]
 fn pep_751_lock_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pylock_toml = context.temp_dir.child("pylock.toml");
     pylock_toml.write_str(
@@ -14397,7 +14698,7 @@ fn pep_751_lock_version() -> Result<()> {
 
 #[test]
 fn pep_751_package_requires_python() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pylock_toml = context.temp_dir.child("pylock.toml");
     pylock_toml.write_str(
@@ -14451,7 +14752,7 @@ fn pep_751_package_requires_python() -> Result<()> {
 
 #[test]
 fn pep_751_requires_python() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]).with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -14494,14 +14795,16 @@ fn pep_751_requires_python() -> Result<()> {
 /// Test that uv doesn't hang if an index returns a distribution for the wrong package.
 #[tokio::test]
 async fn bogus_redirect() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let index = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let redirect_server = MockServer::start().await;
 
     // Configure a bogus redirect where for all packages, anyio is returned.
     Mock::given(method("GET"))
         .respond_with(
-            ResponseTemplate::new(302).insert_header("Location", "https://pypi.org/simple/anyio/"),
+            ResponseTemplate::new(302)
+                .insert_header("Location", format!("{}anyio/", index.index_url())),
         )
         .mount(&redirect_server)
         .await;
@@ -14524,7 +14827,7 @@ async fn bogus_redirect() -> Result<()> {
 
 #[test]
 fn reserved_script_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -14595,7 +14898,7 @@ fn reserved_script_name() -> Result<()> {
 #[cfg(unix)]
 #[test]
 fn install_in_prefix_symlinked_wheel_data_directory() -> Result<()> {
-    let context = uv_test::test_context!("3.11");
+    let context = uv_test::test_context!("3.11").with_local_index();
     let wheel = context.temp_dir.join("foo-0.1.0-py3-none-any.whl");
     let data_path = "foo-0.1.0.data/data/man/man1/foo.1";
     let record = formatdoc! {"
@@ -14770,7 +15073,7 @@ fn repacked_wheel_with_entrypoint(
 
 #[test]
 fn reject_wheel_entrypoint_paths() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Build a normal wheel, then rewrite its entry-point metadata to exercise the installer
     // directly, rather than relying on backend-side validation.
@@ -14798,7 +15101,7 @@ fn reject_wheel_entrypoint_paths() -> Result<()> {
 
 #[test]
 fn reject_normalized_reserved_wheel_entrypoint_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let repacked_wheel =
         repacked_wheel_with_entrypoint(&context, "console_scripts", "nested/../python")?;
 
@@ -14817,7 +15120,7 @@ fn reject_normalized_reserved_wheel_entrypoint_name() -> Result<()> {
 
 #[test]
 fn reject_case_variant_reserved_wheel_entrypoint_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let repacked_wheel = repacked_wheel_with_entrypoint(&context, "console_scripts", "Python")?;
 
     uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
@@ -14829,7 +15132,7 @@ fn reject_case_variant_reserved_wheel_entrypoint_name() -> Result<()> {
       cause: Scripts must not use the reserved name `python`, got: `Python`
     ");
 
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let repacked_wheel = repacked_wheel_with_entrypoint(&context, "console_scripts", "Python.PY")?;
 
     uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
@@ -14841,7 +15144,7 @@ fn reject_case_variant_reserved_wheel_entrypoint_name() -> Result<()> {
       cause: Scripts must not use the reserved name `python`, got: `Python.PY`
     ");
 
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let repacked_wheel = repacked_wheel_with_entrypoint(&context, "console_scripts", "python.Py")?;
 
     uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
@@ -14858,7 +15161,7 @@ fn reject_case_variant_reserved_wheel_entrypoint_name() -> Result<()> {
 
 #[test]
 fn reject_normalized_reserved_gui_wheel_entrypoint_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let repacked_wheel =
         repacked_wheel_with_entrypoint(&context, "gui_scripts", "nested/../python")?;
 
@@ -14877,7 +15180,7 @@ fn reject_normalized_reserved_gui_wheel_entrypoint_name() -> Result<()> {
 
 #[test]
 fn reject_free_threaded_python_wheel_entrypoint_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let repacked_wheel =
         repacked_wheel_with_entrypoint(&context, "console_scripts", "python3.13t")?;
 
@@ -14896,7 +15199,7 @@ fn reject_free_threaded_python_wheel_entrypoint_name() -> Result<()> {
 
 #[test]
 fn reject_windowed_free_threaded_python_wheel_entrypoint_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let repacked_wheel =
         repacked_wheel_with_entrypoint(&context, "console_scripts", "pythonw3.13t")?;
 
@@ -14915,7 +15218,7 @@ fn reject_windowed_free_threaded_python_wheel_entrypoint_name() -> Result<()> {
 
 #[test]
 fn reject_windows_rewritten_python_wheel_entrypoint_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let repacked_wheel = repacked_wheel_with_entrypoint(&context, "console_scripts", "python.py")?;
 
     uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
@@ -14933,7 +15236,7 @@ fn reject_windows_rewritten_python_wheel_entrypoint_name() -> Result<()> {
 
 #[test]
 fn reject_windows_rewritten_free_threaded_python_wheel_entrypoint_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let repacked_wheel =
         repacked_wheel_with_entrypoint(&context, "console_scripts", "pythonw3.13t.py")?;
 
@@ -14952,7 +15255,7 @@ fn reject_windows_rewritten_free_threaded_python_wheel_entrypoint_name() -> Resu
 
 #[test]
 fn reject_pypy_major_wheel_entrypoint_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let repacked_wheel = repacked_wheel_with_entrypoint(&context, "console_scripts", "pypy3")?;
 
     uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
@@ -14970,7 +15273,7 @@ fn reject_pypy_major_wheel_entrypoint_name() -> Result<()> {
 
 #[test]
 fn reject_windows_rewritten_pypy_wheel_entrypoint_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let repacked_wheel = repacked_wheel_with_entrypoint(&context, "console_scripts", "pypy.py")?;
 
     uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
@@ -14988,7 +15291,7 @@ fn reject_windows_rewritten_pypy_wheel_entrypoint_name() -> Result<()> {
 
 #[test]
 fn warn_normalized_activation_wheel_entrypoint_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let repacked_wheel =
         repacked_wheel_with_entrypoint(&context, "console_scripts", "nested/../activate.bash")?;
 
@@ -15008,7 +15311,7 @@ fn warn_normalized_activation_wheel_entrypoint_name() -> Result<()> {
 
 #[test]
 fn accept_normalized_gui_wheel_entrypoint_paths() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let repacked_wheel =
         repacked_wheel_with_entrypoint(&context, "gui_scripts", "nested/../normalized-gui")?;
 
@@ -15035,7 +15338,7 @@ fn accept_normalized_gui_wheel_entrypoint_paths() -> Result<()> {
 
 #[test]
 fn accept_normalized_wheel_entrypoint_paths() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
     let repacked_wheel =
         repacked_wheel_with_entrypoint(&context, "console_scripts", "nested/../normalized-script")?;
 
@@ -15062,10 +15365,13 @@ fn accept_normalized_wheel_entrypoint_paths() -> Result<()> {
 
 #[test]
 fn pep_751_dependency() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let registry_artifacts = PackseServer::new("packages/pip-install.toml");
+    let artifacts = PackseServer::new("packages/pip-install.toml");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pylock_toml = context.temp_dir.child("pylock.toml");
-    pylock_toml.write_str(r#"
+    pylock_toml.write_str(
+        &format!(r#"
         # This file was autogenerated by uv via the following command:
         #    uv export --cache-dir [CACHE_DIR] -o pylock.toml
         lock-version = "1.0"
@@ -15075,25 +15381,44 @@ fn pep_751_dependency() -> Result<()> {
         [[packages]]
         name = "anyio"
         version = "4.3.0"
-        sdist = { url = "https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz", upload-time = 2024-02-19T08:36:28Z, size = 159642, hashes = { sha256 = "f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6" } }
-        wheels = [{ url = "https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl", upload-time = 2024-02-19T08:36:26Z, size = 85584, hashes = { sha256 = "048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8" } }]
+        sdist = {{ url = "[ANYIO_SDIST_URL]", upload-time = 2024-03-24T00:00:00Z, hashes = {{ sha256 = "{artifact_hash_0}" }} }}
+        wheels = [{{ url = "[ANYIO_WHEEL_URL]", upload-time = 2024-03-24T00:00:00Z, hashes = {{ sha256 = "{artifact_hash_1}" }} }}]
         dependencies = [
-            { name = "idna" },
-            { name = "sniffio" },
+            {{ name = "idna" }},
+            {{ name = "sniffio" }},
         ]
 
         [[packages]]
         name = "idna"
         version = "3.6"
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", upload-time = 2023-11-25T15:40:54Z, size = 175426, hashes = { sha256 = "9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca" } }
-        wheels = [{ url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", upload-time = 2023-11-25T15:40:52Z, size = 61567, hashes = { sha256 = "c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f" } }]
+        sdist = {{ url = "[IDNA_SDIST_URL]", upload-time = 2024-03-24T00:00:00Z, hashes = {{ sha256 = "{artifact_hash_2}" }} }}
+        wheels = [{{ url = "[IDNA_WHEEL_URL]", upload-time = 2024-03-24T00:00:00Z, hashes = {{ sha256 = "{artifact_hash_3}" }} }}]
 
         [[packages]]
         name = "sniffio"
         version = "1.3.1"
-        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", upload-time = 2024-02-25T23:20:04Z, size = 20372, hashes = { sha256 = "f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc" } }
-        wheels = [{ url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-02-25T23:20:01Z, size = 10235, hashes = { sha256 = "2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2" } }]
-    "#)?;
+        sdist = {{ url = "[SNIFFIO_SDIST_URL]", upload-time = 2024-03-24T00:00:00Z, hashes = {{ sha256 = "{artifact_hash_4}" }} }}
+        wheels = [{{ url = "[SNIFFIO_WHEEL_URL]", upload-time = 2024-03-24T00:00:00Z, hashes = {{ sha256 = "{artifact_hash_5}" }} }}]
+    "#, artifact_hash_0 = registry_artifacts.file_hash("anyio-4.3.0.tar.gz").expect("fixture distribution should exist"), artifact_hash_1 = registry_artifacts.file_hash("anyio-4.3.0-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_2 = registry_artifacts.file_hash("idna-3.6.tar.gz").expect("fixture distribution should exist"), artifact_hash_3 = registry_artifacts.file_hash("idna-3.6-py3-none-any.whl").expect("fixture distribution should exist"), artifact_hash_4 = registry_artifacts.file_hash("sniffio-1.3.1.tar.gz").expect("fixture distribution should exist"), artifact_hash_5 = registry_artifacts.file_hash("sniffio-1.3.1-py3-none-any.whl").expect("fixture distribution should exist"))
+        .replace("[ANYIO_SDIST_URL]", &artifacts.file_url("anyio-4.3.0.tar.gz"))
+        .replace(
+            "[ANYIO_WHEEL_URL]",
+            &artifacts.file_url("anyio-4.3.0-py3-none-any.whl"),
+        )
+        .replace("[IDNA_SDIST_URL]", &artifacts.file_url("idna-3.6.tar.gz"))
+        .replace(
+            "[IDNA_WHEEL_URL]",
+            &artifacts.file_url("idna-3.6-py3-none-any.whl"),
+        )
+        .replace(
+            "[SNIFFIO_SDIST_URL]",
+            &artifacts.file_url("sniffio-1.3.1.tar.gz"),
+        )
+        .replace(
+            "[SNIFFIO_WHEEL_URL]",
+            &artifacts.file_url("sniffio-1.3.1-py3-none-any.whl"),
+        ),
+    )?;
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--preview")
@@ -15116,7 +15441,7 @@ fn pep_751_dependency() -> Result<()> {
 /// which are not caught by clap.
 #[test]
 fn conflicting_flags_clap_bug() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.command()
         .arg("pip")
@@ -15134,7 +15459,7 @@ fn conflicting_flags_clap_bug() {
 /// Test that conflicting global arguments retain their color styling.
 #[test]
 fn conflicting_flags_clap_bug_color() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let output = context
         .command()
@@ -15156,7 +15481,7 @@ fn conflicting_flags_clap_bug_color() -> Result<()> {
 /// Test that `--offline` and `--refresh` conflict.
 #[test]
 fn offline_refresh_conflict() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("tqdm")
@@ -15172,7 +15497,7 @@ fn offline_refresh_conflict() {
 /// Test that conflicting arguments do not emit an internal error chain or backtrace.
 #[test]
 fn offline_refresh_conflict_verbose() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("tqdm")
@@ -15193,7 +15518,7 @@ fn offline_refresh_conflict_verbose() {
 #[test]
 #[cfg(unix)]
 fn strip_shebang_arguments() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let project_dir = context.temp_dir.child("shebang_test");
     project_dir.create_dir_all()?;
@@ -15295,8 +15620,9 @@ fn strip_shebang_arguments() -> Result<()> {
 
 #[test]
 fn install_python_preference() {
-    let context =
-        uv_test::test_context_with_versions!(&["3.12", "3.11"]).with_versions_as_managed(&["3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+        .with_local_index()
+        .with_versions_as_managed(&["3.12"]);
 
     // Create a managed interpreter environment
     uv_snapshot!(context.filters(), context.venv(), @"
@@ -15338,7 +15664,7 @@ fn install_python_preference() {
 
 #[test]
 fn config_settings_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -15434,30 +15760,33 @@ fn config_settings_package() -> Result<()> {
 
 #[test]
 fn reject_invalid_archive_member_names() {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-10-07T00:00:00Z");
+    let artifacts = PackseServer::empty();
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let wheel_url = artifacts.file_url("cbwheeldiff2-0.0.1-py2.py3-none-any.whl");
 
     uv_snapshot!(context.filters(), context.pip_install()
-        .arg("cbwheeldiff2==0.0.1"), @"
+        .arg(format!("cbwheeldiff2 @ {wheel_url}")), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 1 package in [TIME]
-    error: Failed to download `cbwheeldiff2==0.0.1`
-      cause: Failed to extract archive: cbwheeldiff2-0.0.1-py2.py3-none-any.whl
-      cause: Archive contains unacceptable filename: cbwheeldiff2-0.0.1.dist-info/RECORD�
+    error: Failed to download `cbwheeldiff2 @ http://[LOCALHOST]/files/cbwheeldiff2-0.0.1-py2.py3-none-any.whl`
+      cause: Failed to unzip wheel: cbwheeldiff2-0.0.1-py2.py3-none-any.whl
+      cause: filename contained an embedded NUL byte
     "
     );
 }
 
 #[test]
 fn reject_invalid_streaming_zip() {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-07-10T00:00:00Z");
+    let artifacts = PackseServer::empty();
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let wheel_url = artifacts.file_url("cbwheelstreamtest-0.0.1-py2.py3-none-any.whl");
 
     uv_snapshot!(context.filters(), context.pip_install()
-        .arg("cbwheelstreamtest==0.0.1"), @"
+        .arg(format!("cbwheelstreamtest @ {wheel_url}")), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    error: Failed to download `cbwheelstreamtest==0.0.1`
+    error: Failed to download `cbwheelstreamtest @ http://[LOCALHOST]/files/cbwheelstreamtest-0.0.1-py2.py3-none-any.whl`
       cause: Failed to extract archive: cbwheelstreamtest-0.0.1-py2.py3-none-any.whl
       cause: ZIP file contains multiple entries with different contents for: cbwheelstreamtest/__init__.py
     "
@@ -15479,23 +15808,24 @@ fn reject_invalid_streaming_zip() {
 
 #[test]
 fn reject_invalid_double_zip() {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-07-10T00:00:00Z");
+    let artifacts = PackseServer::empty();
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let wheel_url = artifacts.file_url("cbwheelziptest-0.0.2-py2.py3-none-any.whl");
 
     uv_snapshot!(context.filters(), context.pip_install()
-        .arg("cbwheelziptest==0.0.2"), @"
+        .arg(format!("cbwheelziptest @ {wheel_url}")), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 2 packages in [TIME]
-    error: Failed to download `cbwheelziptest==0.0.2`
-      cause: Failed to extract archive: cbwheelziptest-0.0.2-py2.py3-none-any.whl
-      cause: ZIP file contains trailing contents after the end-of-central-directory record
+    error: Failed to download `cbwheelziptest @ http://[LOCALHOST]/files/cbwheelziptest-0.0.2-py2.py3-none-any.whl`
+      cause: Failed to unzip wheel: cbwheelziptest-0.0.2-py2.py3-none-any.whl
+      cause: the central directory end (0x458) did not bind to the end record at 0x8c6
     "
     );
 }
 
 #[test]
 fn reject_invalid_central_directory_offset() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("attrs @ https://pub-c6f28d316acd406eae43501e51ad30fa.r2.dev/zip1/attrs-25.3.0-py3-none-any.whl"), @"
@@ -15512,7 +15842,7 @@ fn reject_invalid_central_directory_offset() {
 
 #[test]
 fn reject_invalid_crc32_mismatch() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("attrs @ https://pub-c6f28d316acd406eae43501e51ad30fa.r2.dev/zip2/attrs-25.3.0-py3-none-any.whl"), @"
@@ -15528,7 +15858,7 @@ fn reject_invalid_crc32_mismatch() {
 
 #[test]
 fn reject_invalid_crc32_non_data_descriptor() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("attrs @ https://pub-c6f28d316acd406eae43501e51ad30fa.r2.dev/zip3/attrs-25.3.0-py3-none-any.whl"), @"
@@ -15544,7 +15874,7 @@ fn reject_invalid_crc32_non_data_descriptor() {
 
 #[test]
 fn reject_invalid_duplicate_extra_field() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("attrs @ https://pub-c6f28d316acd406eae43501e51ad30fa.r2.dev/zip4/attrs-25.3.0-py3-none-any.whl"), @"
@@ -15559,7 +15889,7 @@ fn reject_invalid_duplicate_extra_field() {
 
 #[test]
 fn reject_invalid_short_usize() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("attrs @ https://pub-c6f28d316acd406eae43501e51ad30fa.r2.dev/zip5/attrs-25.3.0-py3-none-any.whl"), @"
@@ -15575,7 +15905,7 @@ fn reject_invalid_short_usize() {
 
 #[test]
 fn reject_invalid_chained_extra_field() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("attrs @ https://pub-c6f28d316acd406eae43501e51ad30fa.r2.dev/zip6/attrs-25.3.0-py3-none-any.whl"), @"
@@ -15590,7 +15920,7 @@ fn reject_invalid_chained_extra_field() {
 
 #[test]
 fn reject_invalid_short_usize_zip64() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("attrs @ https://pub-c6f28d316acd406eae43501e51ad30fa.r2.dev/zip7/attrs-25.3.0-py3-none-any.whl"), @"
@@ -15606,7 +15936,9 @@ fn reject_invalid_short_usize_zip64() {
 /// Regression test for: <https://github.com/astral-sh/uv/issues/16068>
 #[test]
 fn already_installed_url_dependency_no_sources() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_counts();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_counts();
 
     context
         .temp_dir
@@ -15683,7 +16015,9 @@ fn already_installed_url_dependency_no_sources() -> Result<()> {
 fn pip_install_build_dependencies_respect_locked_versions() -> Result<()> {
     let server =
         PackseServer::new("prereleases/package-prerelease-specified-only-final-available.toml");
-    let context = uv_test::test_context!("3.12").with_filtered_counts();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_counts();
 
     // Write a test package that arbitrarily requires `a` at build time
     let child = context.temp_dir.child("child");
@@ -15861,7 +16195,7 @@ fn pip_install_build_dependencies_respect_locked_versions() -> Result<()> {
 /// packages.
 #[test]
 fn overlapping_packages_warning() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let built_by_uv = context.workspace_root.join("test/packages/built-by-uv");
 
@@ -15990,7 +16324,7 @@ fn overlapping_packages_warning() -> Result<()> {
 /// Don't warn for improperly built namespace packages with overlapping empty `__init__.py`.
 #[test]
 fn overlapping_empty_init_py() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let gpu_a = context.temp_dir.child("gpu-a");
     gpu_a.child("pyproject.toml").write_str(
@@ -16072,7 +16406,7 @@ fn overlapping_empty_init_py() -> Result<()> {
 /// Warn for conflicting files even nested in namespace packages.
 #[test]
 fn overlapping_nested_files() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let gpu_a = context.temp_dir.child("gpu-a");
     gpu_a.child("pyproject.toml").write_str(
@@ -16165,7 +16499,7 @@ fn overlapping_nested_files() -> Result<()> {
 /// in a module directory.
 #[test]
 fn overlapping_file_without_enclosing_directory() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let gpu_a = context.temp_dir.child("gpu-a");
     gpu_a.child("pyproject.toml").write_str(
@@ -16235,7 +16569,7 @@ fn overlapping_file_without_enclosing_directory() -> Result<()> {
 /// See: <https://github.com/astral-sh/uv/issues/15386>
 #[test]
 fn transitive_dependency_config_settings_invalidation() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Create a local package named `idna`.
     context
@@ -16295,7 +16629,7 @@ fn transitive_dependency_config_settings_invalidation() -> Result<()> {
 
 #[test]
 fn switch_platform() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.pip_install()
         .arg("cffi")
@@ -16348,7 +16682,7 @@ fn switch_platform() {
 /// See: <https://github.com/astral-sh/uv/issues/15190>
 #[test]
 fn pip_install_no_sources_editable_to_registry_switch() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Create a simple local package.
     let local_pkg = context.temp_dir.child("local_pkg");
@@ -16408,6 +16742,7 @@ fn pip_install_no_sources_editable_to_registry_switch() -> Result<()> {
 #[test]
 fn install_with_system_interpreter() {
     let context = uv_test::test_context_with_versions!(&[])
+        .with_local_index()
         .with_managed_python_dirs()
         .with_filtered_python_keys()
         .with_filtered_latest_python_versions();
@@ -16435,7 +16770,9 @@ fn install_with_system_interpreter() {
 #[test]
 fn install_missing_python_no_target() {
     // Create a context that only has Python 3.11 available.
-    let context = uv_test::test_context!("3.11").with_managed_python_dirs();
+    let context = uv_test::test_context!("3.11")
+        .with_local_index()
+        .with_managed_python_dirs();
 
     // Request Python 3.12; which should fail
     uv_snapshot!(context.filters(), context.pip_install()
@@ -16454,6 +16791,7 @@ fn install_missing_python_no_target() {
 fn install_missing_python_with_target() {
     // Create a context with no installed python interpreters.
     let context = uv_test::test_context_with_versions!(&[])
+        .with_local_index()
         .with_managed_python_dirs()
         .with_filtered_latest_python_versions();
 
@@ -16480,6 +16818,7 @@ fn install_missing_python_with_target() {
 fn install_missing_python_version_with_target() {
     // Create a context that only has Python 3.11 available.
     let context = uv_test::test_context!("3.11")
+        .with_local_index()
         .with_managed_python_dirs()
         .with_filtered_latest_python_versions();
 
@@ -16510,6 +16849,7 @@ fn install_missing_python_version_with_target() {
 #[test]
 fn build_backend_wrong_wheel_platform() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.13"])
+        .with_local_index()
         .with_filter((r" on [^ ]+ [^ ]+\.", " on [ARCH] [OS]."))
         .with_filter((r" on [^ ]+ [^ ]+$", " on [ARCH] [OS]"));
 
@@ -16687,7 +17027,7 @@ fn build_backend_wrong_wheel_platform() -> Result<()> {
 /// See <https://github.com/astral-sh/uv/issues/19258>.
 #[test]
 fn install_editable_uv_build_data() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -16785,7 +17125,7 @@ fn install_editable_uv_build_data() -> Result<()> {
 /// See <https://github.com/astral-sh/uv/issues/14446>.
 #[test]
 fn record_uses_forward_slashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     // Create a package with scripts via uv_build data directory.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -16848,6 +17188,7 @@ fn record_uses_forward_slashes() -> Result<()> {
 #[test]
 fn abi_compatibility_on_freethreaded_python() {
     let context = uv_test::test_context_with_versions!(&[])
+        .with_local_index()
         .with_filtered_python_keys()
         .with_managed_python_dirs()
         .with_filtered_python_install_bin()
@@ -16971,6 +17312,7 @@ fn build_debug_wheel(context: &TestContext) -> PathBuf {
 #[cfg(any(target_os = "macos", target_os = "linux"))] // PBS doesn't have debug builds for windows
 fn abi_compatibility_on_debug_python() {
     let context = uv_test::test_context_with_versions!(&[])
+        .with_local_index()
         .with_filtered_python_keys()
         .with_managed_python_dirs()
         .with_filtered_python_install_bin()
@@ -17026,7 +17368,7 @@ fn abi_compatibility_on_debug_python() {
 /// the debug interpreter adds the non-debug ABI as a fallback, not vice versa.
 #[test]
 fn abi_compatibility_on_nondebug_python_with_debug_wheel() {
-    let context = uv_test::test_context!("3.14");
+    let context = uv_test::test_context!("3.14").with_local_index();
 
     // Check that debug wheels are rejected with a helpful error message.
     let debug_wheel = build_debug_wheel(&context);
@@ -17045,7 +17387,7 @@ fn abi_compatibility_on_nondebug_python_with_debug_wheel() {
 
 #[test]
 fn fail_on_bz2_wheel() {
-    let context = uv_test::test_context!("3.14");
+    let context = uv_test::test_context!("3.14").with_local_index();
     let vendor = FindLinksServer::vendor();
 
     uv_snapshot!(
@@ -17064,7 +17406,7 @@ fn fail_on_bz2_wheel() {
 
 #[test]
 fn fail_on_lzma_wheel() {
-    let context = uv_test::test_context!("3.14");
+    let context = uv_test::test_context!("3.14").with_local_index();
     let vendor = FindLinksServer::vendor();
 
     uv_snapshot!(
@@ -17087,7 +17429,10 @@ fn fail_on_lzma_wheel() {
 /// Requires `UV_INTERNAL__TEST_ALT_FS`.
 #[test]
 fn install_cross_device() -> anyhow::Result<()> {
-    let Some(context) = uv_test::test_context!("3.12").with_cache_on_alt_fs()? else {
+    let Some(context) = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_cache_on_alt_fs()?
+    else {
         return Ok(());
     };
 
@@ -17115,7 +17460,10 @@ fn install_cross_device() -> anyhow::Result<()> {
 /// Requires `UV_INTERNAL__TEST_ALT_FS`.
 #[test]
 fn install_cross_device_explicit_copy() -> anyhow::Result<()> {
-    let Some(context) = uv_test::test_context!("3.12").with_cache_on_alt_fs()? else {
+    let Some(context) = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_cache_on_alt_fs()?
+    else {
         return Ok(());
     };
 
@@ -17143,7 +17491,10 @@ fn install_cross_device_explicit_copy() -> anyhow::Result<()> {
 #[test]
 #[cfg(unix)]
 fn install_cross_device_symlink() -> anyhow::Result<()> {
-    let Some(context) = uv_test::test_context!("3.12").with_cache_on_alt_fs()? else {
+    let Some(context) = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_cache_on_alt_fs()?
+    else {
         return Ok(());
     };
 
@@ -17169,7 +17520,10 @@ fn install_cross_device_symlink() -> anyhow::Result<()> {
 /// Requires `UV_INTERNAL__TEST_COW_FS`.
 #[test]
 fn install_copy_on_write_fs() -> anyhow::Result<()> {
-    let Some(context) = uv_test::test_context!("3.12").with_cache_on_cow_fs()? else {
+    let Some(context) = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_cache_on_cow_fs()?
+    else {
         return Ok(());
     };
     let Some(context) = context.with_working_dir_on_cow_fs()? else {
@@ -17197,7 +17551,10 @@ fn install_copy_on_write_fs() -> anyhow::Result<()> {
 /// Requires `UV_INTERNAL__TEST_NOCOW_FS`.
 #[test]
 fn install_no_copy_on_write_fs() -> anyhow::Result<()> {
-    let Some(context) = uv_test::test_context!("3.12").with_cache_on_nocow_fs()? else {
+    let Some(context) = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_cache_on_nocow_fs()?
+    else {
         return Ok(());
     };
     let Some(context) = context.with_working_dir_on_nocow_fs()? else {
@@ -17223,7 +17580,7 @@ fn install_no_copy_on_write_fs() -> anyhow::Result<()> {
 /// `--upgrade-group` is not supported in pip commands.
 #[test]
 fn upgrade_group_not_supported() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
 
     uv_snapshot!(context.pip_install()
         .arg("anyio")
@@ -17240,6 +17597,7 @@ fn upgrade_group_not_supported() {
 #[test]
 fn handle_record_mismatches() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filter((
             regex::escape(r"foo-0.1.0.dist-info/uv_cache.json,sha256=") + ".*",
             r"foo-0.1.0.dist-info/uv_cache.json,sha256=[SHA256],[SIZE]",
@@ -17394,17 +17752,19 @@ fn compile_bytecode_excludes_stdlib() -> Result<()> {
         Ok(count)
     }
 
-    let context = uv_test::test_context!("3.12").with_filtered_compiled_file_count();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_compiled_file_count();
 
     let output = uv_snapshot!(context.filters(), context.pip_install()
         .arg("sniffio==1.3.1")
-        .arg("--compile-bytecode"), @r"
+        .arg("--compile-bytecode"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-    Bytecode compiled [COUNT] files in [TIME]
+    Bytecode compiled 1 file in [TIME]
      + sniffio==1.3.1
     ");
 
@@ -17432,41 +17792,5 @@ fn compile_bytecode_excludes_stdlib() -> Result<()> {
     assert!(stdlib_sources > site_packages_sources);
     assert!(compiled <= site_packages_sources);
 
-    Ok(())
-}
-
-fn write_tar_gz_with_symlink(
-    context: &TestContext,
-    archive: &Path,
-    entries: &[(&str, &str)],
-    symlink: (&str, &str),
-) -> Result<()> {
-    context
-        .python_command()
-        .arg("-c")
-        .arg(indoc! {r#"
-            import io
-            import json
-            import sys
-            import tarfile
-
-            entries, (link_name, link_target) = json.loads(sys.argv[2])
-            with tarfile.open(sys.argv[1], "w:gz") as archive:
-                for name, contents in entries:
-                    data = contents.encode()
-                    info = tarfile.TarInfo(name)
-                    info.size = len(data)
-                    info.mode = 0o644
-                    archive.addfile(info, io.BytesIO(data))
-                info = tarfile.TarInfo(link_name)
-                info.type = tarfile.SYMTYPE
-                info.linkname = link_target
-                info.mode = 0o777
-                archive.addfile(info)
-        "#})
-        .arg(archive)
-        .arg(serde_json::to_string(&(entries, symlink))?)
-        .assert()
-        .success();
     Ok(())
 }
