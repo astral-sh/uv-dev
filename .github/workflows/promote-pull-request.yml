@@ -18,6 +18,7 @@ env:
   UV_REPOSITORY_ID: "699532645"
   AUTOMATIONS_BOT_ID: "305554984"
   UV_SECURITY_PUBLISH_LABEL: "bot:promote"
+  PROMOTION_EVENT: ${{ github.repository == 'astral-sh/uv-security' && 'labeled' || 'ready_for_review' }}
   UV_LOCKED: 1
 
 concurrency:
@@ -119,11 +120,15 @@ jobs:
               "repos/$GITHUB_REPOSITORY/issues/$PULL_REQUEST_NUMBER/events" \
               --paginate \
               --slurp |
-              jq --compact-output '[.[][] | select(.event == "ready_for_review" and .actor.type == "User")] | last // null'
+              jq --compact-output --arg event "$PROMOTION_EVENT" --arg label "$UV_SECURITY_PUBLISH_LABEL" '
+                [.[][]] as $events |
+                ($events | map(select(.event == "ready_for_review")) | last | .id // 0) as $ready_id |
+                [$events[] | select(.event == $event and .actor.type == "User" and
+                  ($event != "labeled" or (.label.name == $label and .id > $ready_id)))] | last // null'
           )
           promoter=$(jq --raw-output '.actor.login // empty' <<< "$approval")
           if [ -z "$promoter" ]; then
-            echo "The pull request does not have a human promoter; refusing to promote it." >&2
+            echo "The pull request has no current human promotion event; refusing to promote it." >&2
             exit 1
           fi
           echo "promoter=$promoter" >> "$GITHUB_OUTPUT"
@@ -458,7 +463,11 @@ jobs:
           source_pull_request=$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER")
           current_approval=$(
             gh api --method GET "repos/$GITHUB_REPOSITORY/issues/$PULL_REQUEST_NUMBER/events" --paginate --slurp |
-              jq --raw-output '[.[][] | select(.event == "ready_for_review" and .actor.type == "User") | .id] | last // empty'
+              jq --raw-output --arg event "$PROMOTION_EVENT" --arg label "$UV_SECURITY_PUBLISH_LABEL" '
+                [.[][]] as $events |
+                ($events | map(select(.event == "ready_for_review")) | last | .id // 0) as $ready_id |
+                [$events[] | select(.event == $event and .actor.type == "User" and
+                  ($event != "labeled" or (.label.name == $label and .id > $ready_id))) | .id] | last // empty'
           )
           if [ "$current_approval" != "$APPROVAL_ID" ] || ! jq --exit-status \
             --arg action "$ACTION" \
@@ -569,7 +578,11 @@ jobs:
                 fi
                 current_approval=$(
                   gh api --method GET "repos/$GITHUB_REPOSITORY/issues/$PULL_REQUEST_NUMBER/events" --paginate --slurp |
-                    jq --raw-output '[.[][] | select(.event == "ready_for_review" and .actor.type == "User") | .id] | last // empty'
+                    jq --raw-output --arg event "$PROMOTION_EVENT" --arg label "$UV_SECURITY_PUBLISH_LABEL" '
+                      [.[][]] as $events |
+                      ($events | map(select(.event == "ready_for_review")) | last | .id // 0) as $ready_id |
+                      [$events[] | select(.event == $event and .actor.type == "User" and
+                        ($event != "labeled" or (.label.name == $label and .id > $ready_id))) | .id] | last // empty'
                 )
                 if [ "$current_approval" != "$APPROVAL_ID" ] || ! jq --exit-status \
                   --arg base_ref "$SOURCE_BASE_REF" --arg base_head "$SOURCE_BASE_SHA" \
@@ -724,7 +737,11 @@ jobs:
         run: |
           current_approval=$(
             gh api --method GET "repos/$GITHUB_REPOSITORY/issues/$PULL_REQUEST_NUMBER/events" --paginate --slurp |
-              jq --raw-output '[.[][] | select(.event == "ready_for_review" and .actor.type == "User") | .id] | last // empty'
+              jq --raw-output --arg event "$PROMOTION_EVENT" --arg label "$UV_SECURITY_PUBLISH_LABEL" '
+                [.[][]] as $events |
+                ($events | map(select(.event == "ready_for_review")) | last | .id // 0) as $ready_id |
+                [$events[] | select(.event == $event and .actor.type == "User" and
+                  ($event != "labeled" or (.label.name == $label and .id > $ready_id))) | .id] | last // empty'
           )
           pull_request=$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER")
           if [ -z "$APPROVAL_ID" ] || [ "$current_approval" != "$APPROVAL_ID" ] || ! jq --exit-status \
@@ -744,7 +761,8 @@ jobs:
             exit 0
           fi
 
-          if jq --exit-status '.draft | not' <<< "$pull_request" > /dev/null; then
+          if [ "$GITHUB_REPOSITORY" != "astral-sh/uv-security" ] && \
+            jq --exit-status '.draft | not' <<< "$pull_request" > /dev/null; then
             gh pr ready "$PULL_REQUEST_NUMBER" --repo "$GITHUB_REPOSITORY" --undo
           fi
           gh api \
@@ -756,13 +774,18 @@ jobs:
           if [ -z "$REJECTION_REASON" ]; then
             REJECTION_REASON="Commit $CHANGED_HEAD does not match the approved commit $EXPECTED_HEAD_SHA."
           fi
-          comment="Promotion stopped: $REJECTION_REASON Returned this pull request to draft and assigned @$PROMOTER."
+          if [ "$GITHUB_REPOSITORY" = "astral-sh/uv-security" ]; then
+            comment="Promotion stopped: $REJECTION_REASON Assigned @$PROMOTER."
+          else
+            comment="Promotion stopped: $REJECTION_REASON Returned this pull request to draft and assigned @$PROMOTER."
+          fi
           if [ -n "$REBASE_REF" ]; then
             pull_request=$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER")
             if ! jq --exit-status \
+              --arg repository "$GITHUB_REPOSITORY" \
               --arg base_ref "$BASE_REF" --arg base_sha "$BASE_PREVIOUS_SHA" \
               --arg head_ref "$HEAD_REF" --arg head_sha "$EXPECTED_HEAD_SHA" \
-              '.state == "open" and .draft and .base.ref == $base_ref and .base.sha == $base_sha and .head.ref == $head_ref and .head.sha == $head_sha' \
+              '.state == "open" and ($repository == "astral-sh/uv-security" or .draft) and .base.ref == $base_ref and .base.sha == $base_sha and .head.ref == $head_ref and .head.sha == $head_sha' \
               <<< "$pull_request" > /dev/null; then
               echo "The stacked pull request changed before retargeting; refusing to update it." >&2
               exit 1
@@ -770,12 +793,15 @@ jobs:
             gh api --method PATCH "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER" \
               --raw-field base="$REBASE_REF" --silent
             if [ "$GITHUB_REPOSITORY" = "astral-sh/uv-security" ]; then
-              comment="$comment Retargeted it to $REBASE_REF. Rebase the commits after $BASE_PREVIOUS_SHA, review the result, and mark this pull request ready again."
+              comment="$comment Retargeted it to $REBASE_REF. Rebase the commits after $BASE_PREVIOUS_SHA."
             else
               comment="$comment Retargeted it to $REBASE_REF so the existing rebase automation can resolve conflicts in the commits after $BASE_PREVIOUS_SHA. Review the result and mark this pull request ready again."
             fi
-          else
+          elif [ "$GITHUB_REPOSITORY" != "astral-sh/uv-security" ]; then
             comment="$comment Please review the updated changes and mark it ready for review again."
+          fi
+          if [ "$GITHUB_REPOSITORY" = "astral-sh/uv-security" ]; then
+            comment+=" Review the changes; when ready, remove and re-add \`bot:promote\` to retry."
           fi
           if [ -n "$UPSTREAM_NUMBER" ]; then
             comment="$comment An upstream pull request was already created at [#$UPSTREAM_NUMBER](https://github.com/astral-sh/uv/pull/$UPSTREAM_NUMBER)."
@@ -792,4 +818,8 @@ jobs:
             gh pr comment "$PULL_REQUEST_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$comment"
           fi
 
-          echo "Returned $GITHUB_REPOSITORY#$PULL_REQUEST_NUMBER to draft: $REJECTION_REASON" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$GITHUB_REPOSITORY" = "astral-sh/uv-security" ]; then
+            echo "Promotion stopped for $GITHUB_REPOSITORY#$PULL_REQUEST_NUMBER: $REJECTION_REASON" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Returned $GITHUB_REPOSITORY#$PULL_REQUEST_NUMBER to draft: $REJECTION_REASON" >> "$GITHUB_STEP_SUMMARY"
+          fi
