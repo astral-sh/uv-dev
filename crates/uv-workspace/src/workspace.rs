@@ -23,7 +23,7 @@ use uv_fs::{CWD, Simplified, normalize_path};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, GroupName, PackageName};
 use uv_once_map::OnceMap;
 use uv_pep440::VersionSpecifiers;
-use uv_pep508::{MarkerTree, VerbatimUrl};
+use uv_pep508::{MarkerExpression, MarkerTree, MarkerValueVersion, VerbatimUrl};
 use uv_pypi_types::{ConflictError, Conflicts, SupportedEnvironments, VerbatimParsedUrl};
 use uv_static::EnvVars;
 use uv_warnings::warn_user_once;
@@ -573,6 +573,26 @@ impl Workspace {
             .is_none_or(|roots| roots.contains(name))
     }
 
+    /// Limit an explicit root to the Python versions supported by that project.
+    fn resolution_root_marker(&self, member: &WorkspaceMember) -> MarkerTree {
+        if self.resolution_roots().is_none() {
+            return MarkerTree::TRUE;
+        }
+        member
+            .pyproject_toml()
+            .project
+            .as_ref()
+            .and_then(|project| project.requires_python.as_ref())
+            .into_iter()
+            .flat_map(|specifiers| specifiers.iter())
+            .fold(MarkerTree::TRUE, |marker, specifier| {
+                marker.and(MarkerTree::expression(MarkerExpression::Version {
+                    key: MarkerValueVersion::PythonFullVersion,
+                    specifier: specifier.clone(),
+                }))
+            })
+    }
+
     /// Returns the workspace members that are resolution roots.
     pub fn members_requirements(&self) -> impl Iterator<Item = Requirement> + '_ {
         self.packages.iter().filter_map(|(name, member)| {
@@ -584,7 +604,7 @@ impl Workspace {
                 name: member.pyproject_toml.project.as_ref()?.name.clone(),
                 extras: Box::new([]),
                 groups: Box::new([]),
-                marker: MarkerTree::TRUE,
+                marker: self.resolution_root_marker(member),
                 source: if member
                     .pyproject_toml()
                     .is_package(!self.is_required_member(name))
@@ -732,7 +752,7 @@ impl Workspace {
                 name: member.pyproject_toml.project.as_ref()?.name.clone(),
                 extras: Box::new([]),
                 groups: groups.into_boxed_slice(),
-                marker: MarkerTree::TRUE,
+                marker: self.resolution_root_marker(member),
                 source: if member.pyproject_toml().is_package(!is_required_member) {
                     RequirementSource::Directory {
                         install_path: member.root.clone().into_boxed_path(),
