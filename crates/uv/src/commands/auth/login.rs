@@ -117,8 +117,8 @@ pub(crate) async fn login(
         format!("{username}@{}", url.without_credentials())
     };
 
-    // TODO(zanieb): Add support for other authentication schemes here, e.g., `Credentials::Bearer`
-    let credentials = Credentials::basic(Some(username), Some(password));
+    // TODO(zanieb): Add support for other authentication schemes here, e.g., Bearer credentials.
+    let credentials = Credentials::basic(Some(username), Some(password))?;
     match backend {
         AuthBackend::System(provider) => {
             provider.store(&url, &credentials).await?;
