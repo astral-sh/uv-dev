@@ -48,6 +48,10 @@ pub(crate) struct Args {
     #[arg(long, requires = "lock")]
     lock_without_metadata: bool,
 
+    /// Classify witnessed lock failures with printed-v1 (default) or structured-v1 evidence.
+    #[arg(long, requires_all = ["lock", "project_selections"], value_name = "MODE")]
+    lock_evidence: Option<LockEvidenceMode>,
+
     /// Include explicit project-extra and dependency-group exports.
     #[arg(long, requires = "lock")]
     project_selections: bool,
@@ -86,7 +90,7 @@ impl Args {
             } else {
                 LockfileMode::Standard
             },
-            evidence: LockEvidenceMode::PrintedV1,
+            evidence: self.lock_evidence.unwrap_or_default(),
         }
     }
 }
@@ -129,6 +133,11 @@ fn minimize(args: &Args) -> Result<()> {
     ensure!(
         args.max_witness_work.is_none() || args.witness.is_some(),
         "--max-witness-work requires --witness"
+    );
+    ensure!(
+        args.lock_evidence.unwrap_or_default() != LockEvidenceMode::StructuredV1
+            || args.witness.is_some(),
+        "--lock-evidence structured-v1 requires --witness"
     );
     let max_witness_work = args.max_witness_work.unwrap_or(DEFAULT_MAX_WITNESS_WORK);
     ensure!(
@@ -389,6 +398,7 @@ mod tests {
             python_platform: vec![ScenarioPlatform::Linux],
             lock: true,
             lock_without_metadata: true,
+            lock_evidence: None,
             project_selections: true,
             witness: None,
             max_witness_work: None,
@@ -483,6 +493,7 @@ satisfiable = true
         assert_eq!(failure["project_selections"], true);
         assert_eq!(failure["lock_options"]["max_states"], 27);
         assert_eq!(failure["lock_options"]["lockfile"], "without-metadata");
+        assert_eq!(failure["lock_options"]["evidence"], "printed-v1");
         assert_eq!(failure["witnesses_captured"], false);
         assert!(failure["source_witness"].is_null());
         assert!(failure["max_witness_work"].is_null());
@@ -505,6 +516,79 @@ satisfiable = true
         let failure: serde_json::Value =
             serde_json::from_slice(&fs_err::read(fixed.join("failure.json"))?)?;
         assert!(failure["lock_options"].is_null());
+        Ok(())
+    }
+
+    #[test]
+    fn lock_evidence_requires_witnessed_project_reduction() -> Result<()> {
+        let crate::Cli::MinimizeScenario(default) = crate::Cli::try_parse_from([
+            "uv-dev",
+            "minimize-scenario",
+            "--uv",
+            "uv",
+            "--output",
+            "reduced.toml",
+            "--lock",
+            "--project-selections",
+            "graph.toml",
+        ])?
+        else {
+            bail!("expected the scenario reducer");
+        };
+        assert_eq!(default.lock_evidence, None);
+        assert_eq!(default.lock_options().evidence, LockEvidenceMode::PrintedV1);
+
+        for (mode, expected) in [
+            ("printed-v1", LockEvidenceMode::PrintedV1),
+            ("structured-v1", LockEvidenceMode::StructuredV1),
+        ] {
+            let crate::Cli::MinimizeScenario(args) = crate::Cli::try_parse_from([
+                "uv-dev",
+                "minimize-scenario",
+                "--uv",
+                "uv",
+                "--output",
+                "reduced.toml",
+                "--lock",
+                "--project-selections",
+                "--lock-evidence",
+                mode,
+                "--witness",
+                "graph.witness.json",
+                "graph.toml",
+            ])?
+            else {
+                bail!("expected the scenario reducer");
+            };
+            assert_eq!(args.lock_options().evidence, expected);
+        }
+
+        for flags in [
+            vec!["--lock-evidence", "structured-v1"],
+            vec!["--lock", "--lock-evidence", "structured-v1"],
+            vec![
+                "--lock",
+                "--project-selections",
+                "--lock-evidence",
+                "unknown",
+            ],
+        ] {
+            let mut arguments = vec![
+                "uv-dev",
+                "minimize-scenario",
+                "--uv",
+                "uv",
+                "--output",
+                "reduced.toml",
+            ];
+            arguments.extend(flags);
+            arguments.push("graph.toml");
+            assert!(crate::Cli::try_parse_from(arguments).is_err());
+        }
+
+        let mut unwitnessed = default;
+        unwitnessed.lock_evidence = Some(LockEvidenceMode::StructuredV1);
+        insta::assert_snapshot!(main(&unwitnessed).expect_err("a fresh witness is required"), @"--lock-evidence structured-v1 requires --witness");
         Ok(())
     }
 
@@ -560,6 +644,7 @@ satisfiable = true
     fn writes_a_replayable_witness_pair_without_overwriting_inputs() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let mut args = reduction_args(directory.path());
+        args.lock_evidence = Some(LockEvidenceMode::StructuredV1);
         args.witness = Some(directory.path().join("original.witness.json"));
         args.max_witness_work = Some(1_000);
         let result = witnessed_result()?;
@@ -572,6 +657,7 @@ satisfiable = true
         assert_eq!(stored["scenario"], "witnessed-output");
         assert_eq!(stored["marker_certificate"]["checked_requirements"], 2);
         assert_eq!(stored["lock_options"]["lockfile"], "without-metadata");
+        assert_eq!(stored["lock_options"]["evidence"], "structured-v1");
         write_witnessed_result(&args, &result)?;
 
         args.output = directory.path().join("conflict.toml");
@@ -590,6 +676,7 @@ satisfiable = true
     fn interrupted_witnesses_can_be_recertified_without_the_original_file() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let mut args = reduction_args(directory.path());
+        args.lock_evidence = Some(LockEvidenceMode::StructuredV1);
         args.witness = Some(directory.path().join("absent-original.witness.json"));
         args.max_witness_work = Some(1_000);
         let result = witnessed_result()?;
@@ -615,11 +702,16 @@ satisfiable = true
             let witness = read_witness(&evidence.join(format!("{name}.witness.json")))?;
             assert_eq!(witness, assignment);
             certify_project_marker_witness(&document, &witness, 1_000)?;
+            let stored: serde_json::Value = serde_json::from_slice(&fs_err::read(
+                evidence.join(format!("{name}.witness.json")),
+            )?)?;
+            assert_eq!(stored["lock_options"]["evidence"], "structured-v1");
         }
         let failure: serde_json::Value =
             serde_json::from_slice(&fs_err::read(evidence.join("failure.json"))?)?;
         assert_eq!(failure["witnesses_captured"], true);
         assert_eq!(failure["max_witness_work"], 1_000);
+        assert_eq!(failure["lock_options"]["evidence"], "structured-v1");
         Ok(())
     }
 }
