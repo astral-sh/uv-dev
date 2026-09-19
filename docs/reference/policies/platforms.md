@@ -15,6 +15,7 @@ uv has Tier 2 support
 (["guaranteed to build"](https://doc.rust-lang.org/beta/rustc/platform-support.html#tier-2-with-host-tools))
 for the following platforms:
 
+- Android
 - Linux (PPC64LE)
 - Linux (RISC-V64)
 - Linux (aarch64)
