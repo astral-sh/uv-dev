@@ -67,6 +67,7 @@ pub(crate) async fn sync(
     project_dir: &Path,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
+    isolated_lock: bool,
     dry_run: DryRun,
     active: ActiveEnvironment,
     all_packages: bool,
@@ -340,7 +341,7 @@ pub(crate) async fn sync(
         LockMode::Frozen(frozen_source.into())
     } else if let LockCheck::Enabled(lock_check) = lock_check {
         LockMode::Locked(environment.interpreter(), lock_check)
-    } else if dry_run.enabled() {
+    } else if isolated_lock || dry_run.enabled() {
         LockMode::DryRun(environment.interpreter())
     } else {
         LockMode::Write(environment.interpreter())
@@ -387,7 +388,7 @@ pub(crate) async fn sync(
         Err(err) => return Err(UvError::from(err).into()),
     };
 
-    let lock_report = LockReport::from((&lock_target, &mode, &outcome));
+    let lock_report = LockReport::new(&lock_target, &mode, &outcome, isolated_lock, dry_run);
     if let Some(message) = lock_report.format(output_format) {
         writeln!(printer.stderr(), "{message}")?;
     }
@@ -1397,6 +1398,8 @@ enum LockAction {
     Use,
     /// The lockfile was checked and required no updates.
     Check,
+    /// The dependencies were resolved without writing the lockfile.
+    Resolve,
     /// The lockfile was updated.
     Update,
     /// A new lockfile was created.
@@ -1407,7 +1410,7 @@ impl LockAction {
     fn message(&self, dry_run: bool) -> Option<&'static str> {
         let message = if dry_run {
             match self {
-                Self::Use => return None,
+                Self::Use | Self::Resolve => return None,
                 Self::Check => "Found up-to-date",
                 Self::Update => "Would update",
                 Self::Create => "Would create",
@@ -1587,8 +1590,14 @@ struct LockReport {
     dry_run: bool,
 }
 
-impl From<(&LockTarget<'_>, &LockMode<'_>, &Outcome)> for LockReport {
-    fn from((target, mode, outcome): (&LockTarget, &LockMode, &Outcome)) -> Self {
+impl LockReport {
+    fn new(
+        target: &LockTarget<'_>,
+        mode: &LockMode<'_>,
+        outcome: &Outcome,
+        isolated_lock: bool,
+        dry_run: DryRun,
+    ) -> Self {
         Self {
             path: target.lock_path().deref().into(),
             action: match outcome {
@@ -1601,6 +1610,11 @@ impl From<(&LockTarget<'_>, &LockMode<'_>, &Outcome)> for LockReport {
                                 LockAction::Check
                             }
                         },
+                        LockResult::Changed(..)
+                            if isolated_lock && matches!(mode, LockMode::DryRun(_)) =>
+                        {
+                            LockAction::Resolve
+                        }
                         LockResult::Changed(None, ..) => LockAction::Create,
                         LockResult::Changed(Some(_), ..) => LockAction::Update,
                     }
@@ -1608,12 +1622,10 @@ impl From<(&LockTarget<'_>, &LockMode<'_>, &Outcome)> for LockReport {
                 // TODO(zanieb): We don't have a way to report the outcome of the lock yet
                 Outcome::LockMismatch(..) => LockAction::Check,
             },
-            dry_run: matches!(mode, LockMode::DryRun(_)),
+            dry_run: dry_run.enabled() && matches!(mode, LockMode::DryRun(_)),
         }
     }
-}
 
-impl LockReport {
     fn format(&self, output_format: SyncFormat) -> Option<String> {
         match output_format {
             SyncFormat::Json => None,

@@ -15,6 +15,7 @@ doc-valid-idents = [
   "UV_DEV",
   "UV_FROZEN",
   "UV_ISOLATED",
+  "UV_ISOLATED_LOCK",
   "UV_LOCKED",
   "UV_MANAGED_PYTHON",
   "UV_NATIVE_TLS",

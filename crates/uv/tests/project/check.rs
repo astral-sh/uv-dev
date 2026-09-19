@@ -3331,6 +3331,42 @@ fn check_no_install_project_env_var_conflicts() -> Result<()> {
 }
 
 #[test]
+fn check_isolated_lock() -> Result<()> {
+    let server = PackseServer::new("simple/single-package.toml");
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+    "#})?;
+    context.temp_dir.child("main.py").write_str("import a\n")?;
+    let sentinel = context.venv.child("sentinel");
+    sentinel.write_str("present")?;
+
+    uv_snapshot!(context.filters(), workspace_check(&context)
+        .arg("--isolated-lock")
+        .env(EnvVars::UV_INDEX, server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    All checks passed!
+
+    ----- stderr -----
+    warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
+    Installed 1 package in [TIME]
+    ");
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    assert!(context.site_packages().join("a").exists());
+    assert!(sentinel.exists());
+
+    Ok(())
+}
+
+#[test]
 fn check_isolated() -> Result<()> {
     let server = PackseServer::new("extras/extra-does-not-exist-backtrack.toml");
     let context = uv_test::test_context!("3.12").with_exclude_newer("2026-02-15T00:00:00Z");
