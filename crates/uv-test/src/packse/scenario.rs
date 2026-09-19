@@ -102,6 +102,10 @@ pub struct PackageMetadata {
     #[serde(default)]
     pub requires: Vec<Requirement>,
 
+    /// Build requirements for the generated source distribution.
+    #[serde(default)]
+    pub build_requires: Vec<Requirement>,
+
     /// Extra names mapped to their optional dependency requirements.
     #[serde(default)]
     pub extras: BTreeMap<ExtraName, Vec<Requirement>>,
@@ -129,6 +133,14 @@ pub struct PackageMetadata {
     )]
     pub sdist: Option<ArtifactMetadata>,
 
+    /// Build backend included in a generated source distribution.
+    #[serde(default)]
+    pub sdist_backend: SdistBackend,
+
+    /// Project directory beneath the source archive's top-level directory.
+    #[serde(default)]
+    pub sdist_subdirectory: Option<String>,
+
     /// Whether to produce wheels, and optionally their shared metadata.
     #[serde(
         default = "default_artifact",
@@ -144,6 +156,19 @@ pub struct PackageMetadata {
     /// An empty list means produce only the default `py3-none-any` wheel.
     #[serde(default)]
     pub wheel_tags: Vec<WheelTag>,
+}
+
+/// Backend used by a generated source distribution.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SdistBackend {
+    /// A self-contained PEP 517 backend requiring no packages from an index.
+    InTree,
+    /// Hatchling, for coverage that requires a separate build backend.
+    #[default]
+    Hatchling,
+    /// A legacy setuptools project without `pyproject.toml` or static metadata.
+    LegacySetuptools,
 }
 
 fn deserialize_artifact<'de, D>(
@@ -369,6 +394,21 @@ example = "import_name:main"
         assert_eq!(metadata.module_name.as_deref(), Some("import_name"));
         assert_eq!(metadata.init_py.as_deref(), Some("answer = 42\n"));
         assert_eq!(metadata.scripts["example"], "import_name:main");
+        Ok(())
+    }
+
+    #[test]
+    fn parse_source_build_metadata() -> Result<()> {
+        let metadata: PackageMetadata = toml::from_str(
+            r#"
+build_requires = ["build-dependency"]
+sdist_backend = "legacy-setuptools"
+sdist_subdirectory = "project"
+"#,
+        )?;
+        assert_eq!(metadata.build_requires[0].to_string(), "build-dependency");
+        assert_eq!(metadata.sdist_subdirectory.as_deref(), Some("project"));
+        assert_eq!(metadata.sdist_backend, SdistBackend::LegacySetuptools);
         Ok(())
     }
 
