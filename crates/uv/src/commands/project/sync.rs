@@ -184,6 +184,7 @@ pub(crate) async fn sync(
             ScriptEnvironment::get_or_init(
                 script.into(),
                 python.as_deref().map(PythonRequest::parse),
+                None,
                 &client_builder,
                 python_preference,
                 python_downloads,
