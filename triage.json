@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 13225,
+        "title": "More gentle modifications of shell files",
+        "url": "https://github.com/astral-sh/uv/issues/13225",
+        "state": "open",
+        "reason": "astral-sh/uv#13225 is the canonical match. Its comments report XDG_DATA_HOME=$HOME/.local/share yielding $XDG_DATA_HOME/../bin, failing to recognize $HOME/.local/bin on PATH, and editing shell files; a maintainer says this exact path-detection case needs more robust handling."
+      },
+      {
+        "kind": "pull_request",
+        "number": 8420,
+        "title": "Use XDG (i.e. `~/.local/bin`) instead of the Cargo home directory in the installer",
+        "url": "https://github.com/astral-sh/uv/pull/8420",
+        "state": "merged",
+        "reason": "astral-sh/uv#8420 introduced the XDG installer fallback. Its review explicitly observed that XDG_DATA_HOME produces an unresolved /../bin path and identified normalization as fixable, establishing the mismatch’s historical origin."
+      },
+      {
+        "kind": "issue",
+        "number": 12101,
+        "title": "uv installer erroneously complains about shadowed commands",
+        "url": "https://github.com/astral-sh/uv/issues/12101",
+        "state": "closed",
+        "reason": "astral-sh/uv#12101 has the same warning symptom, but its confirmed mechanism was an empty command lookup and its fix added a non-empty guard. This report reaches that guard with a non-empty but lexically different equivalent path, so it is related history rather than the same fixed defect."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using the exact warning, XDG_DATA_HOME/../bin, share/../bin, NO_MODIFY_PATH, and XDG_BIN_HOME, plus conceptual queries for installer shadow detection, equivalent or normalized PATH entries, shell-profile edits, fish conf.d creation, and installer path defaults. Inspected candidate comments, linked discussions, and the current installer. astral-sh/uv#10413 was ruled out as an opt-out question, astral-sh/uv#13859 as genuine third-party shadowing, astral-sh/uv#14849 as VS Code/Snap isolation, and astral-sh/uv#15345 as a real older binary earlier on PATH."
+  },
+  "type": "duplicate",
+  "type_reason": "Current installer source confirms incorrect lexical path comparisons, but duplicate takes precedence because open astral-sh/uv#13225 already tracks the same XDG_DATA_HOME/../bin versus $HOME/.local/bin mismatch and unnecessary shell-file modification. This report adds the false shadow warning as another consequence of that problem. It is not a regression of astral-sh/uv#12101, whose fix addressed an empty lookup rather than equivalent non-empty paths.",
+  "summary": "Open astral-sh/uv#13225 already tracks the same unresolved XDG fallback path causing the installer to miss an equivalent PATH entry and modify shell files. Merged astral-sh/uv#8420 supplies the origin and prior normalization discussion; closed astral-sh/uv#12101 shares only the warning symptom and had a different cause.",
+  "draft_response": "Thanks for the detailed reproduction. This is the same underlying path-detection problem already tracked in astral-sh/uv#13225: when XDG_DATA_HOME is set to $HOME/.local/share, the installer keeps $HOME/.local/share/../bin as a lexical path and does not recognize the equivalent $HOME/.local/bin entry already on PATH. The current installer uses that same unresolved value for both the PATH-presence check and the shadow check, which accounts for the unnecessary profile edits and false warning.\n\nLet’s centralize the fix in astral-sh/uv#13225. Closing this as a duplicate while retaining this concrete reproduction of the shadow-warning side effect."
+}
