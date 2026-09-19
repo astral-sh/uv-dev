@@ -1,5 +1,8 @@
 //! Integration tests for `uv tool`.
 
+#[cfg(all(feature = "test-python", feature = "test-git"))]
+mod git;
+
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 use uv_test::pypi_proxy;
 
