@@ -70,16 +70,6 @@ pub(crate) async fn remove(
                 "`--package` is a no-op for Python scripts with inline metadata, which always run in isolation"
             );
         }
-        if let LockCheck::Enabled(lock_check) = lock_check {
-            warn_user_once!(
-                "`{lock_check}` is a no-op for Python scripts with inline metadata, which always run in isolation",
-            );
-        }
-        if frozen.is_some() {
-            warn_user_once!(
-                "`--frozen` is a no-op for Python scripts with inline metadata, which always run in isolation"
-            );
-        }
         if no_sync {
             warn_user_once!(
                 "`--no-sync` is a no-op for Python scripts with inline metadata, which always run in isolation"
