@@ -235,6 +235,19 @@ impl GitRepository {
         Ok(result.parse()?)
     }
 
+    /// Removes the given reference if it exists.
+    fn remove_ref(&self, refname: &str) -> Result<()> {
+        GIT.as_ref()
+            .cloned()?
+            .arg("update-ref")
+            .arg("-d")
+            .arg(refname)
+            .cwd(&self.path)
+            .exec_with_output()?;
+
+        Ok(())
+    }
+
     /// Verifies LFS artifacts have been initialized for a given `refname`.
     #[instrument(skip_all, fields(path = %self.path.user_display(), refname = %refname))]
     fn lfs_fsck_objects(&self, refname: &str) -> bool {
@@ -773,34 +786,38 @@ fn fetch(
             offline,
         ),
         RefspecStrategy::First => {
-            // Try each refspec
-            let mut errors = refspecs
-                .iter()
-                .map_while(|refspec| {
-                    let fetch_result = fetch_with_cli(
-                        repo,
-                        remote_url,
-                        std::slice::from_ref(refspec),
-                        tags,
-                        disable_ssl,
-                        offline,
-                    );
-
-                    // Stop after the first success and log failures
-                    match fetch_result {
-                        Err(ref err) => {
-                            debug!("Failed to fetch refspec `{refspec}`: {err}");
-                            Some(fetch_result)
-                        }
-                        Ok(()) => None,
+            let mut errors = Vec::new();
+            let mut missing_destinations = Vec::new();
+            for refspec in &refspecs {
+                if let Err(err) = fetch_with_cli(
+                    repo,
+                    remote_url,
+                    std::slice::from_ref(refspec),
+                    tags,
+                    disable_ssl,
+                    offline,
+                ) {
+                    debug!("Failed to fetch refspec `{refspec}`: {err}");
+                    if is_missing_remote_ref(&err, refspec)
+                        && let Some((_, destination)) = refspec.rsplit_once(':')
+                    {
+                        missing_destinations.push(destination);
                     }
-                })
-                .collect::<Vec<_>>();
+                    errors.push(err);
+                } else {
+                    // A later refspec resolved the reference, so any definitively missing
+                    // earlier refs are stale. Preserve cached refs after transient failures.
+                    for destination in missing_destinations {
+                        repo.remove_ref(destination)?;
+                    }
+                    break;
+                }
+            }
 
             if errors.len() == refspecs.len() {
                 if let Some(result) = errors.pop() {
                     // Use the last error for the message
-                    result
+                    Err(result)
                 } else {
                     // Can only occur if there were no refspecs to fetch
                     Ok(())
@@ -868,6 +885,23 @@ fn fetch_with_cli(
     })?;
 
     Ok(())
+}
+
+/// Returns whether a fetch failed because the attempted source reference is missing.
+fn is_missing_remote_ref(error: &anyhow::Error, refspec: &str) -> bool {
+    let Some((source, _)) = refspec.split_once(':') else {
+        return false;
+    };
+    let source = source.strip_prefix('+').unwrap_or(source);
+    let expected = format!("fatal: couldn't find remote ref {source}");
+
+    error
+        .chain()
+        .find_map(|error| error.downcast_ref::<ProcessError>())
+        .filter(|error| error.code == Some(128))
+        .and_then(|error| error.stderr.as_deref())
+        .and_then(|stderr| str::from_utf8(stderr).ok())
+        .is_some_and(|stderr| stderr.lines().any(|line| line.trim_end() == expected))
 }
 
 /// A global cache of the `git lfs` command.
@@ -962,6 +996,56 @@ fn is_short_hash_of(rev: &str, oid: GitOid) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_remote_ref_is_definitive() {
+        let refspec = "+refs/heads/release:refs/remotes/origin/release";
+        let error = ProcessError::new_raw(
+            "Git fetch failed",
+            Some(128),
+            "exit status: 128",
+            None,
+            Some(b"fatal: couldn't find remote ref refs/heads/release\n"),
+        );
+
+        assert!(is_missing_remote_ref(&error.into(), refspec));
+    }
+
+    #[test]
+    fn transient_fetch_errors_do_not_mark_refs_missing() {
+        let refspec = "+refs/heads/release:refs/remotes/origin/release";
+        for stderr in [
+            b"fatal: Authentication failed for 'https://example.com/repository'\n".as_slice(),
+            b"fatal: unable to access 'https://example.com/repository': Operation timed out\n"
+                .as_slice(),
+            b"fatal: couldn't find remote ref refs/tags/release\n".as_slice(),
+            b"remote: fatal: couldn't find remote ref refs/heads/release\n".as_slice(),
+            b"\xff".as_slice(),
+        ] {
+            let error = ProcessError::new_raw(
+                "Git fetch failed",
+                Some(128),
+                "exit status: 128",
+                None,
+                Some(stderr),
+            );
+            assert!(!is_missing_remote_ref(&error.into(), refspec));
+        }
+
+        let error = ProcessError::new_raw(
+            "Git fetch failed",
+            Some(1),
+            "exit status: 1",
+            None,
+            Some(b"fatal: couldn't find remote ref refs/heads/release\n"),
+        );
+        assert!(!is_missing_remote_ref(&error.into(), refspec));
+        assert!(!is_missing_remote_ref(&anyhow!("network error"), refspec));
+        assert!(!is_missing_remote_ref(
+            &anyhow!("network error"),
+            "+refs/heads/release"
+        ));
+    }
 
     #[test]
     fn submodule_update_config_strips_credentials_from_origin_override() {
