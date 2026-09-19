@@ -90,7 +90,7 @@ impl BatchPrefetcher {
             return Ok(());
         };
 
-        let (num_tried, do_prefetch) = self.should_prefetch(next);
+        let (num_tried, do_prefetch) = self.should_prefetch(name);
         if !do_prefetch {
             return Ok(());
         }
@@ -144,16 +144,7 @@ impl BatchPrefetcher {
     /// After 5, 10, 20, 40 tried versions, prefetch that many versions to start early but not
     /// too aggressive. Later we schedule the prefetch of 50 versions every 20 versions, this gives
     /// us a good buffer until we see prefetch again and is high enough to saturate the task pool.
-    fn should_prefetch(&self, next: &PubGrubPackage) -> (usize, bool) {
-        let PubGrubPackageInner::Package {
-            name,
-            kind: PackageNodeKind::Base,
-            marker: MarkerTree::TRUE,
-        } = &**next
-        else {
-            return (0, false);
-        };
-
+    fn should_prefetch(&self, name: &PackageName) -> (usize, bool) {
         let num_tried = self.tried_versions.get(name).map_or(0, FxHashSet::len);
         let previous_prefetch = self.last_prefetch.get(name).copied().unwrap_or_default();
         let do_prefetch = (num_tried >= 5 && previous_prefetch < 5)
@@ -337,4 +328,44 @@ fn satisfies_python(dist: &CompatibleDist, python_requirement: &PythonRequiremen
     }
 
     true
+}
+
+#[cfg(test)]
+mod scheduling_tests {
+    use super::*;
+    use crate::resolver::InMemoryIndex;
+
+    #[test]
+    fn schedules_distinct_versions_by_package_name() {
+        let (request_sink, _) = tokio::sync::mpsc::channel(1);
+        let requests = MetadataRequests::new(InMemoryIndex::default(), request_sink);
+        let mut prefetcher = BatchPrefetcher::new(IndexCapabilities::default(), requests);
+        let alpha: PackageName = "alpha".parse().expect("valid package name");
+        let beta: PackageName = "beta".parse().expect("valid package name");
+        let alpha_package = PubGrubPackage::base(alpha.clone());
+        let beta_package = PubGrubPackage::base(beta.clone());
+        let mut scheduled = Vec::new();
+
+        assert_eq!(prefetcher.should_prefetch(&alpha), (0, false));
+        for count in 1..=60_usize {
+            let version = Version::new([1, u64::try_from(count - 1).expect("small test version")]);
+            prefetcher.version_tried(&alpha_package, &version);
+            prefetcher.version_tried(&alpha_package, &version);
+            let (num_tried, do_prefetch) = prefetcher.should_prefetch(&alpha);
+            assert_eq!(num_tried, count);
+            if do_prefetch {
+                scheduled.push(count);
+                prefetcher.last_prefetch.insert(alpha.clone(), count);
+                assert_eq!(prefetcher.should_prefetch(&alpha), (count, false));
+            }
+        }
+        assert_eq!(scheduled, [5, 10, 20, 40, 60]);
+        assert_eq!(prefetcher.should_prefetch(&beta), (0, false));
+
+        for minor in 0..5_u64 {
+            prefetcher.version_tried(&beta_package, &Version::new([1, minor]));
+        }
+        assert_eq!(prefetcher.should_prefetch(&alpha), (60, false));
+        assert_eq!(prefetcher.should_prefetch(&beta), (5, true));
+    }
 }
