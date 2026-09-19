@@ -561,6 +561,115 @@ fn uninstall_record_path_traversal() -> Result<()> {
     Ok(())
 }
 
+/// Absolute RECORD entries within the environment must be removed without allowing escapes.
+#[cfg(unix)]
+#[test]
+fn uninstall_absolute_record_paths() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .init()
+        .arg("--lib")
+        .arg("absolute-record")
+        .assert()
+        .success();
+    context
+        .pip_install()
+        .arg("./absolute-record")
+        .assert()
+        .success();
+
+    let script = context.venv.child("bin/absolute-record-script");
+    script.write_str("#!/bin/sh\n")?;
+    let outside = context.temp_dir.child("absolute-record-outside");
+    outside.write_str("I should not be deleted")?;
+
+    let record_file = context
+        .site_packages()
+        .join("absolute_record-0.1.0.dist-info/RECORD");
+    let record = fs_err::read_to_string(&record_file)?;
+    fs_err::write(
+        &record_file,
+        format!(
+            "{}\n{},,0\n{},,0\n",
+            record.trim(),
+            script.path().display(),
+            outside.path().display()
+        ),
+    )?;
+
+    uv_snapshot!(context.filters(), context.pip_uninstall()
+        .arg("absolute-record"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    warning: Invalid RECORD entry in absolute-record==0.1.0 (from file://[TEMP_DIR]/absolute-record) that escapes the Python environment, skipping: [TEMP_DIR]/absolute-record-outside
+    Uninstalled 1 package in [TIME]
+     - absolute-record==0.1.0 (from file://[TEMP_DIR]/absolute-record)
+    ");
+
+    assert!(!script.exists());
+    assert!(outside.exists());
+
+    Ok(())
+}
+
+/// Absolute RECORD entries must not follow a directory symlink outside the environment.
+#[cfg(unix)]
+#[test]
+fn uninstall_absolute_record_symlink_path_traversal() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .init()
+        .arg("--lib")
+        .arg("absolute-record")
+        .assert()
+        .success();
+    context
+        .pip_install()
+        .arg("./absolute-record")
+        .assert()
+        .success();
+
+    let target_dir = context.temp_dir.child("outside");
+    let target = target_dir.child("target.txt");
+    target.write_str("I should not be deleted")?;
+    let escaped = context.site_packages().join("escaped");
+    uv_fs::create_symlink(target_dir.path(), &escaped)?;
+
+    let record_file = context
+        .site_packages()
+        .join("absolute_record-0.1.0.dist-info/RECORD");
+    let record = fs_err::read_to_string(&record_file)?;
+    fs_err::write(
+        &record_file,
+        format!(
+            "{}\n{},,0\n",
+            record.trim(),
+            escaped.join("target.txt").display()
+        ),
+    )?;
+
+    uv_snapshot!(context.filters(), context.pip_uninstall()
+        .arg("absolute-record"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    warning: Invalid RECORD entry in absolute-record==0.1.0 (from file://[TEMP_DIR]/absolute-record) that escapes the Python environment, skipping: [SITE_PACKAGES]/escaped/target.txt
+    Uninstalled 1 package in [TIME]
+     - absolute-record==0.1.0 (from file://[TEMP_DIR]/absolute-record)
+    ");
+
+    assert!(target.exists());
+
+    Ok(())
+}
+
 /// Egg `top_level.txt` entries must be top-level names, not paths.
 #[test]
 fn uninstall_egg_info_top_level_path_traversal() -> Result<()> {
