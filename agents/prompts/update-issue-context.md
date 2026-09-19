@@ -29,6 +29,14 @@ items, reproduction findings, and other existing context. Distinguish source-bac
 user reports and hypotheses, correct inaccurate information carefully, and avoid copying the entire
 comment or maintaining a chronological comment log.
 
+Keep updated README content focused on a maintainer's next decision. Aim for roughly 200 words
+outside essential code or command blocks, expanding only when the issue requires additional context.
+Lead with confirmed findings, retain the minimal reproduction and strongest evidence, and remove
+repetition or stale speculation when integrating new information. Avoid investigation transcripts,
+exhaustive search histories, lengthy diagnostic output, and explanations repeated across sections. A
+concise reporter-facing draft response may restate the essential answer. Do not rewrite the README
+solely to shorten it when the new comment adds no useful information.
+
 In any GitHub-facing output, write issue and pull request references in the canonical
 owner/repository#number form, such as astral-sh/uv#123 or astral-sh/uv-dev#123. Do not use bare
 numbers, repository-name shorthand, Markdown link syntax, or backticks around references. Never
