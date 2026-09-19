@@ -2071,7 +2071,7 @@ fn tool_run_python_at_version() {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving tool dependencies
-      cause: Because cp311 was not found in the package registry and you require cp311, we can conclude that your requirements are unsatisfiable.
+      cause: cp311 was not found in the package registry.
     ");
 
     // Bare versions don't work either. Again we interpret them as package names.
@@ -2081,7 +2081,7 @@ fn tool_run_python_at_version() {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving tool dependencies
-      cause: Because 311 was not found in the package registry and you require 311, we can conclude that your requirements are unsatisfiable.
+      cause: 311 was not found in the package registry.
     ");
 
     // Request a version via `-p`
@@ -2948,7 +2948,7 @@ fn tool_run_verbose_hint() {
     ----- stderr -----
     error: Failed to run tool
       cause: No solution found when resolving dependencies
-      cause: Because nonexistent-package-foo was not found in the package registry and you require nonexistent-package-foo, we can conclude that your requirements are unsatisfiable.
+      cause: nonexistent-package-foo was not found in the package registry.
 
     hint: You provided `--verbose` to `nonexistent-package-foo`. Did you mean to provide it to `uv tool run`? e.g., `uv tool run --verbose nonexistent-package-foo`
     ");
@@ -2961,7 +2961,7 @@ fn tool_run_verbose_hint() {
     ----- stderr -----
     error: Failed to run tool
       cause: No solution found when resolving dependencies
-      cause: Because nonexistent-package-bar was not found in the package registry and you require nonexistent-package-bar, we can conclude that your requirements are unsatisfiable.
+      cause: nonexistent-package-bar was not found in the package registry.
 
     hint: You provided `-v` to `nonexistent-package-bar`. Did you mean to provide it to `uv tool run`? e.g., `uv tool run -v nonexistent-package-bar`
     ");
@@ -2974,7 +2974,7 @@ fn tool_run_verbose_hint() {
     ----- stderr -----
     error: Failed to run tool
       cause: No solution found when resolving dependencies
-      cause: Because nonexistent-package-baz was not found in the package registry and you require nonexistent-package-baz, we can conclude that your requirements are unsatisfiable.
+      cause: nonexistent-package-baz was not found in the package registry.
 
     hint: You provided `-vv` to `nonexistent-package-baz`. Did you mean to provide it to `uv tool run`? e.g., `uv tool run -vv nonexistent-package-baz`
     ");
@@ -2986,7 +2986,7 @@ fn tool_run_verbose_hint() {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving tool dependencies
-      cause: Because nonexistent-package-quux was not found in the package registry and you require nonexistent-package-quux, we can conclude that your requirements are unsatisfiable.
+      cause: nonexistent-package-quux was not found in the package registry.
     ");
 }
 
