@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 15799,
+        "title": "Wrongly recognized platform, unnecessary rebuilds",
+        "url": "https://github.com/astral-sh/uv/issues/15799",
+        "state": "closed",
+        "reason": "Exact FreeBSD analogue: locally built wheel metadata used a lowercase BSD release/amd64 tag while uv generated an uppercase release and incompatible architecture spelling."
+      },
+      {
+        "kind": "pull_request",
+        "number": 15829,
+        "title": "Improve BSD tag construction",
+        "url": "https://github.com/astral-sh/uv/pull/15829",
+        "state": "merged",
+        "reason": "Fixed astral-sh/uv#15799 by lowercasing the FreeBSD release and using BSD architecture names, but left NetBSD release casing unchanged; this is the closest historical implementation evidence."
+      }
+    ],
+    "search_scope": "Literal searches covered NetBSD identifiers, tag fragments, and the reported incompatibility error. Conceptual searches covered BSD tag normalization, case sensitivity, platform mismatch, and local-wheel compatibility; fix-oriented searches covered closed issues, merged pull requests, and implementation history. No other NetBSD tracker or fix was found. astral-sh/uv#3824 and astral-sh/uv#13713 were inspected and ruled out because they concern libc/interpreter OS detection rather than wheel-tag comparison."
+  },
+  "type": "bug",
+  "type_reason": "Source confirms incorrect behavior: FreeBSD release strings are lowercased during compatible-tag construction, while NetBSD release strings are not. This produces the reported case mismatch and rejects an otherwise matching wheel. The historical FreeBSD fix never covered NetBSD, so this is a new bug rather than a duplicate or regression.",
+  "summary": "astral-sh/uv#15799 and astral-sh/uv#15829 establish the equivalent FreeBSD defect and fix. The fix did not normalize NetBSD release casing, and no existing NetBSD issue or pull request tracks this case.",
+  "draft_response": "Thanks, this is a bug. NetBSD compatibility-tag construction currently replaces dots and hyphens in the release but, unlike the FreeBSD path fixed in astral-sh/uv#15829, does not lowercase it. That produces `netbsd_11_0_STABLE_amd64` and prevents it from matching the wheel’s `netbsd_11_0_stable_amd64` tag. The next step is to apply the same release normalization to NetBSD and add regression coverage for this tag."
+}
