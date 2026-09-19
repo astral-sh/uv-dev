@@ -153,7 +153,21 @@ async fn do_uninstall(
     // Find and remove all relevant Python executables
     let mut uninstalled_executables: FxHashMap<PythonInstallationKey, FxHashSet<PathBuf>> =
         FxHashMap::default();
-    for executable in python_executable_dir()?
+    let mut executable_installations: FxHashMap<String, Vec<_>> = FxHashMap::default();
+    for installation in &matching_installations {
+        for name in [
+            installation.key().executable_name_minor(),
+            installation.key().executable_name_major(),
+            installation.key().executable_name(),
+        ] {
+            executable_installations
+                .entry(name)
+                .or_default()
+                .push(installation);
+        }
+    }
+
+    for (executable, installations) in python_executable_dir()?
         .read_dir()
         .into_iter()
         .flatten()
@@ -169,17 +183,14 @@ async fn do_uninstall(
         // Only include files that match the expected Python executable names
         // TODO(zanieb): This is a minor optimization to avoid opening more files, but we could
         // leave broken links behind, i.e., if the user created them.
-        .filter(|path| {
-            matching_installations.iter().any(|installation| {
-                let name = path.file_name().and_then(|name| name.to_str());
-                name == Some(&installation.key().executable_name_minor())
-                    || name == Some(&installation.key().executable_name_major())
-                    || name == Some(&installation.key().executable_name())
-            })
+        .filter_map(|path| {
+            let name = path.file_name()?.to_str()?;
+            let installations = executable_installations.get(name)?;
+            Some((path, installations))
         })
-        .sorted()
+        .sorted_by(|(left, _), (right, _)| left.cmp(right))
     {
-        let Some(installation) = matching_installations
+        let Some(installation) = installations
             .iter()
             .find(|installation| installation.is_bin_link(executable.as_path()))
         else {
