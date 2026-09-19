@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::Display;
 use std::io;
 use std::io::{BufReader, Read, Write};
+use std::iter;
 use std::path::{Path, PathBuf};
 
 use data_encoding::BASE64URL_NOPAD;
@@ -9,7 +10,7 @@ use fs_err as fs;
 use fs_err::{DirEntry, File};
 use itertools::Itertools;
 use mailparse::parse_headers;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use sha2::{Digest, Sha256};
 use tracing::{debug, instrument, trace, warn};
 use walkdir::WalkDir;
@@ -712,6 +713,50 @@ fn install_script(
     Ok(())
 }
 
+/// The names of the console and GUI entrypoints declared by a wheel.
+enum EntryPointNames<'a> {
+    None,
+    One(&'a str),
+    Many(FxHashSet<&'a str>),
+}
+
+impl<'a> EntryPointNames<'a> {
+    fn new(console_scripts: &'a [Script], gui_scripts: &'a [Script]) -> Self {
+        let mut scripts = console_scripts.iter().chain(gui_scripts);
+        let Some(first) = scripts.next() else {
+            return Self::None;
+        };
+        let Some(second) = scripts.next() else {
+            return Self::One(&first.name);
+        };
+
+        Self::Many(
+            iter::once(first)
+                .chain(iter::once(second))
+                .chain(scripts)
+                .map(|script| script.name.as_str())
+                .collect(),
+        )
+    }
+
+    fn match_name(name: &str) -> &str {
+        name.strip_suffix(".exe")
+            .or_else(|| name.strip_suffix("-script.py"))
+            .or_else(|| name.strip_suffix(".pya"))
+            .unwrap_or(name)
+    }
+
+    fn contains(&self, name: &str) -> bool {
+        let name = Self::match_name(name);
+
+        match self {
+            Self::None => false,
+            Self::One(entry_point) => *entry_point == name,
+            Self::Many(entry_points) => entry_points.contains(name),
+        }
+    }
+}
+
 /// Move the files from the .data directory to the right location in the venv
 #[instrument(skip_all)]
 pub(crate) fn install_data(
@@ -752,22 +797,27 @@ pub(crate) fn install_data(
                 );
                 let mut rename_or_copy = RenameOrCopy::default();
                 let mut initialized = false;
-                for file in fs::read_dir(path)? {
+                let mut entry_point_names = None;
+                for (index, file) in fs::read_dir(path)?.enumerate() {
                     let file = file?;
 
                     // Couldn't find any docs for this, took it directly from
                     // https://github.com/pypa/pip/blob/b5457dfee47dd9e9f6ec45159d9d410ba44e5ea1/src/pip/_internal/operations/install/wheel.py#L565-L583
                     let name = file.file_name().to_string_lossy().to_string();
-                    let match_name = name
-                        .strip_suffix(".exe")
-                        .or_else(|| name.strip_suffix("-script.py"))
-                        .or_else(|| name.strip_suffix(".pya"))
-                        .unwrap_or(&name);
-                    if console_scripts
-                        .iter()
-                        .chain(gui_scripts)
-                        .any(|script| script.name == match_name)
-                    {
+                    let is_entry_point = if index == 0 {
+                        let match_name = EntryPointNames::match_name(&name);
+                        console_scripts
+                            .iter()
+                            .chain(gui_scripts)
+                            .any(|script| script.name == match_name)
+                    } else {
+                        entry_point_names
+                            .get_or_insert_with(|| {
+                                EntryPointNames::new(console_scripts, gui_scripts)
+                            })
+                            .contains(&name)
+                    };
+                    if is_entry_point {
                         continue;
                     }
 
@@ -1229,10 +1279,12 @@ mod test {
     use anyhow::Result;
     use assert_fs::prelude::*;
     use indoc::{formatdoc, indoc};
+    use uv_pypi_types::Scheme;
 
     use super::{
-        Error, RecordEntry, Script, WheelFile, format_shebang, get_script_executable,
-        parse_email_message_file, parse_scripts, read_record, write_installer_metadata,
+        EntryPointNames, Error, Layout, RecordEntry, Script, WheelFile, format_shebang,
+        get_script_executable, install_data, parse_email_message_file, parse_scripts, read_record,
+        write_installer_metadata,
     };
 
     #[test]
@@ -1394,6 +1446,108 @@ mod test {
                 function: "main_bar".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn data_script_entry_point_names() {
+        fn script(name: &str) -> Script {
+            Script {
+                name: name.to_string(),
+                module: "example".to_string(),
+                function: "main".to_string(),
+            }
+        }
+
+        let empty = EntryPointNames::new(&[], &[]);
+        assert!(!empty.contains("console"));
+
+        let console = [script("console")];
+        let one_console = EntryPointNames::new(&console, &[]);
+        assert!(one_console.contains("console"));
+        assert!(one_console.contains("console.exe"));
+        assert!(one_console.contains("console-script.py"));
+        assert!(one_console.contains("console.pya"));
+        assert!(!one_console.contains("console-script.py.exe"));
+
+        let gui = [script("gui")];
+        let one_gui = EntryPointNames::new(&[], &gui);
+        assert!(one_gui.contains("gui"));
+        assert!(!one_gui.contains("console"));
+
+        let console = [script("console"), script("duplicate")];
+        let gui = [script("gui"), script("duplicate")];
+        let many = EntryPointNames::new(&console, &gui);
+        assert!(many.contains("console.exe"));
+        assert!(many.contains("gui-script.py"));
+        assert!(many.contains("duplicate.pya"));
+        assert!(!many.contains("data-script"));
+    }
+
+    #[test]
+    fn data_scripts_skip_entrypoints() -> Result<()> {
+        fn script(name: &str) -> Script {
+            Script {
+                name: name.to_string(),
+                module: "example".to_string(),
+                function: "main".to_string(),
+            }
+        }
+
+        let environment = assert_fs::TempDir::new()?;
+        let site_packages = environment.child("lib/python3.13/site-packages");
+        let data_dir = site_packages.child("example-1.0.0.data");
+        let data_scripts = data_dir.child("scripts");
+        for name in ["console.exe", "gui-script.py", "duplicate.pya"] {
+            data_scripts.child(name).write_str("payload")?;
+        }
+        data_scripts
+            .child("data-script")
+            .write_str("#!python\npayload")?;
+
+        let layout = Layout {
+            sys_executable: environment.path().join("bin/python"),
+            python_version: (3, 13),
+            os_name: "posix".to_string(),
+            scheme: Scheme {
+                purelib: site_packages.to_path_buf(),
+                platlib: site_packages.to_path_buf(),
+                scripts: environment.path().join("bin"),
+                data: environment.path().to_path_buf(),
+                include: environment.path().join("include/python3.13"),
+            },
+        };
+        let console = [script("console"), script("duplicate")];
+        let gui = [script("gui"), script("duplicate")];
+        let mut record = [RecordEntry {
+            path: "example-1.0.0.data/scripts/data-script".to_string(),
+            hash: None,
+            size: None,
+        }];
+
+        install_data(
+            &layout,
+            false,
+            site_packages.path(),
+            data_dir.path(),
+            &"example".parse()?,
+            &console,
+            &gui,
+            &mut record,
+        )?;
+
+        for name in ["console.exe", "gui-script.py", "duplicate.pya"] {
+            assert!(data_scripts.child(name).exists());
+            assert!(!environment.child(format!("bin/{name}")).exists());
+        }
+        assert!(!data_scripts.child("data-script").exists());
+        let installed = environment.child("bin/data-script");
+        assert!(installed.exists());
+        assert_eq!(
+            site_packages.path().join(&record[0].path).canonicalize()?,
+            installed.path().canonicalize()?
+        );
+
+        Ok(())
     }
 
     #[test]
