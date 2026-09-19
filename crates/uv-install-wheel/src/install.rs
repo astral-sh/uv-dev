@@ -16,7 +16,7 @@ use crate::wheel::{
     LibKind, ValidatedWheel, WheelFile, dist_info_metadata, find_dist_info, install_data,
     parse_scripts, read_record, write_installer_metadata, write_record, write_script_entrypoints,
 };
-use crate::{Error, Layout};
+use crate::{Error, InstallerMetadata, Layout};
 
 /// Return the path at which the wheel's `.dist-info` directory will be installed.
 pub fn installed_dist_info_path(
@@ -59,7 +59,7 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
     cache_info: Option<&Cache>,
     build_info: Option<&Build>,
     installer: Option<&str>,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     link_mode: LinkMode,
     state: &InstallState,
 ) -> Result<(), Error> {
@@ -146,7 +146,7 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
         trace!(?name, "No data");
     }
 
-    if installer_metadata {
+    if installer_metadata.enabled() {
         trace!(?name, "Writing installer metadata");
         write_installer_metadata(
             site_packages,
