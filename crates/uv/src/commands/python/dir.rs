@@ -1,6 +1,5 @@
 use std::fmt::Write;
 
-use anyhow::Context;
 use owo_colors::OwoColorize;
 
 use uv_fs::Simplified;
@@ -14,8 +13,7 @@ pub(crate) fn dir(bin: bool, printer: Printer) -> anyhow::Result<()> {
         let bin = python_executable_dir()?;
         writeln!(printer.stdout(), "{}", bin.simplified_display().cyan())?;
     } else {
-        let installed_toolchains = ManagedPythonInstallations::from_settings(None)
-            .context("Failed to initialize toolchain settings")?;
+        let installed_toolchains = ManagedPythonInstallations::from_settings(None);
         writeln!(
             printer.stdout(),
             "{}",

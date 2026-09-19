@@ -125,17 +125,15 @@ impl ManagedPythonInstallations {
     /// 2. The specific Python directory specified with the `UV_PYTHON_INSTALL_DIR` environment variable.
     /// 3. A directory in the system-appropriate user-level data directory, e.g., `~/.local/uv/python`.
     /// 4. A directory in the local data directory, e.g., `./.uv/python`.
-    pub fn from_settings(install_dir: Option<PathBuf>) -> Result<Self, Error> {
+    pub fn from_settings(install_dir: Option<PathBuf>) -> Self {
         if let Some(install_dir) = install_dir {
-            Ok(Self::from_path(install_dir))
+            Self::from_path(install_dir)
         } else if let Some(install_dir) =
             std::env::var_os(EnvVars::UV_PYTHON_INSTALL_DIR).filter(|s| !s.is_empty())
         {
-            Ok(Self::from_path(install_dir))
+            Self::from_path(install_dir)
         } else {
-            Ok(Self::from_path(
-                StateStore::from_settings(None)?.bucket(StateBucket::ManagedPython),
-            ))
+            Self::from_path(StateStore::from_settings(None).bucket(StateBucket::ManagedPython))
         }
     }
 
@@ -247,7 +245,7 @@ impl ManagedPythonInstallations {
     -> Result<impl DoubleEndedIterator<Item = ManagedPythonInstallation> + use<>, Error> {
         let platform = Platform::from_env()?;
 
-        let iter = Self::from_settings(None)?
+        let iter = Self::from_settings(None)
             .find_all()?
             .filter(move |installation| {
                 if !platform.supports(installation.platform()) {
@@ -359,7 +357,7 @@ impl ManagedPythonInstallation {
     ///
     /// Returns `None` if the interpreter is not a managed installation.
     pub fn try_from_interpreter(interpreter: &Interpreter) -> Option<Self> {
-        let managed_root = ManagedPythonInstallations::from_settings(None).ok()?;
+        let managed_root = ManagedPythonInstallations::from_settings(None);
         let root = managed_root.absolute_root().ok()?;
 
         // Canonicalize both paths to handle Windows path format differences
@@ -1348,7 +1346,7 @@ mod tests {
             uv_static::EnvVars::UV_PYTHON_INSTALL_DIR,
             Some(temp_dir.path()),
             || {
-                let installations = ManagedPythonInstallations::from_settings(None).unwrap();
+                let installations = ManagedPythonInstallations::from_settings(None);
 
                 // Version 3.1 should NOT match 3.10
                 let v3_1 = PythonVersion::from_str("3.1").unwrap();
@@ -1378,7 +1376,7 @@ mod tests {
                 (uv_static::EnvVars::PWD, Some(workdir.as_os_str())),
             ],
             || {
-                let installations = ManagedPythonInstallations::from_settings(None).unwrap();
+                let installations = ManagedPythonInstallations::from_settings(None);
                 assert_eq!(
                     installations.absolute_root().unwrap(),
                     workdir.join(".python-installs")
