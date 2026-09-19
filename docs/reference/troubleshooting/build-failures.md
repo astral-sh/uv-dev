@@ -118,7 +118,7 @@ If the build error mentions a missing command, for example, `gcc`:
 
 <!-- docker run --platform linux/x86_64 -it ghcr.io/astral-sh/uv:python3.10-trixie-slim /bin/bash -c "uv pip install --system pysha3==1.0.2" -->
 
-```hl_lines="17"
+```hl_lines="18"
 × Failed to build `pysha3==1.0.2`
 ├─▶ The build backend returned an error
 ╰─▶ Call to `setuptools.build_meta:__legacy__.build_wheel` failed (exit status: 1)
@@ -166,7 +166,7 @@ For example, installing `pygraphviz` requires Graphviz to be installed:
 
 <!-- docker run --platform linux/x86_64 -it ghcr.io/astral-sh/uv:python3.12-trixie /bin/bash -c "uv pip install --system 'pygraphviz'" -->
 
-```hl_lines="18-19"
+```hl_lines="19-20"
 × Failed to build `pygraphviz==1.14`
 ├─▶ The build backend returned an error
 ╰─▶ Call to `setuptools.build_meta.build_wheel` failed (exit status: 1)
@@ -217,7 +217,7 @@ dependency:
 
 <!-- docker run --platform linux/x86_64 -it ghcr.io/astral-sh/uv:python3.12-trixie-slim /bin/bash -c "uv pip install --system chumpy" -->
 
-```hl_lines="7"
+```hl_lines="8"
   × Failed to build `chumpy==0.70`
   ├─▶ The build backend returned an error
   ╰─▶ Call to `setuptools.build_meta:__legacy__.build_wheel` failed (exit status: 1)
