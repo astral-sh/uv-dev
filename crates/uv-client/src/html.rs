@@ -45,23 +45,11 @@ fn attribute<'a>(tag: &'a HTMLTag<'_>, name: &'a str) -> Option<Cow<'a, str>> {
         .get(name)
         .flatten()
         .map(tl::Bytes::as_utf8_str)
-        .or_else(|| {
-            tag.attributes().iter().find_map(|(attribute_name, value)| {
-                attribute_name
-                    .eq_ignore_ascii_case(name)
-                    .then_some(value)
-                    .flatten()
-            })
-        })
 }
 
 /// Return `true` if the tag has the given case-insensitive HTML attribute name.
 fn has_attribute<'a>(tag: &'a HTMLTag<'_>, name: &'a str) -> bool {
     tag.attributes().contains(name)
-        || tag
-            .attributes()
-            .iter()
-            .any(|(attribute_name, _)| attribute_name.eq_ignore_ascii_case(name))
 }
 
 /// A parsed structure from PyPI "HTML" index format for a single package.
@@ -1862,6 +1850,46 @@ mod tests {
         )
         "#
         );
+    }
+
+    #[test]
+    fn parse_duplicate_attributes() -> Result<(), Error> {
+        let cases = [
+            ("", None, false),
+            (r#"data-yanked="""#, Some(""), true),
+            ("data-yanked", None, true),
+            (
+                r#"DATA-YANKED="first" data-yanked="second""#,
+                Some("first"),
+                true,
+            ),
+            (
+                r#"data-yanked="first" DATA-YANKED="second""#,
+                Some("first"),
+                true,
+            ),
+            (r#"DATA-YANKED data-yanked="second""#, None, true),
+            (r#"data-yanked DATA-YANKED="second""#, None, true),
+            (r#"data-yanked="first" DATA-YANKED"#, Some("first"), true),
+            (r#"DATA-YANKED="" data-yanked="second""#, Some(""), true),
+        ];
+        for padding in ["", "data-one=one data-two=two data-three=three"] {
+            for (attributes, expected, present) in cases {
+                let text = format!("<A {padding} {attributes}></A>");
+                let dom = tl::parse(&text, tl::ParserOptions::default())?;
+                let tag = dom
+                    .nodes()
+                    .iter()
+                    .find_map(Node::as_tag)
+                    .expect("Expected an HTML tag");
+                assert!(is_tag(tag, b"a"));
+                for name in ["data-yanked", "DaTa-YaNkEd"] {
+                    assert_eq!(attribute(tag, name).as_deref(), expected, "{text}");
+                    assert_eq!(has_attribute(tag, name), present, "{text}");
+                }
+            }
+        }
+        Ok(())
     }
 
     // Test parsing project status metadata with emojis in the reason.
