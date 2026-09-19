@@ -190,13 +190,7 @@ impl UniversalMarker {
         for conflict_set in conflict_sets {
             let mut marker = self.marker;
             for inference in conflict_set {
-                let extra = encode_conflict_item(&inference.item);
-
-                marker = if inference.included {
-                    marker.simplify_extras_with(|candidate| *candidate == extra)
-                } else {
-                    marker.simplify_not_extras_with(|candidate| *candidate == extra)
-                };
+                marker = simplify_conflict_item(marker, &inference.item, inference.included);
             }
             if let Some(previous_marker) = &previous_marker {
                 if previous_marker != &marker {
@@ -213,16 +207,17 @@ impl UniversalMarker {
         }
     }
 
+    /// Assume that a conflict item is included or excluded, as inferred from the graph.
+    pub(crate) fn assume_inference(&mut self, inference: &Inference) {
+        self.assume_conflict_item_with_polarity(&inference.item, inference.included);
+    }
+
     /// Assumes that a given extra/group for the given package is activated.
     ///
     /// This may simplify the conflicting marker component of this universal
     /// marker.
     pub fn assume_conflict_item(&mut self, item: &ConflictItem) {
-        match *item.kind() {
-            ConflictKind::Extra(ref extra) => self.assume_extra(item.package(), extra),
-            ConflictKind::Group(ref group) => self.assume_group(item.package(), group),
-            ConflictKind::Project => self.assume_project(item.package()),
-        }
+        self.assume_conflict_item_with_polarity(item, true);
     }
 
     /// Assumes that a given extra/group for the given package is not
@@ -231,84 +226,11 @@ impl UniversalMarker {
     /// This may simplify the conflicting marker component of this universal
     /// marker.
     pub fn assume_not_conflict_item(&mut self, item: &ConflictItem) {
-        match *item.kind() {
-            ConflictKind::Extra(ref extra) => self.assume_not_extra(item.package(), extra),
-            ConflictKind::Group(ref group) => self.assume_not_group(item.package(), group),
-            ConflictKind::Project => self.assume_not_project(item.package()),
-        }
+        self.assume_conflict_item_with_polarity(item, false);
     }
 
-    /// Assumes that the "production" dependencies for the given project are
-    /// activated.
-    ///
-    /// This may simplify the conflicting marker component of this universal
-    /// marker.
-    fn assume_project(&mut self, package: &PackageName) {
-        let extra = encode_project(package);
-        self.marker = self
-            .marker
-            .simplify_extras_with(|candidate| *candidate == extra);
-        self.pep508 = self.marker.without_extras();
-    }
-
-    /// Assumes that the "production" dependencies for the given project are
-    /// not activated.
-    ///
-    /// This may simplify the conflicting marker component of this universal
-    /// marker.
-    fn assume_not_project(&mut self, package: &PackageName) {
-        let extra = encode_project(package);
-        self.marker = self
-            .marker
-            .simplify_not_extras_with(|candidate| *candidate == extra);
-        self.pep508 = self.marker.without_extras();
-    }
-
-    /// Assumes that a given extra for the given package is activated.
-    ///
-    /// This may simplify the conflicting marker component of this universal
-    /// marker.
-    fn assume_extra(&mut self, package: &PackageName, extra: &ExtraName) {
-        let extra = encode_package_extra(package, extra);
-        self.marker = self
-            .marker
-            .simplify_extras_with(|candidate| *candidate == extra);
-        self.pep508 = self.marker.without_extras();
-    }
-
-    /// Assumes that a given extra for the given package is not activated.
-    ///
-    /// This may simplify the conflicting marker component of this universal
-    /// marker.
-    fn assume_not_extra(&mut self, package: &PackageName, extra: &ExtraName) {
-        let extra = encode_package_extra(package, extra);
-        self.marker = self
-            .marker
-            .simplify_not_extras_with(|candidate| *candidate == extra);
-        self.pep508 = self.marker.without_extras();
-    }
-
-    /// Assumes that a given group for the given package is activated.
-    ///
-    /// This may simplify the conflicting marker component of this universal
-    /// marker.
-    fn assume_group(&mut self, package: &PackageName, group: &GroupName) {
-        let extra = encode_package_group(package, group);
-        self.marker = self
-            .marker
-            .simplify_extras_with(|candidate| *candidate == extra);
-        self.pep508 = self.marker.without_extras();
-    }
-
-    /// Assumes that a given group for the given package is not activated.
-    ///
-    /// This may simplify the conflicting marker component of this universal
-    /// marker.
-    fn assume_not_group(&mut self, package: &PackageName, group: &GroupName) {
-        let extra = encode_package_group(package, group);
-        self.marker = self
-            .marker
-            .simplify_not_extras_with(|candidate| *candidate == extra);
+    fn assume_conflict_item_with_polarity(&mut self, item: &ConflictItem, included: bool) {
+        self.marker = simplify_conflict_item(self.marker, item, included);
         self.pep508 = self.marker.without_extras();
     }
 
@@ -639,6 +561,16 @@ impl std::fmt::Debug for ConflictMarker {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         // This is a little more succinct than the default.
         write!(f, "ConflictMarker({:?})", self.marker)
+    }
+}
+
+/// Simplifies a marker using the given polarity of a conflict item.
+fn simplify_conflict_item(marker: MarkerTree, item: &ConflictItem, included: bool) -> MarkerTree {
+    let extra = encode_conflict_item(item);
+    if included {
+        marker.simplify_extras_with(|candidate| *candidate == extra)
+    } else {
+        marker.simplify_not_extras_with(|candidate| *candidate == extra)
     }
 }
 
@@ -1189,6 +1121,103 @@ mod tests {
         marker.imbibe(ConflictMarker::TRUE);
 
         assert_eq!(marker, expected);
+    }
+
+    #[test]
+    fn assume_each_conflict_item_polarity() {
+        let package = create_package("pkg");
+        let pep508 =
+            MarkerTree::from_str("sys_platform == 'darwin'").expect("valid marker expression");
+        let other = create_extra_marker("other");
+        let items = [
+            ConflictItem::from(package.clone()),
+            ConflictItem::from((package.clone(), create_extra("feature"))),
+            ConflictItem::from((
+                package,
+                GroupName::from_str("dev").expect("valid group name"),
+            )),
+        ];
+
+        for item in items {
+            for included in [true, false] {
+                let mut marker = UniversalMarker::new(
+                    pep508,
+                    ConflictMarker::from_conflict_item(&item).or(other),
+                );
+
+                marker.assume_inference(&Inference {
+                    included,
+                    item: item.clone(),
+                });
+
+                let expected = if included {
+                    UniversalMarker::from_combined(pep508)
+                } else {
+                    UniversalMarker::new(pep508, other)
+                };
+                assert_eq!(marker, expected, "{item:?}, included: {included}");
+            }
+        }
+    }
+
+    #[test]
+    fn unify_inference_sets_preserves_distinct_branches() {
+        let pep508 =
+            MarkerTree::from_str("sys_platform == 'darwin'").expect("valid marker expression");
+        let original = UniversalMarker::new(
+            pep508,
+            create_extra_marker("foo").or(create_extra_marker("bar")),
+        );
+        let included = BTreeSet::from([Inference {
+            included: true,
+            item: create_extra_item("foo"),
+        }]);
+        let excluded = BTreeSet::from([Inference {
+            included: false,
+            item: create_extra_item("foo"),
+        }]);
+
+        for sets in [
+            vec![],
+            vec![BTreeSet::new()],
+            vec![included.clone(), BTreeSet::new()],
+            vec![included, excluded],
+        ] {
+            let mut marker = original;
+            marker.unify_inference_sets(&sets);
+            assert_eq!(marker, original, "{sets:?}");
+        }
+    }
+
+    #[test]
+    fn unify_inference_sets_simplifies_equal_branches() {
+        let pep508 =
+            MarkerTree::from_str("sys_platform == 'darwin'").expect("valid marker expression");
+
+        for included in [true, false] {
+            let foo = create_extra_marker("foo");
+            let bar = create_extra_marker("bar");
+            let conflict = if included {
+                foo.or(bar)
+            } else {
+                foo.negate().or(bar.negate())
+            };
+            let mut marker = UniversalMarker::new(pep508, conflict);
+            let sets = [
+                BTreeSet::from([Inference {
+                    included,
+                    item: create_extra_item("foo"),
+                }]),
+                BTreeSet::from([Inference {
+                    included,
+                    item: create_extra_item("bar"),
+                }]),
+            ];
+
+            marker.unify_inference_sets(&sets);
+
+            assert_eq!(marker, UniversalMarker::from_combined(pep508));
+        }
     }
 
     #[test]
