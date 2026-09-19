@@ -322,37 +322,27 @@ fn parse_shell_from_path(path: &Path) -> Option<Shell> {
 
 /// Escape a string for use in a shell command by inserting backslashes.
 fn backslash_escape(s: &str) -> Cow<'_, str> {
-    if !s.chars().any(|c| matches!(c, '\\' | '"')) {
-        return Cow::Borrowed(s);
-    }
-
-    let mut escaped = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '\\' | '"' => escaped.push('\\'),
-            _ => {}
-        }
-        escaped.push(c);
-    }
-    Cow::Owned(escaped)
+    escape_shell(s, '\\', |c| matches!(c, '\\' | '"'))
 }
 
 /// Escape a string for use in a `PowerShell` command by inserting backticks.
 fn backtick_escape(s: &str) -> Cow<'_, str> {
-    if !s
-        .chars()
-        .any(|c| matches!(c, '"' | '`' | '\u{201C}' | '\u{201D}' | '\u{201E}' | '$'))
-    {
+    // Need to also escape unicode double quotes that PowerShell treats
+    // as the ASCII double quote.
+    escape_shell(s, '`', |c| {
+        matches!(c, '"' | '`' | '\u{201C}' | '\u{201D}' | '\u{201E}' | '$')
+    })
+}
+
+fn escape_shell(s: &str, escape: char, needs_escape: impl Fn(char) -> bool) -> Cow<'_, str> {
+    if !s.chars().any(&needs_escape) {
         return Cow::Borrowed(s);
     }
 
     let mut escaped = String::with_capacity(s.len());
     for c in s.chars() {
-        match c {
-            // Need to also escape unicode double quotes that PowerShell treats
-            // as the ASCII double quote.
-            '"' | '`' | '\u{201C}' | '\u{201D}' | '\u{201E}' | '$' => escaped.push('`'),
-            _ => {}
+        if needs_escape(c) {
+            escaped.push(escape);
         }
         escaped.push(c);
     }
@@ -365,6 +355,42 @@ mod tests {
     use fs_err::File;
     use temp_env::with_vars;
     use tempfile::tempdir;
+
+    #[test]
+    fn shell_escape_preserves_backslash_output() {
+        for (input, expected) in [
+            ("\\", "\\\\"),
+            ("\"", "\\\""),
+            ("$", "$"),
+            ("`", "`"),
+            ("“”„", "“”„"),
+            ("a\\\"$`β", "a\\\\\\\"$`β"),
+        ] {
+            assert_eq!(backslash_escape(input), expected, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn shell_escape_preserves_backtick_output() {
+        for (input, expected) in [
+            ("\\", "\\"),
+            ("\"", "`\""),
+            ("$", "`$"),
+            ("`", "``"),
+            ("“”„", "`“`”`„"),
+            ("a\\\"$`β", "a\\`\"`$``β"),
+        ] {
+            assert_eq!(backtick_escape(input), expected, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn shell_escape_preserves_plain_unicode_output() {
+        for input in ["", "python", "plain/path α"] {
+            assert_eq!(backslash_escape(input), input);
+            assert_eq!(backtick_escape(input), input);
+        }
+    }
 
     // First option used by std::env::home_dir.
     const HOME_DIR_ENV_VAR: &str = if cfg!(windows) {
