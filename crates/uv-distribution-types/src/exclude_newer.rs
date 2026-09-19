@@ -3,7 +3,8 @@ use std::str::FromStr;
 
 use jiff::{Span, Timestamp, ToSpan, Unit, tz::TimeZone};
 use serde::Deserialize;
-use serde::de::value::MapAccessDeserializer;
+use serde::de::value::{MapAccessDeserializer, StrDeserializer};
+use uv_warnings::warn_user_once;
 
 #[derive(Debug, Copy, Clone)]
 pub struct ExcludeNewerSpan(Span);
@@ -147,7 +148,20 @@ impl<'de> serde::Deserialize<'de> for ExcludeNewerValue {
         }
 
         match Helper::deserialize(deserializer)? {
-            Helper::String(s) => Self::from_str(&s).map_err(serde::de::Error::custom),
+            Helper::String(input) => {
+                let value = Self::from_str(&input).map_err(serde::de::Error::custom)?;
+                // Local dates are accepted while configurations migrate to explicit timestamps
+                // with the same effective cutoff.
+                match &value {
+                    Self::Absolute(timestamp) if input.parse::<Timestamp>().is_err() => {
+                        warn_user_once!(
+                            "`{input}` is a local date without a timezone. `exclude-newer` values in persistent configuration should use a full timestamp with a timezone (use `{timestamp}` to retain the current cutoff); local dates will be rejected in a future release"
+                        );
+                    }
+                    Self::Absolute(_) | Self::Relative(_) => {}
+                }
+                Ok(value)
+            }
             Helper::Table(table) => Ok(match table.span {
                 Some(span) => Self::relative(span),
                 None => Self::absolute(table.timestamp),
@@ -295,7 +309,7 @@ impl schemars::JsonSchema for ExcludeNewerValue {
     fn json_schema(_generator: &mut schemars::generate::SchemaGenerator) -> schemars::Schema {
         schemars::json_schema!({
             "type": "string",
-            "description": "Exclude distributions uploaded after the given timestamp.\n\nAccepts both RFC 3339 timestamps (e.g., `2006-12-02T02:07:43Z`) and local dates in the same format (e.g., `2006-12-02`), as well as relative durations (e.g., `1 week`, `30 days`, `6 months`). Relative durations are resolved to a timestamp at lock time.",
+            "description": "Exclude distributions uploaded after the given timestamp.\n\nAccepts both RFC 3339 timestamps (e.g., `2006-12-02T02:07:43Z`) and local dates in the same format (e.g., `2006-12-02`), as well as relative durations (e.g., `1 week`, `30 days`, `6 months`). Local dates depend on the system timezone and are accepted for compatibility, but will be rejected in a future release. Relative durations are resolved to a timestamp at lock time.",
         })
     }
 }
@@ -378,9 +392,8 @@ impl<'de> serde::Deserialize<'de> for ExcludeNewerOverride {
             where
                 E: serde::de::Error,
             {
-                ExcludeNewerValue::from_str(v)
+                ExcludeNewerValue::deserialize(StrDeserializer::<E>::new(v))
                     .map(ExcludeNewerOverride::from)
-                    .map_err(E::custom)
             }
 
             fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
@@ -419,5 +432,59 @@ impl serde::Serialize for ExcludeNewerOverride {
             Self::Enabled(timestamp) => timestamp.to_string().serialize(serializer),
             Self::Disabled => serializer.serialize_bool(false),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ExcludeNewerOverride, ExcludeNewerValue};
+    use std::collections::BTreeMap;
+    use std::str::FromStr;
+
+    #[derive(Debug, serde::Deserialize)]
+    struct Options {
+        #[serde(rename = "exclude-newer")]
+        _exclude_newer: Option<ExcludeNewerOverride>,
+        #[serde(rename = "exclude-newer-package", default)]
+        _exclude_newer_package: BTreeMap<String, ExcludeNewerOverride>,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    struct Value {
+        _value: ExcludeNewerValue,
+    }
+
+    #[test]
+    fn local_date_is_accepted_from_command_line_and_persistent_configuration() {
+        ExcludeNewerValue::from_str("2024-01-01").unwrap();
+        toml::from_str::<Options>(r#"exclude-newer = "2024-01-01""#).unwrap();
+        toml::from_str::<Options>(r#"exclude-newer-package = { anyio = "2024-01-01" }"#).unwrap();
+        toml::from_str::<Value>(r#"_value = "2024-01-01""#).unwrap();
+    }
+
+    #[test]
+    fn timestamp_and_duration_are_accepted_from_persistent_configuration() {
+        toml::from_str::<Options>(r#"exclude-newer = "2024-01-01T00:00:00Z""#).unwrap();
+        toml::from_str::<Options>(r#"exclude-newer = "30 days""#).unwrap();
+    }
+
+    #[test]
+    fn persistent_timestamp_span_tables_are_accepted() -> Result<(), toml::de::Error> {
+        let absolute =
+            toml::from_str::<Value>(r#"_value = { timestamp = "2024-01-01T00:00:00Z" }"#)?;
+        assert_eq!(
+            absolute._value.timestamp().to_string(),
+            "2024-01-01T00:00:00Z"
+        );
+        assert_eq!(absolute._value.span(), None);
+
+        let relative = toml::from_str::<Value>(
+            r#"_value = { timestamp = "0001-01-01T00:00:00Z", span = "P3D" }"#,
+        )?;
+        assert_eq!(
+            relative._value.span().map(ToString::to_string),
+            Some("P3D".to_string())
+        );
+        Ok(())
     }
 }
