@@ -71,7 +71,7 @@ use uv_warnings::warn_user_once;
 use uv_workspace::{Editability, WorkspaceMember};
 
 pub use crate::lock::deserialize::Error as CanonicalLockError;
-pub use crate::lock::export::RequirementsTxtExport;
+pub use crate::lock::export::{ExportableRequirements, RequirementsTxtExport};
 pub use crate::lock::export::{
     Metadata, PylockToml, PylockTomlError, PylockTomlErrorKind, PythonReport, cyclonedx_json,
 };

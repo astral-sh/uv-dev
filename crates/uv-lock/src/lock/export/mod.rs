@@ -26,7 +26,7 @@ pub(crate) use crate::lock::export::metadata::{
 pub use crate::lock::export::pylock_toml::{PylockToml, PylockTomlError, PylockTomlErrorKind};
 pub use crate::lock::export::requirements_txt::RequirementsTxtExport;
 use crate::lock::{LockErrorKind, PackageIndex};
-use crate::{Installable, InstallableRootKind, LockError, Package};
+use crate::{Installable, InstallableRootKind, Lock, LockError, Package};
 
 pub mod cyclonedx_json;
 mod metadata;
@@ -46,17 +46,17 @@ struct ExportableRequirement<'lock> {
 
 /// A set of flattened, exportable requirements, generated from a lockfile.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ExportableRequirements<'lock>(Vec<ExportableRequirement<'lock>>);
+pub struct ExportableRequirements<'lock>(Vec<ExportableRequirement<'lock>>);
 
 impl<'lock> ExportableRequirements<'lock> {
-    /// Generate the set of exportable [`ExportableRequirement`] entries from the given lockfile.
-    fn from_lock(
+    /// Generate the flattened requirements from the given lockfile selection.
+    pub fn from_lock(
         target: &impl Installable<'lock>,
         prune: &[PackageName],
         extras: &ExtrasSpecificationWithDefaults,
         groups: &DependencyGroupsWithDefaults,
         annotate: bool,
-        install_options: &'lock InstallOptions,
+        install_options: &InstallOptions,
     ) -> Result<Self, LockError> {
         let size_guess = target.lock().packages.len();
         let mut graph = Graph::<Node<'lock>, Edge<'lock>>::with_capacity(size_guess, size_guess);
@@ -65,6 +65,20 @@ impl<'lock> ExportableRequirements<'lock> {
         let mut queue: VecDeque<(PackageIndex, Option<&ExtraName>)> = VecDeque::new();
         let mut seen = FxHashSet::default();
         let mut activated_items = FxHashMap::default();
+
+        let mut context_marker = MarkerTree::TRUE;
+        if let Some(context) = target.export_context() {
+            for name in context {
+                let package = target
+                    .lock()
+                    .find_by_name(name)
+                    .map_err(|_| LockErrorKind::MultipleRootPackages { name: name.clone() })?
+                    .ok_or_else(|| LockErrorKind::MissingRootPackage { name: name.clone() })?;
+                let marker = package_environment(target.lock(), package);
+                context_marker = context_marker.and(marker);
+                activated_items.insert(ConflictItem::from(name.clone()), marker);
+            }
+        }
 
         let root = graph.add_node(Node::Root);
 
@@ -91,15 +105,7 @@ impl<'lock> ExportableRequirements<'lock> {
                 .ok_or_else(|| LockErrorKind::MissingRootPackage {
                     name: root_name.clone(),
                 })?;
-            let root_marker = if dist.fork_markers.is_empty() {
-                MarkerTree::TRUE
-            } else {
-                target.lock().simplify_environment(
-                    dist.fork_markers
-                        .iter()
-                        .fold(MarkerTree::FALSE, |marker, fork| marker.or(fork.pep508())),
-                )
-            };
+            let root_marker = package_environment(target.lock(), dist).and(context_marker);
 
             if root_kind == InstallableRootKind::Production {
                 // Track the activated package in the list of known conflicts.
@@ -234,6 +240,7 @@ impl<'lock> ExportableRequirements<'lock> {
                     else {
                         continue;
                     };
+                    let marker = marker.and(context_marker);
                     let package_index = target.lock().by_id[&dist.id];
 
                     // Add the dependency to the graph and get its index.
@@ -362,6 +369,40 @@ impl<'lock> ExportableRequirements<'lock> {
             .collect::<Vec<_>>();
 
         Ok(Self(nodes))
+    }
+
+    /// Return whether the selected closure contains a package in any supported environment.
+    pub fn contains_package(&self, name: &PackageName) -> bool {
+        self.0
+            .iter()
+            .any(|requirement| requirement.package.name() == name)
+    }
+
+    /// Compare resolved package identities and their environment markers, ignoring annotations.
+    pub fn same_packages(&self, other: &Self) -> bool {
+        let canonical = |requirements: &Self| {
+            let mut packages = requirements
+                .0
+                .iter()
+                .map(|requirement| (&requirement.package.id, requirement.marker))
+                .collect::<Vec<_>>();
+            packages.sort_unstable();
+            packages
+        };
+        canonical(self) == canonical(other)
+    }
+}
+
+fn package_environment(lock: &Lock, package: &Package) -> MarkerTree {
+    if package.fork_markers.is_empty() {
+        MarkerTree::TRUE
+    } else {
+        lock.simplify_environment(
+            package
+                .fork_markers
+                .iter()
+                .fold(MarkerTree::FALSE, |marker, fork| marker.or(fork.pep508())),
+        )
     }
 }
 

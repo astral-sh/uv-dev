@@ -17,15 +17,18 @@ use uv_configuration::{
     ExportFormat, ExtrasSpecification, ExtrasSpecificationWithDefaults, InstallOptions,
 };
 use uv_distribution_types::Verbatim;
-use uv_lock::{Installable, Lock, PylockToml, RequirementsTxtExport, cyclonedx_json};
+use uv_lock::{
+    ExportableRequirements, Installable, Lock, PylockToml, RequirementsTxtExport, cyclonedx_json,
+};
 use uv_normalize::{DefaultExtras, DefaultGroups, ExtraName, GroupName, PackageName};
+use uv_pep508::MarkerTree;
 use uv_preview::{Preview, PreviewFeature};
 use uv_python::{ConfigDiscovery, PythonDownloads, PythonPreference, PythonRequest};
 use uv_requirements::is_pylock_toml;
 use uv_scripts::Pep723Script;
 use uv_settings::PythonInstallMirrors;
 use uv_warnings::warn_user;
-use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, WorkspaceCache};
+use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, Workspace, WorkspaceCache};
 
 use crate::commands::pip::loggers::DefaultResolveLogger;
 use crate::commands::project::install_target::InstallTarget;
@@ -72,6 +75,8 @@ struct BatchExport {
     #[serde(default)]
     package: Vec<PackageName>,
     #[serde(default)]
+    resolution_root: Vec<PackageName>,
+    #[serde(default)]
     all_packages: bool,
     #[serde(default)]
     extra: Vec<ExtraName>,
@@ -112,6 +117,9 @@ impl ExportBatch {
             if entry.all_packages && !entry.package.is_empty() {
                 bail!("`all-packages` cannot be combined with `package`");
             }
+            if entry.all_packages && !entry.resolution_root.is_empty() {
+                bail!("`all-packages` cannot be combined with `resolution-root`");
+            }
             if entry.all_extras && !entry.extra.is_empty() {
                 bail!("`all-extras` cannot be combined with `extra`");
             }
@@ -133,6 +141,7 @@ pub(crate) async fn export(
     format: Option<ExportFormat>,
     all_packages: bool,
     package: Vec<PackageName>,
+    resolution_root: Vec<PackageName>,
     prune: Vec<PackageName>,
     hashes: bool,
     install_options: InstallOptions,
@@ -359,6 +368,7 @@ pub(crate) async fn export(
                     format,
                     entry.all_packages,
                     &entry.package,
+                    &entry.resolution_root,
                     &prune,
                     hashes,
                     &install_options,
@@ -401,6 +411,7 @@ pub(crate) async fn export(
         format,
         all_packages,
         &package,
+        &resolution_root,
         &prune,
         hashes,
         &install_options,
@@ -426,6 +437,198 @@ pub(crate) async fn export(
     Ok(ExitStatus::Success)
 }
 
+/// An export has independent traversal roots and resolution-context roots.
+struct ContextualExportTarget<'context, 'lock> {
+    target: InstallTarget<'lock>,
+    context: Option<&'context [PackageName]>,
+}
+
+impl<'lock> Installable<'lock> for ContextualExportTarget<'_, 'lock> {
+    fn install_path(&self) -> &'lock Path {
+        self.target.install_path()
+    }
+
+    fn lock(&self) -> &'lock Lock {
+        self.target.lock()
+    }
+
+    fn roots(&self) -> impl Iterator<Item = &PackageName> {
+        self.target.roots()
+    }
+
+    fn export_context(&self) -> Option<&[PackageName]> {
+        self.context
+    }
+
+    fn group_root(&self, groups: &DependencyGroupsWithDefaults) -> Option<&PackageName> {
+        self.target.group_root(groups)
+    }
+
+    fn includes_group(
+        &self,
+        package: Option<&PackageName>,
+        group: &GroupName,
+        groups: &DependencyGroupsWithDefaults,
+    ) -> bool {
+        self.target.includes_group(package, group, groups)
+    }
+
+    fn project_name(&self) -> Option<&PackageName> {
+        self.target.project_name()
+    }
+}
+
+/// Select a locked root context without changing which packages are emitted.
+fn select_export_context(
+    workspace: &Workspace,
+    target: &InstallTarget<'_>,
+    explicit: &[PackageName],
+    extras: &ExtrasSpecificationWithDefaults,
+    groups: &DependencyGroupsWithDefaults,
+) -> Result<Option<Vec<PackageName>>> {
+    if workspace.resolution_roots().is_none() {
+        if !explicit.is_empty() {
+            bail!("`--resolution-root` requires an explicit-root workspace");
+        }
+        return Ok(None);
+    }
+
+    let lock = target.lock();
+    let selected = target.roots().cloned().collect::<Vec<_>>();
+    if explicit.is_empty() && selected.iter().all(|name| lock.members().contains(name)) {
+        return Ok(None);
+    }
+    // Context inference applies only to packages already present in the lock. The ordinary
+    // exporter reports missing or ambiguous package entries with its existing diagnostics.
+    if explicit.is_empty()
+        && selected.iter().any(|name| match lock.find_by_name(name) {
+            Ok(Some(_)) => false,
+            Ok(None) | Err(_) => true,
+        })
+    {
+        return Ok(None);
+    }
+
+    let production_extras = ExtrasSpecification::default().with_defaults(DefaultExtras::default());
+    let production_groups = DependencyGroups::default().with_defaults(DefaultGroups::default());
+    let install_options = InstallOptions::default();
+
+    let context = if explicit.is_empty() {
+        let [name] = selected.as_slice() else {
+            bail!(
+                "Exporting several non-root members requires an explicit `--resolution-root` selection"
+            );
+        };
+        let mut candidates = Vec::new();
+        let mut first_projection = None;
+        let mut ambiguous = false;
+        for root in lock.members() {
+            let root_target = InstallTarget::Project {
+                workspace,
+                name: root,
+                lock,
+            };
+            let closure = ExportableRequirements::from_lock(
+                &root_target,
+                &[],
+                &production_extras,
+                &production_groups,
+                false,
+                &install_options,
+            )?;
+            if !closure.contains_package(name) {
+                continue;
+            }
+            let roots = std::slice::from_ref(root);
+            let projection_target = ContextualExportTarget {
+                target: *target,
+                context: Some(roots),
+            };
+            let projection = ExportableRequirements::from_lock(
+                &projection_target,
+                &[],
+                extras,
+                groups,
+                false,
+                &install_options,
+            )?;
+            if let Some(first) = &first_projection {
+                if !projection.same_packages(first) {
+                    ambiguous = true;
+                }
+            } else {
+                first_projection = Some(projection);
+            }
+            candidates.push(root.clone());
+        }
+        if ambiguous {
+            bail!(
+                "Package `{name}` has different dependency closures in workspace roots {}; select one with `--resolution-root`",
+                candidates.iter().map(|name| format!("`{name}`")).join(", ")
+            );
+        }
+        let Some(root) = candidates.into_iter().next() else {
+            bail!("Package `{name}` is not reachable from a locked workspace root");
+        };
+        vec![root]
+    } else {
+        let mut roots = explicit.to_vec();
+        roots.sort();
+        roots.dedup();
+        for root in &roots {
+            if !lock.members().contains(root) {
+                bail!("Package `{root}` is not a locked workspace resolution root");
+            }
+        }
+        roots
+    };
+
+    let context_target = InstallTarget::Projects {
+        workspace,
+        names: &context,
+        lock,
+    };
+    detect_conflicts(&context_target, &production_extras, &production_groups)?;
+    let mut environment = MarkerTree::TRUE;
+    for root in &context {
+        let package = lock
+            .find_by_name(root)
+            .map_err(anyhow::Error::msg)?
+            .with_context(|| {
+                format!("Workspace resolution root `{root}` is missing from the lockfile")
+            })?;
+        if !package.fork_markers().is_empty() {
+            environment = environment.and(
+                package
+                    .fork_markers()
+                    .iter()
+                    .fold(MarkerTree::FALSE, |marker, fork| marker.or(fork.pep508())),
+            );
+        }
+    }
+    if environment.is_false() {
+        bail!("The selected resolution roots have no common supported environment");
+    }
+    let context_target = ContextualExportTarget {
+        target: context_target,
+        context: Some(&context),
+    };
+    let closure = ExportableRequirements::from_lock(
+        &context_target,
+        &[],
+        &production_extras,
+        &production_groups,
+        false,
+        &install_options,
+    )?;
+    for name in &selected {
+        if !closure.contains_package(name) {
+            bail!("Package `{name}` is not reachable from the selected resolution roots");
+        }
+    }
+    Ok(Some(context))
+}
+
 /// Render one selection from a shared lockfile, deferring its file write until validation completes.
 #[expect(clippy::fn_params_excessive_bools)]
 async fn render_export<'output>(
@@ -434,6 +637,7 @@ async fn render_export<'output>(
     format: Option<ExportFormat>,
     all_packages: bool,
     package: &[PackageName],
+    resolution_root: &[PackageName],
     prune: &[PackageName],
     hashes: bool,
     install_options: &InstallOptions,
@@ -452,6 +656,10 @@ async fn render_export<'output>(
     cache: &Cache,
     preview: Preview,
 ) -> Result<OutputWriter<'output>> {
+    let workspace = match target {
+        ExportTarget::Project(project) => Some(project.workspace()),
+        ExportTarget::Script(_) => None,
+    };
     // Identify the installation target.
     let target = match target {
         ExportTarget::Project(VirtualProject::Project(project)) => {
@@ -508,6 +716,19 @@ async fn render_export<'output>(
     target.validate_extras(extras)?;
     target.validate_groups(groups)?;
 
+    let context = if let Some(workspace) = workspace {
+        select_export_context(workspace, &target, resolution_root, extras, groups)?
+    } else {
+        if !resolution_root.is_empty() {
+            bail!("`--resolution-root` requires an explicit-root workspace");
+        }
+        None
+    };
+    let target = ContextualExportTarget {
+        target,
+        context: context.as_deref(),
+    };
+
     if output_file
         .and_then(Path::file_name)
         .is_some_and(|name| name.eq_ignore_ascii_case("pyproject.toml"))
@@ -546,7 +767,7 @@ async fn render_export<'output>(
 
     // Skip conflict detection for CycloneDX exports, as SBOMs are meant to document all dependencies including conflicts.
     if !matches!(format, ExportFormat::CycloneDX1_5) {
-        detect_conflicts(&target, extras, groups)?;
+        detect_conflicts(&target.target, extras, groups)?;
     }
 
     // If the user is exporting to PEP 751, ensure the filename matches the specification.
