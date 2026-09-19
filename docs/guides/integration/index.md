@@ -8,6 +8,7 @@ Learn how to integrate uv with other software:
 - [Using with pre-commit](./pre-commit.md)
 - [Using in GitHub Actions](./github.md)
 - [Using in GitLab CI/CD](./gitlab.md)
+- [Using in CircleCI](./circleci.md)
 - [Installing PyTorch](./pytorch.md)
 - [Building a FastAPI application](./fastapi.md)
 - [Using with Bazel](./bazel.md)
