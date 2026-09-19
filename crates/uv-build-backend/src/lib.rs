@@ -556,9 +556,6 @@ mod tests {
         // Build a source distribution.
         let (_name, source_dist_list_files) =
             list_source_dist(source_root, MOCK_UV_VERSION, false)?;
-        // TODO(konsti): This should run in the unpacked source dist tempdir, but we need to
-        // normalize the path.
-        let (_name, wheel_list_files) = list_wheel(source_root, MOCK_UV_VERSION, false)?;
         let source_dist_filename = build_source_dist(source_root, dist, MOCK_UV_VERSION, false)?;
         let source_dist_path = dist.join(source_dist_filename.to_string());
         let source_dist_contents = sdist_contents(&source_dist_path);
@@ -571,6 +568,14 @@ mod tests {
             source_dist_filename.name.as_dist_info_name(),
             source_dist_filename.version
         ));
+        let (_name, mut wheel_list_files) =
+            list_wheel(&sdist_top_level_directory, MOCK_UV_VERSION, false)?;
+        // Rebase the unpacked source paths so the listings can be compared directly.
+        for (_, source) in &mut wheel_list_files {
+            if let Some(source) = source {
+                *source = source_root.join(relative_to(&*source, &sdist_top_level_directory)?);
+            }
+        }
         let wheel_filename = build_wheel(
             &sdist_top_level_directory,
             dist,
