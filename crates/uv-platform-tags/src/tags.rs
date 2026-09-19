@@ -723,7 +723,7 @@ fn compatible_tags(platform: &Platform) -> Result<Vec<PlatformTag>, PlatformErro
             }]
         }
         (Os::NetBsd { release }, arch) => {
-            let release_tag = release.replace(['.', '-'], "_");
+            let release_tag = release.replace(['.', '-'], "_").to_lowercase();
             let arch_tag = arch.machine();
             let release_arch = format!("{release_tag}_{arch_tag}");
             vec![PlatformTag::NetBsd {

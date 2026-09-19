@@ -17066,7 +17066,7 @@ fn abi_compatibility_on_nondebug_python_with_debug_wheel() {
 
 #[test]
 #[cfg(unix)]
-fn install_netbsd_wheel_release_tag_is_case_sensitive() -> Result<()> {
+fn install_netbsd_wheel_normalizes_release_tag_case() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let python_shim = context.temp_dir.child("netbsd-python");
     python_shim.write_str(&formatdoc! {r#"
@@ -17096,7 +17096,7 @@ fn install_netbsd_wheel_release_tag_is_case_sensitive() -> Result<()> {
 
     let name = "netbsd-case".parse()?;
     let version = "1.0.0".parse()?;
-    let (lowercase_filename, wheel) = generate_wheel(
+    let (filename, wheel) = generate_wheel(
         &name,
         &version,
         &[],
@@ -17105,46 +17105,24 @@ fn install_netbsd_wheel_release_tag_is_case_sensitive() -> Result<()> {
         "py3-none-netbsd_11_0_stable_amd64",
         &[],
     );
-    fs::write(context.temp_dir.child(&lowercase_filename), wheel)?;
+    fs::write(context.temp_dir.child(&filename), wheel)?;
 
-    // NetBSD release components should be normalized like wheel tags; case-sensitive matching
-    // rejects locally built lowercase tags. See astral-sh/uv#21846.
+    // NetBSD release components are normalized like wheel tags, so the uppercase release reported
+    // by the platform matches the lowercase tag produced by the wheel builder. See astral-sh/uv#21846.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--no-index")
         .arg("--python")
         .arg(python_shim.path())
         .arg("--target")
         .arg("lowercase-target")
-        .arg(&lowercase_filename), @r#"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: .venv/bin/python
-    Resolved 1 package in [TIME]
-    error: Failed to determine installation plan
-      cause: A path (netbsd_case-1.0.0-py3-none-netbsd_11_0_stable_amd64.whl) dependency is incompatible with the current platform
-
-    hint: The wheel is compatible with NetBSD (`netbsd_11_0_stable_amd64`), but you're on NetBSD (`netbsd_11_0_STABLE_amd64`)
-    "#);
-
-    let uppercase_filename = lowercase_filename.replace("stable", "STABLE");
-    fs::copy(
-        context.temp_dir.child(&lowercase_filename),
-        context.temp_dir.child(&uppercase_filename),
-    )?;
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--no-index")
-        .arg("--python")
-        .arg(python_shim.path())
-        .arg("--target")
-        .arg("uppercase-target")
-        .arg(&uppercase_filename), @"
+        .arg(&filename), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: .venv/bin/python
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + netbsd-case==1.0.0 (from file://[TEMP_DIR]/netbsd_case-1.0.0-py3-none-netbsd_11_0_STABLE_amd64.whl)
+     + netbsd-case==1.0.0 (from file://[TEMP_DIR]/netbsd_case-1.0.0-py3-none-netbsd_11_0_stable_amd64.whl)
     ");
 
     Ok(())
