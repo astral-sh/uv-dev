@@ -178,9 +178,9 @@ impl FlatDependencyGroups {
                 // Add the group requires-python as a marker to each requirement
                 // We don't use `requires_python_intersection` because each `include-group`
                 // should already have its markers applied to these.
+                let extra_markers =
+                    RequiresPython::from_specifiers(requires_python.clone()).to_marker_tree();
                 for requirement in &mut requirements {
-                    let extra_markers =
-                        RequiresPython::from_specifiers(requires_python.clone()).to_marker_tree();
                     requirement.marker = requirement.marker.and(extra_markers);
                 }
             }
@@ -331,5 +331,61 @@ impl std::fmt::Display for Cycle {
         }
         write!(f, " -> `{first}`")?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use insta::assert_snapshot;
+
+    use crate::dependency_groups::FlatDependencyGroups;
+    use crate::pyproject::PyProjectToml;
+
+    #[test]
+    fn applies_group_requires_python_to_every_requirement() {
+        let pyproject = PyProjectToml::from_string(
+            r#"
+[dependency-groups]
+base = ["base-one; sys_platform == 'linux'", "base-two"]
+dev = [{ include-group = "base" }, "dev-one; python_version < '3.13'", "dev-two"]
+
+[tool.uv.dependency-groups]
+base = { requires-python = ">=3.10,!=3.11.*,<3.14" }
+dev = { requires-python = ">=3.12,<3.13" }
+"#
+            .to_string(),
+            "pyproject.toml",
+        )
+        .expect("Dependency-group pyproject.toml should parse");
+        let groups =
+            FlatDependencyGroups::from_pyproject_toml(Path::new("pyproject.toml"), &pyproject)
+                .expect("Dependency groups should flatten");
+
+        let requirements = groups
+            .into_iter()
+            .map(|(name, group)| {
+                let requirements = group
+                    .requirements
+                    .into_iter()
+                    .map(|requirement| format!("  {requirement}"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                format!("{name}:\n{requirements}")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_snapshot!(requirements, @r"
+        base:
+          base-one ; python_full_version >= '3.10' and python_full_version < '3.14' and sys_platform == 'linux'
+          base-two ; python_full_version >= '3.10' and python_full_version < '3.14'
+        dev:
+          base-one ; python_full_version == '3.12.*' and sys_platform == 'linux'
+          base-two ; python_full_version == '3.12.*'
+          dev-one ; python_full_version == '3.12.*'
+          dev-two ; python_full_version == '3.12.*'
+        ");
     }
 }
