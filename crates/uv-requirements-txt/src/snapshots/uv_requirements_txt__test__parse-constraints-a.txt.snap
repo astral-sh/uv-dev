@@ -35,53 +35,59 @@ RequirementsTxt {
         },
     ],
     constraints: [
-        Requirement {
-            name: PackageName(
-                "django",
-            ),
-            extras: [],
-            version_or_url: Some(
-                VersionSpecifier(
-                    VersionSpecifiers(
-                        [
-                            VersionSpecifier {
-                                operator: Equal,
-                                version: "2.1.15",
-                            },
-                        ],
+        ConstraintEntry {
+            requirement: Requirement {
+                name: PackageName(
+                    "django",
+                ),
+                extras: [],
+                version_or_url: Some(
+                    VersionSpecifier(
+                        VersionSpecifiers(
+                            [
+                                VersionSpecifier {
+                                    operator: Equal,
+                                    version: "2.1.15",
+                                },
+                            ],
+                        ),
                     ),
                 ),
-            ),
-            marker: true,
-            origin: Some(
-                File(
-                    "<REQUIREMENTS_DIR>/constraints-b.txt",
+                marker: true,
+                origin: Some(
+                    File(
+                        "<REQUIREMENTS_DIR>/constraints-b.txt",
+                    ),
                 ),
-            ),
+            },
+            hashes: [],
         },
-        Requirement {
-            name: PackageName(
-                "pytz",
-            ),
-            extras: [],
-            version_or_url: Some(
-                VersionSpecifier(
-                    VersionSpecifiers(
-                        [
-                            VersionSpecifier {
-                                operator: Equal,
-                                version: "2023.3",
-                            },
-                        ],
+        ConstraintEntry {
+            requirement: Requirement {
+                name: PackageName(
+                    "pytz",
+                ),
+                extras: [],
+                version_or_url: Some(
+                    VersionSpecifier(
+                        VersionSpecifiers(
+                            [
+                                VersionSpecifier {
+                                    operator: Equal,
+                                    version: "2023.3",
+                                },
+                            ],
+                        ),
                     ),
                 ),
-            ),
-            marker: true,
-            origin: Some(
-                File(
-                    "<REQUIREMENTS_DIR>/constraints-b.txt",
+                marker: true,
+                origin: Some(
+                    File(
+                        "<REQUIREMENTS_DIR>/constraints-b.txt",
+                    ),
                 ),
-            ),
+            },
+            hashes: [],
         },
     ],
     editables: [],
