@@ -1,4 +1,4 @@
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::{fmt::Display, fmt::Write};
@@ -99,9 +99,9 @@ pub(crate) fn help(query: &[String], printer: Printer, no_pager: bool) -> Result
     if should_page && let Some(pager) = Pager::try_from_env() {
         let query = query.join(" ");
         if want_color && pager.supports_colors() {
-            pager.spawn(format!("{}: {query}", "uv help".bold()), &help_ansi)?;
+            pager.spawn(&query, format!("{}: {query}", "uv help".bold()), &help_ansi)?;
         } else {
-            pager.spawn(format!("uv help: {query}"), &help_plain)?;
+            pager.spawn(&query, format!("uv help: {query}"), &help_plain)?;
         }
     } else {
         if want_color {
@@ -286,6 +286,29 @@ impl PagerKind {
             Self::Other(_) => vec![],
         }
     }
+
+    fn default_less_options(&self, query: &str, existing: Option<&OsStr>) -> Option<String> {
+        match self {
+            Self::Less => {}
+            Self::More | Self::Other(_) => return None,
+        }
+
+        // Preserve even empty or non-Unicode user options. Restrict the default to validated CLI
+        // names that cannot introduce less prompt syntax or BusyBox less options.
+        if existing.is_some()
+            || query.split(' ').any(|name| {
+                name.is_empty()
+                    || !name.bytes().all(|byte| {
+                        byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+                    })
+            })
+        {
+            return None;
+        }
+
+        // The colon must be escaped in less's prompt language.
+        Some(format!(r"-Psuv help\: {query}"))
+    }
 }
 
 impl Display for PagerKind {
@@ -331,7 +354,7 @@ impl FromStr for Pager {
 
 impl Pager {
     /// Display `contents` using the pager.
-    fn spawn(self, heading: String, contents: impl Display) -> Result<()> {
+    fn spawn(self, query: &str, heading: String, contents: impl Display) -> Result<()> {
         use std::io::Write;
 
         let command = self
@@ -346,10 +369,15 @@ impl Pager {
             self.args
         };
 
-        let mut child = std::process::Command::new(command)
-            .args(args)
-            .stdin(std::process::Stdio::piped())
-            .spawn()?;
+        let mut command = std::process::Command::new(command);
+        command.args(args).stdin(std::process::Stdio::piped());
+        if let Some(options) = self
+            .kind
+            .default_less_options(query, std::env::var_os(EnvVars::LESS).as_deref())
+        {
+            command.env(EnvVars::LESS, options);
+        }
+        let mut child = command.spawn()?;
 
         let mut stdin = child
             .stdin
@@ -402,6 +430,106 @@ impl Pager {
             PagerKind::Less => self.args.is_empty() || self.args.iter().any(|arg| arg == "-R"),
             PagerKind::More => false,
             PagerKind::Other(_) => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsStr;
+    #[cfg(any(unix, windows))]
+    use std::ffi::OsString;
+
+    use clap::CommandFactory;
+
+    use uv_cli::Cli;
+
+    use super::PagerKind;
+
+    #[test]
+    fn less_default_prompt() {
+        assert_eq!(PagerKind::Less.default_args(), ["-R"]);
+        assert_eq!(
+            PagerKind::Less.default_less_options("pip compile", None),
+            Some(r"-Psuv help\: pip compile".to_string())
+        );
+        assert_eq!(
+            PagerKind::Less.default_less_options("--generate-shell-completion", None),
+            Some(r"-Psuv help\: --generate-shell-completion".to_string())
+        );
+        for kind in [PagerKind::More, PagerKind::Other("pager".to_string())] {
+            assert_eq!(kind.default_less_options("pip compile", None), None);
+        }
+    }
+
+    #[test]
+    fn less_preserves_existing_options() {
+        for existing in [OsStr::new(""), OsStr::new("-FRX -Psmy prompt")] {
+            assert_eq!(
+                PagerKind::Less.default_less_options("pip compile", Some(existing)),
+                None
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(any(unix, windows))]
+    fn less_preserves_non_unicode_options() {
+        #[cfg(unix)]
+        let existing = {
+            use std::os::unix::ffi::OsStringExt;
+            OsString::from_vec(vec![0xff])
+        };
+        #[cfg(windows)]
+        let existing = {
+            use std::os::windows::ffi::OsStringExt;
+            OsString::from_wide(&[0xd800])
+        };
+        assert_eq!(
+            PagerKind::Less.default_less_options("pip compile", Some(&existing)),
+            None
+        );
+    }
+
+    #[test]
+    fn less_omits_prompt_for_unsupported_names() {
+        for query in [
+            "",
+            " pip",
+            "pip ",
+            "pip  compile",
+            "Foo",
+            "a?b",
+            "a:b",
+            "a.b",
+            "a%b",
+            "a\\b",
+            "a$b",
+            "a\nb",
+            "a\tb",
+            "café",
+        ] {
+            assert_eq!(
+                PagerKind::Less.default_less_options(query, None),
+                None,
+                "unexpected default for {query:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn less_accepts_current_command_names() {
+        let mut command = Cli::command();
+        command.build();
+        let mut commands = vec![&command];
+        while let Some(command) = commands.pop() {
+            for name in std::iter::once(command.get_name()).chain(command.get_all_aliases()) {
+                assert!(
+                    PagerKind::Less.default_less_options(name, None).is_some(),
+                    "unsupported command name: {name:?}"
+                );
+            }
+            commands.extend(command.get_subcommands());
         }
     }
 }
