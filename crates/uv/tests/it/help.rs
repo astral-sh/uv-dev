@@ -105,6 +105,97 @@ fn help() {
 }
 
 #[test]
+fn help_shell_completion() {
+    let context = uv_test::test_context_with_versions!(&[]);
+
+    uv_snapshot!(context.filters(), context.help().arg("generate-shell-completion"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Generate shell completion
+
+    The completion script is written to standard output. See
+    <https://docs.astral.sh/uv/getting-started/installation/#shell-autocompletion> for shell-specific
+    installation instructions.
+
+    Usage: uv generate-shell-completion [OPTIONS] <SHELL>
+
+    Arguments:
+      <SHELL>
+              The shell to generate the completion script for
+
+              [possible values: bash, elvish, fish, nushell, powershell, zsh]
+
+    Python options:
+          --managed-python
+              Require use of uv-managed Python versions.
+
+              By default, uv prefers using Python versions it manages. However, it will use system
+              Python versions if a uv-managed Python is not installed. This option disables use of
+              system Python versions.
+
+              [env: UV_MANAGED_PYTHON=]
+
+          --no-managed-python
+              Disable use of uv-managed Python versions.
+
+              Instead, uv will search for a suitable Python version on the system.
+
+              [env: UV_NO_MANAGED_PYTHON=]
+
+    Global options:
+          --system-certs
+              Whether to load TLS certificates from the platform's native certificate store [env:
+              UV_SYSTEM_CERTS=]
+
+              By default, uv uses bundled Mozilla root certificates, which improves portability and
+              performance (especially on macOS).
+
+              However, in some cases, you may want to use the platform's native certificate store,
+              especially if you're relying on a corporate trust root (e.g., for a mandatory proxy)
+              that's included in your system's certificate store.
+
+          --allow-insecure-host <ALLOW_INSECURE_HOST>
+              Allow insecure connections to a host.
+
+              Can be provided multiple times.
+
+              Expects to receive either a hostname (e.g., `localhost`), a host-port pair (e.g.,
+              `localhost:8080`), or a URL (e.g., `https://localhost`).
+
+              WARNING: Hosts included in this list will not be verified against the system's certificate
+              store. Only use `--allow-insecure-host` in a secure network with verified sources, as it
+              bypasses SSL verification and could expose you to MITM attacks.
+
+              [env: UV_INSECURE_HOST=]
+
+          --directory <DIRECTORY>
+              Change to the given directory prior to running the command.
+
+              Relative paths are resolved with the given directory as the base.
+
+              See `--project` to only change the project root directory.
+
+              [env: UV_WORKING_DIR=]
+
+          --project <PROJECT>
+              Discover a project in the given directory.
+
+              All `pyproject.toml`, `uv.toml`, and `.python-version` files will be discovered by walking
+              up the directory tree from the project root, as will the project's virtual environment
+              (`.venv`).
+
+              Other command-line arguments (such as relative paths) will be resolved relative to the
+              current working directory.
+
+              See `--directory` to change the working directory entirely.
+
+              This setting has no effect when used in the `uv pip` interface.
+
+              [env: UV_PROJECT=]
+    ");
+}
+
+#[test]
 fn help_flag() {
     let context = uv_test::test_context_with_versions!(&[]);
 
