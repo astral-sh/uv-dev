@@ -1185,6 +1185,59 @@ fn wheel_data_respects_excludes() -> Result<()> {
     Ok(())
 }
 
+/// Files below an excluded module directory must not leak into the wheel archive.
+#[test]
+fn wheel_exclude_prunes_directory() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+
+        [tool.uv.build-backend]
+        wheel-exclude = ["/src/project/excluded", 'excluded\@']
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    context.temp_dir.child("src/project/__init__.py").touch()?;
+    context
+        .temp_dir
+        .child("src/project/excluded/private.txt")
+        .touch()?;
+    context
+        .temp_dir
+        .child("src/project/nested/excluded@/private.txt")
+        .touch()?;
+
+    context.build().arg("--wheel").assert().success();
+
+    let wheel = context
+        .temp_dir
+        .child("dist/project-0.1.0-py3-none-any.whl");
+    let unpacked = TempDir::new()?;
+    uv_extract::unzip(File::open(wheel.path())?, unpacked.path())?;
+    assert!(
+        !unpacked
+            .path()
+            .join("project/excluded/private.txt")
+            .exists()
+    );
+    assert!(
+        !unpacked
+            .path()
+            .join("project/nested/excluded@/private.txt")
+            .exists()
+    );
+
+    Ok(())
+}
+
 /// A symlinked data root must not package files from outside the project, while an internal
 /// symlink still honors the configured excludes.
 #[test]
