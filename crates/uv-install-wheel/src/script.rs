@@ -32,10 +32,27 @@ impl Script {
         //  and after the right square bracket."
         // – https://packaging.python.org/en/latest/specifications/entry-points/#file-format
         let captures = regex!(
-            r"^(?P<module>[\w\d_\-.]+)\s*:\s*(?P<function>[\w\d_\-.]+)(?:\s*\[\s*(?P<extras>(?:[^,]+,?\s*)+)\])?\s*$"
+            r"^(?P<module>[_\p{XID_Start}]\p{XID_Continue}*(?:\.[_\p{XID_Start}]\p{XID_Continue}*)*)\s*:\s*(?P<function>[_\p{XID_Start}]\p{XID_Continue}*(?:\.[_\p{XID_Start}]\p{XID_Continue}*)*)(?:\s*\[\s*(?P<extras>(?:[^,]+,?\s*)+)\])?\s*$"
         )
             .captures(value)
             .ok_or_else(|| Error::InvalidWheel(format!("invalid console script: '{value}'")))?;
+        let (Some(module), Some(function)) = (captures.name("module"), captures.name("function"))
+        else {
+            return Err(Error::InvalidWheel(format!(
+                "invalid console script: '{value}'"
+            )));
+        };
+        let module = module.as_str();
+        let function = function.as_str();
+        if module
+            .split('.')
+            .chain(function.split('.'))
+            .any(is_python_keyword)
+        {
+            return Err(Error::InvalidWheel(format!(
+                "invalid console script: '{value}'"
+            )));
+        }
         if let Some(script_extras) = captures.name("extras") {
             if let Some(extras) = extras {
                 let script_extras = script_extras
@@ -51,8 +68,8 @@ impl Script {
 
         Ok(Some(Self {
             name: script_name.to_string(),
-            module: captures.name("module").unwrap().as_str().to_string(),
-            function: captures.name("function").unwrap().as_str().to_string(),
+            module: module.to_string(),
+            function: function.to_string(),
         }))
     }
 
@@ -61,6 +78,47 @@ impl Script {
             .split_once('.')
             .map_or(&self.function, |(import_name, _)| import_name)
     }
+}
+
+fn is_python_keyword(value: &str) -> bool {
+    matches!(
+        value,
+        "False"
+            | "None"
+            | "True"
+            | "and"
+            | "as"
+            | "assert"
+            | "async"
+            | "await"
+            | "break"
+            | "class"
+            | "continue"
+            | "def"
+            | "del"
+            | "elif"
+            | "else"
+            | "except"
+            | "finally"
+            | "for"
+            | "from"
+            | "global"
+            | "if"
+            | "import"
+            | "in"
+            | "is"
+            | "lambda"
+            | "nonlocal"
+            | "not"
+            | "or"
+            | "pass"
+            | "raise"
+            | "return"
+            | "try"
+            | "while"
+            | "with"
+            | "yield"
+    )
 }
 
 /// Console and GUI scripts declared by an `entry_points.txt` metadata file.
@@ -149,6 +207,8 @@ mod test {
             "foomod:main",
             "foomod:main_bar [bar,baz]",
             "pylutron_caseta.cli:lap_pair[cli]",
+            "módulo:acción",
+            "foomod:_main1",
         ] {
             assert!(Script::from_value("script", case, None).is_ok());
         }
@@ -162,6 +222,16 @@ mod test {
             "foomod:main_bar [bar", // extras malformed
             "pylutron_caseta",      // missing function part
             "weh:",                 // invalid function
+            "foo-bar:main",         // invalid module identifier
+            "foo:main-handler",     // invalid object identifier
+            "1foo:main",            // leading digit in module identifier
+            "foo:1main",            // leading digit in object identifier
+            ".foo:main",            // empty module component
+            "foo..bar:main",        // empty module component
+            "foo:.main",            // empty object component
+            "foo:main..handler",    // empty object component
+            "class:main",           // keyword module component
+            "foo:class",            // keyword object component
         ] {
             assert!(
                 Script::from_value("script", case, None).is_err(),
