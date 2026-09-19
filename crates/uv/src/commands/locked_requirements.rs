@@ -8,9 +8,9 @@ use uv_distribution_types::IndexUrl;
 use uv_fs::CWD;
 use uv_git::ResolvedRepositoryReference;
 use uv_lock::{Lock, LockError, PylockToml, PylockTomlErrorKind};
-use uv_pep508::VerbatimUrl;
+use uv_pep508::{MarkerTree, VerbatimUrl};
 use uv_requirements_txt::RequirementsTxt;
-use uv_resolver::{Preference, PreferenceError, UpgradePackages};
+use uv_resolver::{Preference, PreferenceError, UniversalMarker, UpgradePackages};
 
 #[derive(Debug, Default)]
 pub(crate) struct LockedRequirements {
@@ -135,6 +135,64 @@ pub(crate) fn read_lock_requirements(
     Ok(LockedRequirements { preferences, git })
 }
 
+/// Load registry-version preferences from another workspace's lockfile.
+///
+/// These preferences do not add requirements, change sources, or pin Git references. Upgrading
+/// the current workspace does not discard the other workspace's selected versions. Only the
+/// portions of those preferences that overlap the current workspace's resolution domain apply.
+pub(crate) fn read_inherited_lock_preferences(
+    lock: &Lock,
+    install_path: &Path,
+    child_environment: MarkerTree,
+) -> Result<Vec<Preference>, LockError> {
+    let supported_environments = match lock.supported_environments() {
+        [] => MarkerTree::TRUE,
+        markers => markers
+            .iter()
+            .copied()
+            .fold(MarkerTree::FALSE, MarkerTree::or),
+    };
+    let shared_environment = child_environment
+        .and(supported_environments)
+        .and(lock.requires_python().to_marker_tree());
+    if shared_environment.is_false() {
+        return Ok(Vec::new());
+    }
+
+    let mut preferences = Vec::new();
+    for package in lock.packages() {
+        let Some(version) = package.version() else {
+            continue;
+        };
+
+        let fork_markers = match package.fork_markers() {
+            [] => vec![UniversalMarker::from_combined(shared_environment)],
+            markers => markers
+                .iter()
+                .map(|marker| marker.pep508().and(shared_environment))
+                .filter(|marker| !marker.is_false())
+                .map(UniversalMarker::from_combined)
+                .collect(),
+        };
+        // An empty marker list otherwise represents an unconditional preference.
+        if fork_markers.is_empty() {
+            continue;
+        }
+        let Some(index) = package.index(install_path)? else {
+            continue;
+        };
+
+        preferences.push(Preference::from_inherited_locked(
+            package.name().clone(),
+            version.clone(),
+            index,
+            fork_markers,
+        ));
+    }
+
+    Ok(preferences)
+}
+
 /// Load the preferred requirements from an existing `pylock.toml` file, applying the upgrade strategy.
 pub(crate) async fn read_pylock_toml_requirements(
     output_file: &Path,
@@ -181,4 +239,196 @@ pub(crate) async fn read_pylock_toml_requirements(
     }
 
     Ok(LockedRequirements { preferences, git })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use uv_normalize::PackageName;
+    use uv_pep440::Version;
+
+    use super::*;
+
+    #[test]
+    fn inherited_lock_preferences_only_include_registry_sources() -> Result<()> {
+        let lock = Lock::from_toml(
+            r#"
+version = 1
+revision = 3
+requires-python = ">=3.12"
+supported-markers = ["sys_platform == 'linux'"]
+
+[[package]]
+name = "from-registry"
+version = "1.0"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "from-flat-index"
+version = "2.0"
+source = { registry = "wheelhouse" }
+
+[[package]]
+name = "from-git"
+version = "3.0"
+source = { git = "https://example.org/repository?rev=main#0123456789012345678901234567890123456789" }
+
+[[package]]
+name = "from-url"
+version = "4.0"
+source = { url = "https://example.org/from_url-4.0.tar.gz" }
+
+[[package]]
+name = "from-path"
+version = "5.0"
+source = { path = "from_path-5.0.tar.gz" }
+
+[[package]]
+name = "from-directory"
+version = "6.0"
+source = { directory = "directory" }
+
+[[package]]
+name = "from-editable"
+version = "7.0"
+source = { editable = "editable" }
+
+[[package]]
+name = "from-virtual"
+version = "8.0"
+source = { virtual = "virtual" }
+"#,
+        )?;
+        let parent_root = std::env::current_dir()?;
+        let mut preferences =
+            read_inherited_lock_preferences(&lock, &parent_root, MarkerTree::TRUE)?;
+        preferences.sort_by(|left, right| left.name().cmp(right.name()));
+        let parent_environment = UniversalMarker::from_combined(
+            lock.requires_python()
+                .to_marker_tree()
+                .and(MarkerTree::from_str("sys_platform == 'linux'")?),
+        );
+
+        assert_eq!(
+            preferences,
+            [
+                Preference::from_inherited_locked(
+                    PackageName::from_str("from-flat-index")?,
+                    Version::from_str("2.0")?,
+                    IndexUrl::parse("wheelhouse", Some(&parent_root))?,
+                    vec![parent_environment],
+                ),
+                Preference::from_inherited_locked(
+                    PackageName::from_str("from-registry")?,
+                    Version::from_str("1.0")?,
+                    IndexUrl::from_str("https://pypi.org/simple")?,
+                    vec![parent_environment],
+                ),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn inherited_lock_preferences_respect_child_python_domain() -> Result<()> {
+        let lock = Lock::from_toml(
+            r#"
+version = 1
+revision = 3
+requires-python = ">=3.12,<3.14"
+resolution-markers = [
+    "python_full_version < '3.13'",
+    "python_full_version >= '3.13'",
+]
+
+[[package]]
+name = "shared"
+version = "1.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = ["python_full_version < '3.13'"]
+
+[[package]]
+name = "shared"
+version = "2.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = ["python_full_version >= '3.13'"]
+"#,
+        )?;
+        let parent_root = std::env::current_dir()?;
+
+        assert!(
+            read_inherited_lock_preferences(
+                &lock,
+                &parent_root,
+                MarkerTree::from_str("python_full_version < '3.12'")?,
+            )?
+            .is_empty()
+        );
+
+        let child_environment =
+            MarkerTree::from_str("python_full_version >= '3.13' and python_full_version < '3.15'")?;
+        assert_eq!(
+            read_inherited_lock_preferences(&lock, &parent_root, child_environment)?,
+            [Preference::from_inherited_locked(
+                PackageName::from_str("shared")?,
+                Version::from_str("2.0")?,
+                IndexUrl::from_str("https://pypi.org/simple")?,
+                vec![UniversalMarker::from_combined(
+                    child_environment.and(lock.requires_python().to_marker_tree()),
+                )],
+            )]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn inherited_lock_preferences_respect_child_platform_domain() -> Result<()> {
+        let lock = Lock::from_toml(
+            r#"
+version = 1
+revision = 3
+requires-python = ">=3.12"
+supported-markers = ["sys_platform == 'linux'", "sys_platform == 'win32'"]
+resolution-markers = ["sys_platform == 'linux'", "sys_platform == 'win32'"]
+
+[[package]]
+name = "shared"
+version = "1.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = ["sys_platform == 'linux'"]
+
+[[package]]
+name = "shared"
+version = "2.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = ["sys_platform == 'win32'"]
+"#,
+        )?;
+        let parent_root = std::env::current_dir()?;
+
+        assert!(
+            read_inherited_lock_preferences(
+                &lock,
+                &parent_root,
+                MarkerTree::from_str("sys_platform == 'darwin'")?,
+            )?
+            .is_empty()
+        );
+
+        let child_environment =
+            MarkerTree::from_str("sys_platform == 'linux' and python_full_version < '3.14'")?;
+        assert_eq!(
+            read_inherited_lock_preferences(&lock, &parent_root, child_environment)?,
+            [Preference::from_inherited_locked(
+                PackageName::from_str("shared")?,
+                Version::from_str("1.0")?,
+                IndexUrl::from_str("https://pypi.org/simple")?,
+                vec![UniversalMarker::from_combined(
+                    child_environment.and(lock.requires_python().to_marker_tree()),
+                )],
+            )]
+        );
+        Ok(())
+    }
 }

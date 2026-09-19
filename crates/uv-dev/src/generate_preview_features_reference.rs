@@ -138,6 +138,7 @@ mod tests {
         - `missing-exclude-newer-package-lock`: Exclude `exclude-newer-package` entries from the lockfile when not included in the
           project's resolved dependencies.
         - `native-auth`: Enables storage of credentials in a [system-native location](../concepts/authentication/http.md#the-uv-credentials-store).
+        - `nested-workspaces`: Allows independently locked child workspaces to prefer their parent workspace's lockfile.
         - `no-distutils-patch`: Stops installing the `_virtualenv.py` / `_virtualenv.pth` distutils configuration monkeypatch
           in virtual environments for Python 3.10 and later.
         - `package-conflicts`: Allows defining workspace conflicts at the package level.
