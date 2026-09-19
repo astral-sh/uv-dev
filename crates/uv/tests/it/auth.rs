@@ -1,8 +1,14 @@
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{fixture::PathChild, prelude::FileWriteStr};
+use indoc::formatdoc;
 use insta::allow_duplicates;
+use serde_json::json;
 use uv_static::EnvVars;
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{basic_auth, method, path},
+};
 
 use uv_test::uv_snapshot;
 
@@ -33,6 +39,108 @@ async fn invalid_cloud_endpoint_urls() {
             ");
         }
     }
+}
+
+/// Credentials configured for one index must not bypass stored credentials for another.
+///
+/// Regression test for <https://github.com/astral-sh/uv/issues/18955>.
+#[tokio::test]
+async fn lock_index_credentials_before_realm_cache() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let simple_index = json!({
+        "meta": { "api-version": "1.1" },
+        "name": "basic-package",
+        "files": [{
+            "filename": "basic_package-0.1.0-py3-none-any.whl",
+            "url": format!("{}/second/files/basic_package-0.1.0-py3-none-any.whl", server.uri()),
+            "hashes": {
+                "sha256": "7b6229db79b5800e4e98a351b5628c1c8a944533a2d428aeeaa7275a30d4ea82"
+            },
+            "core-metadata": true
+        }]
+    });
+    Mock::given(method("GET"))
+        .and(path("/second/simple/basic-package/"))
+        .and(basic_auth("user2", "password2"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            simple_index.to_string(),
+            "application/vnd.pypi.simple.v1+json",
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/second/files/basic_package-0.1.0-py3-none-any.whl.metadata",
+        ))
+        .and(basic_auth("user2", "password2"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(indoc::indoc! {"
+            Metadata-Version: 2.1
+            Name: basic-package
+            Version: 0.1.0
+        "}))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(401).insert_header(
+            "WWW-Authenticate",
+            r#"Basic realm="GitLab Packages Registry""#,
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    context
+        .auth_login()
+        .arg(format!("{}/second/simple", server.uri()))
+        .arg("--username")
+        .arg("user2")
+        .arg("--password")
+        .arg("password2")
+        .assert()
+        .success();
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["basic-package"]
+
+            [tool.uv.sources]
+            basic-package = {{ index = "second" }}
+
+            [[tool.uv.index]]
+            name = "first"
+            url = "http://user1:password1@{}/first/simple"
+            explicit = true
+            authenticate = "always"
+
+            [[tool.uv.index]]
+            name = "second"
+            url = "{}/second/simple"
+            explicit = true
+            authenticate = "always"
+        "#,
+            server.address(),
+            server.uri(),
+        })?;
+
+    // This should resolve, but the first index's cached credentials bypass the second index's
+    // stored credentials. See astral-sh/uv#18955.
+    uv_snapshot!(context.filters(), context.lock().env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × No solution found when resolving dependencies:
+      ╰─▶ Because basic-package was not found in the package registry and your project depends on basic-package, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: An index URL (http://[LOCALHOST]/second/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
+    ");
+
+    Ok(())
 }
 
 #[tokio::test]
