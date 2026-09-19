@@ -72,7 +72,8 @@ use uv_workspace::{Editability, WorkspaceMember};
 pub use crate::lock::deserialize::Error as CanonicalLockError;
 pub use crate::lock::export::RequirementsTxtExport;
 pub use crate::lock::export::{
-    Metadata, PylockToml, PylockTomlError, PylockTomlErrorKind, PythonReport, cyclonedx_json,
+    Metadata, PylockToml, PylockTomlError, PylockTomlErrorKind, PylockTomlSourceKind, PythonReport,
+    cyclonedx_json,
 };
 pub use crate::lock::installable::{Installable, InstallableRootKind};
 pub use crate::lock::map::PackageMap;
