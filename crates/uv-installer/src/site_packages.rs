@@ -25,7 +25,7 @@ use uv_redacted::DisplaySafeUrl;
 use uv_types::InstalledPackagesProvider;
 use uv_warnings::warn_user;
 
-use crate::satisfies::RequirementSatisfaction;
+use crate::satisfies::{BuildInfoCache, RequirementSatisfaction};
 
 /// An index over the packages installed in an environment.
 ///
@@ -480,6 +480,12 @@ impl SitePackages {
             });
         let mut stack = Vec::with_capacity(requirements.len());
         let mut seen = FxHashSet::with_capacity_and_hasher(requirements.len(), FxBuildHasher);
+        let mut build_info = BuildInfoCache::new(
+            config_settings,
+            config_settings_package,
+            extra_build_requires,
+            extra_build_variables,
+        );
 
         // Add the direct requirements to the queue.
         for requirement in overrides
@@ -513,10 +519,7 @@ impl SitePackages {
                             None,
                             installation,
                             tags,
-                            config_settings,
-                            config_settings_package,
-                            extra_build_requires,
-                            extra_build_variables,
+                            &mut build_info,
                         ) {
                             RequirementSatisfaction::Mismatch
                             | RequirementSatisfaction::OutOfDate
@@ -537,10 +540,7 @@ impl SitePackages {
                                 None,
                                 installation,
                                 tags,
-                                config_settings,
-                                config_settings_package,
-                                extra_build_requires,
-                                extra_build_variables,
+                                &mut build_info,
                             ) {
                                 RequirementSatisfaction::Mismatch
                                 | RequirementSatisfaction::OutOfDate
