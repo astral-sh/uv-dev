@@ -48,7 +48,6 @@ jobs:
     needs: plan
     if: ${{ needs.plan.outputs.run-checks == 'true' }}
     uses: $/.github/workflows/check-docs.yml
-    secrets: inherit
 
   check-zizmor:
     needs: plan
@@ -127,7 +126,7 @@ jobs:
       - build-dev-binaries
     if: ${{ needs.plan.outputs.test-integration == 'true' }}
     uses: $/.github/workflows/test-integration.yml
-    secrets: inherit
+    secrets: inherit # zizmor: ignore[secrets-inherit] required for integration registry credentials
     permissions:
       contents: read
       id-token: write
@@ -156,7 +155,6 @@ jobs:
     needs: plan
     if: ${{ needs.plan.outputs.build-release-binaries == 'true' }}
     uses: $/.github/workflows/build-release-binaries.yml
-    secrets: inherit
 
   build-docker:
     needs: plan
@@ -164,7 +162,7 @@ jobs:
     uses: $/.github/workflows/build-docker.yml
     with:
       push-dev: ${{ needs.plan.outputs.push-docker == 'true' }}
-    secrets: inherit
+    secrets: inherit # zizmor: ignore[secrets-inherit] required for Docker Hub credentials
     permissions:
       contents: read
       id-token: write
@@ -187,7 +185,7 @@ jobs:
     needs: plan
     if: ${{ needs.plan.outputs.run-bench == 'true' }}
     uses: $/.github/workflows/bench.yml
-    secrets: inherit
+    secrets: inherit # zizmor: ignore[secrets-inherit] required for the CodSpeed token
     with:
       save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
     permissions:
