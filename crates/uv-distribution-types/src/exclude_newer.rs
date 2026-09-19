@@ -30,7 +30,25 @@ impl PartialOrd for ExcludeNewerSpan {
 
 impl Ord for ExcludeNewerSpan {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0.to_string().cmp(&other.0.to_string())
+        self.0.to_string().cmp(&other.0.to_string()).then_with(|| {
+            // ISO formatting balances seconds and subseconds, but equality is fieldwise.
+            let fields = |span: &Span| {
+                (
+                    span.signum(),
+                    span.get_years(),
+                    span.get_months(),
+                    span.get_weeks(),
+                    span.get_days(),
+                    span.get_hours(),
+                    span.get_minutes(),
+                    span.get_seconds(),
+                    span.get_milliseconds(),
+                    span.get_microseconds(),
+                    span.get_nanoseconds(),
+                )
+            };
+            fields(&self.0).cmp(&fields(&other.0))
+        })
     }
 }
 
@@ -419,5 +437,156 @@ impl serde::Serialize for ExcludeNewerOverride {
             Self::Enabled(timestamp) => timestamp.to_string().serialize(serializer),
             Self::Disabled => serializer.serialize_bool(false),
         }
+    }
+}
+
+#[cfg(test)]
+mod span_ordering_tests {
+    use std::cmp::Ordering;
+    use std::collections::hash_map::DefaultHasher;
+    use std::collections::{BTreeSet, HashSet};
+    use std::error::Error;
+    use std::hash::{Hash, Hasher};
+
+    use jiff::Span;
+
+    use super::{ExcludeNewerOverride, ExcludeNewerSpan, ExcludeNewerValue};
+    use crate::{Index, IndexUrl};
+
+    fn spans() -> Vec<ExcludeNewerSpan> {
+        let positive = [
+            Span::new().years(1),
+            Span::new().months(1),
+            Span::new().weeks(1),
+            Span::new().days(1),
+            Span::new().hours(1),
+            Span::new().minutes(1),
+            Span::new().seconds(1),
+            Span::new().milliseconds(1),
+            Span::new().microseconds(1),
+            Span::new().nanoseconds(1),
+            Span::new().milliseconds(1_000),
+            Span::new().microseconds(1_000),
+            Span::new().nanoseconds(1_000),
+            Span::new().nanoseconds(1_000_000),
+            Span::new().milliseconds(1).microseconds(1),
+            Span::new().microseconds(1_001),
+            Span::new()
+                .years(1)
+                .months(2)
+                .weeks(3)
+                .days(4)
+                .hours(5)
+                .minutes(6)
+                .seconds(7)
+                .milliseconds(8)
+                .microseconds(9)
+                .nanoseconds(10),
+        ];
+        std::iter::once(ExcludeNewerSpan(Span::new()))
+            .chain(
+                positive
+                    .into_iter()
+                    .flat_map(|span| [ExcludeNewerSpan(span), ExcludeNewerSpan(-span)]),
+            )
+            .collect()
+    }
+
+    fn hash(value: &impl Hash) -> u64 {
+        let mut state = DefaultHasher::new();
+        value.hash(&mut state);
+        state.finish()
+    }
+
+    #[test]
+    fn orders_equal_display_spans_fieldwise() -> Result<(), serde_json::Error> {
+        for (left, right) in [
+            (Span::new().seconds(1), Span::new().milliseconds(1_000)),
+            (Span::new().milliseconds(1), Span::new().microseconds(1_000)),
+            (Span::new().microseconds(1), Span::new().nanoseconds(1_000)),
+            (
+                Span::new().milliseconds(1).microseconds(1),
+                Span::new().microseconds(1_001),
+            ),
+        ] {
+            for (left, right, expected) in [
+                (left, right, Ordering::Greater),
+                (-left, -right, Ordering::Less),
+            ] {
+                let left = ExcludeNewerSpan(left);
+                let right = ExcludeNewerSpan(right);
+                let display = left.to_string();
+                assert_eq!(display, right.to_string());
+                assert_ne!(left, right);
+                assert_eq!(left.cmp(&right), expected);
+                assert_eq!(right.cmp(&left), expected.reverse());
+                assert_eq!(hash(&left), hash(&display));
+                assert_eq!(hash(&right), hash(&display));
+                assert_eq!(
+                    serde_json::to_string(&left)?,
+                    serde_json::to_string(&display)?
+                );
+                assert_eq!(
+                    serde_json::to_string(&right)?,
+                    serde_json::to_string(&display)?
+                );
+            }
+        }
+
+        let milliseconds: ExcludeNewerSpan = serde_json::from_str(r#""1 millisecond""#)?;
+        let microseconds: ExcludeNewerSpan = serde_json::from_str(r#""1000 microseconds""#)?;
+        assert_eq!(milliseconds, ExcludeNewerSpan(Span::new().milliseconds(1)));
+        assert_eq!(
+            microseconds,
+            ExcludeNewerSpan(Span::new().microseconds(1_000))
+        );
+        assert!(milliseconds > microseconds);
+
+        let zero = ExcludeNewerSpan(Span::new());
+        let negative_zero = ExcludeNewerSpan(-Span::new());
+        assert_eq!(zero, negative_zero);
+        assert_eq!(zero.cmp(&negative_zero), Ordering::Equal);
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_iso_order_for_distinct_displays() {
+        let spans = spans();
+        for left in &spans {
+            for right in &spans {
+                let previous = left.to_string().cmp(&right.to_string());
+                if previous != Ordering::Equal {
+                    assert_eq!(left.cmp(right), previous);
+                }
+                assert_eq!(left.cmp(right) == Ordering::Equal, left == right);
+                assert_eq!(left.partial_cmp(right), Some(left.cmp(right)));
+            }
+        }
+    }
+
+    #[test]
+    fn orders_relative_values_and_indexes_consistently() -> Result<(), Box<dyn Error>> {
+        let spans = spans();
+        let ordered: BTreeSet<_> = spans.iter().copied().collect();
+        let hashed: HashSet<_> = spans.iter().copied().collect();
+        assert_eq!(ordered.len(), hashed.len());
+        assert_eq!(ordered.into_iter().collect::<HashSet<_>>(), hashed);
+
+        let index_url: IndexUrl = "https://example.com/simple".parse()?;
+        let base_index = Index::from_index_url(index_url);
+        for left in &spans {
+            for right in &spans {
+                let left_value = ExcludeNewerValue::relative(*left);
+                let right_value = ExcludeNewerValue::relative(*right);
+                assert_eq!(left_value.cmp(&right_value), left.cmp(right));
+                let mut left_index = base_index.clone();
+                let mut right_index = base_index.clone();
+                left_index.exclude_newer = Some(ExcludeNewerOverride::from(left_value));
+                right_index.exclude_newer = Some(ExcludeNewerOverride::from(right_value));
+                assert_eq!(left_index.cmp(&right_index), left.cmp(right));
+                assert_eq!(left_index == right_index, left == right);
+            }
+        }
+        Ok(())
     }
 }
