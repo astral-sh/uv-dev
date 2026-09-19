@@ -561,6 +561,61 @@ fn uninstall_record_path_traversal() -> Result<()> {
     Ok(())
 }
 
+/// Uninstall must not follow a RECORD entry through a directory symlink outside the environment.
+#[cfg(unix)]
+#[test]
+fn uninstall_record_symlink_path_traversal() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .init()
+        .arg("--lib")
+        .arg("evilpkg")
+        .assert()
+        .success();
+    context.pip_install().arg("./evilpkg").assert().success();
+
+    let target_dir = context.temp_dir.child("outside");
+    let target_file = target_dir.child("target.txt");
+    target_file.write_str("I should not be deleted")?;
+    let parent_target_file = context.temp_dir.child("parent-target.txt");
+    parent_target_file.write_str("I should not be deleted either")?;
+    fs_err::os::unix::fs::symlink(target_dir.path(), context.site_packages().join("escaped"))?;
+
+    let record_file = context
+        .site_packages()
+        .join("evilpkg-0.1.0.dist-info/RECORD");
+    let record = fs_err::read_to_string(&record_file)?;
+    fs_err::write(
+        &record_file,
+        format!(
+            "{}\nescaped/target.txt,,0\nescaped/../parent-target.txt,,0\n",
+            record.trim()
+        ),
+    )?;
+
+    let init_py = context.site_packages().join("evilpkg/__init__.py");
+    assert!(target_file.exists());
+    assert!(init_py.exists());
+
+    uv_snapshot!(context.filters(), context.pip_uninstall().arg("evilpkg"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    warning: Invalid RECORD entry in evilpkg==0.1.0 (from file://[TEMP_DIR]/evilpkg) that escapes the Python environment, skipping: escaped/target.txt
+    Uninstalled 1 package in [TIME]
+     - evilpkg==0.1.0 (from file://[TEMP_DIR]/evilpkg)
+    ");
+
+    assert!(target_file.exists());
+    assert!(parent_target_file.exists());
+    assert!(!init_py.exists());
+
+    Ok(())
+}
+
 /// Egg `top_level.txt` entries must be top-level names, not paths.
 #[test]
 fn uninstall_egg_info_top_level_path_traversal() -> Result<()> {
