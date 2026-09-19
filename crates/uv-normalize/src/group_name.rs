@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::LazyLock;
 
-use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use uv_small_str::SmallString;
@@ -214,13 +213,7 @@ impl serde::Serialize for DefaultGroups {
     {
         match self {
             Self::All => serializer.serialize_str("all"),
-            Self::List(groups) => {
-                let mut seq = serializer.serialize_seq(Some(groups.len()))?;
-                for group in groups {
-                    seq.serialize_element(&group)?;
-                }
-                seq.end()
-            }
+            Self::List(groups) => groups.serialize(serializer),
         }
     }
 }
