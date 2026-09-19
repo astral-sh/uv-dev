@@ -473,8 +473,25 @@ fn python_list_downloads_installed() {
     graalpy-3.10.0-[PLATFORM]     <download available>
     ");
 
-    // TODO(zanieb): It'd be nice to test `--show-urls` here too but we need special filtering for
-    // the URL
+    let show_urls_filters = context
+        .filters()
+        .into_iter()
+        .chain([(
+            r"https://mirror\.example\.com/\S+",
+            "https://mirror.example.com/[FILE-PATH]",
+        )])
+        .collect::<Vec<_>>();
+
+    // The download URL is shown when `--show-urls` is used.
+    uv_snapshot!(show_urls_filters, context.python_list()
+        .arg("cpython@3.10")
+        .arg("--show-urls")
+        .env(EnvVars::UV_PYTHON_INSTALL_MIRROR, "https://mirror.example.com")
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.10.[LATEST]-[PLATFORM]    https://mirror.example.com/[FILE-PATH]
+    ");
 
     // But not if `--only-installed` is used
     uv_snapshot!(context.filters(), context.python_list().arg("3.10").arg("--only-installed").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
@@ -493,6 +510,17 @@ fn python_list_downloads_installed() {
     graalpy-3.10.0-[PLATFORM]     <download available>
     ");
 
+    // Installed interpreters are still shown as paths with `--show-urls`.
+    uv_snapshot!(show_urls_filters, context.python_list()
+        .arg("cpython@3.10")
+        .arg("--show-urls")
+        .env(EnvVars::UV_PYTHON_INSTALL_MIRROR, "https://mirror.example.com")
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.10.[LATEST]-[PLATFORM]    managed/cpython-3.10-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    ");
+
     // But, the display should be reverted if `--only-downloads` is used
     uv_snapshot!(context.filters(), context.python_list().arg("3.10").arg("--only-downloads").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
@@ -500,6 +528,18 @@ fn python_list_downloads_installed() {
     cpython-3.10.[LATEST]-[PLATFORM]    <download available>
     pypy-3.10.16-[PLATFORM]       <download available>
     graalpy-3.10.0-[PLATFORM]     <download available>
+    ");
+
+    // `--only-downloads` shows the URL even when the interpreter is installed.
+    uv_snapshot!(show_urls_filters, context.python_list()
+        .arg("cpython@3.10")
+        .arg("--show-urls")
+        .arg("--only-downloads")
+        .env(EnvVars::UV_PYTHON_INSTALL_MIRROR, "https://mirror.example.com")
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.10.[LATEST]-[PLATFORM]    https://mirror.example.com/[FILE-PATH]
     ");
 
     // And should not be shown if `--no-managed-python` is used
