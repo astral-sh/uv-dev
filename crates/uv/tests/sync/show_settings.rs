@@ -3766,6 +3766,7 @@ fn preview_features() {
          preview: Preview {
     -        flags: [],
     +        flags: [
+    +            SelfManagement,
     +            PythonInstallDefault,
     +            JsonOutput,
     +            Pylock,
