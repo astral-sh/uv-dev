@@ -243,7 +243,11 @@ fn handle_request(
 }
 
 /// Build a response for a distribution file, including support for single byte ranges.
-fn distribution_file_response(req: &Request, filename: &str, bytes: &[u8]) -> ResponseTemplate {
+pub(crate) fn distribution_file_response(
+    req: &Request,
+    filename: &str,
+    bytes: &[u8],
+) -> ResponseTemplate {
     let content_type = content_type_for_filename(filename);
     let Some(range) = req.headers.get("range") else {
         return ResponseTemplate::new(200)
