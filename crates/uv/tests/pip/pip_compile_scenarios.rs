@@ -337,6 +337,98 @@ fn lowest_fork_min_python() -> Result<()> {
     Ok(())
 }
 
+/// A terminal conflict between two pinned requirements does not treat the root as an incompatible package.
+///
+/// ```text
+/// pinned-root-incompatible-with-root-version
+/// ├── environment
+/// │   └── python3.12
+/// ├── root
+/// │   ├── requires a==2.0.0
+/// │   │   └── satisfied by a-2.0.0
+/// │   └── requires b==1.0.0
+/// │       └── satisfied by b-1.0.0
+/// ├── a
+/// │   ├── a-1.0.0
+/// │   │   └── requires b>=1.0.0
+/// │   │       ├── satisfied by b-1.0.0
+/// │   │       └── satisfied by b-2.0.0
+/// │   └── a-2.0.0
+/// │       └── requires b>=2.0.0
+/// │           └── satisfied by b-2.0.0
+/// └── b
+///     ├── b-1.0.0
+///     └── b-2.0.0
+/// ```
+#[test]
+fn pinned_root_incompatible_with_root_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let python_versions = &[];
+    let server =
+        PackseServer::new("incompatible_versions/pinned-root-incompatible-with-root-version.toml");
+
+    let requirements_in = context.temp_dir.child("requirements.in");
+    requirements_in.write_str("b==1.0.0\na==2.0.0")?;
+
+    let output = uv_snapshot!(context.filters(), command(&context, python_versions, &server)
+        , @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because a==2.0.0 depends on b>=2.0.0 and you require b==1.0.0 and a==2.0.0, we can conclude that your requirements are unsatisfiable.
+    "
+    );
+
+    output.assert().failure();
+
+    Ok(())
+}
+
+/// A root requirement does not become a pin merely because only one version is listed.
+///
+/// ```text
+/// unpinned-sparse-root-incompatible-with-root-version
+/// ├── environment
+/// │   └── python3.12
+/// ├── root
+/// │   ├── requires a>=2.0.0,<3.0.0
+/// │   │   └── satisfied by a-2.0.0
+/// │   └── requires b==1.0.0
+/// │       └── satisfied by b-1.0.0
+/// ├── a
+/// │   └── a-2.0.0
+/// │       └── requires b>=2.0.0
+/// │           └── satisfied by b-2.0.0
+/// └── b
+///     ├── b-1.0.0
+///     └── b-2.0.0
+/// ```
+#[test]
+fn unpinned_sparse_root_incompatible_with_root_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let python_versions = &[];
+    let server = PackseServer::new(
+        "incompatible_versions/unpinned-sparse-root-incompatible-with-root-version.toml",
+    );
+
+    let requirements_in = context.temp_dir.child("requirements.in");
+    requirements_in.write_str("b==1.0.0\na>=2.0.0,<3.0.0")?;
+
+    let output = uv_snapshot!(context.filters(), command(&context, python_versions, &server)
+        , @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because all versions of a depend on b>=2.0.0 and you require b==1.0.0, we can conclude that your requirements and all versions of a are incompatible.
+             And because you require a==2.0.0, we can conclude that your requirements are unsatisfiable.
+    "
+    );
+
+    output.assert().failure();
+
+    Ok(())
+}
+
 /// The user requires a package which requires a compatible Python version, but they request an incompatible Python version for package resolution.
 ///
 /// ```text
