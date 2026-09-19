@@ -19,7 +19,7 @@ use tokio::sync::oneshot;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{Level, debug, info, instrument, trace, warn};
 
-use uv_configuration::{Constraints, Excludes, Overrides};
+use uv_configuration::{Constraints, Excludes, Overrides, RequiredEnvironmentsMode};
 use uv_distribution::{ArchiveMetadata, DistributionDatabase};
 use uv_distribution_types::{
     BuiltDist, CompatibleDist, DerivationChain, Dist, DistErrorKind, Identifier, IncompatibleDist,
@@ -1461,8 +1461,8 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
     /// Determine whether a candidate covers all supported platforms; and, if not, generate a fork.
     ///
-    /// This only ever applies to versions that lack source distributions And, for now, we only
-    /// apply it in two cases:
+    /// This applies to versions that lack source distributions and to environments that explicitly
+    /// require wheel coverage. For now, we only apply it in two cases:
     ///
     /// 1. Local versions, where the non-local version has greater platform coverage. The intent is
     ///    such that, if we're resolving PyTorch, and we choose `torch==2.5.2+cpu`, we want to
@@ -1493,9 +1493,22 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         };
 
         let artifact_markers = dist.implied_markers();
-        if artifact_markers.is_true() {
+        // If no environment requires artifact coverage and the package is already compatible
+        // with all environments (as is the case for packages that include a source
+        // distribution), we don't need to fork.
+        let require_wheels = match self.options.required_environments_mode {
+            Some(RequiredEnvironmentsMode::RequireWheels) => true,
+            None => false,
+        };
+        if (!require_wheels || self.options.required_environments.is_empty())
+            && artifact_markers.is_true()
+        {
             return Ok(None);
         }
+
+        let wheel_markers = dist.prioritized().map_or(MarkerTree::TRUE, |prioritized| {
+            prioritized.implied_wheel_markers(self.options.minimum_libc_version)
+        });
 
         // If the caller marked an environment as requiring artifact coverage, ensure it has
         // coverage.
@@ -1503,7 +1516,18 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             // If the platform is part of the current environment...
             if env.included_by_marker(marker) {
                 // But isn't supported by the distribution in this fork...
-                if !env.included_by_marker(artifact_markers.and(marker))
+                let supported_markers = if require_wheels
+                    && self
+                        .options
+                        .required_environments
+                        .iter()
+                        .any(|required| *required == marker)
+                {
+                    wheel_markers
+                } else {
+                    artifact_markers
+                };
+                if !env.included_by_marker(supported_markers.and(marker))
                     && env.included_by_marker(find_environments(id, pubgrub).and(marker))
                 {
                     // Separate the required environment from the candidate's wheel coverage in

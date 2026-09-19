@@ -39,8 +39,8 @@ use uv_configuration::{
     DryRun, EditableMode, EnvFile, ExcludeDependency, ExportFormat, ExtrasSpecification,
     GitLfsSetting, HashCheckingMode, IndexStrategy, InstallOptions, KeyringProviderType, NoBinary,
     NoBuild, NoSources, Override, PackageOverride, PipCompileFormat, ProjectBuildBackend, ProxyUrl,
-    Reinstall, RequiredVersion, TargetTriple, TrustedHost, TrustedPublishing, Upgrade,
-    VersionControlSystem,
+    Reinstall, RequiredEnvironmentsMode, RequiredVersion, TargetTriple, TrustedHost,
+    TrustedPublishing, Upgrade, VersionControlSystem,
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations, IndexUrl,
@@ -3479,6 +3479,7 @@ pub(crate) struct PipCompileSettings {
     pub(crate) environments: SupportedEnvironments,
     pub(crate) required_environments: SupportedEnvironments,
     pub(crate) minimum_libc_version: Option<MinimumLibcVersion>,
+    pub(crate) required_environments_mode: Option<RequiredEnvironmentsMode>,
     pub(crate) refresh: Refresh,
     pub(crate) settings: PipSettings,
 }
@@ -3603,6 +3604,9 @@ impl PipCompileSettings {
         } else {
             SupportedEnvironments::default()
         };
+        let required_environments_mode = filesystem
+            .as_ref()
+            .and_then(|configuration| configuration.required_environments_mode);
 
         let minimum_libc_version = filesystem
             .as_ref()
@@ -3634,6 +3638,7 @@ impl PipCompileSettings {
             environments,
             required_environments,
             minimum_libc_version,
+            required_environments_mode,
             refresh: Refresh::try_from(refresh)?,
             settings: PipSettings::combine(
                 PipOptions {

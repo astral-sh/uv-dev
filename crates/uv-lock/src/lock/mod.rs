@@ -25,7 +25,7 @@ use uv_configuration::{
     BuildOptions, Constraints, DependencyGroupsWithDefaults, ExcludeDependency, ExcludeNewer,
     ExcludeNewerPackage, Excludes, ExtrasSpecificationWithDefaults, ForkStrategy, InstallTarget,
     Override, Overrides, PackageOverride, Prerelease, PrereleaseMode, PrereleasePackage,
-    ResolutionMode, ScopedOverrideSourceError,
+    RequiredEnvironmentsMode, ResolutionMode, ScopedOverrideSourceError,
 };
 use uv_distribution::{
     DistributionDatabase, FlatRequiresDist, Metadata as DistributionMetadata, RequiresDist,
@@ -2583,6 +2583,7 @@ impl Lock {
             fork_strategy: resolution.options.fork_strategy,
             minimum_libc_version: resolution.options.minimum_libc_version,
             exclude_newer: resolution.options.exclude_newer.clone(),
+            required_environments_mode: resolution.options.required_environments_mode,
         };
         // Canonicalize the top-level fork markers to match what is persisted in
         // `uv.lock`. In particular, conflict-only fork markers can serialize to
@@ -2971,6 +2972,11 @@ impl Lock {
     /// Return the selected libc implementation and minimum version.
     pub fn minimum_libc_version(&self) -> Option<MinimumLibcVersion> {
         self.options.minimum_libc_version
+    }
+
+    /// Returns the policy used to satisfy required environments when generating this lock.
+    pub fn required_environments_mode(&self) -> Option<RequiredEnvironmentsMode> {
+        self.options.required_environments_mode
     }
 
     /// Returns the exclude newer setting used to generate this lock.
@@ -5952,6 +5958,8 @@ struct ResolverOptions {
     minimum_libc_version: Option<MinimumLibcVersion>,
     /// The [`ExcludeNewer`] setting used to generate this lock.
     exclude_newer: ExcludeNewer,
+    /// The policy used to satisfy required environments when generating this lock.
+    required_environments_mode: Option<RequiredEnvironmentsMode>,
 }
 
 /// The serialized resolver options in the lockfile.
@@ -5972,6 +5980,9 @@ struct ResolverOptionsWire {
     /// The [`ExcludeNewer`] setting used to generate this lock.
     #[serde(flatten)]
     exclude_newer: ExcludeNewerWire,
+    /// The policy used to satisfy required environments when generating this lock.
+    #[serde(default)]
+    required_environments_mode: Option<RequiredEnvironmentsMode>,
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize)]
@@ -6249,6 +6260,7 @@ impl TryFrom<LockWire> for Lock {
             fork_strategy: options_wire.fork_strategy,
             minimum_libc_version: options_wire.minimum_libc_version,
             exclude_newer: options_wire.exclude_newer.into(),
+            required_environments_mode: options_wire.required_environments_mode,
         };
         let lock = Self::new(
             wire.version,
@@ -10553,6 +10565,43 @@ wheels = [{ filename = "local-1.0.0-py3-none-any.whl", hash = "sha256:53a42340ae
             hasher.archive_policy_for_url(&unknown),
             ArchiveHashPolicy::None
         );
+    }
+
+    #[test]
+    fn required_environments_mode_round_trips() {
+        let lock = Lock::from_canonical_toml(
+            r#"version = 1
+revision = 3
+requires-python = ">=3.12"
+
+[options]
+required-environments-mode = "require-wheels"
+
+[[package]]
+name = "project"
+version = "0.1.0"
+source = { virtual = "." }
+"#,
+        )
+        .expect("valid lock");
+
+        assert_eq!(
+            lock.required_environments_mode(),
+            Some(RequiredEnvironmentsMode::RequireWheels)
+        );
+        insta::assert_snapshot!(lock.to_toml().expect("lock serializes"), @r###"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+
+        [options]
+        required-environments-mode = "require-wheels"
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        "###);
     }
 
     #[test]
