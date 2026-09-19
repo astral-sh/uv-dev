@@ -105,4 +105,16 @@ mod tests {
             assert_eq!(DistInfoName::normalize(input), "friendly-bard");
         }
     }
+
+    #[test]
+    fn version_spellings() {
+        for (input, expected) in [
+            ("friendly_bard-1.0-1", "friendly-bard-1-0-1"),
+            ("friendly_bard-1.0.post1", "friendly-bard-1-0-post1"),
+            ("Friendly.Bard-1.0+LOCAL_1", "friendly-bard-1-0+local-1"),
+            ("friendly-bard-1+local", "friendly-bard-1+local"),
+        ] {
+            assert_eq!(DistInfoName::new(input).as_ref(), expected, "{input}");
+        }
+    }
 }
