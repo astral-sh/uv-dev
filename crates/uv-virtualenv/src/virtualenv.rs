@@ -346,118 +346,38 @@ pub(crate) fn create(
             )
             .map_err(Error::Python)?;
         } else {
+            let copy_launcher = |executable| {
+                copy_launcher_windows(executable, interpreter, &base_python, &scripts, python_home)
+            };
+
             // Always copy `python.exe`.
-            copy_launcher_windows(
-                WindowsExecutable::Python,
-                interpreter,
-                &base_python,
-                &scripts,
-                python_home,
-            )?;
+            copy_launcher(WindowsExecutable::Python)?;
 
             match interpreter.implementation_name() {
                 "graalpy" => {
                     // For GraalPy, copy `graalpy.exe` and `python3.exe`.
-                    copy_launcher_windows(
-                        WindowsExecutable::GraalPy,
-                        interpreter,
-                        &base_python,
-                        &scripts,
-                        python_home,
-                    )?;
-                    copy_launcher_windows(
-                        WindowsExecutable::PythonMajor,
-                        interpreter,
-                        &base_python,
-                        &scripts,
-                        python_home,
-                    )?;
+                    copy_launcher(WindowsExecutable::GraalPy)?;
+                    copy_launcher(WindowsExecutable::PythonMajor)?;
                 }
                 "pypy" => {
                     // For PyPy, copy all versioned executables and all PyPy-specific executables.
-                    copy_launcher_windows(
-                        WindowsExecutable::PythonMajor,
-                        interpreter,
-                        &base_python,
-                        &scripts,
-                        python_home,
-                    )?;
-                    copy_launcher_windows(
-                        WindowsExecutable::PythonMajorMinor,
-                        interpreter,
-                        &base_python,
-                        &scripts,
-                        python_home,
-                    )?;
-                    copy_launcher_windows(
-                        WindowsExecutable::Pythonw,
-                        interpreter,
-                        &base_python,
-                        &scripts,
-                        python_home,
-                    )?;
-                    copy_launcher_windows(
-                        WindowsExecutable::PyPy,
-                        interpreter,
-                        &base_python,
-                        &scripts,
-                        python_home,
-                    )?;
-                    copy_launcher_windows(
-                        WindowsExecutable::PyPyMajor,
-                        interpreter,
-                        &base_python,
-                        &scripts,
-                        python_home,
-                    )?;
-                    copy_launcher_windows(
-                        WindowsExecutable::PyPyMajorMinor,
-                        interpreter,
-                        &base_python,
-                        &scripts,
-                        python_home,
-                    )?;
-                    copy_launcher_windows(
-                        WindowsExecutable::PyPyw,
-                        interpreter,
-                        &base_python,
-                        &scripts,
-                        python_home,
-                    )?;
-                    copy_launcher_windows(
-                        WindowsExecutable::PyPyMajorMinorw,
-                        interpreter,
-                        &base_python,
-                        &scripts,
-                        python_home,
-                    )?;
+                    copy_launcher(WindowsExecutable::PythonMajor)?;
+                    copy_launcher(WindowsExecutable::PythonMajorMinor)?;
+                    copy_launcher(WindowsExecutable::Pythonw)?;
+                    copy_launcher(WindowsExecutable::PyPy)?;
+                    copy_launcher(WindowsExecutable::PyPyMajor)?;
+                    copy_launcher(WindowsExecutable::PyPyMajorMinor)?;
+                    copy_launcher(WindowsExecutable::PyPyw)?;
+                    copy_launcher(WindowsExecutable::PyPyMajorMinorw)?;
                 }
                 _ => {
                     // For all other interpreters, copy `pythonw.exe`.
-                    copy_launcher_windows(
-                        WindowsExecutable::Pythonw,
-                        interpreter,
-                        &base_python,
-                        &scripts,
-                        python_home,
-                    )?;
+                    copy_launcher(WindowsExecutable::Pythonw)?;
 
                     // If the GIL is disabled, copy `venvlaunchert.exe` and `venvwlaunchert.exe`.
                     if interpreter.gil_disabled() {
-                        copy_launcher_windows(
-                            WindowsExecutable::PythonMajorMinort,
-                            interpreter,
-                            &base_python,
-                            &scripts,
-                            python_home,
-                        )?;
-                        copy_launcher_windows(
-                            WindowsExecutable::PythonwMajorMinort,
-                            interpreter,
-                            &base_python,
-                            &scripts,
-                            python_home,
-                        )?;
+                        copy_launcher(WindowsExecutable::PythonMajorMinort)?;
+                        copy_launcher(WindowsExecutable::PythonwMajorMinort)?;
                     }
                 }
             }
