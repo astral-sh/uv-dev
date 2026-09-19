@@ -1030,7 +1030,9 @@ pub(crate) struct ToolUvWorkspace {
     /// Workspace members to use as resolution roots.
     ///
     /// Other discovered members remain available to workspace sources, but only participate in
-    /// resolution when reached through a dependency. When omitted, every member is a root.
+    /// resolution when reached through a dependency. Each explicit root is resolved independently;
+    /// selecting multiple roots requires their locked graphs to be compatible. When omitted, all
+    /// members participate in one shared resolution.
     #[option(
         default = "None",
         value_type = "list[str]",

@@ -2486,7 +2486,9 @@ impl Lock {
             //
             // Canonicalize the subset of fork markers that selected this distribution to
             // match the form persisted in `uv.lock`.
-            let fork_markers = if duplicates.contains(dist.name()) {
+            let fork_markers = if dist.marker.has_root_marker() {
+                canonicalize_universal_markers(&[dist.marker], &requires_python)
+            } else if duplicates.contains(dist.name()) {
                 let fork_markers = resolution
                     .fork_markers
                     .iter()
@@ -3047,7 +3049,11 @@ impl Lock {
         } else {
             let mut combined = MarkerTree::FALSE;
             for fork_marker in &package.fork_markers {
-                combined = combined.or(fork_marker.pep508());
+                combined = combined.or(if fork_marker.has_root_marker() {
+                    fork_marker.combined()
+                } else {
+                    fork_marker.pep508()
+                });
             }
             combined = combined.and(requirement.marker);
             combined
@@ -3177,15 +3183,19 @@ impl Lock {
             // For example, if this group declares `foo; sys_platform == 'linux'`, another
             // dependency can still keep `foo` in the universal lock on macOS; this group's edge
             // must not match there.
-            if !dependency.complexified_marker.evaluate(
-                marker_environment,
-                std::iter::empty::<&PackageName>(),
-                dependency
-                    .extra
-                    .iter()
-                    .map(|extra| (&dependency.package_id.name, extra)),
-                std::iter::once((project_name, group)),
-            ) {
+            if !dependency
+                .complexified_marker
+                .select_roots(&BTreeSet::from([project_name.clone()]))
+                .evaluate(
+                    marker_environment,
+                    std::iter::empty::<&PackageName>(),
+                    dependency
+                        .extra
+                        .iter()
+                        .map(|extra| (&dependency.package_id.name, extra)),
+                    std::iter::once((project_name, group)),
+                )
+            {
                 continue;
             }
 
@@ -3226,15 +3236,19 @@ impl Lock {
             .iter()
             .filter(|dependency| &dependency.package_id.name == dependency_name)
         {
-            if !dependency.complexified_marker.evaluate(
-                marker_environment,
-                std::iter::once(project_name),
-                dependency
-                    .extra
-                    .iter()
-                    .map(|extra| (&dependency.package_id.name, extra)),
-                std::iter::empty::<(&PackageName, &GroupName)>(),
-            ) {
+            if !dependency
+                .complexified_marker
+                .select_roots(&BTreeSet::from([project_name.clone()]))
+                .evaluate(
+                    marker_environment,
+                    std::iter::once(project_name),
+                    dependency
+                        .extra
+                        .iter()
+                        .map(|extra| (&dependency.package_id.name, extra)),
+                    std::iter::empty::<(&PackageName, &GroupName)>(),
+                )
+            {
                 continue;
             }
 
@@ -3523,10 +3537,17 @@ impl Lock {
     /// Returns the actually covered and the expected marker space on validation error.
     pub fn check_marker_coverage(&self) -> Result<(), (MarkerTree, MarkerTree)> {
         let fork_markers_union = self.fork_markers_union();
-        let environments_union = implicit_constraints_marker(
-            self.requires_python.to_marker_tree(),
-            &self.supported_environments,
-        );
+        let python_marker = if self
+            .fork_markers
+            .iter()
+            .any(|marker| marker.has_root_marker())
+        {
+            self.requires_python.to_exact_marker_tree()
+        } else {
+            self.requires_python.to_marker_tree()
+        };
+        let environments_union =
+            implicit_constraints_marker(python_marker, &self.supported_environments);
         if fork_markers_union.negate().is_disjoint(environments_union) {
             Ok(())
         } else {
@@ -3662,6 +3683,15 @@ impl Lock {
         name: &PackageName,
         marker_env: &MarkerEnvironment,
     ) -> Result<Option<&Package>, String> {
+        self.find_by_markers_and_roots(name, marker_env, &self.members().iter().cloned().collect())
+    }
+
+    fn find_by_markers_and_roots(
+        &self,
+        name: &PackageName,
+        marker_env: &MarkerEnvironment,
+        roots: &BTreeSet<PackageName>,
+    ) -> Result<Option<&Package>, String> {
         let mut found_dist = None;
         for dist in &self.packages {
             if &dist.id.name == name {
@@ -3669,7 +3699,7 @@ impl Lock {
                     || dist
                         .fork_markers
                         .iter()
-                        .any(|marker| marker.evaluate_no_extras(marker_env))
+                        .any(|marker| marker.select_roots(roots).evaluate_no_extras(marker_env))
                 {
                     if found_dist.is_some() {
                         return Err(format!("found multiple packages matching `{name}`"));
@@ -9714,6 +9744,14 @@ impl std::fmt::Display for WheelTagHint {
 /// is with the caller somewhere in such cases.
 #[derive(Debug, thiserror::Error)]
 enum LockErrorKind {
+    #[error(
+        "Workspace member `{name}` has no independent locked resolution. Add it to `tool.uv.workspace.roots` and run `uv lock`."
+    )]
+    MissingWorkspaceRoot { name: PackageName },
+    #[error(
+        "The selected workspace roots require incompatible locked packages `{first}` and `{second}`. Select one root, or add a workspace root that depends on both to resolve them together."
+    )]
+    IncompatibleWorkspaceRoots { first: PackageId, second: PackageId },
     /// An error that occurs when the overrides for validating a
     /// metadata-free lockfile cannot be scoped to their packages.
     #[error(transparent)]
@@ -10242,7 +10280,7 @@ fn canonical_marker_trees(
         .iter()
         .tuple_combinations()
         .any(|(&marker1, &marker2)| !marker1.is_disjoint(marker2));
-    let markers = if !any_overlap {
+    let markers = if !any_overlap && !markers.iter().any(|marker| marker.has_root_marker()) {
         pep508_only
     } else {
         markers

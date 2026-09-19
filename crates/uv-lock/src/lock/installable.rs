@@ -150,6 +150,21 @@ pub trait Installable<'lock> {
             .map(&resolve_root)
             .collect::<Result<Vec<_>, LockError>>()?;
         let group_root = self.group_root(groups).map(resolve_root).transpose()?;
+        if self
+            .lock()
+            .fork_markers()
+            .iter()
+            .any(|marker| marker.has_root_marker())
+        {
+            for package in roots.iter().copied().chain(group_root) {
+                if !self.lock().members().contains(package.name()) {
+                    return Err(LockErrorKind::MissingWorkspaceRoot {
+                        name: package.name().clone(),
+                    }
+                    .into());
+                }
+            }
+        }
 
         InstallableExt::to_resolution_from_packages(
             self,
@@ -266,6 +281,21 @@ trait InstallableExt<'lock>: Installable<'lock> {
         install_options: &InstallOptions,
     ) -> Result<Resolution, LockError> {
         let size_guess = self.lock().packages.len();
+        let selected_roots = if include_manifest {
+            roots
+                .iter()
+                .copied()
+                .chain(group_root)
+                .map(|package| package.id.name.clone())
+                .collect::<BTreeSet<_>>()
+        } else {
+            selection_context
+                .package()
+                .or_else(|| self.project_name())
+                .cloned()
+                .into_iter()
+                .collect()
+        };
         let mut petgraph = Graph::with_capacity(size_guess, size_guess);
         let mut inverse = vec![None; size_guess];
 
@@ -398,15 +428,19 @@ trait InstallableExt<'lock>: Installable<'lock> {
                     dependencies_for_conflict_validation.push((dist, dep));
                 }
                 let additional_activated_extras = newly_activated_extras(dep, &activated_extras);
-                if !dep.complexified_marker.evaluate(
-                    marker_env,
-                    activated_projects.iter().copied(),
-                    activated_extras
-                        .iter()
-                        .chain(additional_activated_extras.iter())
-                        .copied(),
-                    activated_groups.iter().copied(),
-                ) {
+                if !dep
+                    .complexified_marker
+                    .select_roots(&selected_roots)
+                    .evaluate(
+                        marker_env,
+                        activated_projects.iter().copied(),
+                        activated_extras
+                            .iter()
+                            .chain(additional_activated_extras.iter())
+                            .copied(),
+                        activated_groups.iter().copied(),
+                    )
+                {
                     continue;
                 }
 
@@ -494,7 +528,7 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 let root_name = &dependency.name;
                 let dist = self
                     .lock()
-                    .find_by_markers(root_name, marker_env)
+                    .find_by_markers_and_roots(root_name, marker_env, &selected_roots)
                     .map_err(|_| LockErrorKind::MultipleRootPackages {
                         name: root_name.clone(),
                     })?
@@ -557,7 +591,7 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 let root_name = &dependency.name;
                 let dist = self
                     .lock()
-                    .find_by_markers(root_name, marker_env)
+                    .find_by_markers_and_roots(root_name, marker_env, &selected_roots)
                     .map_err(|_| LockErrorKind::MultipleRootPackages {
                         name: root_name.clone(),
                     })?
@@ -677,7 +711,7 @@ trait InstallableExt<'lock>: Installable<'lock> {
                     dep_reachability.and(parent_reachability);
                     let additional_activated_extras =
                         newly_activated_extras(dep, &activated_extras);
-                    if !dep_reachability.evaluate(
+                    if !dep_reachability.select_roots(&selected_roots).evaluate(
                         marker_env,
                         activated_projects.iter().copied(),
                         activated_extras
@@ -759,6 +793,7 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 }
                 if !dep
                     .complexified_marker
+                    .select_roots(&selected_roots)
                     .evaluate_activated(marker_env, &activated)
                 {
                     continue;
@@ -836,7 +871,7 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 if !validated_markers.insert(dependency.complexified_marker) {
                     continue;
                 }
-                let mut marker = dependency.complexified_marker;
+                let mut marker = dependency.complexified_marker.select_roots(&selected_roots);
                 for item in self.lock().conflicts().iter().flat_map(ConflictSet::iter) {
                     if selection_context_package != Some(item.package())
                         && !subgraph_packages.contains(item.package())
@@ -873,6 +908,31 @@ trait InstallableExt<'lock>: Installable<'lock> {
             }
         }
 
+        if self
+            .lock()
+            .fork_markers
+            .iter()
+            .any(|marker| marker.has_root_marker())
+        {
+            let mut installed = FxHashMap::default();
+            for (package, index) in self.lock().packages.iter().zip(&inverse) {
+                let Some(index) = index else {
+                    continue;
+                };
+                if !matches!(&petgraph[*index], Node::Dist { install: true, .. }) {
+                    continue;
+                }
+                if let Some(previous) = installed.insert(&package.id.name, &package.id)
+                    && previous != &package.id
+                {
+                    return Err(LockErrorKind::IncompatibleWorkspaceRoots {
+                        first: previous.clone(),
+                        second: package.id.clone(),
+                    }
+                    .into());
+                }
+            }
+        }
         Ok(Resolution::new(petgraph))
     }
 }

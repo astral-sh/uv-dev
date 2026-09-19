@@ -12,6 +12,13 @@ mod lock_conflict;
     feature = "test-pypi",
     feature = "test-universal"
 ))]
+mod lock_root_forks;
+
+#[cfg(all(
+    feature = "test-python",
+    feature = "test-pypi",
+    feature = "test-universal"
+))]
 mod lock_exclude_newer_relative;
 
 #[cfg(feature = "test-universal")]

@@ -35,8 +35,8 @@ use uv_python::{
 };
 use uv_requirements::ExtrasResolver;
 use uv_resolver::{
-    FlatIndex, InMemoryIndex, Options, OptionsBuilder, PythonRequirement, ResolverEnvironment,
-    UniversalMarker,
+    FlatIndex, InMemoryIndex, Options, OptionsBuilder, Preference, PythonRequirement,
+    ResolverEnvironment, ResolverOutput, UniversalMarker,
 };
 use uv_scripts::Pep723Script;
 use uv_settings::PythonInstallMirrors;
@@ -1038,75 +1038,136 @@ async fn do_lock(
             // `preferences-dependent-forking` packse scenario). To avoid this, we store the forks in the
             // lockfile. We read those after all the lockfile filters, to allow the forks to change when
             // the environment changed, e.g. the python bound check above can lead to different forking.
-            let resolver_env = ResolverEnvironment::universal(
-                forks_lock
-                    .map(|lock| {
-                        lock.fork_markers()
-                            .iter()
-                            .copied()
-                            .map(UniversalMarker::combined)
-                            .collect()
-                    })
-                    .unwrap_or_else(|| {
-                        environments
-                            .cloned()
-                            .map(SupportedEnvironments::into_markers)
-                            .unwrap_or_default()
-                    }),
-            );
+            let initial_forks: Vec<MarkerTree> = forks_lock
+                .map(|lock| {
+                    lock.fork_markers()
+                        .iter()
+                        .copied()
+                        .map(UniversalMarker::combined)
+                        .collect()
+                })
+                .unwrap_or_else(|| {
+                    environments
+                        .cloned()
+                        .map(SupportedEnvironments::into_markers)
+                        .unwrap_or_default()
+                });
 
-            // Resolve the requirements.
-            let (resolution, _) = pip::operations::resolve(
-                ExtrasResolver::new(&hasher, state.index(), database)
-                    .with_reporter(Arc::new(ResolverReporter::from(printer)))
-                    .resolve(target.members_requirements())
-                    .await
-                    .map_err(|err| ProjectError::Operation(err.into()))?
-                    .into_iter()
-                    .chain(target.group_requirements())
-                    .chain(requirements.iter().cloned())
-                    .chain(
-                        dependency_groups
-                            .values()
-                            .flat_map(|requirements| requirements.iter().cloned()),
-                    )
-                    .map(UnresolvedRequirementSpecification::from)
-                    .collect(),
-                constraints
-                    .iter()
+            let root_requirements = ExtrasResolver::new(&hasher, state.index(), database)
+                .with_reporter(Arc::new(ResolverReporter::from(printer)))
+                .resolve(target.members_requirements())
+                .await
+                .map_err(|err| ProjectError::Operation(err.into()))?
+                .into_iter()
+                .chain(target.group_requirements())
+                .collect::<Vec<_>>();
+            let resolver_constraints = constraints
+                .iter()
+                .cloned()
+                .map(NameRequirementSpecification::from)
+                .chain(external)
+                .collect::<Vec<_>>();
+            let resolve = async |selected: Option<&PackageName>, preferences: Vec<Preference>| {
+                let selected_roots = selected.cloned().into_iter().collect::<BTreeSet<_>>();
+                let resolver_env = ResolverEnvironment::universal(
+                    initial_forks
+                        .iter()
+                        .copied()
+                        .filter_map(|marker| {
+                            let marker = UniversalMarker::from_combined(marker);
+                            let marker = if selected.is_some() {
+                                marker.select_roots(&selected_roots)
+                            } else {
+                                marker
+                            };
+                            (!marker.is_false()).then_some(marker.combined())
+                        })
+                        .collect(),
+                );
+                let python_requirement = selected
+                    .and_then(|name| packages.get(name))
+                    .and_then(WorkspaceMember::requires_python)
                     .cloned()
-                    .map(NameRequirementSpecification::from)
-                    .chain(external)
-                    .collect(),
-                Vec::new(),
-                overrides.clone(),
-                excludes.clone(),
-                source_trees,
-                // The root is always null in workspaces, it "depends on" the projects
-                None,
-                packages.keys().cloned().collect(),
-                &extras,
-                &groups,
-                preferences,
-                EmptyInstalledPackages,
-                &hasher,
-                &Reinstall::default(),
-                upgrade,
-                None,
-                resolver_env,
-                python_requirement,
-                interpreter.markers(),
-                conflicts.clone(),
-                &client,
-                &flat_index,
-                state.index(),
-                &build_dispatch,
-                concurrency,
-                options,
-                Box::new(SummaryResolveLogger),
-                printer,
-            )
-            .await?;
+                    .map(|requires_python| {
+                        PythonRequirement::from_requires_python(
+                            interpreter,
+                            RequiresPython::from_specifiers(requires_python),
+                        )
+                    })
+                    .unwrap_or_else(|| python_requirement.clone());
+                pip::operations::resolve(
+                    root_requirements
+                        .iter()
+                        .filter(|requirement| selected.is_none_or(|name| requirement.name == *name))
+                        .cloned()
+                        .chain(requirements.iter().cloned())
+                        .chain(
+                            dependency_groups
+                                .values()
+                                .flat_map(|requirements| requirements.iter().cloned()),
+                        )
+                        .map(UnresolvedRequirementSpecification::from)
+                        .collect(),
+                    resolver_constraints.clone(),
+                    Vec::new(),
+                    overrides.clone(),
+                    excludes.clone(),
+                    source_trees.clone(),
+                    // The root is always null in workspaces, it "depends on" the projects
+                    None,
+                    packages.keys().cloned().collect(),
+                    &extras,
+                    &groups,
+                    preferences,
+                    EmptyInstalledPackages,
+                    &hasher,
+                    &Reinstall::default(),
+                    upgrade,
+                    None,
+                    resolver_env,
+                    python_requirement,
+                    interpreter.markers(),
+                    conflicts.clone(),
+                    &client,
+                    &flat_index,
+                    state.index(),
+                    &build_dispatch,
+                    concurrency,
+                    options.clone(),
+                    Box::new(SummaryResolveLogger),
+                    printer,
+                )
+                .await
+            };
+            let resolution = if let Some(roots) = &root_markers {
+                let mut merged: Option<ResolverOutput> = None;
+                let mut shared_preferences = Vec::new();
+                for root in roots.keys() {
+                    let root_preferences = preferences
+                        .iter()
+                        .cloned()
+                        .filter_map(|preference| preference.select_root(root))
+                        .chain(shared_preferences.iter().cloned())
+                        .collect();
+                    let (mut resolution, _) = resolve(Some(root), root_preferences).await?;
+                    shared_preferences.extend(
+                        resolution
+                            .base_dists()
+                            .map(|(_, dist)| Preference::from_resolution(dist)),
+                    );
+                    resolution.scope_to_root(root);
+                    if let Some(merged) = &mut merged {
+                        merged.merge(resolution);
+                    } else {
+                        merged = Some(resolution);
+                    }
+                }
+                let mut resolution = merged.expect("explicit workspace roots are nonempty");
+                resolution.requires_python = requires_python.clone();
+                resolution
+            } else {
+                resolve(None, preferences).await?.0
+            };
 
             // Print the success message after completing resolution.
             logger.on_complete(resolution.len(), start, printer)?;
@@ -1225,6 +1286,15 @@ impl ValidatedLock {
                 options.fork_strategy.cyan()
             );
             return Ok(Self::Unusable(lock));
+        }
+        if root_markers.is_some()
+            != lock
+                .fork_markers()
+                .iter()
+                .any(|marker| marker.has_root_marker())
+        {
+            debug!("Resolving despite existing lockfile due to change in workspace root isolation");
+            return Ok(Self::Versions(lock));
         }
         // Ignore package-specific settings that cannot affect the existing resolution. If the
         // package is added to the requirements, the requirement checks below will invalidate the
@@ -1434,6 +1504,12 @@ impl ValidatedLock {
         } else {
             Some(index_locations)
         };
+
+        // A shared-graph freshness check cannot establish that every independently solved root
+        // still has a complete graph. Re-run those solves using the recorded versions and forks.
+        if root_markers.is_some() {
+            return Ok(Self::Preferable(lock));
+        }
 
         // Determine whether the lockfile satisfies the workspace requirements.
         match lock

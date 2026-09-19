@@ -1,5 +1,5 @@
-use std::collections::VecDeque;
 use std::collections::hash_map::Entry;
+use std::collections::{BTreeSet, VecDeque};
 
 use either::Either;
 use petgraph::graph::NodeIndex;
@@ -15,6 +15,7 @@ use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep508::MarkerTree;
 use uv_pypi_types::ConflictItem;
 
+use uv_resolver_types::UniversalMarker;
 use uv_resolver_types::graph_ops::Reachable;
 use uv_resolver_types::universal_marker::resolve_activated_extras;
 
@@ -59,6 +60,28 @@ impl<'lock> ExportableRequirements<'lock> {
         install_options: &'lock InstallOptions,
     ) -> Result<Self, LockError> {
         let size_guess = target.lock().packages.len();
+        let selected_roots = target
+            .roots()
+            .chain(target.group_root(groups))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if target
+            .lock()
+            .fork_markers()
+            .iter()
+            .any(|marker| marker.has_root_marker())
+        {
+            for name in &selected_roots {
+                if !target.lock().members().contains(name) {
+                    return Err(LockErrorKind::MissingWorkspaceRoot { name: name.clone() }.into());
+                }
+            }
+        }
+        let select_roots = |marker| {
+            UniversalMarker::from_combined(marker)
+                .select_roots(&selected_roots)
+                .combined()
+        };
         let mut graph = Graph::<Node<'lock>, Edge<'lock>>::with_capacity(size_guess, size_guess);
         let mut inverse = vec![None; size_guess];
 
@@ -168,7 +191,9 @@ impl<'lock> ExportableRequirements<'lock> {
                     dep_index,
                     Edge::Dev {
                         group,
-                        marker: root_marker.and(dep.simplified_marker.as_simplified_marker_tree()),
+                        marker: root_marker.and(select_roots(
+                            dep.simplified_marker.as_simplified_marker_tree(),
+                        )),
                         dep_extras: dep.extra.iter().collect(),
                     },
                 );
@@ -245,7 +270,7 @@ impl<'lock> ExportableRequirements<'lock> {
                         root,
                         dep_index,
                         Edge::Prod {
-                            marker,
+                            marker: select_roots(marker),
                             dep_extras: requirement.extras.iter().collect(),
                         },
                     );
@@ -299,12 +324,12 @@ impl<'lock> ExportableRequirements<'lock> {
                     if let Some(extra) = extra {
                         Edge::Optional {
                             extra,
-                            marker: dep.simplified_marker.as_simplified_marker_tree(),
+                            marker: select_roots(dep.simplified_marker.as_simplified_marker_tree()),
                             dep_extras,
                         }
                     } else {
                         Edge::Prod {
-                            marker: dep.simplified_marker.as_simplified_marker_tree(),
+                            marker: select_roots(dep.simplified_marker.as_simplified_marker_tree()),
                             dep_extras,
                         }
                     },
@@ -361,6 +386,29 @@ impl<'lock> ExportableRequirements<'lock> {
             .filter(|requirement| !requirement.marker.is_false())
             .collect::<Vec<_>>();
 
+        if target
+            .lock()
+            .fork_markers()
+            .iter()
+            .any(|marker| marker.has_root_marker())
+        {
+            let mut by_name = FxHashMap::<_, Vec<&ExportableRequirement<'_>>>::default();
+            for requirement in &nodes {
+                let previous = by_name.entry(requirement.package.name()).or_default();
+                for other in previous.iter() {
+                    if other.package.id != requirement.package.id
+                        && !other.marker.is_disjoint(requirement.marker)
+                    {
+                        return Err(LockErrorKind::IncompatibleWorkspaceRoots {
+                            first: other.package.id.clone(),
+                            second: requirement.package.id.clone(),
+                        }
+                        .into());
+                    }
+                }
+                previous.push(requirement);
+            }
+        }
         Ok(Self(nodes))
     }
 }
