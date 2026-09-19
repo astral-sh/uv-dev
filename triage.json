@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 19980,
+        "title": "`uv tool`: give users a flexible way to install tools with modifications",
+        "url": "https://github.com/astral-sh/uv/issues/19980",
+        "state": "open",
+        "reason": "Canonical maintainer-opened tracker for changing a tool’s additional requirements without retyping the complete `--with` list, using a declarative and fully resolved design."
+      },
+      {
+        "kind": "issue",
+        "number": 18996,
+        "title": "Add `uv tool upgrade --with <new_pkg>` or `--add-with <new_pkg>` to add packages to an install",
+        "url": "https://github.com/astral-sh/uv/issues/18996",
+        "state": "open",
+        "reason": "Tracks the add/update half of the request: retaining existing additional packages while appending another one."
+      },
+      {
+        "kind": "issue",
+        "number": 15792,
+        "title": "How to uninstall additional deps installed with a tool",
+        "url": "https://github.com/astral-sh/uv/issues/15792",
+        "state": "open",
+        "reason": "Covers removal and confirms that reinstalling with a new `--with` set removes omitted requirements, requiring users to repeat every requirement they want retained."
+      },
+      {
+        "kind": "issue",
+        "number": 14746,
+        "title": "`uv tool install --in` to add packages to an existing tool environment",
+        "url": "https://github.com/astral-sh/uv/issues/14746",
+        "state": "closed",
+        "reason": "Earlier proposal covering post-install add, upgrade, and uninstall operations. Maintainers rejected unsound in-place mutation, accepted a possible immutable declarative workflow, and closed it after opening astral-sh/uv#19980."
+      }
+    ],
+    "search_scope": "Searched open and closed issues plus open, closed, and merged pull requests using literal terms around `uv tool install`, `--with`, additional dependencies, add/remove/update, reinstall options, and tool environments; conceptual terms including plugins, injection/`pipx inject`, declarative tool configuration, receipts, upgrade, sync, and preserving prior requirements; and fix-oriented terms for `--show-with`, tool receipts, and environment modification. No matching implementation pull request was found. The canonical chain runs through astral-sh/uv#14746 and astral-sh/uv#7312 to astral-sh/uv#19980. astral-sh/uv#14143 was plausible but ruled out as canonical because it concerns retaining the original setup during reinstall, not editing the saved additional-requirement set; astral-sh/uv#7312 only established initial installation with `--with` and does not solve incremental changes."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#19980 already tracks the same underlying enhancement: a sound, declarative way to modify a tool installation’s extra requirements without reconstructing the entire prior `uv tool install ... --with ...` command. The new issue’s add/remove/update sketches and plugin examples fit within that tracker.",
+  "summary": "astral-sh/uv#19980 is the canonical open tracker. astral-sh/uv#18996 and astral-sh/uv#15792 cover the narrower add and remove workflows, while closed astral-sh/uv#14746 records the design rationale and was superseded by the canonical tracker.",
+  "draft_response": "Thanks for the detailed use case. This is already tracked in astral-sh/uv#19980, which covers changing a tool’s additional requirements without having to reconstruct the complete prior `--with` invocation. The add-only workflow is also described in astral-sh/uv#18996, and the removal behavior is discussed in astral-sh/uv#15792.\n\nThe current design direction is to keep tool environments declarative and fully resolved rather than mutate them with an imperative injection operation, since in-place changes can leave the tool and plugin requirements inconsistent. The exact interface still needs design and a decision; astral-sh/uv#19980 is the place to continue that discussion. Closing this as a duplicate."
+}
