@@ -137,6 +137,8 @@ struct ResolverState<InstalledPackages: InstalledPackagesProvider> {
     tags: Option<Tags>,
     python_requirement: PythonRequirement,
     conflicts: Conflicts,
+    /// A membership index of the conflict items used while expanding dependency edges.
+    conflict_items: crate::FxHashbrownSet<ConflictItem>,
     workspace_members: BTreeSet<PackageName>,
     selector: CandidateSelector,
     index: InMemoryIndex,
@@ -241,6 +243,10 @@ impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
         provider: Provider,
         installed_packages: InstalledPackages,
     ) -> Self {
+        let conflict_items = conflicts
+            .iter()
+            .flat_map(|set| set.iter().cloned())
+            .collect();
         let state = ResolverState {
             index: index.clone(),
             git: git.clone(),
@@ -264,6 +270,7 @@ impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
             tags,
             python_requirement: python_requirement.clone(),
             conflicts,
+            conflict_items,
             installed_packages,
             unavailable_packages: Box::default(),
             incomplete_packages: Box::default(),
@@ -1807,7 +1814,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 let requirements = expander.expand(&self.requirements, RequirementContext::Root);
 
                 PubGrubDependency::from_requirements(
-                    &self.conflicts,
+                    &self.conflict_items,
                     requirements,
                     None,
                     Some(package),
@@ -1925,7 +1932,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 let requirements = expander.expand(requirements, context);
 
                 PubGrubDependency::from_requirements(
-                    &self.conflicts,
+                    &self.conflict_items,
                     requirements,
                     kind.group(),
                     Some(package),
