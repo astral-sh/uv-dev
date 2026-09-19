@@ -1,5 +1,5 @@
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -126,10 +126,22 @@ async fn python_install_checksumless_archive_cache_uses_url_identity() -> Result
     let first = python_archive_for("cpython-3.13.1")?;
     let second = python_archive_for("cpython-3.13.2")?;
     assert_ne!(first.sha256, second.sha256);
-    let first_context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
-    let second_context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
-    let legacy_context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
-    let offline_context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    let first_context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_exe_suffix()
+        .with_managed_python_dirs();
+    let second_context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_exe_suffix()
+        .with_managed_python_dirs();
+    let legacy_context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_managed_python_dirs()
+        .with_filtered_path(first_context.temp_dir.path(), "ARCHIVE_ROOT");
+    let offline_context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_exe_suffix()
+        .with_managed_python_dirs();
     let archive_cache = first_context.temp_dir.child("archive-cache");
     fs_err::create_dir_all(archive_cache.path())?;
 
@@ -168,7 +180,7 @@ async fn python_install_checksumless_archive_cache_uses_url_identity() -> Result
     let second_downloads = second_context.temp_dir.child("python-downloads.json");
     second_downloads.write_str(&manifest(&second, &second_url)?)?;
 
-    let install = |context: &TestContext, archive: &PythonArchive, downloads: &std::path::Path| {
+    let install = |context: &TestContext, archive: &PythonArchive, downloads: &Path| {
         let mut command = context.python_install();
         command
             .arg(&archive.key)
@@ -179,15 +191,13 @@ async fn python_install_checksumless_archive_cache_uses_url_identity() -> Result
             .env_remove(EnvVars::UV_PYTHON_INSTALL_MIRROR);
         command
     };
-    let rejected = install(&legacy_context, &second, second_downloads.path())
-        .arg("--offline")
-        .assert()
-        .failure()
-        .code(1);
-    assert!(
-        String::from_utf8_lossy(&rejected.get_output().stderr)
-            .contains("An offline Python installation was requested"),
-    );
+    uv_snapshot!(legacy_context.filters(), install(&legacy_context, &second, second_downloads.path())
+        .arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to install cpython-3.13.2-[PLATFORM]
+      cause: An offline Python installation was requested, but cpython-3.13.2-[PLATFORM] (from http://[LOCALHOST]/second/python.tar.gz) is missing in [ARCHIVE_ROOT]/archive-cache
+    ");
     assert!(
         !legacy_context
             .temp_dir
@@ -195,14 +205,26 @@ async fn python_install_checksumless_archive_cache_uses_url_identity() -> Result
             .join(&second.key)
             .try_exists()?
     );
-    assert!(server.received_requests().await.unwrap().is_empty());
+    assert!(
+        server
+            .received_requests()
+            .await
+            .context("Python archive request recording is disabled")?
+            .is_empty()
+    );
 
-    install(&first_context, &first, first_downloads.path())
-        .assert()
-        .success();
-    install(&second_context, &second, second_downloads.path())
-        .assert()
-        .success();
+    uv_snapshot!(first_context.filters(), install(&first_context, &first, first_downloads.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.13.1 in [TIME]
+     + cpython-3.13.1-[PLATFORM] (python3.13)
+    ");
+    uv_snapshot!(second_context.filters(), install(&second_context, &second, second_downloads.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.13.2 in [TIME]
+     + cpython-3.13.2-[PLATFORM] (python3.13)
+    ");
 
     let cache_filename = |url: &str| -> Result<String> {
         Ok(format!(
@@ -234,31 +256,41 @@ async fn python_install_checksumless_archive_cache_uses_url_identity() -> Result
         "Python archive fixture",
     )
     .await?;
-    install(&offline_context, &second, second_downloads.path())
+    uv_snapshot!(offline_context.filters(), install(&offline_context, &second, second_downloads.path())
         .arg("--offline")
-        .env(EnvVars::UV_LOCK_TIMEOUT, "1")
-        .assert()
-        .success();
+        .env(EnvVars::UV_LOCK_TIMEOUT, "1"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.13.2 in [TIME]
+     + cpython-3.13.2-[PLATFORM] (python3.13)
+    ");
     drop(lock);
 
-    for (context, expected) in [
-        (&first_context, "3.13.1"),
-        (&second_context, "3.13.2"),
-        (&offline_context, "3.13.2"),
-    ] {
+    let python_version = |context: &TestContext| {
         let python = context
             .bin_dir
             .join(format!("python3.13{}", std::env::consts::EXE_SUFFIX));
-        let output = context
-            .external_command(&python)
-            .args([
-                "-I",
-                "-c",
-                "import platform; print(platform.python_version())",
-            ])
-            .output()?;
-        assert!(output.status.success(), "{output:?}");
-        assert_eq!(String::from_utf8(output.stdout)?.trim(), expected);
+        let mut command = context.external_command(&python);
+        command.args([
+            "-I",
+            "-c",
+            "import platform; print(platform.python_version())",
+        ]);
+        command
+    };
+    uv_snapshot!(first_context.filters(), python_version(&first_context), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.13.1
+    ");
+    insta::allow_duplicates! {
+        for context in [&second_context, &offline_context] {
+            uv_snapshot!(context.filters(), python_version(context), @"
+            exit_code: 0 (success)
+            ----- stdout -----
+            3.13.2
+            ");
+        }
     }
     server.verify().await;
     Ok(())
