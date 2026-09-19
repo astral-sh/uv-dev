@@ -992,7 +992,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     .with_size(size))
             }
             .boxed_local()
-            .instrument(info_span!("download", source_dist = %source))
+            .instrument(info_span!("download_source_dist", source_dist = %source))
         };
         let req = Self::request(url.clone(), client.unmanaged)?;
         let revision = client
@@ -2786,7 +2786,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     .with_size(size))
             }
             .boxed_local()
-            .instrument(info_span!("download", source_dist = %source))
+            .instrument(info_span!("download_source_dist", source_dist = %source))
         };
         client
             .managed(async |client| {
@@ -2841,7 +2841,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 expected_size,
             },
         )
-        .instrument(info_span!("download_source_dist", source_dist = %source))
+        .instrument(info_span!("fetch_extract_source_dist", source_dist = %source))
         .await?;
         let metadata = archive.persist(target).await?;
         Ok((metadata.hashes, metadata.size))
