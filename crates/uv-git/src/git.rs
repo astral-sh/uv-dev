@@ -20,7 +20,7 @@ use uv_warnings::warn_user_once;
 
 /// A file indicates that if present, `git reset` has been done and a repo
 /// checkout is ready to go. See [`GitCheckout::reset`] for why we need this.
-const CHECKOUT_READY_LOCK: &str = ".ok";
+const CHECKOUT_READY_LOCK: &str = ".git/.ok";
 
 #[derive(Debug, thiserror::Error)]
 pub enum GitError {
@@ -524,12 +524,12 @@ impl GitCheckout {
     /// because of a signal) uv needs to be sure to try to check out this
     /// repo again on the next go-round.
     ///
-    /// To enable this we have a dummy file in our checkout, [`.ok`],
+    /// To enable this we have a dummy file in our checkout, [`.git/.ok`],
     /// which if present means that the repo has been successfully checked out and is
     /// ready to go. Hence if we start to update submodules, we make sure this file
     /// *doesn't* exist, and then once we're done we create the file.
     ///
-    /// [`.ok`]: CHECKOUT_READY_LOCK
+    /// [`.git/.ok`]: CHECKOUT_READY_LOCK
     /// `git reset --hard [<commit>]` can break relative submodule URLs, so we update submodules
     /// using the original remote URL.
     fn reset(
@@ -607,7 +607,7 @@ impl GitCheckout {
             Some(true) => Some(self.repo.lfs_fsck_objects(self.revision.as_str())),
         };
 
-        // The .ok file should be written when the reset is successful.
+        // The .git/.ok file should be written when the reset is successful.
         // When Git LFS is enabled, the objects must also be fetched and
         // validated successfully as part of the corresponding db.
         if with_lfs.is_none() || lfs_validation == Some(true) {
