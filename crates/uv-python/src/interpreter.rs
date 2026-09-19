@@ -1139,7 +1139,9 @@ impl InterpreterInfo {
         cache.entry(
             CacheBucket::Interpreter,
             // Shard interpreter metadata by host architecture, operating system, and version, to
-            // invalidate the cache (e.g.) on OS upgrades.
+            // invalidate the cache (e.g.) on OS upgrades. The effective Unix machine is included
+            // separately because `setarch` changes Python's `platform_machine` marker without
+            // changing the interpreter executable or uv's compilation target.
             cache_digest(&(
                 ARCH,
                 uv_platform::OsType::from_env()
@@ -1147,6 +1149,9 @@ impl InterpreterInfo {
                     .unwrap_or_default(),
                 uv_platform::OsRelease::from_env()
                     .map(|os_release| os_release.to_string())
+                    .unwrap_or_default(),
+                uv_platform::OsMachine::from_env()
+                    .map(|machine| machine.to_string())
                     .unwrap_or_default(),
             )),
             // We use the absolute path for the cache entry to avoid cache collisions for relative
