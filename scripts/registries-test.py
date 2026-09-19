@@ -50,6 +50,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import colorama
@@ -74,6 +75,109 @@ KNOWN_REGISTRIES = [
     "gemfury",
     "gitlab",
 ]
+
+
+@dataclass
+class TargetConfiguration:
+    registry_url: str
+    package: str
+    username: str
+    token: str | None = field(repr=False)
+    public: bool
+    require_metadata_range_requests: bool
+
+
+@dataclass
+class Plan:
+    uv: Path
+    target: str
+    configuration: TargetConfiguration
+    env: dict[str, str] = field(repr=False)
+    auth_env: dict[str, str] = field(repr=False)
+    auth_command: list[str | Path] | None = field(repr=False)
+    extra_args: list[str]
+    verbosity: int
+    timeout: int
+    requires_python: str
+
+    def command(self, project_dir: str) -> list[str | Path]:
+        return [
+            self.uv,
+            "add",
+            self.configuration.package,
+            "--directory",
+            project_dir,
+            "--no-cache",
+            *self.extra_args,
+        ]
+
+    def command_env(self) -> dict[str, str]:
+        env = self.env | self.auth_env
+        # Each test creates a project without a lockfile; ignore the runner's locked mode.
+        env.pop("UV_LOCKED", None)
+        if self.configuration.require_metadata_range_requests:
+            env["UV_REQUIRE_METADATA_RANGE_REQUESTS"] = "true"
+        return env
+
+
+def plan_test(
+    env: dict[str, str],
+    uv: Path,
+    registry_name: str,
+    registry_url: str,
+    *,
+    verbosity: int,
+    timeout: int,
+    requires_python: str,
+    auth_method: str,
+) -> Plan:
+    """Build a registry installation test plan without running commands."""
+    prefix = f"UV_TEST_{registry_name.upper()}"
+    configuration = TargetConfiguration(
+        registry_url=registry_url,
+        package=env.get(f"{prefix}_PKG", DEFAULT_PKG_NAME),
+        username=env.get(f"{prefix}_USERNAME", "__token__"),
+        token=env.get(f"{prefix}_TOKEN"),
+        public=env.get(f"{prefix}_PUBLIC", "").lower() == "true",
+        require_metadata_range_requests=env.get(
+            f"{prefix}_REQUIRE_METADATA_RANGE_REQUESTS", ""
+        ).lower()
+        == "true",
+    )
+
+    auth_env = {}
+    auth_command = None
+    if configuration.token and auth_method == "env":
+        auth_env = {
+            f"UV_INDEX_{registry_name.upper()}_USERNAME": configuration.username,
+            f"UV_INDEX_{registry_name.upper()}_PASSWORD": configuration.token,
+        }
+    elif configuration.token and auth_method == "text-store":
+        auth_command = [
+            uv,
+            "auth",
+            "login",
+            registry_url,
+            "--username",
+            configuration.username,
+            "--password",
+            configuration.token,
+        ]
+    elif configuration.token:
+        raise ValueError(f"Unknown authentication method: {auth_method}")
+
+    return Plan(
+        uv=uv,
+        target=registry_name,
+        configuration=configuration,
+        env=env,
+        auth_env=auth_env,
+        auth_command=auth_command,
+        extra_args=["-" + "v" * verbosity] if verbosity else [],
+        verbosity=verbosity,
+        timeout=timeout,
+        requires_python=requires_python,
+    )
 
 
 def fetch_op_items(vault_name: str, env: dict[str, str]) -> dict[str, str]:
@@ -177,22 +281,16 @@ default = true
     pyproject_file.write_text(pyproject_content)
 
 
-def run_test(
-    env: dict[str, str],
-    uv: Path,
-    registry_name: str,
-    registry_url: str,
-    package: str,
-    username: str,
-    token: str | None,
-    verbosity: int,
-    timeout: int,
-    requires_python: str,
-    auth_method: str,
-    require_metadata_range_requests: bool,
-) -> bool:
-    print(uv)
+def run_test(plan: Plan) -> bool:
     """Attempt to install a package from this registry."""
+    print(plan.uv)
+    registry_name = plan.target
+    registry_url = plan.configuration.registry_url
+    package = plan.configuration.package
+    username = plan.configuration.username
+    token = plan.configuration.token
+    verbosity = plan.verbosity
+    timeout = plan.timeout
     if token:
         print(
             f"{registry_name} -- Running test for {registry_url} with username {username}"
@@ -205,49 +303,25 @@ def run_test(
         )
     print(f"\nAttempting to install {package}")
 
-    if token and auth_method == "env":
-        env[f"UV_INDEX_{registry_name.upper()}_USERNAME"] = username
-        env[f"UV_INDEX_{registry_name.upper()}_PASSWORD"] = token
-    elif token and auth_method == "text-store":
-        # Use uv's text store for authentication
-        subprocess.check_call(
-            [
-                uv,
-                "auth",
-                "login",
-                f"{registry_url}",
-                "--username",
-                username,
-                "--password",
-                token,
-            ],
-            env=env,
-        )
-    elif token:
-        raise ValueError(f"Unknown authentication method: {auth_method}")
+    # Preserve credentials in the shared environment for subsequent registry tests.
+    plan.env.update(plan.auth_env)
+    if plan.auth_command is not None:
+        subprocess.check_call(plan.auth_command, env=plan.env)
 
     with tempfile.TemporaryDirectory() as project_dir:
-        setup_test_project(registry_name, registry_url, project_dir, requires_python)
-
-        cmd = [uv, "add", package, "--directory", project_dir, "--no-cache"]
-        if verbosity:
-            cmd.extend(["-" + "v" * verbosity])
-
-        command_env = env.copy()
-        # Each test creates a project without a lockfile; ignore the runner's locked mode.
-        command_env.pop("UV_LOCKED", None)
-        if require_metadata_range_requests:
-            command_env["UV_REQUIRE_METADATA_RANGE_REQUESTS"] = "true"
+        setup_test_project(
+            registry_name, registry_url, project_dir, plan.requires_python
+        )
 
         result = None
         try:
             result = subprocess.run(
-                cmd,
+                plan.command(project_dir),
                 capture_output=True,
                 text=True,
                 timeout=timeout,
                 check=False,
-                env=command_env,
+                env=plan.command_env(),
             )
 
             if result.returncode != 0:
@@ -381,11 +455,17 @@ def main() -> None:
     for registry_name, registry_url in get_registries(env).items():
         print("----------------")
 
-        token = env.get(f"UV_TEST_{registry_name.upper()}_TOKEN")
-        public = (
-            env.get(f"UV_TEST_{registry_name.upper()}_PUBLIC", "").lower() == "true"
+        plan = plan_test(
+            env,
+            uv,
+            registry_name,
+            registry_url,
+            verbosity=args.verbose,
+            timeout=args.timeout,
+            requires_python=args.required_python,
+            auth_method=args.auth_method,
         )
-        if not token and not public:
+        if not plan.configuration.token and not plan.configuration.public:
             if args.all:
                 print(
                     f"{Fore.RED}{registry_name}: UV_TEST_{registry_name.upper()}_TOKEN contained no token. Required by --all"
@@ -398,28 +478,7 @@ def main() -> None:
                 skipped.append(registry_name)
             continue
 
-        # The private package we will test installing
-        package = env.get(f"UV_TEST_{registry_name.upper()}_PKG", DEFAULT_PKG_NAME)
-        username = env.get(f"UV_TEST_{registry_name.upper()}_USERNAME", "__token__")
-
-        if run_test(
-            env,
-            uv,
-            registry_name,
-            registry_url,
-            package,
-            username,
-            token,
-            args.verbose,
-            args.timeout,
-            args.required_python,
-            args.auth_method,
-            env.get(
-                f"UV_TEST_{registry_name.upper()}_REQUIRE_METADATA_RANGE_REQUESTS",
-                "",
-            ).lower()
-            == "true",
-        ):
+        if run_test(plan):
             passed.append(registry_name)
         else:
             failed.append(registry_name)
