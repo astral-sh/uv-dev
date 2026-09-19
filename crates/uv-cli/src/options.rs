@@ -306,13 +306,8 @@ impl IntoPipOptions for ResolverArgs {
                 prerelease
             },
             prerelease_package: prerelease_package.map(PrereleasePackage::from_iter),
-            config_settings: config_setting
-                .map(|config_settings| config_settings.into_iter().collect::<ConfigSettings>()),
-            config_settings_package: config_settings_package.map(|config_settings| {
-                config_settings
-                    .into_iter()
-                    .collect::<PackageConfigSettings>()
-            }),
+            config_settings: config_setting.map(ConfigSettings::from_iter),
+            config_settings_package: config_settings_package.map(PackageConfigSettings::from_iter),
             no_build_isolation: flag(no_build_isolation, build_isolation, "build-isolation")?,
             no_build_isolation_package: Some(no_build_isolation_package),
             exclude_newer,
@@ -375,13 +370,8 @@ impl IntoPipOptions for InstallerArgs {
             reinstall_package: Some(reinstall_package),
             index_strategy,
             keyring_provider,
-            config_settings: config_setting
-                .map(|config_settings| config_settings.into_iter().collect::<ConfigSettings>()),
-            config_settings_package: config_settings_package.map(|config_settings| {
-                config_settings
-                    .into_iter()
-                    .collect::<PackageConfigSettings>()
-            }),
+            config_settings: config_setting.map(ConfigSettings::from_iter),
+            config_settings_package: config_settings_package.map(PackageConfigSettings::from_iter),
             no_build_isolation: flag(no_build_isolation, build_isolation, "build-isolation")?,
             exclude_newer,
             exclude_newer_package: exclude_newer_package.map(ExcludeNewerPackage::from_iter),
@@ -477,13 +467,8 @@ impl IntoPipOptions for ResolverInstallerArgs {
             },
             prerelease_package: prerelease_package.map(PrereleasePackage::from_iter),
             fork_strategy,
-            config_settings: config_setting
-                .map(|config_settings| config_settings.into_iter().collect::<ConfigSettings>()),
-            config_settings_package: config_settings_package.map(|config_settings| {
-                config_settings
-                    .into_iter()
-                    .collect::<PackageConfigSettings>()
-            }),
+            config_settings: config_setting.map(ConfigSettings::from_iter),
+            config_settings_package: config_settings_package.map(PackageConfigSettings::from_iter),
             no_build_isolation: flag(no_build_isolation, build_isolation, "build-isolation")?,
             no_build_isolation_package: Some(no_build_isolation_package),
             exclude_newer,
@@ -653,13 +638,8 @@ pub fn resolver_options(
         prerelease_package: prerelease_package.map(PrereleasePackage::from_iter),
         fork_strategy,
         dependency_metadata: None,
-        config_settings: config_setting
-            .map(|config_settings| config_settings.into_iter().collect::<ConfigSettings>()),
-        config_settings_package: config_settings_package.map(|config_settings| {
-            config_settings
-                .into_iter()
-                .collect::<PackageConfigSettings>()
-        }),
+        config_settings: config_setting.map(ConfigSettings::from_iter),
+        config_settings_package: config_settings_package.map(PackageConfigSettings::from_iter),
         build_isolation: BuildIsolation::from_args(
             flag(no_build_isolation, build_isolation, "build-isolation")?,
             no_build_isolation_package,
@@ -810,13 +790,8 @@ pub fn resolver_installer_options(
         prerelease_package: prerelease_package.map(PrereleasePackage::from_iter),
         fork_strategy,
         dependency_metadata: None,
-        config_settings: config_setting
-            .map(|config_settings| config_settings.into_iter().collect::<ConfigSettings>()),
-        config_settings_package: config_settings_package.map(|config_settings| {
-            config_settings
-                .into_iter()
-                .collect::<PackageConfigSettings>()
-        }),
+        config_settings: config_setting.map(ConfigSettings::from_iter),
+        config_settings_package: config_settings_package.map(PackageConfigSettings::from_iter),
         build_isolation: BuildIsolation::from_args(
             flag(no_build_isolation, build_isolation, "build-isolation")?,
             no_build_isolation_package,
