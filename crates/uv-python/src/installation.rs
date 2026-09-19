@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cmp::{Ordering, Reverse};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
@@ -804,7 +805,7 @@ impl Ord for PythonInstallationKey {
 }
 
 /// A view into a [`PythonInstallationKey`] that excludes the patch and prerelease versions.
-#[derive(Clone, Eq, Ord, PartialOrd, RefCast)]
+#[derive(Clone, Eq, RefCast)]
 #[repr(transparent)]
 pub struct PythonInstallationMinorVersionKey(PythonInstallationKey);
 
@@ -813,6 +814,35 @@ impl PythonInstallationMinorVersionKey {
     #[inline]
     pub fn ref_cast(key: &PythonInstallationKey) -> &Self {
         RefCast::ref_cast(key)
+    }
+
+    /// Preserve the full key's preferences without its patch and prerelease versions.
+    fn ordering_key(
+        &self,
+    ) -> (
+        &LenientImplementationName,
+        &u8,
+        &u8,
+        Reverse<&Platform>,
+        Reverse<&PythonVariant>,
+    ) {
+        // Keep this exhaustive so new identity fields cannot be silently omitted.
+        let PythonInstallationKey {
+            implementation,
+            major,
+            minor,
+            patch: _,
+            prerelease: _,
+            platform,
+            variant,
+        } = &self.0;
+        (
+            implementation,
+            major,
+            minor,
+            Reverse(platform),
+            Reverse(variant),
+        )
     }
 
     /// Takes an [`IntoIterator`] of [`ManagedPythonInstallation`]s and returns an [`FxHashMap`] from
@@ -881,6 +911,33 @@ impl PartialEq for PythonInstallationMinorVersionKey {
             && self.0.minor == other.0.minor
             && self.0.platform == other.0.platform
             && self.0.variant == other.0.variant
+    }
+}
+
+impl PartialOrd for PythonInstallationMinorVersionKey {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PythonInstallationMinorVersionKey {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.ordering_key()
+            .cmp(&other.ordering_key())
+            // Platform display can omit OS versions and libc identity. Break only those ties.
+            .then_with(|| {
+                self.0
+                    .platform
+                    .os
+                    .into_str()
+                    .cmp(&other.0.platform.os.into_str())
+                    .reverse()
+            })
+            .then_with(|| match (&self.0.platform.libc, &other.0.platform.libc) {
+                (Libc::None, Libc::None) | (Libc::Some(_), Libc::Some(_)) => Ordering::Equal,
+                (Libc::None, Libc::Some(_)) => Ordering::Greater,
+                (Libc::Some(_), Libc::None) => Ordering::Less,
+            })
     }
 }
 
@@ -1015,5 +1072,266 @@ mod tests {
             key_with_variant.to_string(),
             "cpython-3.13.0+freethreaded-macos-aarch64-none"
         );
+    }
+}
+
+#[cfg(test)]
+mod minor_version_key_ordering_tests {
+    use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+
+    use target_lexicon::{
+        Aarch64Architecture, Architecture, DeploymentTarget, Environment, OperatingSystem,
+    };
+    use uv_pep440::PrereleaseKind;
+    use uv_platform::ArchVariant;
+
+    use super::*;
+
+    fn key(
+        patch: u8,
+        prerelease: Option<Prerelease>,
+        variant: PythonVariant,
+    ) -> PythonInstallationKey {
+        PythonInstallationKey::new(
+            LenientImplementationName::Known(ImplementationName::CPython),
+            3,
+            12,
+            patch,
+            prerelease,
+            Platform::new(
+                Os::new(OperatingSystem::Linux),
+                Arch::new(Architecture::X86_64, None),
+                Libc::Some(Environment::Gnu),
+            ),
+            variant,
+        )
+    }
+
+    #[test]
+    fn ordering_ignores_patch_and_prerelease() {
+        let keys = [
+            key(
+                0,
+                Some(Prerelease {
+                    kind: PrereleaseKind::Alpha,
+                    number: 1,
+                }),
+                PythonVariant::Default,
+            ),
+            key(
+                0,
+                Some(Prerelease {
+                    kind: PrereleaseKind::Rc,
+                    number: 1,
+                }),
+                PythonVariant::Default,
+            ),
+            key(0, None, PythonVariant::Default),
+            key(1, None, PythonVariant::Default),
+            key(9, None, PythonVariant::Default),
+        ];
+
+        for pair in keys.windows(2) {
+            assert!(pair[0] < pair[1]);
+        }
+        for left in &keys {
+            for right in &keys {
+                let left = PythonInstallationMinorVersionKey::ref_cast(left);
+                let right = PythonInstallationMinorVersionKey::ref_cast(right);
+                assert_eq!(left, right);
+                assert_eq!(left.cmp(right), Ordering::Equal);
+                assert_eq!(left.partial_cmp(right), Some(Ordering::Equal));
+            }
+        }
+    }
+
+    #[test]
+    fn ordering_preserves_identity_and_preference() {
+        let base = key(0, None, PythonVariant::Default);
+        let mut keys = vec![
+            base.clone(),
+            PythonInstallationKey {
+                implementation: LenientImplementationName::Known(ImplementationName::PyPy),
+                ..base.clone()
+            },
+            PythonInstallationKey {
+                implementation: LenientImplementationName::Unknown("custom".to_owned()),
+                ..base.clone()
+            },
+            PythonInstallationKey {
+                major: 2,
+                ..base.clone()
+            },
+            PythonInstallationKey {
+                minor: 13,
+                ..base.clone()
+            },
+            PythonInstallationKey {
+                platform: Platform {
+                    os: Os::new(OperatingSystem::Windows),
+                    ..base.platform.clone()
+                },
+                ..base.clone()
+            },
+            PythonInstallationKey {
+                platform: Platform {
+                    arch: Arch::new(Architecture::X86_64, Some(ArchVariant::V3)),
+                    ..base.platform.clone()
+                },
+                ..base.clone()
+            },
+            PythonInstallationKey {
+                platform: Platform {
+                    arch: Arch::new(Architecture::Aarch64(Aarch64Architecture::Aarch64), None),
+                    ..base.platform.clone()
+                },
+                ..base.clone()
+            },
+            PythonInstallationKey {
+                platform: Platform {
+                    libc: Libc::Some(Environment::Musl),
+                    ..base.platform.clone()
+                },
+                ..base
+            },
+        ];
+        keys.extend(
+            [
+                PythonVariant::Default,
+                PythonVariant::Debug,
+                PythonVariant::Freethreaded,
+                PythonVariant::FreethreadedDebug,
+                PythonVariant::Gil,
+                PythonVariant::GilDebug,
+            ]
+            .map(|variant| key(0, None, variant)),
+        );
+
+        for left in &keys {
+            for right in &keys {
+                let expected = left.cmp(right);
+                let left = PythonInstallationMinorVersionKey::ref_cast(left);
+                let right = PythonInstallationMinorVersionKey::ref_cast(right);
+                assert_eq!(left.cmp(right), expected);
+                assert_eq!(left.partial_cmp(right), Some(expected));
+                assert_eq!(left.cmp(right) == Ordering::Equal, left == right);
+            }
+        }
+    }
+
+    #[test]
+    fn ordered_collections_match_hash_identity() {
+        let base = key(0, None, PythonVariant::Default);
+        let keys = [
+            base.clone(),
+            key(1, None, PythonVariant::Default),
+            key(9, None, PythonVariant::Default),
+            PythonInstallationKey {
+                minor: 13,
+                ..base.clone()
+            },
+            key(0, None, PythonVariant::Freethreaded),
+            PythonInstallationKey {
+                implementation: LenientImplementationName::Known(ImplementationName::PyPy),
+                ..base
+            },
+        ]
+        .map(PythonInstallationMinorVersionKey::from);
+
+        let hashed = keys.iter().cloned().collect::<HashSet<_>>();
+        let ordered = keys.iter().cloned().collect::<BTreeSet<_>>();
+        assert_eq!(hashed.len(), 4);
+        assert_eq!(ordered.len(), hashed.len());
+        assert!(hashed.iter().all(|key| ordered.contains(key)));
+
+        let entries = || {
+            keys.iter()
+                .cloned()
+                .enumerate()
+                .map(|(index, key)| (key, index))
+        };
+        let hashed = entries().collect::<HashMap<_, _>>();
+        let ordered = entries().collect::<BTreeMap<_, _>>();
+        assert_eq!(ordered.len(), hashed.len());
+        for (key, value) in hashed {
+            assert_eq!(ordered.get(&key), Some(&value));
+        }
+    }
+
+    #[test]
+    fn platform_display_ties_remain_distinct() {
+        let base = key(0, None, PythonVariant::Default);
+        let keys = [
+            None,
+            Some(DeploymentTarget {
+                major: 13,
+                minor: 0,
+                patch: 0,
+            }),
+            Some(DeploymentTarget {
+                major: 14,
+                minor: 0,
+                patch: 0,
+            }),
+        ]
+        .map(|version| PythonInstallationKey {
+            platform: Platform::new(
+                Os::new(OperatingSystem::Darwin(version)),
+                Arch::new(Architecture::Aarch64(Aarch64Architecture::Aarch64), None),
+                Libc::None,
+            ),
+            ..base.clone()
+        });
+
+        for left in &keys {
+            for right in &keys {
+                assert_eq!(left.platform.cmp(&right.platform), Ordering::Equal);
+                assert_eq!(left.cmp(right), Ordering::Equal);
+                let expected = left
+                    .platform
+                    .os
+                    .into_str()
+                    .cmp(&right.platform.os.into_str())
+                    .reverse();
+                let left = PythonInstallationMinorVersionKey::ref_cast(left);
+                let right = PythonInstallationMinorVersionKey::ref_cast(right);
+                assert_eq!(left.cmp(right), expected);
+                assert_eq!(left.cmp(right) == Ordering::Equal, left == right);
+            }
+        }
+
+        let implicit = &keys[0];
+        let explicit = PythonInstallationKey {
+            platform: Platform {
+                libc: Libc::Some(Environment::None),
+                ..implicit.platform.clone()
+            },
+            ..implicit.clone()
+        };
+        assert_ne!(implicit, &explicit);
+        assert_eq!(implicit.cmp(&explicit), Ordering::Equal);
+        assert_eq!(
+            PythonInstallationMinorVersionKey::ref_cast(implicit)
+                .cmp(PythonInstallationMinorVersionKey::ref_cast(&explicit)),
+            Ordering::Greater,
+        );
+
+        // Existing runtime-variant preference wins before platform identity breaks a tie.
+        let mut debug = key(0, None, PythonVariant::Debug);
+        debug.platform = keys[1].platform.clone();
+        assert_eq!(
+            PythonInstallationMinorVersionKey::ref_cast(implicit)
+                .cmp(PythonInstallationMinorVersionKey::ref_cast(&debug)),
+            implicit.cmp(&debug),
+        );
+
+        let keys = keys
+            .into_iter()
+            .chain([explicit])
+            .map(PythonInstallationMinorVersionKey::from);
+        let hashed = keys.clone().collect::<HashSet<_>>();
+        let ordered = keys.collect::<BTreeSet<_>>();
+        assert_eq!(hashed.len(), 4);
+        assert_eq!(ordered.len(), hashed.len());
     }
 }
