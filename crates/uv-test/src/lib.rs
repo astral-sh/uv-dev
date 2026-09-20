@@ -211,6 +211,22 @@ impl TestContext {
         Ok(files)
     }
 
+    /// Materialize the `fake-uv` package without relying on its source-directory symlink.
+    pub fn materialize_fake_uv(&self, package: impl AsRef<Path>) -> anyhow::Result<PathBuf> {
+        let destination = self.temp_dir.join("fake-uv");
+        fs_err::create_dir(&destination)?;
+        fs_err::copy(
+            package.as_ref().join("pyproject.toml"),
+            destination.join("pyproject.toml"),
+        )?;
+        copy_dir_ignore(
+            package.as_ref().join("scripts"),
+            destination.join("scripts"),
+        )?;
+        copy_dir_ignore(self.workspace_root.join("python"), destination.join("src"))?;
+        Ok(destination)
+    }
+
     /// Set an environment variable for all commands created from this context.
     #[must_use]
     pub fn with_env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
