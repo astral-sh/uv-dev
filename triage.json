@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 15110,
+        "title": "Add test cases for `find_uv_bin`",
+        "url": "https://github.com/astral-sh/uv/pull/15110",
+        "state": "merged",
+        "reason": "astral-sh/uv#15110 introduced the fake-uv fixture, including src as a mode-120000 link, and explains that it reuses uv’s in-tree Python module. It establishes the design behind the reported failure but did not track it."
+      },
+      {
+        "kind": "pull_request",
+        "number": 17032,
+        "title": "Move test support files out of `scripts/` into `test/`",
+        "url": "https://github.com/astral-sh/uv/pull/17032",
+        "state": "merged",
+        "reason": "astral-sh/uv#17032 moved the fixture to test/packages/fake-uv/src while preserving the symbolic link and updating its test consumers. It is relevant path history, not an existing report or fix."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for the current and former fixture paths, fake-uv, uv==0.1.0, core.symlinks, Developer Mode, plain-file checkout behavior, Windows privilege constraints, python_module failures, fixture materialization, copying, and documentation. No existing tracker or fix was found. astral-sh/uv#15368 and astral-sh/uv#15188 involved the same tests finding an installed system uv, not a malformed checkout. astral-sh/uv#6782 concerns virtual-environment interpreter copying, while astral-sh/uv#4374 involved snapshot differences in unpacked sources."
+  },
+  "type": "bug",
+  "type_reason": "The repository confirms that test/packages/fake-uv/src is its sole committed symbolic link, the fixture expects it to expose the in-tree Python package, and integration tests install that fixture. With core.symlinks=false, a plain target-text file cannot provide the intended source tree. This is incorrect test-repository behavior, and no existing issue or pull request tracks it.",
+  "summary": "No duplicate was found. astral-sh/uv#15110 introduced the symlink-based fixture, and astral-sh/uv#17032 moved it to its current path unchanged. Earlier failures in the same test module had different causes.",
+  "draft_response": "Thanks for the detailed report. The repository confirms that test/packages/fake-uv/src is a committed symbolic link and that the python_module integration tests install this fixture. With core.symlinks=false, materializing that entry as a plain file cannot provide the source tree the fixture expects, so this is a test-fixture bug. A fix should remove checkout-time symlink support as a prerequisite for these tests; whether to package the needed files directly or construct the fixture during test setup needs maintainer review."
+}
