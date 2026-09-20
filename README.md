@@ -46,9 +46,21 @@ The command exited with status 1. As a control, the same installation from the o
 
 Existing coverage in `crates/uv/tests/python/python_module.rs` includes 14 `find_uv_bin_*` integration tests that rely on installing this fixture, but none constructs a checkout with `core.symlinks=false`. Those tests cover the fixture's intended behavior when `src` is a working link, not its materialization as a regular file.
 
+## Fix
+
+Outcome: **fixed**.
+
+The failure is confined to how the integration tests consume the `fake-uv` fixture; uv's package builder should not interpret an arbitrary text file as a symbolic link. `TestContext::materialize_fake_uv` now constructs a temporary package from the fixture's `pyproject.toml` and fake script while copying the in-tree `python` directory into `src`. Every consumer in `crates/uv/tests/python/python_module.rs` installs that materialized package instead of relying on the checkout-time symlink.
+
+The parent regression still constructs the `core.symlinks=false` form, including the regular `src` file containing the link target, but now passes it through the same materializer and snapshots a successful installation. This verifies the reported checkout state without requiring symlink privileges. The neighboring `find_uv_bin_*` tests were updated to exercise the same producer/consumer path and retain their behavioral assertions.
+
+The repository contains no other committed symbolic links. Related coverage in `crates/uv/tests/build/build_backend.rs` and `crates/uv/tests/pip/pip_sync.rs` creates symlinks at runtime and is Unix-gated where symlink support is required, so it does not share this checkout-materialization failure and required no change.
+
+Focused validation passed for the parent regression, all 15 `python_module` tests, native Clippy for the Python integration-test target, Windows cross-Clippy for the same target, Rust formatting, and diff whitespace checks.
+
 ## Draft response
 
-Thanks for the detailed report. We reproduced the failure by checking out the repository with `core.symlinks=false`: Git created a regular 16-byte `src` file containing `../../../python/`, and uv then failed to build the fixture because `src/uv/__init__.py` was absent. The equivalent install succeeded from a symlink-preserving checkout. This is a test-fixture bug. A fix should remove checkout-time symlink support as a prerequisite for these tests; whether to package the needed files directly or construct the fixture during test setup needs maintainer review.
+Thanks for the detailed report. We reproduced the failure by checking out the repository with `core.symlinks=false`: Git created a regular 16-byte `src` file containing `../../../python/`, and uv then failed to build the fixture because `src/uv/__init__.py` was absent. The integration tests now materialize `fake-uv` in their temporary directory with the in-tree Python module copied into `src`, so they no longer require checkout-time symlink support. The regression test recreates the affected checkout form and confirms that the materialized package installs successfully.
 
 ## Classification
 
@@ -68,3 +80,5 @@ Searches covered this repository's open and closed issues and open, closed, and 
 Remote path history confirms that astral-sh/uv#15110 created the link and astral-sh/uv#17032 moved it unchanged. The current tree contains no other committed symbolic link, while the integration test source has multiple installs from `test/packages/fake-uv`.
 
 The strongest superficially similar issue was astral-sh/uv#15368, which also reported local failures in the `python_module` tests using `fake-uv`. Its output showed the tests finding `/usr/bin/uv`, and astral-sh/uv#15611 fixed that by overriding `sys.base_prefix`; it did not involve checkout materialization. astral-sh/uv#15188 was another installed-system-uv test regression with the same important difference. astral-sh/uv#6782 concerns copy semantics for virtual-environment interpreters, not repository fixtures, and astral-sh/uv#4374 concerned version strings in snapshots from unpacked sources rather than symbolic links.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/1991

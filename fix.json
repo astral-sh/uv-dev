@@ -1,0 +1,12 @@
+{
+  "outcome": "fixed",
+  "summary": "The fake-uv integration fixture depended on a committed source symlink unavailable in some Windows checkouts. TestContext now materializes the package with copied Python sources, and the updated regression verifies successful installation from the symlink-disabled checkout form.",
+  "validation": [
+    "cargo test --package uv --test python 'python_module::'",
+    "cargo +stable clippy --package uv --test python --locked -- -D warnings",
+    "uv run --frozen --only-dev cargo +stable xwin clippy --package uv --test python --locked -- -D warnings",
+    "cargo +stable fmt --all -- --check",
+    "git diff --check"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/1991"
+}
