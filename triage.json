@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 13254,
+        "title": "uv version leaves lock file out-of-date",
+        "url": "https://github.com/astral-sh/uv/issues/13254",
+        "state": "closed",
+        "reason": "Historical inverse of the new failure: changing only `pyproject.toml` left `uv.lock` stale; it led to the lock-and-sync behavior that now exposes the non-transactional error path."
+      },
+      {
+        "kind": "pull_request",
+        "number": 13317,
+        "title": "make `uv version` lock and sync",
+        "url": "https://github.com/astral-sh/uv/pull/13317",
+        "state": "merged",
+        "reason": "Introduced the current `uv version` lock/sync flow and explicitly documented that a non-noop set under `--locked` errors, but its implementation writes `pyproject.toml` before validation and has no revert path."
+      },
+      {
+        "kind": "issue",
+        "number": 15643,
+        "title": "uv sync --locked --no-install-project fails if only project version changes",
+        "url": "https://github.com/astral-sh/uv/issues/15643",
+        "state": "open",
+        "reason": "Maintainer discussion confirms that a project-version change intentionally makes the lockfile out of date under `--locked`; unlike the new report, it concerns an externally changed file rather than `uv version` retaining its own edit after failure."
+      }
+    ],
+    "search_scope": "Literal and exact-error searches covered `uv version`, `--locked`, `UV_LOCKED`, `pyproject.toml`, `lock_and_sync`, and “The lockfile ... needs to be updated.” Conceptual searches covered atomicity, rollback/revert, failed commands leaving project metadata changed, version-bump lock/sync behavior, and prior fixes. Open and closed issues and open, closed, and merged pull requests were searched. astral-sh/uv#15286 was inspected as a plausible candidate but ruled out because it requests avoiding or reducing full resolution/sync during version bumps rather than restoring files after a failed operation."
+  },
+  "type": "bug",
+  "type_reason": "Current source confirms a correctness defect: `uv version` writes the new `pyproject.toml` in `update_project` before `lock_and_sync` runs, and an error from locked validation propagates without restoring the file. The `--locked` rejection itself is intended, but retaining the command's partial edit is not. No existing issue or open pull request was found that tracks this same rollback failure.",
+  "summary": "No duplicate was found. astral-sh/uv#13254 and its merged fix astral-sh/uv#13317 established that `uv version` must keep `pyproject.toml` and `uv.lock` synchronized, while astral-sh/uv#15643 confirms a version change should fail locked validation; the newly reported bug is the missing rollback after that expected failure.",
+  "draft_response": "Thanks, this is a bug. The `--locked` error is expected because changing a static project version makes the lockfile out of date, but `uv version` should not retain its `pyproject.toml` edit after that validation fails. The current implementation writes the file before `lock_and_sync` and propagates the error without restoring it. astral-sh/uv#13254 and astral-sh/uv#13317 explain why the command updates the lockfile, but they do not cover rollback on failure. The next step is an integration regression test asserting that both `pyproject.toml` and `uv.lock` remain unchanged after `uv version --bump minor --locked`, followed by making the version edit use the same snapshot-and-revert behavior as other project-editing commands."
+}
