@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "At commit 7b090fba, using Git 2.55.0, uv 0.12.13, and Python 3.12.3, a temporary checkout configured with `core.symlinks=false` materialized `test/packages/fake-uv/src` as a 16-byte regular file containing `../../../python/`. `uv pip install` then exited 1 because `src/uv/__init__.py` was missing. The same install succeeded from the symlink-preserving checkout. This directly reproduces Git’s reported Windows materialization and resulting fixture failure; the Windows host condition itself was simulated on Linux."
+}

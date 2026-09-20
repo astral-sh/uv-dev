@@ -6,21 +6,55 @@ Classification: bug
 
 ## Summary
 
-The report identifies `test/packages/fake-uv/src` as a committed symbolic link that Git materializes as a plain target-text file on Windows checkouts where `core.symlinks=false`. The `fake-uv` package then lacks the source tree expected by the `python_module` integration tests.
+The reported behavior is reproducible. `test/packages/fake-uv/src` is a committed symbolic link that Git materializes as a plain target-text file in a checkout where `core.symlinks=false`, matching the reported unprivileged Windows checkout behavior. The resulting `fake-uv` package lacks the source tree expected by the `python_module` integration tests and cannot be built.
 
-Repository evidence supports the report's central claim: the entry is the repository's sole mode-`120000` file and targets `../../../python/`; the fixture README says it links uv's in-tree Python module; and `crates/uv/tests/python/python_module.rs` repeatedly installs the fixture. The repository also already treats Windows symlink availability as conditional in other tests. A plain file at `src` cannot fulfill this fixture design.
+The entry is the repository's sole mode-`120000` file and targets `../../../python/`. The fixture README says it links uv's in-tree Python module, and the tests in `crates/uv/tests/python/python_module.rs` repeatedly install the fixture. The repository also treats Windows symlink availability as conditional in other tests.
 
 No existing issue or pull request was found that tracks the checkout defect. astral-sh/uv#15110 introduced the symlink-based fixture at its former `scripts/packages/fake-uv/src` path, and astral-sh/uv#17032 moved it to the current path while preserving the link.
 
+## Reproduction
+
+Outcome: **reproducible**.
+
+The reproduction used repository commit `7b090fba99bc89a6670a23de5368d48d2418a756`, Git 2.55.0, uv 0.12.13 (`x86_64-unknown-linux-gnu`), and CPython 3.12.3. Although the runner was Linux rather than Windows, configuring the temporary worktree with `core.symlinks=false` exercises Git's reported checkout materialization directly:
+
+```console
+$ git clone --no-checkout --no-local /home/runner/work/uv/uv /tmp/uv-21850/checkout
+$ git -C /tmp/uv-21850/checkout config core.symlinks false
+$ git -C /tmp/uv-21850/checkout checkout HEAD
+$ git -C /tmp/uv-21850/checkout config --get core.symlinks
+false
+$ stat -c '%F, %s bytes' /tmp/uv-21850/checkout/test/packages/fake-uv/src
+regular file, 16 bytes
+$ sed -n '1p' /tmp/uv-21850/checkout/test/packages/fake-uv/src
+../../../python/
+$ git -C /tmp/uv-21850/checkout ls-files -s test/packages/fake-uv/src
+120000 e22ace59e47a6957bd8c615cd58f11c40d3133d2 0 test/packages/fake-uv/src
+```
+
+Installing the materialized fixture with the installed uv executable and an isolated virtual environment and cache failed as expected:
+
+```console
+$ uv pip install --python /tmp/uv-21850/venv/bin/python /tmp/uv-21850/checkout/test/packages/fake-uv
+Building uv @ file:///tmp/uv-21850/checkout/test/packages/fake-uv
+Failed to build `uv @ file:///tmp/uv-21850/checkout/test/packages/fake-uv`
+Expected a Python module at:
+/tmp/uv-21850/checkout/test/packages/fake-uv/src/uv/__init__.py
+```
+
+The command exited with status 1. As a control, the same installation from the original symlink-preserving checkout succeeded, installed `uv==0.1.0`, and produced `site-packages/uv/__init__.py`.
+
+Existing coverage in `crates/uv/tests/python/python_module.rs` includes 14 `find_uv_bin_*` integration tests that rely on installing this fixture, but none constructs a checkout with `core.symlinks=false`. Those tests cover the fixture's intended behavior when `src` is a working link, not its materialization as a regular file.
+
 ## Draft response
 
-Thanks for the detailed report. The repository confirms that `test/packages/fake-uv/src` is a committed symbolic link and that the `python_module` integration tests install this fixture. With `core.symlinks=false`, materializing that entry as a plain file cannot provide the source tree the fixture expects, so this is a test-fixture bug. A fix should remove checkout-time symlink support as a prerequisite for these tests; whether to package the needed files directly or construct the fixture during test setup needs maintainer review.
+Thanks for the detailed report. We reproduced the failure by checking out the repository with `core.symlinks=false`: Git created a regular 16-byte `src` file containing `../../../python/`, and uv then failed to build the fixture because `src/uv/__init__.py` was absent. The equivalent install succeeded from a symlink-preserving checkout. This is a test-fixture bug. A fix should remove checkout-time symlink support as a prerequisite for these tests; whether to package the needed files directly or construct the fixture during test setup needs maintainer review.
 
 ## Classification
 
-This is a bug. The fixture is intended to expose the in-tree Python package as the source of a mock `uv` distribution, but under the reported Windows checkout condition it instead contains a regular file named `src`. That makes repository integration tests unusable even though the checkout behavior is expected when Git cannot create symbolic links.
+This is a bug. The fixture is intended to expose the in-tree Python package as the source of a mock `uv` distribution, but with `core.symlinks=false` it instead contains a regular file named `src`. uv cannot build the fixture in that state, so integration tests that install it cannot run successfully.
 
-The committed mode, link target, fixture documentation, and test consumers are source-confirmed. The reporter's specific Windows reproduction was not rerun in this Unix checkout, but the repository's own tests note that Windows does not allow symbolic links by default or may require elevated privilege. No existing tracker covers this exact failure, so the issue is not a duplicate.
+The Windows host condition itself was not rerun on this Linux runner, but the reported Git materialization and resulting package failure were both observed in a temporary checkout. The repository's own tests note that Windows does not allow symbolic links by default or may require elevated privilege. No existing tracker covers this exact failure, so the issue is not a duplicate.
 
 ## Related
 
