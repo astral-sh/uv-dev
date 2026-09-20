@@ -2559,6 +2559,62 @@ fn version_get_frozen_workspace_without_python() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn version_bump_locked_updates_pyproject_before_validation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "myproject"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+        "#})?;
+
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.version()
+        .arg("--bump").arg("minor")
+        .arg("--locked"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    // Lock validation happens after the write, leaving the project inconsistent on failure.
+    // See astral-sh/uv#21854.
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "myproject"
+    version = "0.2.0"
+    requires-python = ">=3.12"
+    "#);
+    assert_snapshot!(context.read("uv.lock"), @r#"
+    version = 1
+    revision = 3
+    requires-python = ">=3.12"
+
+    [options]
+    exclude-newer = "2024-03-25T00:00:00Z"
+
+    [[package]]
+    name = "myproject"
+    version = "0.1.0"
+    source = { virtual = "." }
+    "#);
+
+    Ok(())
+}
+
 /// Edit the version of a workspace member
 ///
 /// Also check that --locked/--frozen/--no-sync do what they say
