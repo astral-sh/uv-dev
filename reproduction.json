@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Using uv 0.12.13 on Linux x86_64 with CPython 3.12.3, I created a local Git package whose tracked `.ok` entry (mode 120000) pointed to a 16-byte file outside the repository. `UV_CACHE_DIR=\"$REPRO/cache\" uv pip install --python /usr/bin/python3 --target \"$REPRO/install\" \"uv-git-ok-repro @ git+file://$REPRO/source@$REVISION\"` succeeded and installed an importable package, but truncated the external file to 0 bytes. A native `git clone` followed by `git reset --hard` left it unchanged. The cached `.ok` remained a symlink to the victim. No existing integration test covers this case; `crates/uv/tests/project/edit.rs::add_git_lfs` tests marker absence and recovery, but not a repository-controlled symlink. Updated `$RUNNER_TEMP/issue-context/README.md` with the findings."
+}

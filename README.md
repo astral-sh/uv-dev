@@ -6,13 +6,14 @@ Classification: bug
 
 ## Summary
 
-The report demonstrates that a Git dependency can track `.ok` as a symlink to an existing writable
-file outside its checkout. A successful `uv pip install` performs the checkout and then writes uv's
-readiness marker through that symlink, truncating the external target. The reporter reproduced this
-on uv 0.12.13 and on the cited current-main revision for uv 0.12.17; native `git clone` followed by
-`git reset --hard` did not alter the target.
+The reported behavior is reproducible with the installed uv 0.12.13 on Linux. A minimal local Git
+dependency tracked `.ok` as an absolute symlink to a 16-byte file outside the repository. A
+successful `uv pip install` truncated that file to zero bytes, while a native `git clone` followed
+by `git reset --hard` left it unchanged. The installed package remained usable after uv reported a
+successful build and install.
 
-The repository source supports the reported mechanism. `uv-git` defines
+The observed cached checkout retained `.ok` as a symlink to the external file. This is consistent
+with the repository implementation: `uv-git` defines
 `CHECKOUT_READY_LOCK` as `.ok` inside the checkout, treats its existence as evidence that a checkout
 is fresh, removes it before reset, and calls `paths::create` on the same worktree path after
 `git reset --hard` and submodule processing succeed. Because Git controls the worktree entry after
@@ -22,6 +23,52 @@ No existing issue or pull request was found for this exact Git checkout-marker c
 closest precedent is astral-sh/uv#19542, fixed by astral-sh/uv#19543, where `uv cache prune`
 followed a symlink and deleted its target outside the cache. That fix was confined to pruning in
 `uv-cache` and does not protect marker creation in `uv-git`.
+
+## Reproduction
+
+Outcome: reproducible.
+
+Environment:
+
+- uv 0.12.13 (`x86_64-unknown-linux-gnu`), the affected release named in the report
+- Linux 6.17.0-1022-azure x86_64
+- Git 2.55.0
+- CPython 3.12.3 at `/usr/bin/python3`
+
+The fixture was created entirely under `$RUNNER_TEMP/issue-21857-reproduction`. It contained a
+minimal setuptools project committed to a local Git repository, plus a tracked `.ok` symlink whose
+absolute target was `$RUNNER_TEMP/issue-21857-reproduction/victim.txt`. `git ls-tree HEAD .ok`
+reported mode `120000`, confirming that the symlink was repository-controlled. The victim initially
+contained `do-not-truncate` and was 16 bytes long.
+
+The native-Git control succeeded without changing the victim:
+
+```console
+git clone -q "$REPRO/source" "$REPRO/native/checkout"
+git -C "$REPRO/native/checkout" reset --hard -q "$REVISION"
+# victim: 16 bytes; SHA-256 924bd5a93a257e1787fb6bfb2fac6e44b041e96db03119d633c90645ff6333a4
+```
+
+Using a fresh isolated cache and install target, the uv operation was:
+
+```console
+UV_CACHE_DIR="$REPRO/cache-success" UV_PYTHON_DOWNLOADS=never \
+  uv pip install --python /usr/bin/python3 --target "$REPRO/install-success" \
+  "uv-git-ok-repro @ git+file://$REPRO/source@$REVISION"
+```
+
+uv exited successfully, built and installed `uv-git-ok-repro==0.1.0`, and the installed module
+imported successfully. Afterward, the victim was 0 bytes with the empty-file SHA-256
+`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`. The checkout entry under
+`cache-success/git-v0/checkouts/.../.ok` was still a symlink to the victim. This directly reproduces
+the reported external truncation during a successful install and distinguishes it from native Git
+checkout behavior.
+
+No existing integration test covers a repository-controlled `.ok` symlink. The nearest coverage is
+`crates/uv/tests/project/edit.rs::add_git_lfs`, which identifies the checkout `.ok` path, asserts
+that the marker is absent after an incomplete Git LFS checkout, and verifies recovery after the
+marker is removed. It does not create `.ok` as a tracked repository entry or test an external
+symlink target.
 
 ## Draft response
 
