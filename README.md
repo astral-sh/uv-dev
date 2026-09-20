@@ -18,6 +18,10 @@ astral-sh/uv#5830, which reordered the existing top-level commands rather than p
 `uv workspace`. Open astral-sh/uv#18215 is also adjacent, but it requests documentation for the
 existing workspace inspection commands rather than new management aliases.
 
+A maintainer has asked the reporter to explain how the proposed commands would differ from the
+regular top-level forms, citing `sync` and `run`. The issue therefore still lacks concrete semantics
+or workflows that distinguish the proposal from aliases for existing commands.
+
 ## Draft response
 
 Thanks for the proposal. The existing project commands already operate in workspace contexts, while
@@ -31,6 +35,14 @@ consensus, particularly because commands such as `init`, `add`, `remove`, `run`,
 `publish` can target a project or member rather than the workspace as a whole. Concrete examples
 where the current top-level commands are unclear, along with the expected whole-workspace versus
 member-specific behavior for each proposed command, would help define the design.
+
+## Maintainer follow-up
+
+Maintainer `konstin` asked how the proposed workspace commands would differ from regular top-level
+commands such as `uv sync` and `uv run`. This establishes that the next useful input is not another
+list of aliases, but concrete behavioral differences: which commands should act on the entire
+workspace, which should select a member, and what each form should do that the existing command and
+its workspace-related options cannot do. No answer from the reporter is present yet.
 
 ## Classification
 
