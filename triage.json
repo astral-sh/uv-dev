@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 5702,
+        "title": "Improve ordering of top-level commands",
+        "url": "https://github.com/astral-sh/uv/issues/5702",
+        "state": "closed",
+        "reason": "Its discussion explicitly grouped seven proposed commands as workspace operations, but the accepted outcome was top-level ordering, not a `uv workspace` hierarchy."
+      },
+      {
+        "kind": "pull_request",
+        "number": 5830,
+        "title": "Improve display order of top-level commands",
+        "url": "https://github.com/astral-sh/uv/pull/5830",
+        "state": "merged",
+        "reason": "This implemented astral-sh/uv#5702 by reordering top-level commands; it addressed similar discoverability concerns without adding workspace aliases."
+      },
+      {
+        "kind": "issue",
+        "number": 18215,
+        "title": "Missing documentation for uv workspace commands",
+        "url": "https://github.com/astral-sh/uv/issues/18215",
+        "state": "open",
+        "reason": "This adjacent request concerns documenting the existing workspace inspection namespace, not aliases for project-management commands."
+      }
+    ],
+    "search_scope": "Searched issues and pull requests for each proposed workspace form: init, add, remove, sync, lock, run, tree, build, and publish. Conceptual searches covered workspace commands, subcommands, aliases, namespaces, CLI grouping, project namespaces, and monorepo tooling. Inspected candidate discussions and references. Astral-sh/uv#9626 concerns affected-package builds and versioning; astral-sh/uv#12541 and astral-sh/uv#13636 concern specific inspection commands. Astral-sh/uv#18368 was closed without merge and does not implement these aliases."
+  },
+  "type": "enhancement",
+  "type_reason": "The issue requests a new CLI hierarchy and alias surface to improve discoverability. It reports no incorrect behavior, and the closest prior discussion only changed top-level command ordering, so no existing issue or pull request tracks the same request closely enough for duplicate classification.",
+  "summary": "No duplicate was found. Astral-sh/uv#5702 and astral-sh/uv#5830 are the closest precedent but retained top-level commands; astral-sh/uv#18215 only concerns documentation for existing inspection commands.",
+  "draft_response": "Thanks for the proposal. The existing project commands already operate in workspace contexts, while `uv workspace` currently exposes workspace inspection commands. The closest prior CLI discussion, astral-sh/uv#5702, grouped many of these commands conceptually as workspace operations, but astral-sh/uv#5830 addressed discoverability by ordering the top-level commands rather than nesting or aliasing them.\n\nWe’ll treat this as an enhancement proposal. Adding aliases for the full set would need design consensus, particularly because commands such as `init`, `add`, `remove`, `run`, `build`, and `publish` can target a project or member rather than the workspace as a whole. Concrete examples where the current commands are unclear, along with the expected whole-workspace versus member-specific behavior for each proposed command, would help define the design."
+}
