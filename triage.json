@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 19542,
+        "title": "`uv cache prune` can delete directories outside `UV_CACHE_DIR` if a symlink is present in a cache bucket",
+        "url": "https://github.com/astral-sh/uv/issues/19542",
+        "state": "closed",
+        "reason": "Closest conceptual precedent: uv followed a cache symlink and mutated an external target. It differs because it concerns `uv cache prune` and an unexpected cache entry, whereas astral-sh/uv#21857 concerns a Git repository’s tracked `.ok` entry during checkout."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19543,
+        "title": "Avoid following symlinks during cache prune",
+        "url": "https://github.com/astral-sh/uv/pull/19543",
+        "state": "merged",
+        "reason": "The fix for astral-sh/uv#19542 established the nearby safe behavior of operating on the symlink rather than its external target, but it changed only `uv-cache` pruning and does not cover the `uv-git` checkout marker."
+      }
+    ],
+    "search_scope": "Exact searches for `.ok`, checkout marker/readiness, repository-controlled and tracked symlinks, outside-checkout writes, and truncation found no earlier report or fix for this Git checkout behavior. Conceptual searches covered symlink following, unsafe paths, arbitrary or external file mutation, cache escape, malicious Git dependencies, and path traversal across open and closed issues and open, closed, and merged pull requests. Fix-oriented review followed astral-sh/uv#19542 to astral-sh/uv#19543 and confirmed its scope is cache pruning. astral-sh/uv#8731 was inspected but ruled out because it concerned unsanitized ZIP member paths during wheel extraction, not Git checkout markers or symlinks."
+  },
+  "type": "bug",
+  "type_reason": "Repository source confirms that `uv-git` reserves `.ok` inside the checked-out worktree, checks it with `Path::exists`, and recreates it with `paths::create` after `git reset --hard`. Because the repository controls that path after reset, a tracked symlink can redirect the marker write to an external file. Mutating that file while reporting a successful install is incorrect. This is not a duplicate or regression of astral-sh/uv#19542 or astral-sh/uv#19543 because that fix was limited to cache-prune deletion in `uv-cache`; this report reaches a separate marker-creation path in `uv-git`.",
+  "summary": "No existing issue or pull request tracks the same Git checkout-marker problem. The closest precedent is astral-sh/uv#19542, fixed by astral-sh/uv#19543, where cache pruning followed a symlink outside the cache; that fix does not cover Git’s repository-controlled `.ok` path.",
+  "draft_response": "Thanks for the report. The current checkout code reserves `.ok` inside the Git worktree and recreates it after `git reset --hard`, so a repository-tracked symlink at that path can redirect the marker write outside the checkout. That is incorrect behavior, and we’ll keep astral-sh/uv#21857 as a separate bug.\n\nThe closest prior issue is astral-sh/uv#19542, fixed by astral-sh/uv#19543, but that change only prevents `uv cache prune` from following cache symlinks; it does not cover marker creation in `uv-git`. The concrete next step is a regression test using a Git dependency that tracks `.ok` as a symlink, followed by changing readiness-marker handling so it cannot follow or rely on a repository-controlled entry."
+}
