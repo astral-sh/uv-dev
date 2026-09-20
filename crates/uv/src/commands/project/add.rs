@@ -1462,35 +1462,35 @@ impl AddTarget {
 
     /// Take a snapshot of the target.
     async fn snapshot(&self) -> Result<AddTargetSnapshot, io::Error> {
-        // Read the lockfile into memory.
-        let target = match self {
-            Self::Script(script, _) => LockTarget::from(script),
-            Self::Project(project, _) => LockTarget::Workspace(project.workspace()),
-        };
-        let lock = target.read_bytes().await?;
-
         // Obtain a detached a copy of the old structure so we can revert to it without
         // breaking the assumption that the workspace cache is only used by the modifying code
         // when changing it.
         match self {
-            Self::Script(script, _) => Ok(AddTargetSnapshot::Script(script.clone(), lock)),
-            Self::Project(project, _) => {
-                Ok(AddTargetSnapshot::Project(project.clone_detach(), lock))
+            Self::Script(script, _) => {
+                let lock = LockTarget::from(script).read_bytes().await?;
+                Ok(AddTargetSnapshot::Script(script.clone(), lock))
             }
+            Self::Project(project, _) => AddTargetSnapshot::from_project(project).await,
         }
     }
 }
 
 #[derive(Debug, Clone)]
 #[expect(clippy::large_enum_variant)]
-enum AddTargetSnapshot {
+pub(super) enum AddTargetSnapshot {
     Script(Pep723Script, Option<Vec<u8>>),
     Project(VirtualProject, Option<Vec<u8>>),
 }
 
 impl AddTargetSnapshot {
+    /// Take a snapshot of a project and its lockfile.
+    pub(super) async fn from_project(project: &VirtualProject) -> Result<Self, io::Error> {
+        let lock = LockTarget::from(project.workspace()).read_bytes().await?;
+        Ok(Self::Project(project.clone_detach(), lock))
+    }
+
     /// Write the snapshot back to disk (e.g., to a `pyproject.toml` and `uv.lock`).
-    fn revert(&self) -> Result<(), io::Error> {
+    pub(super) fn revert(&self) -> Result<(), io::Error> {
         match self {
             Self::Script(script, lock) => {
                 // Write the PEP 723 script back to disk.

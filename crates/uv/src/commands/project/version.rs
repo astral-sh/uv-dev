@@ -31,7 +31,7 @@ use uv_workspace::{
 
 use crate::commands::pip::loggers::{DefaultInstallLogger, DefaultResolveLogger};
 use crate::commands::pip::operations::Modifications;
-use crate::commands::project::add::{AddTarget, PythonTarget};
+use crate::commands::project::add::{AddTarget, AddTargetSnapshot, PythonTarget};
 use crate::commands::project::install_target::InstallTarget;
 use crate::commands::project::lock::LockMode;
 use crate::commands::project::lock_target::LockTarget;
@@ -331,14 +331,21 @@ pub(crate) async fn project_version(
     let status = if dry_run {
         ExitStatus::Success
     } else if let Some(new_version) = &new_version {
-        let project = update_project(
+        let snapshot = AddTargetSnapshot::from_project(&project).await?;
+        let project = match update_project(
             project,
             new_version,
             &mut toml,
             &pyproject_path,
             workspace_cache,
-        )?;
-        Box::pin(lock_and_sync(
+        ) {
+            Ok(project) => project,
+            Err(err) => {
+                let _ = snapshot.revert();
+                return Err(err);
+            }
+        };
+        match Box::pin(lock_and_sync(
             project,
             project_dir,
             lock_check,
@@ -359,7 +366,14 @@ pub(crate) async fn project_version(
             preview,
             &malware_settings,
         ))
-        .await?
+        .await
+        {
+            Ok(status) => status,
+            Err(err) => {
+                let _ = snapshot.revert();
+                return Err(err);
+            }
+        }
     } else {
         debug!("No changes to version; skipping update");
         ExitStatus::Success

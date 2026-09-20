@@ -2560,7 +2560,7 @@ fn version_get_frozen_workspace_without_python() -> Result<()> {
 }
 
 #[test]
-fn version_bump_locked_updates_pyproject_before_validation() -> Result<()> {
+fn version_bump_locked_preserves_pyproject() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     context
@@ -2590,12 +2590,11 @@ fn version_bump_locked_updates_pyproject_before_validation() -> Result<()> {
     hint: To update the lockfile, run `uv lock`.
     ");
 
-    // Lock validation happens after the write, leaving the project inconsistent on failure.
-    // See astral-sh/uv#21854.
+    // A failed version change should leave the project and lockfile consistent.
     assert_snapshot!(context.read("pyproject.toml"), @r#"
     [project]
     name = "myproject"
-    version = "0.2.0"
+    version = "0.1.0"
     requires-python = ">=3.12"
     "#);
     assert_snapshot!(context.read("uv.lock"), @r#"
