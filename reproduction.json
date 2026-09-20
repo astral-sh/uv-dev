@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "In an isolated /tmp project using uv 0.12.13 on Linux x86_64 with Python 3.12.3, `uv init --name demo`, `uv lock`, then `uv version --bump minor --locked` exited 2 with the expected stale-lockfile error. Despite failing, it changed pyproject.toml from 0.1.0 to 0.2.0 while uv.lock remained unchanged at 0.1.0. The `UV_LOCKED=1` variant behaved identically. The issue-context README was updated with these findings."
+}
