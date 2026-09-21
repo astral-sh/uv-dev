@@ -2937,18 +2937,30 @@ async fn install_environment(
             preflight,
             prepared,
         } => (preflight, prepared, false),
-        EnvironmentInstallMode::Prepare => (
-            None,
-            Some(InstallationPlan::for_new_environment(resolution)?),
-            true,
-        ),
+        EnvironmentInstallMode::Prepare => (None, None, true),
     };
     let mut plan = if let Some(prepared) = prepared {
         prepared
     } else {
+        let site_packages = if prepare_only {
+            if resolution
+                .distributions()
+                .any(|dist| matches!(dist, uv_distribution_types::ResolvedDist::Installed { .. }))
+            {
+                return Err(anyhow::anyhow!(
+                    "A new environment requires installable distributions"
+                )
+                .into());
+            }
+            // The replacement starts empty, but cached wheels still belong to the isolated
+            // installation phase. Classify them before preparation changes the cache.
+            SitePackages::empty(interpreter.clone())
+        } else {
+            SitePackages::from_environment(venv)?
+        };
         InstallationPlan::build(
             resolution,
-            SitePackages::from_environment(venv)?,
+            site_packages,
             InstallationStrategy::Permissive,
             reinstall,
             build_options,

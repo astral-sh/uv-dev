@@ -581,30 +581,6 @@ pub(crate) struct InstallationPlan {
 }
 
 impl InstallationPlan {
-    /// Construct an installation for a new, empty environment from an exact resolution.
-    pub(crate) fn for_new_environment(resolution: &Resolution) -> Result<Self, Error> {
-        let remote = resolution
-            .distributions()
-            .map(|dist| match dist {
-                uv_distribution_types::ResolvedDist::Installable { dist, .. } => {
-                    Ok(Arc::clone(dist))
-                }
-                uv_distribution_types::ResolvedDist::Installed { .. } => {
-                    Err(anyhow!("A new environment requires installable distributions").into())
-                }
-            })
-            .collect::<Result<Vec<_>, Error>>()?;
-        Ok(Self {
-            plan: Plan {
-                cached: Vec::new(),
-                remote,
-                reinstalls: Vec::new(),
-                extraneous: Vec::new(),
-            },
-            elapsed: Duration::ZERO,
-        })
-    }
-
     /// Prepare a complete plan without modifying its environment, if all remaining builds are
     /// isolated. Shared builds may depend on the isolated phase being installed first, so they
     /// must continue through the normal two-phase execution path.
