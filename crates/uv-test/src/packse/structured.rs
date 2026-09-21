@@ -237,6 +237,13 @@ pub(super) fn validate_scenario_policy(scenario: &Scenario) -> Result<()> {
         "the scenario has an unsupported structured lock policy"
     );
     for package in scenario.packages.values() {
+        ensure!(
+            package
+                .versions
+                .keys()
+                .all(|version| !version.any_prerelease()),
+            "structured locks do not model pre-release candidate policies"
+        );
         for metadata in package.versions.values() {
             ensure!(
                 metadata.wheel_tags.len() <= 1,

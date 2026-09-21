@@ -378,9 +378,11 @@ impl ResolverOptions {
         if let Some(fork_strategy) = self.fork_strategy {
             arguments.extend(["--fork-strategy".to_owned(), fork_strategy.to_string()]);
         }
-        if self.prereleases {
-            arguments.push("--prerelease=allow".to_owned());
-        }
+        arguments.push(if self.prereleases {
+            "--prerelease=allow".to_owned()
+        } else {
+            "--prerelease=if-necessary".to_owned()
+        });
         arguments
     }
 }

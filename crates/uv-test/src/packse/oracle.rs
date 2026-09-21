@@ -38,9 +38,10 @@ pub struct ScenarioOracle<'a> {
 impl<'a> ScenarioOracle<'a> {
     /// Validate that the graph only uses policies understood by the oracle.
     ///
-    /// Stable, non-yanked versions with platform-independent wheels are supported. Dependencies
-    /// may have ordinary environment markers and additive extras, including recursive extras.
-    /// Dependency `Requires-Python` is interpreted as a lower bound, as documented by uv.
+    /// Non-yanked versions with platform-independent wheels are supported, including pre-releases
+    /// under the default stable-first policy or global pre-release opt-in. Dependencies may have
+    /// ordinary environment markers and additive extras, including recursive extras. Dependency
+    /// `Requires-Python` is interpreted as a lower bound, as documented by uv.
     pub fn new(scenario: &'a Scenario, environment: &'a MarkerEnvironment) -> Result<Self> {
         ensure!(
             !scenario.root.has_project_dependencies(),
@@ -278,10 +279,6 @@ pub(super) fn validate_scenario(
     for (name, package) in &scenario.packages {
         for (version, metadata) in &package.versions {
             ensure!(
-                !version.any_prerelease(),
-                "the scenario oracle does not model pre-release selection: {name}=={version}"
-            );
-            ensure!(
                 !metadata.yanked,
                 "the scenario oracle does not model yanked releases: {name}=={version}"
             );
@@ -412,6 +409,64 @@ mod tests {
 
     fn scenario(contents: &str) -> Scenario {
         toml::from_str(contents).expect("valid scenario")
+    }
+
+    #[test]
+    fn accepts_prereleases_without_imposing_stable_preference() -> Result<()> {
+        let mut scenario = scenario(
+            r#"
+name = "prerelease-candidates"
+[root]
+requires = ["a>=1"]
+[expected]
+satisfiable = true
+[packages.a.versions."1"]
+[packages.a.versions."2rc1"]
+"#,
+        );
+        let environment = environment();
+        for prereleases in [false, true] {
+            scenario.resolver_options.prereleases = prereleases;
+            let oracle = ScenarioOracle::new(&scenario, &environment)?;
+            oracle.validate(&selection(&[("a", "1")]))?;
+            oracle.validate(&selection(&[("a", "2rc1")]))?;
+            assert_eq!(
+                oracle.find_solution(3)?.solution,
+                Some(selection(&[("a", "2rc1")]))
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn checks_prerelease_dependency_closure() -> Result<()> {
+        let scenario = scenario(
+            r#"
+name = "prerelease-closure"
+[root]
+requires = ["a"]
+[expected]
+satisfiable = true
+[packages.a.versions."1rc1"]
+requires = ["b==2rc1"]
+[packages.a.versions."2"]
+requires = ["missing"]
+[packages.b.versions."1"]
+[packages.b.versions."2rc1"]
+"#,
+        );
+        let environment = environment();
+        let oracle = ScenarioOracle::new(&scenario, &environment)?;
+        let valid = selection(&[("a", "1rc1"), ("b", "2rc1")]);
+        oracle.validate(&valid)?;
+        assert!(oracle.validate(&selection(&[("a", "1rc1")])).is_err());
+        assert!(
+            oracle
+                .validate(&selection(&[("a", "1rc1"), ("b", "1")]))
+                .is_err()
+        );
+        assert_eq!(oracle.find_solution(9)?.solution, Some(valid));
+        Ok(())
     }
 
     #[test]
@@ -704,7 +759,6 @@ requires = ["b; extra != 'gpu'"]
     fn rejects_unmodeled_candidate_policies() {
         let environment = environment();
         let cases = [
-            ("pre-release", "[packages.a.versions.\"1rc1\"]"),
             ("yanked", "[packages.a.versions.\"1\"]\nyanked = true"),
             (
                 "platform wheel",
@@ -734,7 +788,6 @@ requires = ["b; extra != 'gpu'"]
             .collect::<Vec<_>>()
             .join("\n");
         insta::assert_snapshot!(errors, @"
-        pre-release: the scenario oracle does not model pre-release selection: a==1rc1
         yanked: the scenario oracle does not model yanked releases: a==1
         platform wheel: the scenario oracle requires universal wheels: a==1
         source build: the scenario oracle requires universal wheels: a==1

@@ -23,6 +23,84 @@ use uv_test::packse::project::{ProjectSelection, ScenarioProject};
 use uv_test::packse::scenario::{Resolution, Scenario, ScenarioDocument};
 
 #[test]
+fn prerelease_scenarios_match_the_exhaustive_oracle() -> Result<()> {
+    let target = ScenarioTarget {
+        python: PythonVersion::from_str("3.12").expect("valid Python version"),
+        platform: ScenarioPlatform::Linux,
+    };
+    for path in [
+        "prereleases/package-only-prereleases-in-range.toml",
+        "prereleases/transitive-prerelease-and-stable-dependency.toml",
+    ] {
+        for prereleases in [false, true] {
+            let context = uv_test::test_context!("3.12");
+            let mut scenario =
+                Scenario::from_path(&context.workspace_root.join("test/scenarios").join(path))?;
+            scenario.resolver_options.prereleases = prereleases;
+            let result = check_scenario(&context, &scenario, &target, 100_000)?;
+            assert_eq!(result.selection, Some(scenario.expected.packages));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn prerelease_locks_match_their_concrete_projections() -> Result<()> {
+    let contents = r#"
+name = "prerelease-lock-domain"
+[root]
+requires_python = ">=3.12,<3.14"
+requires = ["a"]
+[expected]
+satisfiable = true
+[packages.a.versions."1rc1"]
+[packages.a.versions."2"]
+requires = ["missing"]
+"#;
+    let targets = ScenarioTarget::matrix(
+        &["3.12", "3.13"]
+            .map(|version| PythonVersion::from_str(version).expect("valid Python version")),
+        &[ScenarioPlatform::Linux, ScenarioPlatform::Windows],
+    );
+    for prereleases in [false, true] {
+        let graph = WitnessedProjectGraph {
+            document: format!("{contents}\n[resolver_options]\nprereleases = {prereleases}\n")
+                .parse()?,
+            assignment: [("a".parse()?, "1rc1".parse()?)].into_iter().collect(),
+        };
+        let scenario = graph.document.scenario()?;
+        let selections = ScenarioProject::new(&scenario)?.selection_matrix();
+        for lockfile in [LockfileMode::Standard, LockfileMode::WithoutMetadata] {
+            let options = LockCheckOptions {
+                max_states: 100_000,
+                lockfile,
+                evidence: LockEvidenceMode::PrintedV1,
+            };
+            let context = uv_test::test_context!("3.12");
+            assert!(matches!(
+                check_lock_scenario(&context, &scenario, &targets, options)?,
+                LockCheckResult::Satisfiable { projections, .. }
+                    if projections == targets.len()
+            ));
+            let context = uv_test::test_context!("3.12");
+            assert!(matches!(
+                check_witnessed_project_lock_scenario(
+                    &context,
+                    &graph,
+                    &targets,
+                    &selections,
+                    options,
+                    100_000,
+                )?,
+                LockCheckResult::Satisfiable { projections, .. }
+                    if projections == targets.len() * selections.len()
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn fixed_scenarios_match_the_exhaustive_oracle() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let mut target = ScenarioTarget {

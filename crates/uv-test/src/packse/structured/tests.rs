@@ -227,6 +227,14 @@ fn only_the_generated_project_and_supported_index_policy_are_admitted() -> Resul
     unsupported.resolver_options.prereleases = false;
     unsupported.resolver_options.environments = vec!["sys_platform == 'win32'".parse()?];
     assert!(validate_scenario_policy(&unsupported).is_err());
+    let prerelease = SCENARIO
+        .replace(
+            "[packages.a.versions.\"1.0.0\"]",
+            "[packages.a.versions.\"1.0.0rc1\"]",
+        )
+        .parse::<ScenarioDocument>()?
+        .scenario()?;
+    assert!(validate_scenario_policy(&prerelease).is_err());
     Ok(())
 }
 
@@ -254,6 +262,13 @@ fn structured_locks_bind_explicit_selection_policies() -> Result<()> {
             1
         );
     }
+    assert_eq!(
+        arguments
+            .iter()
+            .filter(|argument| *argument == "--prerelease=if-necessary")
+            .count(),
+        1
+    );
     Ok(())
 }
 

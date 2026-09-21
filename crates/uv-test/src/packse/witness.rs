@@ -391,6 +391,32 @@ requires_python = ">=3.13,<3.15"
     }
 
     #[test]
+    fn certifies_prerelease_assignments_without_version_preferences() -> Result<()> {
+        let contents = r#"
+name = "prerelease-witness"
+[root]
+requires_python = ">=3.12,<3.15"
+requires = ["a"]
+[expected]
+satisfiable = true
+[packages.a.versions."1rc1"]
+[packages.a.versions."2"]
+requires = ["missing"]
+"#;
+        let prerelease = assignment(&[("a", "1rc1")]);
+        for enabled in [false, true] {
+            let document =
+                format!("{contents}\n[resolver_options]\nprereleases = {enabled}\n").parse()?;
+            let certificate = certify_project_marker_witness(&document, &prerelease, 100)?;
+            assert_eq!(certificate.assignment(), &prerelease);
+            assert!(
+                certify_project_marker_witness(&document, &assignment(&[("a", "2")]), 100).is_err()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn activation_growth_is_independent_of_root_order() -> Result<()> {
         let contents = r#"
 name = "activation-cycle"
