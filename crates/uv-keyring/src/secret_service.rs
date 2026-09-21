@@ -83,7 +83,7 @@ use std::collections::HashMap;
 
 use secret_service::{Collection, EncryptionType, Error, Item, SecretService};
 
-use crate::credential::{Credential, CredentialApi, CredentialBuilder, CredentialBuilderApi};
+use crate::credential::{Credential, CredentialApi};
 use crate::error::{Error as ErrorCode, Result, decode_password};
 
 /// The representation of an item in the secret-service.
@@ -446,31 +446,15 @@ impl SsCredential {
     }
 }
 
-/// The builder for secret-service credentials
-#[derive(Debug, Default)]
-struct SsCredentialBuilder;
-
-/// Returns an instance of the secret-service credential builder.
-///
-/// If secret-service is the default credential store,
-/// this is called once when an entry is first created.
-pub(crate) fn default_credential_builder() -> Box<CredentialBuilder> {
-    Box::new(SsCredentialBuilder {})
-}
-
-impl CredentialBuilderApi for SsCredentialBuilder {
-    /// Build an [`SsCredential`] for the given target, service, and user.
-    fn build(&self, target: Option<&str>, service: &str, user: &str) -> Result<Box<Credential>> {
-        Ok(Box::new(SsCredential::new_with_target(
-            target, service, user,
-        )?))
-    }
-
-    /// Return the underlying builder object with an `Any` type so that it can
-    /// be downgraded to an [`SsCredentialBuilder`] for platform-specific processing.
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+/// Build an [`SsCredential`] for the given target, service, and user.
+pub(crate) fn build_credential(
+    target: Option<&str>,
+    service: &str,
+    user: &str,
+) -> Result<Box<Credential>> {
+    Ok(Box::new(SsCredential::new_with_target(
+        target, service, user,
+    )?))
 }
 
 //
