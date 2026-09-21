@@ -19,8 +19,9 @@ is fresh, removes it before reset, and calls `paths::create` on the same worktre
 `git reset --hard` and submodule processing succeed. Because Git controls the worktree entry after
 the reset, a tracked symlink can redirect that final marker creation outside the checkout.
 
-No existing issue or pull request was found for this exact Git checkout-marker collision. The
-closest precedent is astral-sh/uv#19542, fixed by astral-sh/uv#19543, where `uv cache prune`
+No earlier issue or pull request was found for this exact Git checkout-marker collision. An
+external contributor has since opened astral-sh/uv#21892 in response to this report. The closest
+historical precedent is astral-sh/uv#19542, fixed by astral-sh/uv#19543, where `uv cache prune`
 followed a symlink and deleted its target outside the cache. That fix was confined to pruning in
 `uv-cache` and does not protect marker creation in `uv-git`.
 
@@ -70,18 +71,21 @@ that the marker is absent after an incomplete Git LFS checkout, and verifies rec
 marker is removed. It does not create `.ok` as a tracked repository entry or test an external
 symlink target.
 
-## Draft response
+## Proposed fix status
 
-Thanks for the report. The current checkout code does reserve `.ok` inside the Git worktree and
-recreates it after `git reset --hard`, so a repository-tracked symlink at that path can redirect the
-marker write outside the checkout. That is incorrect behavior, and we'll keep astral-sh/uv#21857
-as a separate bug.
+astral-sh/uv#21892 is an open, non-draft pull request created in response to this issue. At the time
+of review it was marked mergeable, had no maintainer review, and had not been merged. Its proposed
+changes are limited to `uv-git` plus test dependencies:
 
-The closest prior issue is astral-sh/uv#19542, fixed by astral-sh/uv#19543, but that change only
-prevents `uv cache prune` from following cache symlinks; it does not cover marker creation in
-`uv-git`. The concrete next step here is a regression test using a Git dependency that tracks `.ok`
-as a symlink, followed by changing the readiness-marker handling so it cannot follow or rely on a
-repository-controlled entry.
+- use `symlink_metadata` in `is_fresh` so a symlink does not qualify as a valid checkout marker;
+- remove any repository-created `.ok` entry after `git reset --hard` and before `paths::create`, so
+  marker creation does not follow a tracked symlink; and
+- add unit tests for replacing a marker symlink without modifying its target and for rejecting a
+  symlink as a freshness marker.
+
+The added tests directly exercise the removal-and-create sequence and the metadata predicate. They
+do not run the complete Git dependency reproduction through `GitCheckout::reset`, so the existing
+end-to-end reproduction remains useful when reviewing the proposed fix.
 
 ## Classification
 
@@ -110,6 +114,10 @@ an unsanitized ZIP member path during wheel extraction, not a Git checkout marke
 
 ## Related
 
+- astral-sh/uv#21892 — Open pull request created in response to astral-sh/uv#21857. It proposes
+  rejecting symlinks as freshness markers and unlinking a repository-controlled `.ok` entry before
+  creating uv's regular marker. It includes focused unit tests but has not yet received maintainer
+  review or been merged.
 - astral-sh/uv#19542 — Closed issue and closest conceptual precedent. `uv cache prune` canonicalized
   a symlink in a cache bucket and could delete the external target. Both reports concern uv following
   a symlink and mutating data outside its intended tree, but the command, entry ownership, operation,
