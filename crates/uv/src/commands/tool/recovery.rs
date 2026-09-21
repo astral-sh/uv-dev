@@ -255,7 +255,7 @@ impl ToolEntrypointPreflight<'_> {
 }
 
 /// The installation layout that `uv venv` will create at a tool's final path.
-pub(super) fn replacement_layout(root: &Path, interpreter: &Interpreter) -> Layout {
+fn replacement_layout(root: &Path, interpreter: &Interpreter) -> Layout {
     let scheme = interpreter.virtualenv();
     Layout {
         scheme: Scheme {
@@ -272,7 +272,7 @@ pub(super) fn replacement_layout(root: &Path, interpreter: &Interpreter) -> Layo
 impl ToolEntrypointSnapshot {
     /// Admit the known selected wheel inventories before any package changes. Pending shared
     /// sources remain subject to the complete final preflight after their real build finishes.
-    pub(super) fn preflight_selected(
+    fn preflight_selected(
         &self,
         layout: &Layout,
         site_packages: Option<&SitePackages>,
