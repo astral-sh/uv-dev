@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 21750,
+        "title": "Make Git stamping opt-in for development builds",
+        "url": "https://github.com/astral-sh/uv/pull/21750",
+        "state": "merged",
+        "reason": "astral-sh/uv#21750 directly introduced the unconditional `env!(\"PROFILE\")` check and documents the intended behavior for release-derived profiles."
+      },
+      {
+        "kind": "issue",
+        "number": 13212,
+        "title": "`version::self_version_json` and `version::version_get_fallback_unmanaged_json` test failures (outside git checkout?)",
+        "url": "https://github.com/astral-sh/uv/issues/13212",
+        "state": "closed",
+        "reason": "astral-sh/uv#13212 is related historical packaging context: version-test expectations failed for builds without upstream Git metadata, although its trigger and runtime failure differ from this compile error."
+      },
+      {
+        "kind": "pull_request",
+        "number": 13566,
+        "title": "Fix version json tests to work outside git checkout",
+        "url": "https://github.com/astral-sh/uv/pull/13566",
+        "state": "merged",
+        "reason": "astral-sh/uv#13566 fixed astral-sh/uv#13212 and introduced `git_version_info_expected`; astral-sh/uv#21750 later extended that helper with the failing profile check."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for the exact compiler error, `env!(\"PROFILE\")`, `git_version_info_expected`, `UV_INTERNAL__BUILD_GIT_INFO`, custom Cargo profiles, profile inheritance, build-script environment forwarding, Git stamping, and downstream builds without Git metadata. Source and pull-request history identified astral-sh/uv#21750 as the introducing change. astral-sh/uv#14785 and astral-sh/uv#14786 were inspected but ruled out because they concern a runtime assertion in an obsolete fallback test, not compilation under a custom profile."
+  },
+  "type": "bug",
+  "type_reason": "The integration test fails to compile in the reported release-derived custom profile because it unconditionally requires a compile-time variable that is absent from that test target. This contradicts astral-sh/uv#21750’s stated intent to support release-derived profiles. No existing issue or active pull request tracks the exact failure, so it is not a duplicate.",
+  "summary": "No existing tracker covers the same custom-profile compilation failure. astral-sh/uv#21750 introduced the failing check, while astral-sh/uv#13212 and astral-sh/uv#13566 provide related history for accommodating downstream packaging contexts.",
+  "draft_response": "Thanks for the detailed report. This is a bug. astral-sh/uv#21750 added the unconditional `env!(\"PROFILE\")` check while explicitly intending profiles derived from `release` to retain Git metadata. The crate build script attempts to expose that value to integration tests, but the test cannot compile when it is absent, as in this Fedora build. The earlier packaging fix in astral-sh/uv#13566 does not cover custom profiles.\n\nA fix should remove the hard compile-time requirement while preserving the intended distinction between development-derived and release-derived profiles; simply treating an unset value as a development build would make the test compile but would not model the Fedora build correctly. A focused pull request with coverage for a custom profile inheriting from `release` would be an appropriate next step."
+}
