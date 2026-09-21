@@ -132,8 +132,12 @@ prescribing the preferred solution. Explicit lock `environments` restrict the in
 domain and are retained in the generated project for all lock and export commands. Requested
 projections outside that domain are rejected. Environment entries must be disjoint, intersect the
 root Python range, and contain no extra or PEP 751 list markers. The marker witness proves
-satisfiability over that restricted domain. Original-derivation `structured-v1` classification still
-requires unrestricted lock environments.
+satisfiability over that restricted domain. Original-derivation `structured-v1` classification binds
+the ordered initial environments and checks that the failed effective environment lies inside the
+certified domain. Its bounded marker comparison rejects `in`, `contains`, extra, and list markers,
+and comparisons that combine more than one of `os_name`, `sys_platform`, and `platform_system`.
+Those three OS identities have native cross-variable exclusions that the capture consumer does not
+yet model.
 
 Add `--project-selections` for project optional dependencies and PEP 735 dependency groups. The
 universal lock is checked against all roots together. Frozen exports disable default groups and

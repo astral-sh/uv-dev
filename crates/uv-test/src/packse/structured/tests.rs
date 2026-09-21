@@ -226,6 +226,10 @@ fn only_the_generated_project_and_supported_index_policy_are_admitted() -> Resul
     assert!(validate_scenario_policy(&unsupported).is_err());
     unsupported.resolver_options.prereleases = false;
     unsupported.resolver_options.environments = vec!["sys_platform == 'win32'".parse()?];
+    validate_scenario_policy(&unsupported)?;
+    let restricted = ScenarioProject::new(&unsupported)?;
+    validate_project(&restricted, &restricted.pyproject()?)?;
+    unsupported.resolver_options.required_environments = vec!["sys_platform == 'win32'".parse()?];
     assert!(validate_scenario_policy(&unsupported).is_err());
     Ok(())
 }
@@ -254,6 +258,33 @@ fn structured_locks_bind_explicit_selection_policies() -> Result<()> {
             1
         );
     }
+    Ok(())
+}
+
+#[test]
+fn structured_locks_admit_only_the_generated_environment_policy() -> Result<()> {
+    let scenario = format!(
+        "{SCENARIO}\n[resolver_options]\nenvironments = [\"sys_platform == 'win32'\", \"sys_platform == 'linux'\"]\n"
+    ).parse::<ScenarioDocument>()?.scenario()?;
+    validate_scenario_policy(&scenario)?;
+    let project = ScenarioProject::new(&scenario)?;
+    let pyproject = project.pyproject()?;
+    validate_project(&project, &pyproject)?;
+    let mut changed: toml::Value = toml::from_str(&pyproject)?;
+    changed["tool"]["uv"]["environments"]
+        .as_array_mut()
+        .context("environment list")?
+        .reverse();
+    assert!(validate_project(&project, &toml::to_string(&changed)?).is_err());
+    let mut changed: toml::Value = toml::from_str(&pyproject)?;
+    changed["tool"]["uv"]["index-strategy"] = "unsafe-best-match".into();
+    assert!(validate_project(&project, &toml::to_string(&changed)?).is_err());
+    let mut overlapping = scenario;
+    overlapping
+        .resolver_options
+        .environments
+        .push("python_version >= '3.12'".parse()?);
+    assert!(validate_scenario_policy(&overlapping).is_err());
     Ok(())
 }
 

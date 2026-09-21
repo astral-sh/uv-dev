@@ -835,6 +835,56 @@ requires_python = ">=3.13,<3.15"
 }
 
 #[test]
+fn structured_restricted_project_locks_match_their_concrete_projections() -> Result<()> {
+    let graph = WitnessedProjectGraph {
+        document: r#"
+name = "structured-restricted-lock-domain"
+[root]
+requires_python = ">=3.12,<3.15"
+requires = ["a", "missing; sys_platform != 'win32' and sys_platform != 'linux'"]
+optional_dependencies = { feature = ["a"] }
+dependency_groups = { dev = ["a"] }
+[expected]
+satisfiable = true
+[resolver_options]
+fork_strategy = "fewest"
+environments = ["sys_platform == 'win32' and python_version >= '3.13'", "sys_platform == 'linux' and python_version >= '3.13'"]
+[packages.a.versions."1.0.0"]
+requires_python = ">=3.13,<3.15"
+"#
+        .parse()?,
+        assignment: [("a".parse()?, "1.0.0".parse()?)].into_iter().collect(),
+    };
+    let scenario = graph.document.scenario()?;
+    let selections = ScenarioProject::new(&scenario)?.selection_matrix();
+    let targets = ScenarioTarget::matrix(
+        &["3.13", "3.14"]
+            .map(|version| PythonVersion::from_str(version).expect("valid Python version")),
+        &[ScenarioPlatform::Windows, ScenarioPlatform::Linux],
+    );
+    for lockfile in [LockfileMode::Standard, LockfileMode::WithoutMetadata] {
+        let context = uv_test::test_context!("3.13");
+        let result = check_witnessed_project_lock_scenario(
+            &context,
+            &graph,
+            &targets,
+            &selections,
+            LockCheckOptions {
+                max_states: 100_000,
+                lockfile,
+                evidence: LockEvidenceMode::StructuredV1,
+            },
+            100_000,
+        )?;
+        let LockCheckResult::Satisfiable { projections, .. } = result else {
+            bail!("the structured restricted witness must be satisfiable");
+        };
+        assert_eq!(projections, targets.len() * selections.len());
+    }
+    Ok(())
+}
+
+#[test]
 fn structured_project_locks_match_their_concrete_projections() -> Result<()> {
     let targets = ScenarioTarget::matrix(
         &["3.12", "3.13", "3.14"]
