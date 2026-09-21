@@ -347,14 +347,6 @@ kind = "reexport"
 level = "expect"
 reason = "typed rejection reason for checked interval encoding"
 
-[[override]]
-lint = "hawk::unnecessary_public"
-crate = "uv_pep440"
-item = "version_ranges_encoding::EncodedVersionRanges::into_ranges"
-kind = "inherent_method"
-level = "expect"
-reason = "reconstructs checked candidate-membership intervals"
-
 [[exclude]]
 crate = "uv_extract"
 module = "dirhash"
