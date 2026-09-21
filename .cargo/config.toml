@@ -1,6 +1,10 @@
 [alias]
 dev = "run --package uv-dev --features dev"
 
+[env]
+# Let snapshot tests run directly without invoking Cargo to locate the workspace.
+INSTA_WORKSPACE_ROOT = { value = ".", relative = true }
+
 # statically link the C runtime so the executable does not depend on
 # that shared/dynamic library.
 #
