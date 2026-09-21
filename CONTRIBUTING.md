@@ -255,6 +255,19 @@ deletion-minimal result only means that no supported single deletion retains the
 the graph is globally minimal. The output records the concrete Python and platform target and avoids
 claiming a preferred solution or universal satisfiability from one environment.
 
+To measure version duplication in an existing universal lockfile, use:
+
+```shell
+cargo dev score-lock path/to/uv.lock
+```
+
+This reads the lockfile without resolving or modifying it and prints a JSON inventory. Its
+`excess_versions` score sums the number of versions beyond the first for each normalized package
+name and exact serialized source. Distinct registries, Git revisions, and local source kinds are
+kept separate. Unversioned records are reported separately. Compare scores only after checking the
+locks' correctness and using the same project, index inputs, and resolver policy; a lower score is
+not a proof of global optimality or equivalent marker coverage.
+
 ### Snapshot testing
 
 uv uses [insta](https://insta.rs/) for snapshot testing. It's recommended (but not necessary) to use

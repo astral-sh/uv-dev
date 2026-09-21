@@ -22,6 +22,7 @@ use crate::list_packages::ListPackagesArgs;
 use crate::minimize_scenario::Args as MinimizeScenarioArgs;
 #[cfg(feature = "render")]
 use crate::render_benchmarks::RenderBenchmarksArgs;
+use crate::score_lock::Args as ScoreLockArgs;
 use crate::validate_zip::ValidateZipArgs;
 use crate::wheel_metadata::WheelMetadataArgs;
 
@@ -40,6 +41,7 @@ mod generate_sysconfig_mappings;
 mod list_packages;
 mod minimize_scenario;
 mod render_benchmarks;
+mod score_lock;
 mod validate_zip;
 mod wheel_metadata;
 
@@ -51,6 +53,8 @@ enum Cli {
     CheckScenarios(CheckScenariosArgs),
     /// Reduce a fixed-environment resolver counterexample to a replayable Packse fixture.
     MinimizeScenario(MinimizeScenarioArgs),
+    /// Count source-qualified duplicate versions in an existing universal lockfile.
+    ScoreLock(ScoreLockArgs),
     /// Display the metadata for a `.whl` at a given URL.
     WheelMetadata(WheelMetadataArgs),
     /// Validate that a `.whl` or `.zip` file at a given URL is a valid ZIP file.
@@ -98,6 +102,7 @@ pub async fn run() -> Result<()> {
     match cli {
         Cli::CheckScenarios(args) => check_scenarios::main(&args)?,
         Cli::MinimizeScenario(args) => minimize_scenario::main(&args)?,
+        Cli::ScoreLock(args) => score_lock::main(&args)?,
         Cli::WheelMetadata(args) => wheel_metadata::wheel_metadata(args, environment).await?,
         Cli::ValidateZip(args) => validate_zip::validate_zip(args, environment).await?,
         Cli::Compile(args) => compile::compile(args).await?,
@@ -138,6 +143,12 @@ mod tests {
     fn scenario_checker_command_is_registered() {
         let command = Cli::command();
         assert!(command.find_subcommand("check-scenarios").is_some());
+    }
+
+    #[test]
+    fn lock_score_requires_an_input_file() {
+        assert!(Cli::try_parse_from(["uv-dev", "score-lock", "uv.lock"]).is_ok());
+        assert!(Cli::try_parse_from(["uv-dev", "score-lock"]).is_err());
     }
 
     #[test]

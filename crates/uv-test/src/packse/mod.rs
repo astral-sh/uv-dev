@@ -8,6 +8,7 @@ pub mod check;
 mod derivation;
 mod evidence;
 pub mod generate;
+pub mod lock_score;
 pub mod minimize;
 pub mod oracle;
 pub mod project;
