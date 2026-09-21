@@ -1,47 +1,63 @@
-# Test `git_version_info_expected` doesn’t compile with custom profile: `PROFILE` is unset
+# Test helper function `git_version_info_expected` doesn’t compile with custom profile: `PROFILE` is unset
 
 Issue: astral-sh/uv#21884
 
-Classification: needs more information
+Classification: downstream packaging issue (not an upstream bug)
 
 ## Summary
 
-The report says Fedora builds uv and its tests with a custom Cargo profile named `rpm` that
-inherits from `release`, and that the `git_version_info_expected` integration-test helper fails to
-compile because `env!("PROFILE")` has no compile-time value. The reported environment is Fedora
-Rawhide x86_64, uv 0.12.7, and Python 3.15.0rc2, but the report does not include the Cargo command,
-the `rpm` profile definition, the Cargo/Rust versions, or the Fedora RPM macro expansion.
+Fedora builds uv and its tests with a custom Cargo profile named `rpm` that inherits from
+`release`. The reported `git_version_info_expected` compilation failure is explained by Fedora's
+Rawhide packaging: `uv.spec` deletes `crates/uv/build.rs` and removes its `embed-manifest` build
+dependency. That downstream change was based on the script's former Windows-only responsibility.
 
-The ordinary Cargo path does not show the failure. At the exact referenced commit,
-`crates/uv/build.rs` receives Cargo's normalized profile value and emits
-`cargo:rustc-env=PROFILE=release`. Cargo then makes that value available while compiling the
-integration-test target. The downstream setup must differ in some unreported way before the
-reported result can be independently reproduced.
+astral-sh/uv#21750 gave the same build script an additional cross-platform responsibility. It now
+reads Cargo's normalized `PROFILE` value and emits `cargo:rustc-env=PROFILE=...` for the `uv`
+package, making the value available to `env!("PROFILE")` in the integration test. Deleting the
+script therefore directly removes the compile-time value and produces the reported error. If the
+script is retained, Cargo normalizes Fedora's release-derived `rpm` profile to `release`, which is
+the value expected by the test and Git-stamping logic.
 
 ## Classification
 
-Needs more information. The compiler error in the report is plausible if the integration-test
-target is compiled without the `crates/uv/build.rs` output, but neither uv's actual integration
-target nor a minimal equivalent failed under a standard custom profile inheriting from `release`.
-Source inspection alone is not sufficient to classify the Fedora-specific behavior as reproduced.
+This is a downstream packaging issue, not an upstream bug. A maintainer identified the deletion in
+Fedora's release manifest and stated that relying on the forwarded `PROFILE` value is intentional.
+The Fedora Rawhide `uv.spec` confirms that it deletes `crates/uv/build.rs` under a stale comment
+saying the script only embeds a Windows manifest. Source inspection confirms that the upstream
+script now also forwards `PROFILE` on every platform.
 
-The exact Fedora build/test command and macro expansion, the complete `rpm` profile definition,
-Cargo and Rust versions, and any downstream patches or flags that affect build scripts or test
-target compilation are needed. In particular, maintainers need to know whether Fedora invokes
-`rustc` for the integration test outside the Cargo package build that generated the build-script
-metadata.
+The previous “needs more information” classification is resolved: the missing Fedora command and
+profile details are no longer required to explain the failure. The ordinary Cargo path and a
+minimal equivalent both work because they retain and run the build script.
 
-## Reproduction
+## Cause and downstream fix
 
-Outcome: needs more information.
+Fedora's preparation step currently performs both of these downstream changes:
 
-The check used Ubuntu 24.04.5 x86_64, Cargo 1.98.1, Rust 1.98.1, and checkout commit
-`a1b84bcbda122236faae8fa5fdcbe16cfb76cde2`, which is the commit linked by the report. The installed
-uv was 0.12.13 and the installed Python was 3.12.3; neither executable participates in expansion of
-the Rust compile-time environment variable.
+```console
+rm --verbose crates/uv/build.rs
+tomcli set crates/uv/Cargo.toml del build-dependencies.embed-manifest
+```
 
-With the parent process's `PROFILE` removed and all Cargo, target, and uv cache state under a fresh
-runner temporary directory, uv's actual integration-test crate was checked with a custom profile:
+The first command removes the producer of the integration test's compile-time `PROFILE` value. The
+second removes a dependency imported by that script, so retaining the script also requires retaining
+the build dependency or replacing the downstream patch with an equivalent that preserves the
+script's new profile-forwarding behavior.
+
+The appropriate next step is to update Fedora's packaging rather than change
+`git_version_info_expected` to tolerate an absent value. Treating an absent value as a development
+profile would compile, but would incorrectly model an `rpm` profile that inherits from `release`.
+The reporter's temporary patch that returns `false` is a workaround only; it disables the relevant
+Git-metadata expectation.
+
+## Reproduction and verification
+
+Outcome: explained by downstream modification; not reproducible with the upstream build script
+intact.
+
+The earlier check used Ubuntu 24.04.5 x86_64, Cargo 1.98.1, Rust 1.98.1, and checkout commit
+`a1b84bcbda122236faae8fa5fdcbe16cfb76cde2`. With the parent process's `PROFILE` removed, uv's
+actual integration-test crate compiled successfully under a custom release-derived profile:
 
 ```console
 $ env -u PROFILE \
@@ -54,42 +70,41 @@ $ env -u PROFILE \
     Finished `rpm` profile [optimized] target(s) in 1m 04s
 ```
 
-This command compiles `crates/uv/tests/it/version.rs`, including the reported
-`env!("PROFILE")` expression. The uv build-script output for this build was:
+The retained `crates/uv/build.rs` emitted:
 
 ```text
 cargo:rustc-env=PROFILE=release
 ```
 
-A separate minimal crate reproducing the same mechanism also succeeded with
-`env -u PROFILE cargo test --profile rpm`: its build script read `PROFILE`, forwarded it with
-`cargo:rustc-env`, and its integration test verified `env!("PROFILE") == "release"`.
-
-Existing integration coverage is `crates/uv/tests/it/version.rs`, test `self_version_json`; it calls
-`git_version_info_expected` and therefore confirms that the helper compiles in normal test builds.
-There is no existing test that invokes Cargo recursively with a custom release-derived profile or
-models Fedora's RPM build macros, so it does not cover the unreported downstream path.
+A minimal crate using the same build-script forwarding mechanism also passed. These results align
+with the newly identified Fedora-specific deletion: a standard custom profile is supported, while
+removing the build script removes the value required by the integration test.
 
 ## Related
 
 - astral-sh/uv#21750 (merged pull request), “Make Git stamping opt-in for development builds” —
-  introduced the profile-sensitive expectation and intends release-derived profiles to retain Git
-  metadata.
+  added the cross-platform profile-forwarding responsibility to `crates/uv/build.rs` and introduced
+  the profile-sensitive test expectation. It is the key change that made Fedora's existing deletion
+  invalid.
 - astral-sh/uv#13212 (closed issue), “`version::self_version_json` and
   `version::version_get_fallback_unmanaged_json` test failures (outside git checkout?)” — concerns
-  snapshot failures from an unpacked source archive, not a custom-profile compile error.
+  snapshot failures from an unpacked source archive, not deletion of the package build script.
 - astral-sh/uv#13566 (merged pull request), “Fix version json tests to work outside git checkout” —
   introduced `git_version_info_expected`; astral-sh/uv#21750 later added the profile check.
 
-## Draft response
+## Evidence status
 
-Thanks for the detailed report. We could not reproduce the missing compile-time `PROFILE` value
-with standard Cargo behavior at the referenced commit. With `PROFILE` removed from the parent
-environment, an `rpm` profile inheriting from `release` successfully compiled uv's `it` target;
-Cargo gave `crates/uv/build.rs` the normalized value `release`, and its `cargo:rustc-env` output
-made that value available to `env!("PROFILE")`.
+Confirmed from upstream source and astral-sh/uv#21750:
 
-Could you provide the exact Fedora build and test commands (including expanded RPM macros), the
-complete custom-profile configuration, Cargo and Rust versions, and any downstream patches or
-flags affecting build scripts? Those details are needed to reproduce how the integration test is
-compiled without the uv build-script environment.
+- Cargo supplies `PROFILE` to the build script.
+- `crates/uv/build.rs` forwards it with `cargo:rustc-env`.
+- A profile inheriting from `release` is forwarded as `release`.
+
+Confirmed from Fedora Rawhide's current `uv.spec`:
+
+- The packaging deletes `crates/uv/build.rs`.
+- The accompanying comment assumes that the script only handles Windows manifest embedding.
+- The packaging also removes the script's `embed-manifest` build dependency.
+
+No upstream source change is currently indicated. The actionable correction is in Fedora's package
+preparation steps.
