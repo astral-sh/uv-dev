@@ -189,7 +189,7 @@ impl Budget {
         self.charge(Resource::Work, amount)
     }
 
-    pub(super) fn components(&mut self, count: usize) -> Result<(), Stop> {
+    fn components(&mut self, count: usize) -> Result<(), Stop> {
         self.check_components(count)?;
         self.work(count)
     }
@@ -228,7 +228,7 @@ impl Budget {
         Ok(value.to_owned())
     }
 
-    pub(super) fn decimal(&mut self, value: u64) -> Result<(), Stop> {
+    fn decimal(&mut self, value: u64) -> Result<(), Stop> {
         let digits = value.checked_ilog10().map_or(1, |value| value as usize + 1);
         self.atom(digits)
     }
