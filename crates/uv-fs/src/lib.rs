@@ -327,12 +327,32 @@ pub fn replace_symlink(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io:
                     .expect("Symlink path must have a parent"),
                 |path| fs_err::os::unix::fs::symlink(src.as_ref(), path),
             )?;
-            fs_err::rename(temp_file.path(), dst.as_ref())?;
+            persist_temporary_symlink(temp_file, dst.as_ref())?;
 
             Ok(())
         }
         Err(err) => Err(err),
     }
+}
+
+#[cfg(unix)]
+fn persist_temporary_symlink(
+    from: tempfile::NamedTempFile<()>,
+    to: impl AsRef<Path>,
+) -> io::Result<()> {
+    // Disarm cleanup before another writer can reuse the temporary path.
+    let to = to.as_ref();
+    from.persist(to).map_err(|err| {
+        io::Error::new(
+            err.error.kind(),
+            format!(
+                "failed to rename file from {} to {}: {}",
+                err.file.path().display(),
+                to.display(),
+                err.error
+            ),
+        )
+    })
 }
 
 /// Create a directory link at `dst` pointing to `src`.
@@ -1026,8 +1046,116 @@ pub fn clear_virtualenv(location: &Path) -> io::Result<bool> {
 #[cfg(test)]
 mod tests {
     use std::assert_matches;
+    #[cfg(unix)]
+    use std::cell::RefCell;
 
     use super::*;
+
+    /// Reuse the temporary pathname after rename and before its cleanup owner is dropped.
+    #[cfg(unix)]
+    struct ReuseSymlinkPath<'a> {
+        source: &'a Path,
+        destination: &'a Path,
+        result: &'a RefCell<io::Result<()>>,
+    }
+
+    #[cfg(unix)]
+    impl AsRef<Path> for ReuseSymlinkPath<'_> {
+        fn as_ref(&self) -> &Path {
+            self.destination
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for ReuseSymlinkPath<'_> {
+        fn drop(&mut self) {
+            *self.result.borrow_mut() = fs_err::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(self.source)
+                .and_then(|mut file| file.write_all(b"replacement"));
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn persist_symlink_does_not_remove_reused_temporary_path() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let target = directory.path().join("target");
+        fs_err::write(&target, "target contents")?;
+        let file = tempfile::Builder::new().make_in(directory.path(), |path| {
+            fs_err::os::unix::fs::symlink(&target, path)
+        })?;
+        let source = file.path().to_path_buf();
+        let destination = directory.path().join("destination");
+        fs_err::os::unix::fs::symlink("previous target", &destination)?;
+        let result = RefCell::new(Err(io::Error::other("source path was not reused")));
+
+        persist_temporary_symlink(
+            file,
+            ReuseSymlinkPath {
+                source: &source,
+                destination: &destination,
+                result: &result,
+            },
+        )?;
+
+        result.into_inner()?;
+        assert_eq!(fs_err::read_link(&destination)?, target);
+        assert_eq!(fs_err::read(&source)?, b"replacement");
+        assert_eq!(fs_err::read_to_string(&target)?, "target contents");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn persist_symlink_removes_temporary_path_on_error() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let target = directory.path().join("target");
+        fs_err::write(&target, "target contents")?;
+        let file = tempfile::Builder::new().make_in(directory.path(), |path| {
+            fs_err::os::unix::fs::symlink(&target, path)
+        })?;
+        let source = file.path().to_path_buf();
+        let destination = directory.path().join("missing").join("destination");
+
+        let Err(expected) = fs_err::rename(&source, &destination) else {
+            return Err(io::Error::other("rename to missing directory succeeded"));
+        };
+        let Err(error) = persist_temporary_symlink(file, &destination) else {
+            return Err(io::Error::other("persist to missing directory succeeded"));
+        };
+
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert_eq!(error.to_string(), expected.to_string());
+        assert_matches!(fs_err::symlink_metadata(&source), Err(err) if err.kind() == io::ErrorKind::NotFound);
+        assert_matches!(fs_err::symlink_metadata(&destination), Err(err) if err.kind() == io::ErrorKind::NotFound);
+        assert_eq!(fs_err::read_to_string(&target)?, "target contents");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn replace_symlink_replaces_the_link_without_removing_either_target() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let original = directory.path().join("original");
+        let replacement = directory.path().join("replacement");
+        let destination = directory.path().join("destination");
+        fs_err::write(&original, "original contents")?;
+        fs_err::write(&replacement, "replacement contents")?;
+        fs_err::os::unix::fs::symlink(&original, &destination)?;
+
+        replace_symlink(&replacement, &destination)?;
+
+        assert_eq!(fs_err::read_link(&destination)?, replacement);
+        assert_eq!(fs_err::read_to_string(&original)?, "original contents");
+        assert_eq!(
+            fs_err::read_to_string(&replacement)?,
+            "replacement contents"
+        );
+        assert_eq!(fs_err::read_dir(directory.path())?.count(), 3);
+        Ok(())
+    }
 
     #[test]
     fn remove_symlink_removes_directory_link_without_removing_target() -> io::Result<()> {
