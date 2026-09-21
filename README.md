@@ -16,7 +16,9 @@ reads Cargo's normalized `PROFILE` value and emits `cargo:rustc-env=PROFILE=...`
 package, making the value available to `env!("PROFILE")` in the integration test. Deleting the
 script therefore directly removes the compile-time value and produces the reported error. If the
 script is retained, Cargo normalizes Fedora's release-derived `rpm` profile to `release`, which is
-the value expected by the test and Git-stamping logic.
+the value expected by the test and Git-stamping logic. The reporter has confirmed this diagnosis:
+retaining the build script while patching out its `embed-manifest` dependency makes the Fedora build
+work.
 
 ## Classification
 
@@ -28,7 +30,8 @@ script now also forwards `PROFILE` on every platform.
 
 The previous “needs more information” classification is resolved: the missing Fedora command and
 profile details are no longer required to explain the failure. The ordinary Cargo path and a
-minimal equivalent both work because they retain and run the build script.
+minimal equivalent both work because they retain and run the build script, and the reporter has now
+confirmed the same remedy downstream.
 
 ## Cause and downstream fix
 
@@ -44,16 +47,18 @@ second removes a dependency imported by that script, so retaining the script als
 the build dependency or replacing the downstream patch with an equivalent that preserves the
 script's new profile-forwarding behavior.
 
-The appropriate next step is to update Fedora's packaging rather than change
-`git_version_info_expected` to tolerate an absent value. Treating an absent value as a development
-profile would compile, but would incorrectly model an `rpm` profile that inherits from `release`.
-The reporter's temporary patch that returns `false` is a workaround only; it disables the relevant
-Git-metadata expectation.
+The appropriate fix is to update Fedora's packaging rather than change
+`git_version_info_expected` to tolerate an absent value. The reporter is now doing this by patching
+the unwanted `embed-manifest` dependency out of the build script instead of deleting the script,
+and reports that this works. Treating an absent value as a development profile would compile, but
+would incorrectly model an `rpm` profile that inherits from `release`. The earlier temporary patch
+that returned `false` was only a workaround because it disabled the relevant Git-metadata
+expectation.
 
 ## Reproduction and verification
 
-Outcome: explained by downstream modification; not reproducible with the upstream build script
-intact.
+Outcome: explained by downstream modification and confirmed fixed downstream by retaining the build
+script; not reproducible with the upstream build script intact.
 
 The earlier check used Ubuntu 24.04.5 x86_64, Cargo 1.98.1, Rust 1.98.1, and checkout commit
 `a1b84bcbda122236faae8fa5fdcbe16cfb76cde2`. With the parent process's `PROFILE` removed, uv's
@@ -105,6 +110,11 @@ Confirmed from Fedora Rawhide's current `uv.spec`:
 - The packaging deletes `crates/uv/build.rs`.
 - The accompanying comment assumes that the script only handles Windows manifest embedding.
 - The packaging also removes the script's `embed-manifest` build dependency.
+
+Confirmed by the reporter's downstream test:
+
+- Keeping `crates/uv/build.rs` while patching out only the `embed-manifest` dependency resolves the
+  compilation failure.
 
 No upstream source change is currently indicated. The actionable correction is in Fedora's package
 preparation steps.
