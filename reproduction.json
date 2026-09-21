@@ -1,0 +1,4 @@
+{
+  "reproduction": "needs_more_information",
+  "reason": "At commit a1b84bcbda122236faae8fa5fdcbe16cfb76cde2 on Ubuntu x86_64 with Cargo/Rust 1.98.1, `env -u PROFILE cargo check --package uv --test it --profile rpm --config 'profile.rpm.inherits=\"release\"'` succeeded. The build script emitted `cargo:rustc-env=PROFILE=release`, so the reported `env!(\"PROFILE\")` error did not occur. A matching minimal integration-test fixture also passed. Reproduction requires the exact Fedora commands and expanded RPM macros, complete profile configuration, Cargo/Rust versions, downstream patches, and flags affecting build scripts."
+}
