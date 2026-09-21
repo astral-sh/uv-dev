@@ -3,9 +3,11 @@ use std::str::FromStr;
 use anyhow::{Context, Result, bail};
 
 use uv_python::PythonVersion;
+use uv_static::EnvVars;
+use uv_test::packse::PackseServer;
 use uv_test::packse::check::{
-    LockCheckOptions, LockCheckResult, LockScenarioFailureKind, LockfileMode, ScenarioPlatform,
-    ScenarioTarget, check_lock_scenario, check_lock_scenario_with_artifacts,
+    LockCheckOptions, LockCheckResult, LockEvidenceMode, LockScenarioFailureKind, LockfileMode,
+    ScenarioPlatform, ScenarioTarget, check_lock_scenario, check_lock_scenario_with_artifacts,
     check_project_lock_scenario, check_project_lock_scenario_with_artifacts, check_scenario,
     check_witnessed_project_lock_scenario, check_witnessed_project_lock_scenario_with_artifacts,
 };
@@ -163,6 +165,7 @@ fn metadata_free_locks_match_their_concrete_projections() -> Result<()> {
     let options = LockCheckOptions {
         max_states: 100_000,
         lockfile: LockfileMode::WithoutMetadata,
+        evidence: LockEvidenceMode::PrintedV1,
     };
     let scenario = Scenario::from_path(
         &context
@@ -285,6 +288,7 @@ fn captures_unsampled_universal_conflicts() -> Result<()> {
         LockCheckOptions {
             max_states: 100_000,
             lockfile: LockfileMode::WithoutMetadata,
+            evidence: LockEvidenceMode::PrintedV1,
         },
         &directory,
     )
@@ -655,6 +659,7 @@ fn certified_project_locks_match_their_concrete_projections() -> Result<()> {
             LockCheckOptions {
                 max_states: 100_000,
                 lockfile,
+                evidence: LockEvidenceMode::PrintedV1,
             },
             100_000,
         )?;
@@ -664,6 +669,275 @@ fn certified_project_locks_match_their_concrete_projections() -> Result<()> {
                 if projections == targets.len() * selections.len()
         ));
     }
+    Ok(())
+}
+
+#[test]
+fn structured_project_locks_match_their_concrete_projections() -> Result<()> {
+    let targets = ScenarioTarget::matrix(
+        &["3.12", "3.13", "3.14"]
+            .map(|version| PythonVersion::from_str(version).expect("valid Python version")),
+        &[
+            ScenarioPlatform::Linux,
+            ScenarioPlatform::Macos,
+            ScenarioPlatform::Windows,
+        ],
+    );
+    for lockfile in [LockfileMode::Standard, LockfileMode::WithoutMetadata] {
+        let context = uv_test::test_context!("3.12")
+            .with_env(EnvVars::UV_OFFLINE, "1")
+            .with_env(EnvVars::UV_INDEX_STRATEGY, "unsafe-best-match")
+            .with_env(EnvVars::UV_TORCH_BACKEND, "cu129")
+            .with_env("UV_INDEX_PRIVATE_PASSWORD", "unexpected")
+            .with_env(EnvVars::UV_CONFIG_FILE, "unexpected.toml")
+            .with_env(EnvVars::UV_INTERNAL__SHOW_DERIVATION_TREE, "1")
+            .with_env(EnvVars::UV_INTERNAL__RESOLVER_CAPTURE, "inherited.json")
+            .with_env(
+                EnvVars::UV_INTERNAL__RESOLVER_CAPTURE_REQUEST,
+                "ffffffffffffffffffffffffffffffff",
+            );
+        let graph = WitnessedProjectGraph {
+            document: ScenarioDocument::from_path(
+                &context
+                    .workspace_root
+                    .join("test/scenarios/fork/non-local-fork-marker-unreachable.toml"),
+            )?,
+            assignment: [("a".parse()?, "1.0.0".parse()?)].into_iter().collect(),
+        };
+        let scenario = graph.document.scenario()?;
+        let selections = ScenarioProject::new(&scenario)?.selection_matrix();
+        let result = check_witnessed_project_lock_scenario(
+            &context,
+            &graph,
+            &targets,
+            &selections,
+            LockCheckOptions {
+                max_states: 100_000,
+                lockfile,
+                evidence: LockEvidenceMode::StructuredV1,
+            },
+            100_000,
+        )?;
+        let LockCheckResult::Satisfiable { projections, .. } = result else {
+            bail!("the structured witnessed lock must be satisfiable");
+        };
+        assert_eq!(projections, targets.len() * selections.len());
+        assert!(!context.temp_dir.join("inherited.json").exists());
+    }
+    Ok(())
+}
+
+#[test]
+fn missing_index_packages_only_create_an_empty_credential_lock() -> Result<()> {
+    let scenario = r#"
+name = "missing-index-package"
+[root]
+requires_python = ">=3.12,<3.13"
+requires = ["missing"]
+[expected]
+satisfiable = false
+"#
+    .parse::<ScenarioDocument>()?
+    .scenario()?;
+    for lockfile in [LockfileMode::Standard, LockfileMode::WithoutMetadata] {
+        let context = uv_test::test_context!("3.12");
+        fs_err::write(
+            context.temp_dir.join("pyproject.toml"),
+            r#"[project]
+name = "missing-index-package"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = ["missing"]
+"#,
+        )?;
+        let credentials = context.temp_dir.join("credentials");
+        fs_err::create_dir(&credentials)?;
+        let server = PackseServer::from_scenario_without_build_dependencies(&scenario);
+        let mut command = context.lock();
+        command
+            .args([
+                "--no-config",
+                "--no-build",
+                "--no-offline",
+                "--index-strategy",
+                "first-index",
+                "--keyring-provider",
+                "disabled",
+                "--python",
+                "3.12",
+                "--no-python-downloads",
+            ])
+            .arg("--index-url")
+            .arg(server.index_url())
+            .env(EnvVars::UV_CREDENTIALS_DIR, &credentials);
+        if matches!(lockfile, LockfileMode::WithoutMetadata) {
+            command.args(["--preview-features", "lock-without-metadata"]);
+        }
+        let output = command.output()?;
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
+        let mut entries = fs_err::read_dir(&credentials)?;
+        let lock = entries.next().context("the credential lock")??;
+        assert_eq!(lock.file_name(), "credentials.toml.lock");
+        assert!(lock.file_type()?.is_file());
+        assert!(fs_err::read(lock.path())?.is_empty());
+        assert!(entries.next().is_none());
+        assert!(!context.temp_dir.join("uv.lock").exists());
+    }
+    Ok(())
+}
+
+#[test]
+fn structured_project_locks_do_not_apply_an_available_version_cutoff() -> Result<()> {
+    let targets = ScenarioTarget::matrix(
+        &[PythonVersion::from_str("3.12").expect("valid Python version")],
+        &[ScenarioPlatform::Linux],
+    );
+    for lockfile in [LockfileMode::Standard, LockfileMode::WithoutMetadata] {
+        let context = uv_test::test_context!("3.12").with_env(
+            EnvVars::UV_TEST_AVAILABLE_VERSION_CUTOFF,
+            "2024-03-25T00:00:00Z",
+        );
+        let graph = WitnessedProjectGraph {
+            document: ScenarioDocument::from_path(
+                &context
+                    .workspace_root
+                    .join("test/scenarios/project/available-version-cutoff.toml"),
+            )?,
+            assignment: [
+                ("a".parse()?, "2.0.0".parse()?),
+                ("b".parse()?, "2.0.0".parse()?),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        let certificate = graph.certify_universal_witness()?;
+        assert_eq!(certificate.assigned_packages, 2);
+        assert_eq!(certificate.checked_requirements, 3);
+        let scenario = graph.document.scenario()?;
+        let selections = ScenarioProject::new(&scenario)?.selection_matrix();
+        let result = check_witnessed_project_lock_scenario(
+            &context,
+            &graph,
+            &targets,
+            &selections,
+            LockCheckOptions {
+                max_states: 100_000,
+                lockfile,
+                evidence: LockEvidenceMode::StructuredV1,
+            },
+            100_000,
+        )?;
+        let LockCheckResult::Satisfiable { projections, .. } = result else {
+            bail!("the complete candidate inventory must admit a==2 and b==2");
+        };
+        assert_eq!(projections, targets.len() * selections.len());
+
+        // A separate ordinary lock of the same generated project demonstrates the policy being
+        // excluded from structured evidence: the cutoff hides the only compatible `a` candidate.
+        let cutoff_context = uv_test::test_context!("3.12");
+        fs_err::write(
+            cutoff_context.temp_dir.join("pyproject.toml"),
+            fs_err::read(context.temp_dir.join("pyproject.toml"))?,
+        )?;
+        let server = PackseServer::from_scenario_without_build_dependencies(&scenario);
+        let mut command = cutoff_context.lock();
+        command
+            .args([
+                "--no-config",
+                "--no-build",
+                "--no-offline",
+                "--index-strategy",
+                "first-index",
+                "--keyring-provider",
+                "disabled",
+                "--python",
+                "3.12",
+                "--no-python-downloads",
+            ])
+            .arg("--index-url")
+            .arg(server.index_url())
+            .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+            .env(
+                EnvVars::UV_TEST_AVAILABLE_VERSION_CUTOFF,
+                "2024-03-25T00:00:00Z",
+            );
+        match lockfile {
+            LockfileMode::Standard => {}
+            LockfileMode::WithoutMetadata => {
+                command.args(["--preview-features", "lock-without-metadata"]);
+            }
+        }
+        let output = command.output()?;
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
+        assert!(!cutoff_context.temp_dir.join("uv.lock").exists());
+    }
+    Ok(())
+}
+
+#[test]
+fn structured_project_locks_cannot_certify_a_genuine_conflict() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let document = ScenarioDocument::from_path(
+        &context
+            .workspace_root
+            .join("test/scenarios/project/combined-roots-conflict.toml"),
+    )?;
+    let scenario = document.scenario()?;
+    let selections = ScenarioProject::new(&scenario)?.selection_matrix();
+    let targets = ScenarioTarget::matrix(
+        &[PythonVersion::from_str("3.12").expect("valid Python version")],
+        &[ScenarioPlatform::Linux],
+    );
+    let result = check_project_lock_scenario(
+        &context,
+        &scenario,
+        &targets,
+        &selections,
+        LockCheckOptions::new(100_000),
+    )?;
+    assert!(matches!(result, LockCheckResult::Unsatisfiable { .. }));
+
+    let context = uv_test::test_context!("3.12");
+    let graph = WitnessedProjectGraph {
+        document,
+        assignment: [
+            ("base".parse()?, "1".parse()?),
+            ("dep".parse()?, "1".parse()?),
+        ]
+        .into_iter()
+        .collect(),
+    };
+    let directory = context.temp_dir.join("failure");
+    let error = check_witnessed_project_lock_scenario_with_artifacts(
+        &context,
+        &graph,
+        &targets,
+        &selections,
+        LockCheckOptions {
+            max_states: 100_000,
+            lockfile: LockfileMode::Standard,
+            evidence: LockEvidenceMode::StructuredV1,
+        },
+        100_000,
+        &directory,
+    )
+    .expect_err("the conflicting project has no whole-domain assignment");
+    assert_eq!(LockScenarioFailureKind::from_error(&error), None);
+    insta::assert_snapshot!(error, @"dep==1 does not satisfy `dep==2`");
+    assert!(!context.temp_dir.join("pyproject.toml").exists());
+    assert!(!directory.exists());
     Ok(())
 }
 
@@ -701,6 +975,7 @@ fn witnessed_reduction_requires_a_reproducing_lock_failure() -> Result<()> {
                     LockCheckOptions {
                         max_states: 100_000,
                         lockfile,
+                        evidence: LockEvidenceMode::PrintedV1,
                     },
                     100_000,
                 )

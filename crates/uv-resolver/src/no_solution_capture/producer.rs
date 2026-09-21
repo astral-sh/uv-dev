@@ -9,10 +9,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use uv_distribution_types::{IndexCapabilities, IndexLocations, IndexUrl, RequiresPython};
 use uv_normalize::PackageName;
-use uv_pep440::{
-    EncodedVersion, EncodedVersionRanges, LocalSegment, LocalVersionSlice, MIN_VERSION, Operator,
-    Version,
-};
+use uv_pep440::{EncodedVersion, EncodedVersionRanges, MIN_VERSION, Operator, Version};
 use uv_pep508::{
     CanonicalMarkerValueString, CanonicalMarkerValueVersion, MarkerTree, MarkerTreeKind,
 };
@@ -472,35 +469,7 @@ impl Collector {
     }
 
     fn preflight_version(&mut self, version: &Version) -> Result<(), Stop> {
-        self.budget.work(1)?;
-        let release = version.release();
-        self.budget.components(release.len())?;
-        self.budget.decimal(version.epoch())?;
-        for component in &*release {
-            self.budget.decimal(*component)?;
-        }
-        if let Some(pre) = version.pre() {
-            self.budget.decimal(pre.number)?;
-        }
-        for component in [version.post(), version.dev()].into_iter().flatten() {
-            self.budget.decimal(component)?;
-        }
-        // The checked codec admits at most one zero-valued min/max sentinel. Reserve its
-        // decimal byte before encoding without exposing the native sentinel accessors.
-        self.budget.decimal(0)?;
-        match version.local() {
-            LocalVersionSlice::Segments(segments) => {
-                self.budget.components(segments.len())?;
-                for segment in segments {
-                    match segment {
-                        LocalSegment::String(value) => self.budget.atom(value.len())?,
-                        LocalSegment::Number(value) => self.budget.decimal(*value)?,
-                    }
-                }
-            }
-            LocalVersionSlice::Max => {}
-        }
-        Ok(())
+        self.budget.version(version)
     }
 
     fn version(&mut self, version: &Version) -> Result<EncodedVersion, Stop> {

@@ -13,6 +13,7 @@ pub mod oracle;
 pub mod project;
 pub mod scenario;
 mod server;
+mod structured;
 mod wheel;
 pub mod witness;
 

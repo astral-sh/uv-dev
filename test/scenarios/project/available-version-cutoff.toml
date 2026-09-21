@@ -1,0 +1,37 @@
+name = "project-available-version-cutoff"
+description = '''
+The compatible `a==2` candidate is newer than the fixed test cutoff. A raw
+closed-world check must not remove it from the independently witnessed inventory.
+'''
+
+[testgen]
+disable = true
+
+[resolver_options]
+universal = true
+
+[expected]
+satisfiable = true
+packages = { a = "2.0.0", b = "2.0.0" }
+
+[root]
+requires_python = ">=3.12,<3.15"
+requires = ["a>=1", "b==2"]
+
+[packages.a.versions."1.0.0"]
+requires = ["b==1"]
+sdist = false
+wheel = { upload_time = "2024-03-23T00:00:00Z" }
+
+[packages.a.versions."2.0.0"]
+requires = ["b==2"]
+sdist = false
+wheel = { upload_time = "2024-03-26T00:00:00Z" }
+
+[packages.b.versions."1.0.0"]
+sdist = false
+wheel = { upload_time = "2024-03-23T00:00:00Z" }
+
+[packages.b.versions."2.0.0"]
+sdist = false
+wheel = { upload_time = "2024-03-23T00:00:00Z" }

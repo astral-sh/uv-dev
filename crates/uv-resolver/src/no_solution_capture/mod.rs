@@ -5,6 +5,7 @@
 //! cannot establish that an independently served package inventory was empty.
 
 mod budget;
+mod consumer;
 mod producer;
 mod reader;
 mod wire;
@@ -14,6 +15,10 @@ mod test_support;
 
 use std::fmt;
 
+pub use consumer::{
+    ClosedWorldInventory, ClosedWorldNoSolution, ClosedWorldNoSolutionError,
+    classify_closed_world_no_solution,
+};
 use reader::CaptureReadError;
 pub use reader::CaptureWriteError;
 use wire::CaptureStatus;
@@ -26,14 +31,10 @@ pub(crate) use producer::CaptureContext;
 pub struct NoSolutionEvidence(wire::EvidenceWire);
 
 impl NoSolutionEvidence {
+    /// Largest capture accepted by the internal version-1 reader.
+    pub const MAX_JSON_BYTES: usize = budget::CaptureLimits::V1.json_bytes;
+
     /// Read a complete envelope under the fixed version-1 resource limits.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "capture reconstruction is restricted to internal validation"
-        )
-    )]
     fn from_json(bytes: &[u8], token: &CaptureToken) -> Result<Self, CaptureReadError> {
         reader::read(bytes, token, budget::CaptureLimits::V1)
     }

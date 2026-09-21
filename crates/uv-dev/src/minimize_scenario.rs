@@ -10,8 +10,9 @@ use anyhow::{Context, Result, ensure};
 use uv_python::PythonVersion;
 use uv_test::TestContext;
 use uv_test::packse::check::{
-    LockCheckOptions, LockfileMode, ScenarioPlatform, ScenarioTarget, check_lock_scenario,
-    check_project_lock_scenario, check_scenario, check_witnessed_project_lock_scenario,
+    LockCheckOptions, LockEvidenceMode, LockfileMode, ScenarioPlatform, ScenarioTarget,
+    check_lock_scenario, check_project_lock_scenario, check_scenario,
+    check_witnessed_project_lock_scenario,
 };
 use uv_test::packse::generate::WitnessedProjectGraph;
 use uv_test::packse::minimize::{
@@ -85,6 +86,7 @@ impl Args {
             } else {
                 LockfileMode::Standard
             },
+            evidence: LockEvidenceMode::PrintedV1,
         }
     }
 }

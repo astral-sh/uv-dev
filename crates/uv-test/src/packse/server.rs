@@ -7,12 +7,13 @@
 //! Cached build dependencies are exposed through the same `/simple/*` and
 //! `/files/*` routes as scenario packages.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::{Context, ensure};
+use anyhow::{Context, bail, ensure};
+use serde::Serialize;
 use serde_json::json;
 use wiremock::{
     Mock, MockServer, Request, ResponseTemplate,
@@ -26,8 +27,9 @@ use uv_pep440::VersionSpecifiers;
 use crate::http_server::{HttpServer, content_type_for_filename};
 use crate::vendor::{VendorArtifact, vendor_artifacts};
 
-use super::scenario::{Scenario, WheelTag};
+use super::scenario::{ArtifactMetadata, PackageMetadata, Scenario, WheelTag};
 use super::scenarios_dir;
+use super::structured::{InputBudget, hash_json};
 use super::wheel::{generate_sdist, generate_wheel, sha256_hex};
 
 const PACKSE_UPLOAD_TIME: &str = "2024-03-24T00:00:00Z";
@@ -75,12 +77,33 @@ struct ServerIndex {
 pub struct PackseServer {
     server: HttpServer,
     index: Arc<ServerIndex>,
+    hashes: bool,
+    build_dependencies: BuildDependencies,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 enum BuildDependencies {
     Include,
     Exclude,
+}
+
+/// Identity of the exact in-memory listings and distribution bodies admitted by the checker.
+#[derive(Debug, Serialize)]
+pub(super) struct ClosedWorldIndex {
+    index_url: String,
+    packages: usize,
+    distributions: usize,
+    distribution_bytes: usize,
+    manifest_sha256: String,
+}
+
+#[derive(Serialize)]
+struct AdvertisedDistribution<'index> {
+    filename: &'index str,
+    sha256: &'index str,
+    requires_python: Option<&'index VersionSpecifiers>,
+    upload_time: Option<&'index str>,
+    yanked: bool,
 }
 
 impl PackseServer {
@@ -127,7 +150,12 @@ impl PackseServer {
             handle_request(request, server_uri, &server_index, hashes)
         });
 
-        Self { server, index }
+        Self {
+            server,
+            index,
+            hashes,
+            build_dependencies,
+        }
     }
 
     /// The Simple API index URL (e.g., `http://127.0.0.1:PORT/simple/`).
@@ -147,6 +175,157 @@ impl PackseServer {
             .values()
             .flat_map(|package| package.dists.iter())
             .map(|dist| (dist.filename.as_str(), dist.sha256.as_str()))
+    }
+
+    /// Verify the actual immutable server index against independently admitted scenario metadata.
+    pub(super) fn validate_closed_world(
+        &self,
+        scenario: &Scenario,
+    ) -> anyhow::Result<ClosedWorldIndex> {
+        ensure!(
+            self.hashes && self.build_dependencies == BuildDependencies::Exclude,
+            "the structured index includes unmodeled server policy"
+        );
+        ensure!(
+            self.index.packages.len() == scenario.packages.len(),
+            "the server package inventory differs from the scenario"
+        );
+        let mut budget = InputBudget::default();
+        let mut package_names = Vec::new();
+        let mut manifest = Vec::new();
+        let mut filenames = BTreeSet::new();
+        let mut distribution_bytes = 0_usize;
+        for (name, package) in &scenario.packages {
+            budget.atom(name.as_ref())?;
+            package_names.push(name.as_ref());
+            let entry = self
+                .index
+                .packages
+                .get(name)
+                .context("the server is missing a scenario package")?;
+            let mut advertised = BTreeMap::new();
+            for dist in &entry.dists {
+                budget.atom(&dist.filename)?;
+                budget.atom(&dist.sha256)?;
+                if let Some(requires_python) = &dist.requires_python {
+                    budget.atom(&requires_python.to_string())?;
+                }
+                if let Some(upload_time) = &dist.upload_time {
+                    budget.atom(upload_time)?;
+                }
+                ensure!(
+                    advertised.insert(dist.filename.as_str(), dist).is_none(),
+                    "the server advertises a duplicate distribution"
+                );
+            }
+            let mut checked = 0_usize;
+            for (version, metadata) in &package.versions {
+                budget.work(1)?;
+                let wheel_metadata = metadata
+                    .wheel
+                    .as_ref()
+                    .context("structured candidates require a universal wheel")?;
+                ensure!(
+                    metadata.wheel_tags.is_empty()
+                        || (metadata.wheel_tags.len() == 1
+                            && metadata.wheel_tags[0].as_str() == "py3-none-any"),
+                    "structured candidates require one universal wheel"
+                );
+                let wheel_name = format!("{}-{version}-py3-none-any.whl", name.as_dist_info_name());
+                let dist = advertised
+                    .get(wheel_name.as_str())
+                    .context("the server is missing a raw candidate wheel")?;
+                let bytes = self.closed_world_bytes(&wheel_name, &mut budget)?;
+                let (generated_name, generated) = generate_wheel(
+                    name,
+                    version,
+                    &metadata.requires,
+                    &metadata.extras,
+                    metadata.requires_python.as_ref(),
+                    "py3-none-any",
+                );
+                ensure!(
+                    generated_name == wheel_name,
+                    "the generated wheel identity changed"
+                );
+                verify_generated_distribution(dist, metadata, wheel_metadata, bytes, &generated)?;
+                ensure!(
+                    filenames.insert(dist.filename.as_str()),
+                    "a distribution is advertised under more than one package"
+                );
+                manifest.push(advertised_distribution(dist));
+                distribution_bytes += bytes.len();
+                checked += 1;
+                if let Some(sdist_metadata) = &metadata.sdist {
+                    let sdist_name = format!("{}-{version}.tar.gz", name.as_dist_info_name());
+                    let dist = advertised
+                        .get(sdist_name.as_str())
+                        .context("the server is missing a raw candidate source distribution")?;
+                    let bytes = self.closed_world_bytes(&sdist_name, &mut budget)?;
+                    let (generated_name, generated) = generate_sdist(
+                        name,
+                        version,
+                        &metadata.requires,
+                        &metadata.extras,
+                        metadata.requires_python.as_ref(),
+                    );
+                    ensure!(
+                        generated_name == sdist_name,
+                        "the generated source distribution identity changed"
+                    );
+                    verify_generated_distribution(
+                        dist,
+                        metadata,
+                        sdist_metadata,
+                        bytes,
+                        &generated,
+                    )?;
+                    ensure!(
+                        filenames.insert(dist.filename.as_str()),
+                        "a distribution is advertised under more than one package"
+                    );
+                    manifest.push(advertised_distribution(dist));
+                    distribution_bytes += bytes.len();
+                    checked += 1;
+                }
+            }
+            ensure!(
+                checked == advertised.len(),
+                "the server advertises an unexpected candidate"
+            );
+        }
+        ensure!(
+            filenames.len() == self.index.files.len(),
+            "the server exposes unadvertised distribution bytes"
+        );
+        manifest.sort_unstable_by_key(|dist| dist.filename);
+        let manifest_sha256 = hash_json(&(package_names, &manifest))?;
+        Ok(ClosedWorldIndex {
+            index_url: self.index_url(),
+            packages: scenario.packages.len(),
+            distributions: manifest.len(),
+            distribution_bytes,
+            manifest_sha256,
+        })
+    }
+
+    fn closed_world_bytes<'index>(
+        &'index self,
+        filename: &str,
+        budget: &mut InputBudget,
+    ) -> anyhow::Result<&'index [u8]> {
+        budget.atom(filename)?;
+        let bytes = match self
+            .index
+            .files
+            .get(filename)
+            .context("an advertised distribution has no body")?
+        {
+            FileData::Bytes(bytes) => bytes.as_ref(),
+            FileData::Vendor(_) => bail!("the structured index contains a vendored distribution"),
+        };
+        budget.distribution(bytes.len())?;
+        Ok(bytes)
     }
 
     /// Save the exact advertised distribution bytes and their source URLs for a replay.
@@ -189,6 +368,37 @@ impl PackseServer {
         )?;
         Ok(())
     }
+}
+
+fn advertised_distribution(dist: &DistInfo) -> AdvertisedDistribution<'_> {
+    AdvertisedDistribution {
+        filename: &dist.filename,
+        sha256: &dist.sha256,
+        requires_python: dist.requires_python.as_ref(),
+        upload_time: dist.upload_time.as_deref(),
+        yanked: dist.yanked,
+    }
+}
+
+fn verify_generated_distribution(
+    dist: &DistInfo,
+    metadata: &PackageMetadata,
+    artifact: &ArtifactMetadata,
+    served: &[u8],
+    generated: &[u8],
+) -> anyhow::Result<()> {
+    ensure!(
+        dist.requires_python == metadata.requires_python
+            && dist.upload_time == artifact.upload_time
+            && dist.yanked == metadata.yanked
+            && !dist.yanked,
+        "the actual Simple listing differs from the raw metadata"
+    );
+    ensure!(
+        served == generated && sha256_hex(served) == dist.sha256,
+        "the actual distribution body differs from the raw metadata or advertised hash"
+    );
+    Ok(())
 }
 
 /// Build the complete [`ServerIndex`] from a scenario and cached build dependencies.

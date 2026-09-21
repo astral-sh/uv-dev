@@ -7520,6 +7520,7 @@ dependencies = [
  "uv-preview",
  "uv-pypi-types",
  "uv-python",
+ "uv-resolver",
  "uv-static",
  "uv-toml",
  "uv-version",
