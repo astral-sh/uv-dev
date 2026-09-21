@@ -266,6 +266,10 @@ pub(super) fn validate_scenario(
         scenario.resolver_options.required_environments.is_empty(),
         "the scenario oracle checks one environment at a time"
     );
+    ensure!(
+        scenario.resolver_options.environments.is_empty(),
+        "the scenario oracle does not model restricted lock environments"
+    );
 
     for requirement in root_requirements {
         validate_requirement(requirement)?;
@@ -736,5 +740,25 @@ requires = ["b; extra != 'gpu'"]
         direct URL: the scenario oracle does not model direct URLs: b @ https://example.org/b.whl
         PEP 751 marker: the scenario oracle does not model PEP 751 list markers: b ; 'dev' in dependency_groups
         ");
+    }
+
+    #[test]
+    fn rejects_restricted_lock_environments() {
+        let scenario = scenario(
+            r#"
+name = "restricted"
+[root]
+requires = []
+[expected]
+satisfiable = true
+[resolver_options]
+environments = ["sys_platform == 'win32'"]
+"#,
+        );
+        let environment = environment();
+        let error = ScenarioOracle::new(&scenario, &environment)
+            .err()
+            .expect("restricted environments are not modeled");
+        insta::assert_snapshot!(error, @"the scenario oracle does not model restricted lock environments");
     }
 }

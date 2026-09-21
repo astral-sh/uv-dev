@@ -126,6 +126,11 @@ Add `--lock-without-metadata` to exercise the metadata-free lockfile preview. Th
 used for the initial lock, both read-only round trips, frozen exports, and any diagnostic refresh.
 Failure captures record the format and exhaustive-search bound alongside the command trace.
 
+Explicit Packse `resolution` and `fork_strategy` settings are passed to the initial resolution,
+read-only lock checks, and frozen exports. The oracle still checks dependency correctness instead of
+prescribing the preferred solution. Restricted lock `environments` remain outside its supported
+policy subset.
+
 Add `--project-selections` for project optional dependencies and PEP 735 dependency groups. The
 universal lock is checked against all roots together. Frozen exports disable default groups and
 cover the base project, individual and combined extras, individual and combined groups, groups-only

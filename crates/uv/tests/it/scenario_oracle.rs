@@ -3,6 +3,7 @@ use std::str::FromStr;
 use anyhow::{Context, Result, bail};
 
 use uv_python::PythonVersion;
+use uv_resolver::ForkStrategy;
 use uv_static::EnvVars;
 use uv_test::packse::PackseServer;
 use uv_test::packse::check::{
@@ -19,7 +20,7 @@ use uv_test::packse::lock_score::score_lock_versions;
 use uv_test::packse::minimize::minimize_witnessed_project_lock_scenario;
 use uv_test::packse::oracle::Selection;
 use uv_test::packse::project::{ProjectSelection, ScenarioProject};
-use uv_test::packse::scenario::{Scenario, ScenarioDocument};
+use uv_test::packse::scenario::{Resolution, Scenario, ScenarioDocument};
 
 #[test]
 fn fixed_scenarios_match_the_exhaustive_oracle() -> Result<()> {
@@ -182,6 +183,62 @@ fn lock_version_scores_use_the_actual_universal_lock() -> Result<()> {
         let lock = context.read("uv.lock");
         assert_eq!(score_lock_versions(&lock)?.excess_versions(), 1);
         assert_eq!(context.read("uv.lock"), lock);
+    }
+    Ok(())
+}
+
+#[test]
+fn explicit_resolution_policies_survive_lock_round_trips() -> Result<()> {
+    let targets = ScenarioTarget::matrix(
+        &["3.12", "3.13"]
+            .map(|version| PythonVersion::from_str(version).expect("valid Python version")),
+        &[ScenarioPlatform::Linux],
+    );
+    let document: ScenarioDocument = r#"
+name = "fork-policy-oracle"
+[root]
+requires_python = ">=3.12,<3.14"
+requires = ["a"]
+[expected]
+satisfiable = true
+[packages.a.versions."1.0.0"]
+requires_python = ">=3.12"
+[packages.a.versions."2.0.0"]
+requires_python = ">=3.13"
+"#
+    .parse()?;
+    for lockfile in [LockfileMode::Standard, LockfileMode::WithoutMetadata] {
+        for resolution in [
+            Resolution::Highest,
+            Resolution::Lowest,
+            Resolution::LowestDirect,
+        ] {
+            for fork_strategy in [ForkStrategy::RequiresPython, ForkStrategy::Fewest] {
+                let context = uv_test::test_context!("3.12");
+                let mut scenario = document.scenario()?;
+                scenario.resolver_options.resolution = Some(resolution);
+                scenario.resolver_options.fork_strategy = Some(fork_strategy);
+                let result = check_lock_scenario(
+                    &context,
+                    &scenario,
+                    &targets,
+                    LockCheckOptions {
+                        lockfile,
+                        ..LockCheckOptions::new(100)
+                    },
+                )?;
+                assert!(matches!(result, LockCheckResult::Satisfiable { .. }));
+                let expected = usize::from(
+                    resolution == Resolution::Highest
+                        && fork_strategy == ForkStrategy::RequiresPython,
+                );
+                assert_eq!(
+                    score_lock_versions(&context.read("uv.lock"))?.excess_versions(),
+                    expected,
+                    "{lockfile:?}, {resolution}, {fork_strategy}"
+                );
+            }
+        }
     }
     Ok(())
 }

@@ -18,6 +18,7 @@ use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::{MarkerTree, Requirement};
 use uv_pypi_types::DependencyGroups;
 use uv_python::PythonVersion;
+use uv_resolver::ForkStrategy;
 
 /// A complete packse scenario definition.
 #[derive(Debug, Deserialize)]
@@ -330,6 +331,10 @@ pub struct ResolverOptions {
     #[serde(default)]
     pub resolution: Option<Resolution>,
 
+    /// Fork strategy for universal resolution.
+    #[serde(default)]
+    pub fork_strategy: Option<ForkStrategy>,
+
     /// Python version override for resolution.
     #[serde(default)]
     pub python: Option<PythonVersion>,
@@ -354,9 +359,30 @@ pub struct ResolverOptions {
     #[serde(default)]
     pub python_platform: Option<TargetTriple>,
 
+    /// Supported environments for generated lock tests.
+    #[serde(default)]
+    pub environments: Vec<MarkerTree>,
+
     /// Required environments (platform markers).
     #[serde(default)]
     pub required_environments: Vec<MarkerTree>,
+}
+
+impl ResolverOptions {
+    /// Explicit version-selection policy for commands that otherwise use isolated configuration.
+    pub(super) fn selection_arguments(&self) -> Vec<String> {
+        let mut arguments = Vec::new();
+        if let Some(resolution) = self.resolution {
+            arguments.extend(["--resolution".to_owned(), resolution.to_string()]);
+        }
+        if let Some(fork_strategy) = self.fork_strategy {
+            arguments.extend(["--fork-strategy".to_owned(), fork_strategy.to_string()]);
+        }
+        if self.prereleases {
+            arguments.push("--prerelease=allow".to_owned());
+        }
+        arguments
+    }
 }
 
 /// Options for generating tests from a scenario.
@@ -442,6 +468,29 @@ requires = ["a>=2 ; sys_platform == 'linux'", "a<2 ; sys_platform == 'darwin'"]
         assert!(scenario.resolver_options.universal);
         assert_eq!(scenario.packages.len(), 1);
         assert_eq!(scenario.packages[&package_name].versions.len(), 2);
+    }
+
+    #[test]
+    fn parse_universal_fork_options() {
+        let scenario: Scenario = toml::from_str(
+            r#"
+name = "fewest-versions"
+[root]
+requires = []
+[expected]
+satisfiable = true
+[resolver_options]
+universal = true
+fork_strategy = "fewest"
+environments = ["python_version < '3.13'", "python_version >= '3.13'"]
+"#,
+        )
+        .expect("scenario should parse");
+        assert_eq!(
+            scenario.resolver_options.fork_strategy,
+            Some(ForkStrategy::Fewest)
+        );
+        assert_eq!(scenario.resolver_options.environments.len(), 2);
     }
 
     #[test]

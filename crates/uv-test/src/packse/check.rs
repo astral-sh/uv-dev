@@ -366,12 +366,7 @@ fn check_scenario_inner(
         .arg("--no-annotate")
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .env_remove(EnvVars::VIRTUAL_ENV);
-    if let Some(resolution) = scenario.resolver_options.resolution {
-        command.arg("--resolution").arg(resolution.to_string());
-    }
-    if scenario.resolver_options.prereleases {
-        command.arg("--prerelease=allow");
-    }
+    command.args(scenario.resolver_options.selection_arguments());
     let output = command.output().context("failed to run uv pip compile")?;
     let selection = match compare_output(&oracle, &environment, expected.solution.as_ref(), &output)
     {
@@ -1098,6 +1093,7 @@ impl<'a> LockRun<'a> {
             .arg("--no-header")
             .arg("--no-annotate")
             .env_remove(EnvVars::UV_EXCLUDE_NEWER);
+        command.args(self.scenario.resolver_options.selection_arguments());
         self.options.lockfile.apply(&mut command);
         command
     }
@@ -1244,12 +1240,7 @@ fn lock_command(mut command: Command, scenario: &Scenario, server: &PackseServer
         .arg(server.index_url())
         .arg("--no-build")
         .env_remove(EnvVars::UV_EXCLUDE_NEWER);
-    if let Some(resolution) = scenario.resolver_options.resolution {
-        command.arg("--resolution").arg(resolution.to_string());
-    }
-    if scenario.resolver_options.prereleases {
-        command.arg("--prerelease=allow");
-    }
+    command.args(scenario.resolver_options.selection_arguments());
     command
 }
 
@@ -1452,6 +1443,54 @@ mod tests {
             cache,
             next.witness.as_ref().expect("witnessed lock").cache.path()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_selection_policies_reach_every_lock_command() -> Result<()> {
+        let context = TestContext::new_with_versions_and_bin(&[], std::env::current_exe()?);
+        let document: ScenarioDocument = r#"
+name = "explicit-policy"
+[root]
+requires_python = ">=3.12,<3.15"
+requires = []
+[expected]
+satisfiable = true
+[resolver_options]
+resolution = "lowest-direct"
+fork_strategy = "fewest"
+"#
+        .parse()?;
+        let scenario = document.scenario()?;
+        let server = PackseServer::from_scenario_without_build_dependencies(&scenario);
+        let run = LockRun::new(
+            &context,
+            &scenario,
+            &server,
+            ScenarioProject::new(&scenario)?.pyproject()?,
+            LockCheckOptions::new(100),
+            None,
+        )?;
+        for command in [
+            run.resolve_command(),
+            run.lock_command(),
+            run.canonical_check_command(),
+            run.export_command(),
+        ] {
+            let arguments = command.get_args().collect::<Vec<_>>();
+            for (option, value) in [
+                ("--resolution", "lowest-direct"),
+                ("--fork-strategy", "fewest"),
+            ] {
+                assert_eq!(
+                    arguments
+                        .windows(2)
+                        .filter(|pair| pair[0] == option && pair[1] == value)
+                        .count(),
+                    1
+                );
+            }
+        }
         Ok(())
     }
 

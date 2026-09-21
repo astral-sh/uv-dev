@@ -232,6 +232,7 @@ pub(super) fn validate_scenario_policy(scenario: &Scenario) -> Result<()> {
             && !options.prereleases
             && options.no_build.is_empty()
             && options.no_binary.is_empty()
+            && options.environments.is_empty()
             && options.required_environments.is_empty(),
         "the scenario has an unsupported structured lock policy"
     );
@@ -781,9 +782,7 @@ fn lock_arguments(
         index_url,
         "--no-build".to_owned(),
     ];
-    if let Some(resolution) = scenario.resolver_options.resolution {
-        arguments.extend(["--resolution".to_owned(), resolution.to_string()]);
-    }
+    arguments.extend(scenario.resolver_options.selection_arguments());
     match lockfile {
         LockfileMode::Standard => {}
         LockfileMode::WithoutMetadata => arguments.extend([
