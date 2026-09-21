@@ -26,6 +26,7 @@ use crate::{TEST_TIMESTAMP, TestContext};
 
 use super::PackseServer;
 use super::check::LockfileMode;
+use super::domain::lock_environment_marker;
 use super::evidence::ProcessIdentity;
 use super::project::ScenarioProject;
 use super::scenario::{Scenario, ScenarioDocument};
@@ -186,6 +187,7 @@ fn build_inventory(
         requires_python,
         interpreter.python_version(),
     )?;
+    inventory.set_supported_environments(&scenario.resolver_options.environments)?;
     for extra in scenario.root.optional_dependencies.keys() {
         inventory.add_project_extra(extra)?;
     }
@@ -232,10 +234,10 @@ pub(super) fn validate_scenario_policy(scenario: &Scenario) -> Result<()> {
             && !options.prereleases
             && options.no_build.is_empty()
             && options.no_binary.is_empty()
-            && options.environments.is_empty()
             && options.required_environments.is_empty(),
         "the scenario has an unsupported structured lock policy"
     );
+    lock_environment_marker(scenario)?;
     for package in scenario.packages.values() {
         ensure!(
             package
@@ -270,9 +272,29 @@ fn validate_project(project: &ScenarioProject<'_>, pyproject: &str) -> Result<()
     ensure!(
         table
             .keys()
-            .all(|key| key == "project" || key == "dependency-groups"),
+            .all(|key| key == "project" || key == "dependency-groups" || key == "tool"),
         "generated project contains unsupported configuration"
     );
+    if let Some(tool) = table.get("tool") {
+        let tool = tool.as_table().context("invalid generated tool table")?;
+        ensure!(
+            tool.len() == 1 && tool.contains_key("uv"),
+            "generated project contains unsupported tool configuration"
+        );
+        let uv = tool["uv"]
+            .as_table()
+            .context("invalid generated uv table")?;
+        ensure!(
+            uv.len() == 1
+                && uv
+                    .get("environments")
+                    .and_then(toml::Value::as_array)
+                    .is_some_and(|environments| {
+                        !environments.is_empty() && environments.iter().all(toml::Value::is_str)
+                    }),
+            "generated project contains unsupported uv configuration"
+        );
+    }
     let package = table
         .get("project")
         .and_then(toml::Value::as_table)
