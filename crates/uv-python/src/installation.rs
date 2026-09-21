@@ -27,8 +27,8 @@ use crate::downloads::{
 use crate::implementation::LenientImplementationName;
 use crate::managed::{ManagedPythonInstallation, ManagedPythonInstallations};
 use crate::{
-    Error, ImplementationName, Interpreter, LenientPythonBuildVariant, MissingPythonHint,
-    PythonDownloads, PythonPreference, PythonSource, PythonVariant, PythonVersion, downloads,
+    Error, ImplementationName, Interpreter, MissingPythonHint, PythonBuildVariant, PythonDownloads,
+    PythonPreference, PythonSource, PythonVariant, PythonVersion, downloads,
 };
 
 /// A Python interpreter and accompanying tools.
@@ -566,7 +566,7 @@ pub struct PythonInstallationKey {
     pub(super) prerelease: Option<Prerelease>,
     pub(super) platform: Platform,
     pub(super) variant: PythonVariant,
-    pub(super) build_variant: Option<LenientPythonBuildVariant>,
+    pub(super) build_variant: Option<PythonBuildVariant>,
 }
 
 impl PythonInstallationKey {
@@ -611,7 +611,7 @@ impl PythonInstallationKey {
 
     /// Return a new installation key with the given build variant.
     #[must_use]
-    pub(crate) fn with_build_variant(mut self, build_variant: LenientPythonBuildVariant) -> Self {
+    pub(crate) fn with_build_variant(mut self, build_variant: PythonBuildVariant) -> Self {
         self.build_variant = Some(build_variant);
         self
     }
@@ -693,7 +693,7 @@ impl PythonInstallationKey {
         &self.variant
     }
 
-    pub(crate) fn build_variant(&self) -> Option<&LenientPythonBuildVariant> {
+    pub(crate) fn build_variant(&self) -> Option<&PythonBuildVariant> {
         self.build_variant.as_ref()
     }
 
@@ -978,8 +978,20 @@ mod tests {
             ("+gil+debug+custom", "CPython3.13.7d+custom"),
             ("+freethreaded+custom", "CPython3.13.7t+custom"),
             ("+freethreaded+debug+custom", "CPython3.13.7td+custom"),
-            ("+pgo+lto", "CPython3.13.7+pgo+lto"),
-            ("+freethreaded+pgo+lto", "CPython3.13.7t+pgo+lto"),
+            ("+freethreaded+custom+debug", "CPython3.13.7td+custom"),
+            ("+debug+freethreaded+custom", "CPython3.13.7td+custom"),
+            ("+debug+custom+freethreaded", "CPython3.13.7td+custom"),
+            ("+custom+freethreaded+debug", "CPython3.13.7td+custom"),
+            ("+custom+debug+freethreaded", "CPython3.13.7td+custom"),
+            ("+custom+td", "CPython3.13.7td+custom"),
+            ("+custom+debug+gil", "CPython3.13.7d+custom"),
+            ("+custom+debug", "CPython3.13.7d+custom"),
+            ("+custom+freethreaded", "CPython3.13.7t+custom"),
+            ("+custom_internal", "CPython3.13.7+custom_internal"),
+            (
+                "+freethreaded+custom_internal",
+                "CPython3.13.7t+custom_internal",
+            ),
         ] {
             let key = PythonInstallationKey::from_str(&format!(
                 "cpython-3.13.7{variants}-windows-x86_64-none"
@@ -990,7 +1002,7 @@ mod tests {
     }
 
     #[test]
-    fn test_python_installation_key_from_str() {
+    fn test_python_installation_key_from_str() -> Result<(), PythonInstallationKeyError> {
         // Test basic parsing
         let key = PythonInstallationKey::from_str("cpython-3.12.0-linux-x86_64-gnu").unwrap();
         assert_eq!(
@@ -1060,20 +1072,97 @@ mod tests {
         assert_eq!(key.platform.libc, Libc::None);
 
         // Test with separate Python and build variants
-        let key = PythonInstallationKey::from_str(
-            "cpython-3.13.0+freethreaded+pgo+lto-macos-aarch64-none",
-        )
-        .unwrap();
-        assert_eq!(key.variant, PythonVariant::Freethreaded);
-        assert_eq!(
-            key.build_variant,
-            Some(LenientPythonBuildVariant::from_str("pgo+lto").unwrap())
-        );
+        for (runtime, expected) in [
+            ("freethreaded", PythonVariant::Freethreaded),
+            ("freethreaded+debug", PythonVariant::FreethreadedDebug),
+            ("gil+debug", PythonVariant::GilDebug),
+        ] {
+            let key = PythonInstallationKey::from_str(&format!(
+                "cpython-3.13.0+{runtime}+custom_internal-macos-aarch64-none",
+            ))?;
+            assert_eq!(key.variant, expected);
+            assert_eq!(
+                key.build_variant.as_ref().map(ToString::to_string),
+                Some("custom_internal".to_string())
+            );
+        }
+
+        // Equivalent suffixes have one installation identity and directory name.
+        for (canonical, variants) in [
+            (
+                "freethreaded+debug+custom",
+                &[
+                    "freethreaded+custom+debug",
+                    "debug+freethreaded+custom",
+                    "debug+custom+freethreaded",
+                    "custom+freethreaded+debug",
+                    "custom+debug+freethreaded",
+                    "CUSTOM+DEBUG+FREETHREADED",
+                    "td+custom",
+                    "custom+td",
+                    "custom+d+t",
+                    "t+custom+d",
+                ][..],
+            ),
+            (
+                "gil+debug+custom",
+                &[
+                    "gil+custom+debug",
+                    "debug+gil+custom",
+                    "debug+custom+gil",
+                    "custom+gil+debug",
+                    "custom+debug+gil",
+                ][..],
+            ),
+            ("freethreaded+custom", &["custom+freethreaded"][..]),
+            ("debug+custom", &["custom+debug"][..]),
+            ("gil+custom", &["custom+gil"][..]),
+            ("freethreaded+debug", &["debug+freethreaded", "d+t"][..]),
+            ("gil+debug", &["debug+gil"][..]),
+        ] {
+            let canonical = format!("cpython-3.13.0+{canonical}-macos-aarch64-none");
+            let expected = PythonInstallationKey::from_str(&canonical)?;
+            for variant in variants {
+                let key = PythonInstallationKey::from_str(&format!(
+                    "cpython-3.13.0+{variant}-macos-aarch64-none",
+                ))?;
+                assert_eq!(key, expected, "variant: {variant}");
+                assert_eq!(key.to_string(), canonical, "variant: {variant}");
+            }
+        }
 
         // Test error cases
         assert!(PythonInstallationKey::from_str("cpython-3.12.0-linux-x86_64").is_err());
         assert!(PythonInstallationKey::from_str("cpython-3.12.0").is_err());
         assert!(PythonInstallationKey::from_str("cpython").is_err());
+        for variants in [
+            "+custom",
+            "custom+",
+            "custom++debug",
+            "custom+internal",
+            "custom+custom",
+            "freethreaded+custom+internal",
+            "freethreaded+debug+custom+internal",
+            "pgo+lto",
+            "freethreaded+",
+            "debug+debug",
+            "d+debug",
+            "td+debug",
+            "td+freethreaded",
+            "freethreaded+t",
+            "gil+freethreaded",
+            "freethreaded+gil",
+            "debug+custom+gil+freethreaded",
+        ] {
+            assert!(
+                PythonInstallationKey::from_str(&format!(
+                    "cpython-3.13.0+{variants}-macos-aarch64-none",
+                ))
+                .is_err(),
+                "variants: {variants}"
+            );
+        }
+        Ok(())
     }
 
     #[test]
@@ -1113,11 +1202,11 @@ mod tests {
             prerelease: None,
             platform: Platform::from_str("linux-x86_64-gnu").unwrap(),
             variant: PythonVariant::Default,
-            build_variant: Some(LenientPythonBuildVariant::from_str("pgo+lto").unwrap()),
+            build_variant: Some(PythonBuildVariant::from_str("custom_internal").unwrap()),
         };
         assert_eq!(
             key_with_build_variant.to_string(),
-            "cpython-3.13.0+pgo+lto-linux-x86_64-gnu"
+            "cpython-3.13.0+custom_internal-linux-x86_64-gnu"
         );
         assert_eq!(
             key_with_build_variant.executable_name_minor(),

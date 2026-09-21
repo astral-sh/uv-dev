@@ -189,25 +189,9 @@ pub enum PythonVariant {
     GilDebug,
 }
 
-/// A known Python build variant.
-///
-/// Build variants describe how an interpreter was built, without changing its runtime or ABI.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum PythonBuildVariant {
-    NoOpt,
-    Pgo,
-    Lto,
-    PgoLto,
-}
-
-/// A known or provider-defined Python build variant.
-///
-/// Unknown variants are composed of one or more `+`-separated tags, such as `custom`.
+/// A publisher-defined name identifying a Python build, such as `custom`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum LenientPythonBuildVariant {
-    Unknown(String),
-    Known(PythonBuildVariant),
-}
+pub struct PythonBuildVariant(String);
 
 /// A Python discovery version request.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
@@ -3580,26 +3564,55 @@ impl FromStr for VersionRequest {
     }
 }
 
-/// Parse a suffix containing a [`PythonVariant`] and an optional [`LenientPythonBuildVariant`].
+/// Parse a suffix containing a [`PythonVariant`] and an optional [`PythonBuildVariant`] in any order.
 pub(crate) fn parse_python_variants(
     variants: &str,
-) -> Result<(PythonVariant, Option<LenientPythonBuildVariant>), ()> {
+) -> Result<(PythonVariant, Option<PythonBuildVariant>), ()> {
     let variants = variants.to_ascii_lowercase();
     if let Ok(python) = PythonVariant::from_str(&variants) {
         return Ok((python, None));
     }
 
-    for (index, _) in variants.rmatch_indices('+') {
-        if let Ok(python) = PythonVariant::from_str(&variants[..index]) {
-            let build = LenientPythonBuildVariant::from_str(&variants[index + 1..])?;
-            return Ok((python, Some(build)));
+    let mut gil_disabled = None;
+    let mut debug_enabled = false;
+    let mut build_variant = None;
+    for variant in variants.split('+') {
+        let (variant_gil_disabled, variant_debug) = match PythonVariant::from_str(variant) {
+            Ok(PythonVariant::Default) => return Err(()),
+            Ok(PythonVariant::Debug) => (None, true),
+            Ok(PythonVariant::Freethreaded) => (Some(true), false),
+            Ok(PythonVariant::FreethreadedDebug) => (Some(true), true),
+            Ok(PythonVariant::Gil) => (Some(false), false),
+            Ok(PythonVariant::GilDebug) => (Some(false), true),
+            Err(()) => {
+                if build_variant.is_some() {
+                    return Err(());
+                }
+                build_variant = Some(PythonBuildVariant::from_str(variant)?);
+                continue;
+            }
+        };
+
+        if let Some(variant_gil_disabled) = variant_gil_disabled
+            && gil_disabled.replace(variant_gil_disabled).is_some()
+        {
+            return Err(());
         }
+        if variant_debug && debug_enabled {
+            return Err(());
+        }
+        debug_enabled |= variant_debug;
     }
 
-    Ok((
-        PythonVariant::Default,
-        Some(LenientPythonBuildVariant::from_str(&variants)?),
-    ))
+    let python = match (gil_disabled, debug_enabled) {
+        (None, false) => PythonVariant::Default,
+        (None, true) => PythonVariant::Debug,
+        (Some(true), false) => PythonVariant::Freethreaded,
+        (Some(true), true) => PythonVariant::FreethreadedDebug,
+        (Some(false), false) => PythonVariant::Gil,
+        (Some(false), true) => PythonVariant::GilDebug,
+    };
+    Ok((python, build_variant))
 }
 
 impl FromStr for PythonVariant {
@@ -3622,43 +3635,16 @@ impl FromStr for PythonBuildVariant {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "noopt" => Ok(Self::NoOpt),
-            "pgo" => Ok(Self::Pgo),
-            "lto" => Ok(Self::Lto),
-            "pgo+lto" => Ok(Self::PgoLto),
-            _ => Err(()),
-        }
-    }
-}
-
-impl FromStr for LenientPythonBuildVariant {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
         let variant = s.to_ascii_lowercase();
-        let mut tags = FxHashSet::default();
-        for tag in variant.split('+') {
-            if tag.is_empty()
-                || PythonVariant::from_str(tag).is_ok()
-                || !tag.chars().all(|character| {
-                    character.is_ascii_alphanumeric() || matches!(character, '_' | '.')
-                })
-                || !tags.insert(tag)
-            {
-                return Err(());
-            }
+        if variant.is_empty()
+            || PythonVariant::from_str(&variant).is_ok()
+            || !variant.chars().all(|character| {
+                character.is_ascii_alphanumeric() || character == '_' || character == '.'
+            })
+        {
+            return Err(());
         }
-        Ok(match PythonBuildVariant::from_str(&variant) {
-            Ok(variant) => Self::Known(variant),
-            Err(()) => Self::Unknown(variant),
-        })
-    }
-}
-
-impl From<PythonBuildVariant> for LenientPythonBuildVariant {
-    fn from(variant: PythonBuildVariant) -> Self {
-        Self::Known(variant)
+        Ok(Self(variant))
     }
 }
 
@@ -3675,23 +3661,9 @@ impl fmt::Display for PythonVariant {
     }
 }
 
-impl fmt::Display for LenientPythonBuildVariant {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unknown(variant) => f.write_str(variant),
-            Self::Known(variant) => fmt::Display::fmt(variant, f),
-        }
-    }
-}
-
 impl fmt::Display for PythonBuildVariant {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NoOpt => f.write_str("noopt"),
-            Self::Pgo => f.write_str("pgo"),
-            Self::Lto => f.write_str("lto"),
-            Self::PgoLto => f.write_str("pgo+lto"),
-        }
+        f.write_str(&self.0)
     }
 }
 
@@ -3966,10 +3938,9 @@ mod tests {
     use uv_platform::{Arch, Libc, Os};
 
     use super::{
-        DiscoveryPreferences, EnvironmentPreference, Error, InterpreterError,
-        LenientPythonBuildVariant, PythonBuildVariant, PythonExecutableGroup, PythonPreference,
-        PythonSource, PythonVariant, QueryStrategy, python_installations_from_executables,
-        sort_installations_by_key,
+        DiscoveryPreferences, EnvironmentPreference, Error, InterpreterError, PythonBuildVariant,
+        PythonExecutableGroup, PythonPreference, PythonSource, PythonVariant, QueryStrategy,
+        python_installations_from_executables, sort_installations_by_key,
     };
 
     // Testing this at a higher level would necessitate relying on filesystem ordering.
@@ -4418,21 +4389,38 @@ mod tests {
     #[test]
     fn build_variant_from_str() {
         for (name, variant) in [
-            ("noopt", PythonBuildVariant::NoOpt),
-            ("pgo", PythonBuildVariant::Pgo),
-            ("lto", PythonBuildVariant::Lto),
-            ("pgo+lto", PythonBuildVariant::PgoLto),
+            ("custom", "custom"),
+            ("CUSTOM", "custom"),
+            ("custom_internal", "custom_internal"),
+            ("custom.public", "custom.public"),
+            ("custom20260825", "custom20260825"),
+            ("avx2", "avx2"),
+            ("pgo", "pgo"),
         ] {
-            assert_eq!(PythonBuildVariant::from_str(name), Ok(variant));
             assert_eq!(
-                LenientPythonBuildVariant::from_str(name),
-                Ok(LenientPythonBuildVariant::Known(variant))
+                PythonBuildVariant::from_str(name).map(|variant| variant.to_string()),
+                Ok(variant.to_string()),
+                "name: {name}"
             );
         }
-        assert_eq!(
-            LenientPythonBuildVariant::from_str("custom"),
-            Ok(LenientPythonBuildVariant::Unknown("custom".to_string()))
-        );
+        for name in [
+            "",
+            "custom+internal",
+            "custom+custom",
+            "pgo+lto",
+            "custom-internal",
+            "custom/internal",
+            "custom internal",
+            "cüstom",
+            "t",
+            "d",
+            "td",
+            "freethreaded",
+            "debug",
+            "gil",
+        ] {
+            assert!(PythonBuildVariant::from_str(name).is_err(), "name: {name}");
+        }
     }
 
     #[test]

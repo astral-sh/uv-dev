@@ -1085,7 +1085,7 @@ mod tests {
     fn path_and_key_from_base_prefix_preserves_build_variant() -> Result<()> {
         let temp_dir = tempfile::tempdir()?;
         let root = temp_dir.path().join("python");
-        let name = "cpython-3.13.0+pgo+lto-linux-x86_64-gnu";
+        let name = "cpython-3.13.0+custom_internal-linux-x86_64-gnu";
         let installation = root.join(name);
         let base_prefix = installation.join("lib").join("python3.13");
         fs::create_dir_all(&base_prefix)?;
@@ -1221,7 +1221,7 @@ mod tests {
         let mut custom = default.clone();
         custom.key = custom
             .key
-            .with_build_variant(crate::LenientPythonBuildVariant::from_str("custom").unwrap());
+            .with_build_variant(crate::PythonBuildVariant::from_str("custom").unwrap());
 
         assert!(!custom.is_upgrade_of(&default));
         assert!(!default.is_upgrade_of(&custom));
