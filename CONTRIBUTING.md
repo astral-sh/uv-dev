@@ -128,8 +128,12 @@ Failure captures record the format and exhaustive-search bound alongside the com
 
 Explicit Packse `resolution` and `fork_strategy` settings are passed to the initial resolution,
 read-only lock checks, and frozen exports. The oracle still checks dependency correctness instead of
-prescribing the preferred solution. Restricted lock `environments` remain outside its supported
-policy subset.
+prescribing the preferred solution. Explicit lock `environments` restrict the independent marker
+domain and are retained in the generated project for all lock and export commands. Requested
+projections outside that domain are rejected. Environment entries must be disjoint, intersect the
+root Python range, and contain no extra or PEP 751 list markers. The marker witness proves
+satisfiability over that restricted domain. Original-derivation `structured-v1` classification still
+requires unrestricted lock environments.
 
 Add `--project-selections` for project optional dependencies and PEP 735 dependency groups. The
 universal lock is checked against all roots together. Frozen exports disable default groups and

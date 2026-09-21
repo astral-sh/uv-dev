@@ -11,6 +11,7 @@ use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep508::{MarkerEnvironment, Requirement};
 use uv_pypi_types::{DependencyGroupSpecifier, DependencyGroups};
 
+use super::domain::apply_lock_environments;
 use super::oracle::{ScenarioOracle, validate_requirement};
 use super::scenario::Scenario;
 
@@ -224,6 +225,7 @@ impl<'a> ScenarioProject<'a> {
             }
             pyproject["dependency-groups"] = serde_json::Value::Object(rendered);
         }
+        apply_lock_environments(self.scenario, &mut pyproject)?;
         toml::to_string(&pyproject).context("failed to render the scenario project")
     }
 

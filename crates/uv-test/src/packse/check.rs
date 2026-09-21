@@ -20,6 +20,7 @@ use crate::TestContext;
 
 use super::PackseServer;
 use super::derivation::{SemanticNoSolution, certify_no_solution};
+use super::domain::apply_lock_environments;
 use super::evidence::{self, LockTrace};
 use super::generate::WitnessedProjectGraph;
 use super::oracle::{ScenarioOracle, SearchResult, Selection};
@@ -598,7 +599,7 @@ fn check_lock_scenario_inner(
 
     let server = PackseServer::from_scenario_without_build_dependencies(scenario);
     let root_name = project_name(scenario)?;
-    let project = serde_json::json!({
+    let mut project = serde_json::json!({
         "project": {
             "name": root_name,
             "version": "0.0.0",
@@ -606,6 +607,7 @@ fn check_lock_scenario_inner(
             "dependencies": scenario.root.requires.iter().map(ToString::to_string).collect::<Vec<_>>(),
         }
     });
+    apply_lock_environments(scenario, &mut project)?;
     let mut run = LockRun::new(
         context,
         scenario,
