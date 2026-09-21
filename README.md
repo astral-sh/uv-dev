@@ -12,6 +12,8 @@ The current generated installer confirms these lexical comparisons. It assigns `
 
 Open astral-sh/uv#13225 already tracks the same underlying path-equivalence failure. Its comments use the same `XDG_DATA_HOME=$HOME/.local/share` setup, explain that `$HOME/.local/bin` is already on `PATH` but does not match `$HOME/.local/share/../bin`, and report the resulting shell-file edits. A maintainer explicitly concludes that path detection should handle this case more robustly. The new report adds a precise reproduction of the false shadow-warning consequence, but it does not require a separate canonical discussion.
 
+An external contributor has opened axodotdev/cargo-dist#2513 against the upstream installer template. As of 2026-09-21, the pull request is open, is not a draft, and has no reviews or maintainer comments. Its patch canonicalizes `_install_dir` and `_lib_install_dir` with `pwd -P` after creating them, refreshes `_install_dir_expr`, and adds a file-identity (`-ef`) fallback to the shadow check for equivalent or symlinked binaries. The pull request changes only the installer template and does not add or update tests, so it is a proposed fix rather than a confirmed resolution.
+
 ## Draft response
 
 Thanks for the detailed reproduction. This is the same underlying path-detection problem already tracked in astral-sh/uv#13225: when `XDG_DATA_HOME` is set to `$HOME/.local/share`, the installer keeps `$HOME/.local/share/../bin` as a lexical path and does not recognize the equivalent `$HOME/.local/bin` entry already on `PATH`. The current installer uses that same unresolved value for both the `PATH`-presence check and the shadow check, which accounts for the unnecessary profile edits and the false warning you observed.
@@ -29,6 +31,7 @@ The lower-priority request to avoid creating fish configuration on systems witho
 ## Related
 
 - astral-sh/uv#13225 — Open issue and canonical match. Its comments report `XDG_DATA_HOME=$HOME/.local/share` producing `$XDG_DATA_HOME/../bin`, failing to recognize `$HOME/.local/bin` on `PATH`, and editing shell files; a maintainer says this exact path-detection case needs more robust handling.
+- axodotdev/cargo-dist#2513 — Open upstream pull request submitted in response to astral-sh/uv#21837. It proposes canonicalizing the generated install and library paths and treating file-identical or symlinked binaries as the same in the shadow check. It has not been reviewed or merged and currently contains no test changes.
 - astral-sh/uv#8420 — Merged pull request that introduced the XDG installer fallback. Its review explicitly observed that `XDG_DATA_HOME` yields an unresolved `/../bin` path and identified normalization as fixable, establishing the historical origin of the mismatch.
 - astral-sh/uv#12101 — Closed issue with the same false shadow-warning symptom but a different confirmed mechanism. Its fix added a non-empty guard for `command -v`; astral-sh/uv#21837 passes that guard with a non-empty but lexically different equivalent path.
 
