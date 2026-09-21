@@ -1090,7 +1090,8 @@ pub(crate) async fn install(
                     printer,
                     preview,
                 )
-                .await?
+                .await
+                .map_err(UvError::from)?
         } else {
             None
         };

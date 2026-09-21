@@ -590,30 +590,6 @@ pub(crate) enum PreparationMode {
 }
 
 impl InstallationPlan {
-    /// Construct an installation for a new, empty environment from an exact resolution.
-    pub(crate) fn for_new_environment(resolution: &Resolution) -> Result<Self, Error> {
-        let remote = resolution
-            .distributions()
-            .map(|dist| match dist {
-                uv_distribution_types::ResolvedDist::Installable { dist, .. } => {
-                    Ok(Arc::clone(dist))
-                }
-                uv_distribution_types::ResolvedDist::Installed { .. } => {
-                    Err(anyhow!("A new environment requires installable distributions").into())
-                }
-            })
-            .collect::<Result<Vec<_>, Error>>()?;
-        Ok(Self {
-            plan: Plan {
-                cached: Vec::new(),
-                remote,
-                reinstalls: Vec::new(),
-                extraneous: Vec::new(),
-            },
-            elapsed: Duration::ZERO,
-        })
-    }
-
     /// Prepare a complete plan before the installer modifies its environment, when the real build
     /// environment is already available. Shared builds that require an earlier isolated install,
     /// or a replacement environment, continue through the normal two-phase execution path.

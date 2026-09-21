@@ -9023,6 +9023,10 @@ fn tool_install_lock_verifies_hashes() -> Result<()> {
         "sha256:5327e0bb67cdb46800999de6dcf034bf0a5335702883494af0d8b7f6ca48cee4",
         "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     ))?;
+    let marker = tool_dir
+        .child("simple-launcher")
+        .child("preserve-on-failure");
+    marker.write_str("existing environment")?;
 
     uv_snapshot!(context.filters(), context.tool_install()
         .arg(&wheel)
@@ -9040,6 +9044,7 @@ fn tool_install_lock_verifies_hashes() -> Result<()> {
              Computed:
                sha256:5327e0bb67cdb46800999de6dcf034bf0a5335702883494af0d8b7f6ca48cee4
     "#);
+    marker.assert("existing environment");
 
     Ok(())
 }
