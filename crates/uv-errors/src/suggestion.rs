@@ -306,6 +306,71 @@ mod tests {
         assert!(plain.0[0].suggestion.is_none());
     }
 
+    #[test]
+    fn report_hint_deduplication_retains_only_unambiguous_edits() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("failed to load input")]
+        struct Repeated {
+            suggestion: SourceSuggestion,
+            #[source]
+            source: Suggested,
+        }
+
+        fn repeated_diagnostic<'a>(error: &'a (dyn Error + 'static)) -> Option<Diagnostic<'a>> {
+            let (suggestion, ordering) = if let Some(error) = error.downcast_ref::<Repeated>() {
+                (&error.suggestion, HintOrdering::Last)
+            } else {
+                let error = error.downcast_ref::<Suggested>()?;
+                (&error.0, HintOrdering::First)
+            };
+            Some(
+                Diagnostic::default().with_hints(
+                    Hint::new("Replace the selected value")
+                        .with_ordering(ordering)
+                        .with_suggestion(suggestion.clone())
+                        .into(),
+                ),
+            )
+        }
+
+        let original = suggestion([SourceEdit::new(1..3, "e")]).expect("valid edit");
+        let render = |source: SourceSuggestion| {
+            let error = Repeated {
+                suggestion: original.clone().with_source_text(),
+                source: Suggested(source),
+            };
+            let explicit = Hints::from(
+                Hint::new("Replace the selected value").with_suggestion(original.clone()),
+            );
+            let mut output = String::new();
+            write_error_chain_with_options(
+                &error,
+                &explicit,
+                ErrorOptions::default()
+                    .with_width_override(usize::MAX)
+                    .with_diagnostic(repeated_diagnostic)
+                    .with_stream(&mut output),
+            )
+            .expect("format repeated suggestions");
+            anstream::adapter::strip_str(&output).to_string()
+        };
+
+        assert_snapshot!(render(original.clone()), @"
+        error: failed to load input
+          cause: invalid declaration
+
+        hint: Replace the selected value
+           --> input:1:2
+        ");
+        let independent = suggestion([SourceEdit::new(1..3, "e")]).expect("independent valid edit");
+        assert_snapshot!(render(independent), @"
+        error: failed to load input
+          cause: invalid declaration
+
+        hint: Replace the selected value
+        ");
+    }
+
     #[derive(Debug, thiserror::Error)]
     #[error("failed to load input")]
     struct Outer(#[source] Suggested);
@@ -381,15 +446,18 @@ mod tests {
         assert_snapshot!(hidden, @"
         error: failed to load input
           cause: invalid declaration
-          hint: replace the selected values
+
+        hint: replace the selected values
            --> config.toml:40:9
            ::: config.toml:42:9
-          hint: check the input
+
+        hint: check the input
         ");
         assert_snapshot!(shown, @"
         error: failed to load input
           cause: invalid declaration
-          hint: replace the selected values
+
+        hint: replace the selected values
             --> config.toml:40:9
              |
           40 - name = 'café'
@@ -398,14 +466,15 @@ mod tests {
           42 - count = 2
           42 + count = 3
              |
-          hint: check the input
+
+        hint: check the input
         ");
     }
 
     #[test]
     fn structured_edits_use_original_utf8_coordinates() -> Result<(), Box<dyn Error>> {
         let error = Outer(Suggested(example()));
-        let report = ErrorReport::new(&error, Some(diagnostic));
+        let report = ErrorReport::new(&error, Some(diagnostic), &Hints::none());
         let value = serde_json::to_value(&report)?;
         assert!(!serde_json::to_string(&report)?.contains("sentinel-secret"));
         assert_json_snapshot!(&value["errors"][1]["hints"], @r#"
@@ -457,7 +526,8 @@ mod tests {
         "#);
 
         let shown = Outer(Suggested(example().with_source_text()));
-        let shown = serde_json::to_value(ErrorReport::new(&shown, Some(diagnostic)))?;
+        let shown =
+            serde_json::to_value(ErrorReport::new(&shown, Some(diagnostic), &Hints::none()))?;
         assert_json_snapshot!(&shown["errors"][1]["hints"][0]["suggestion"]["source"], @r#"
         {
           "kind": "snippet",
@@ -588,7 +658,7 @@ mod tests {
                 .with_format(ErrorFormat::Json),
         )?;
         let value: serde_json::Value = serde_json::from_str(&json)?;
-        assert_eq!(value["errors"][0]["hints"][0]["ordering"], "last");
+        assert_eq!(value["errors"][0]["hints"][0]["ordering"], "first");
         assert!(value["errors"][0]["hints"][0]["suggestion"].is_object());
         assert!(value["errors"][1].get("hints").is_none());
         Ok(())

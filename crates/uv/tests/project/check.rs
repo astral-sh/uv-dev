@@ -1573,7 +1573,8 @@ fn check_no_sync_locked_rejects_stale_lock_without_update() -> Result<()> {
     ----- stderr -----
     warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     "
     );
 
@@ -2938,7 +2939,8 @@ fn check_no_project() -> Result<()> {
     ----- stderr -----
     warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
     error: No interpreter found for Python >=3.12 in [PYTHON SOURCES]
-      hint: A managed Python download is available for Python >=3.12, but Python downloads are set to 'never'
+
+    hint: A managed Python download is available for Python >=3.12, but Python downloads are set to 'never'
     ");
 
     // The unavailable project environment is not initialized when project discovery is disabled.

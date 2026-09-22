@@ -647,7 +647,8 @@ fn build_fail() -> Result<()> {
     error: Failed to build `[TEMP_DIR]/project`
       cause: The build backend returned an error
       cause: Call to `setuptools.build_meta.get_requires_for_build_sdist` failed (exit status: 1)
-      hint: Build failures usually indicate a problem with the package or the build environment
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     "#);
 
     Ok(())
@@ -941,7 +942,8 @@ fn build_all_with_failure() -> Result<()> {
     error: Failed to build `member-b @ [TEMP_DIR]/project/packages/member_b`
       cause: The build backend returned an error
       cause: Call to `setuptools.build_meta.get_requires_for_build_sdist` failed (exit status: 1)
-      hint: Build failures usually indicate a problem with the package or the build environment
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     Successfully built dist/project-0.1.0.tar.gz
     Successfully built dist/project-0.1.0-py3-none-any.whl
     ");
@@ -2187,7 +2189,8 @@ fn build_hide_build_output_on_failure() -> Result<()> {
     error: Failed to build `[TEMP_DIR]/project`
       cause: The build backend returned an error
       cause: Call to `setuptools.build_meta.get_requires_for_build_sdist` failed (exit status: 1)
-      hint: Build failures usually indicate a problem with the package or the build environment
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     Ok(())
@@ -2347,7 +2350,8 @@ fn build_named_index_config_file_hint() -> Result<()> {
       cause: Failed to parse entry: `hatchling`
       cause: Package `hatchling` references an undeclared index: `privindex`
        --> pyproject.toml:12:31
-      hint: Index `privindex` was found in a project-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
+
+    hint: Index `privindex` was found in a project-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
     ");
 
     Ok(())
@@ -2699,7 +2703,8 @@ fn build_fast_path_exact_pin() -> Result<()> {
       cause: Failed to resolve requirements from `build-system.requires`
       cause: No solution found when resolving: `uv-build==0.11.33`
       cause: Because uv-build was not found in the provided package locations and you require uv-build==0.11.33, we can conclude that your requirements are unsatisfiable.
-      hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+
+    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
     ");
 
     for requirement in [
@@ -2764,7 +2769,8 @@ fn build_fast_path_constraint_exact_pin() -> Result<()> {
       cause: Failed to resolve requirements from `build-system.requires`
       cause: No solution found when resolving: `uv-build>=0.11, <10000`
       cause: Because uv-build was not found in the provided package locations and you require uv-build==0.11.33, we can conclude that your requirements are unsatisfiable.
-      hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+
+    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
     ");
 
     constraints.write_str("uv_build>=0.11,==0.11.33")?;
@@ -2782,7 +2788,8 @@ fn build_fast_path_constraint_exact_pin() -> Result<()> {
       cause: Failed to resolve requirements from `build-system.requires`
       cause: No solution found when resolving: `uv-build>=0.11, <10000`
       cause: Because uv-build was not found in the provided package locations and you require uv-build==0.11.33, we can conclude that your requirements are unsatisfiable.
-      hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+
+    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
     ");
 
     // Listing files requires the fast path and must reject the incompatible constraint.
@@ -3386,7 +3393,8 @@ fn force_pep517() -> Result<()> {
     error: Failed to build `[TEMP_DIR]/`
       cause: The build backend returned an error
       cause: Call to `uv_build.build_sdist` failed (exit status: 1)
-      hint: Build failures usually indicate a problem with the package or the build environment
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     Ok(())
@@ -3441,9 +3449,10 @@ fn venv_included_in_sdist() -> Result<()> {
     Building source distribution...
     error: Failed to build `[TEMP_DIR]/`
       cause: Invalid tar file
-      hint: The source distribution includes a virtual environment. Virtual environments must be excluded from source distributions.
       cause: failed to unpack `[CACHE_DIR]/sdists-v9/[TMP]/project-0.1.0/.venv/bin/python`
       cause: symlink path `[PYTHON-3.12]` is absolute, but external symlinks are not allowed
+
+    hint: The source distribution includes a virtual environment. Virtual environments must be excluded from source distributions.
     ");
 
     // Point the virtual environment at the test interpreter's `python/3.12/python3` shim to
@@ -3463,8 +3472,9 @@ fn venv_included_in_sdist() -> Result<()> {
     Building source distribution...
     error: Failed to build `[TEMP_DIR]/`
       cause: Invalid tar file
-      hint: The source distribution includes a virtual environment. Virtual environments must be excluded from source distributions.
       cause: at byte [OFFSET]: unsafe symbolic-link target "[PYTHON-3.12]": is absolute
+
+    hint: The source distribution includes a virtual environment. Virtual environments must be excluded from source distributions.
     "#);
 
     uv_snapshot!(context.filters(), context.build().arg("-q"), @"
@@ -3472,9 +3482,10 @@ fn venv_included_in_sdist() -> Result<()> {
     ----- stderr -----
     error: Failed to build `[TEMP_DIR]/`
       cause: Invalid tar file
-      hint: The source distribution includes a virtual environment. Virtual environments must be excluded from source distributions.
       cause: failed to unpack `[CACHE_DIR]/sdists-v9/[TMP]/project-0.1.0/.venv/bin/python`
       cause: symlink path `[PYTHON-3.12]` is absolute, but external symlinks are not allowed
+
+    hint: The source distribution includes a virtual environment. Virtual environments must be excluded from source distributions.
     ");
 
     uv_snapshot!(context.filters(), context.build().arg("-qq"), @"

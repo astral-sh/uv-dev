@@ -42,8 +42,7 @@ impl<'a> Diagnostic<'a> {
 
     /// Attach actionable suggestions owned by this error.
     ///
-    /// [`HintOrdering::First`] and [`HintOrdering::Any`] are rendered beside this error. Its
-    /// [`HintOrdering::Last`] suggestions follow its complete source chain.
+    /// All hints are rendered after the complete error chain, grouped by [`HintOrdering`].
     #[must_use]
     pub fn with_hints(mut self, hints: Hints<'a>) -> Self {
         self.hints.extend(hints);
@@ -59,17 +58,25 @@ impl<'a> Diagnostic<'a> {
 
     /// Supply presentation data for the next error returned by [`Error::source`].
     ///
-    /// This takes precedence over the diagnostic resolver's presentation for that error. Hints
-    /// owned by the source error are retained, followed by any hints supplied here. This does not
-    /// add a source to the error chain, and is ignored if there is no next source.
+    /// This takes precedence over the diagnostic resolver's message and source presentation for
+    /// that error. Information and hints owned by the source error are retained, followed by any
+    /// supplied here. This does not add a source to the error chain, and is ignored if there is no
+    /// next source.
     #[must_use]
     pub fn with_source(mut self, source: Self) -> Self {
         self.source = Some(Box::new(source));
         self
     }
 
-    /// Replace presentation fields without discarding suggestions owned by the actual error.
+    /// Use another message and source presentation without discarding owned context or advice.
+    ///
+    /// Information from this diagnostic precedes information from `presentation`. Hints are
+    /// merged using their usual ordering and duplicate-suggestion rules. The supplied presentation
+    /// controls the displayed message, source snippets, and next-source override.
+    #[must_use]
     pub(crate) fn with_presentation_override(mut self, mut presentation: Self) -> Self {
+        self.info.append(&mut presentation.info);
+        presentation.info = self.info;
         self.hints.extend(presentation.hints);
         presentation.hints = self.hints;
         presentation
@@ -115,13 +122,15 @@ pub type DiagnosticFn = for<'a> fn(&'a (dyn Error + 'static)) -> Option<Diagnost
 pub(crate) fn write_hints(
     stream: &mut impl Write,
     hints: &Hints<'_>,
-    ordering: HintOrdering,
     width: Option<usize>,
 ) -> fmt::Result {
-    for hint in hints.iter_for_ordering(ordering) {
+    for hint in [HintOrdering::First, HintOrdering::Any, HintOrdering::Last]
+        .into_iter()
+        .flat_map(|ordering| hints.iter_for_ordering(ordering))
+    {
         let message = wrap_text(
             &hint.message,
-            width.map(|width| width.saturating_sub(8)),
+            width.map(|width| width.saturating_sub(6)),
             "",
             "",
             "",
@@ -129,14 +138,14 @@ pub(crate) fn write_hints(
         let mut lines = message.lines();
         writeln!(
             stream,
-            "  {HintPrefix} {}",
+            "\n{HintPrefix} {}",
             lines.next().unwrap_or_default().trim()
         )?;
         for line in lines {
             if line.trim().is_empty() {
                 writeln!(stream)?;
             } else {
-                writeln!(stream, "        {line}")?;
+                writeln!(stream, "      {line}")?;
             }
         }
         if let Some(suggestion) = &hint.suggestion {
