@@ -1,0 +1,24 @@
+name = "emit-marker-expression"
+description = "Implementation and platform markers in compiled requirements."
+
+[root]
+
+[expected]
+satisfiable = true
+
+[packages.marker-parent.versions."1.0.0"]
+requires_python = ">=3.12"
+requires = [
+  "implementation-dependency; python_full_version == '3.12.9' and platform_python_implementation == 'CPython'",
+  "platform-dependency; sys_platform == 'linux'",
+]
+sdist_backend = "in-tree"
+
+[packages.implementation-dependency.versions."1.0.0"]
+sdist_backend = "in-tree"
+
+[packages.platform-dependency.versions."1.0.0"]
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true
