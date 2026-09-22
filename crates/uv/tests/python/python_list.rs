@@ -746,6 +746,18 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
         .mount(&server)
         .await;
 
+    let named_build_json = versioned_json
+        .replace("+custom", "+custom_internal")
+        .replace(
+            r#""build_name": "custom""#,
+            r#""build_name": "custom_internal""#,
+        );
+    Mock::given(method("GET"))
+        .and(path("/named-build"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(named_build_json, "application/json"))
+        .mount(&server)
+        .await;
+
     Mock::given(method("GET"))
         .and(path("/versioned-invalid-revision"))
         .respond_with(ResponseTemplate::new(200).set_body_raw(
@@ -791,6 +803,72 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     cpython-3.14.0-macos-aarch64-none                    https://custom.com/cpython-3.14.0-darwin-aarch64-none.tar.gz
     cpython-3.13.2+freethreaded-linux-powerpc64le-gnu    https://custom.com/ccpython-3.13.2+freethreaded-linux-powerpc64le-gnu.tar.gz
     cpython-3.12.9+custom-linux-x86_64-gnu               https://custom.com/cpython-3.12.9+custom-linux-x86_64-gnu.tar.gz
+    ");
+
+    // Test selecting a publisher-defined build name explicitly.
+    uv_snapshot!(context
+        .python_list()
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .arg("3.12+custom")
+        .arg("--all-versions")
+        .arg("--all-platforms")
+        .arg("--all-arches")
+        .arg("--show-urls")
+        .arg("--python-downloads-json-url").arg(server.uri()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.12.9+custom-linux-x86_64-gnu    https://custom.com/cpython-3.12.9+custom-linux-x86_64-gnu.tar.gz
+    ");
+
+    // A named build can be selected explicitly.
+    uv_snapshot!(context
+        .python_list()
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .arg("3.12+custom_internal")
+        .arg("--only-downloads")
+        .arg("--all-platforms")
+        .arg("--all-arches")
+        .arg("--show-urls")
+        .arg("--python-downloads-json-url").arg(format!("{}/named-build", server.uri())), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.12.9+custom_internal-linux-x86_64-gnu    https://custom.com/cpython-3.12.9+custom_internal-linux-x86_64-gnu.tar.gz
+    ");
+
+    // A different build name does not match.
+    uv_snapshot!(context
+        .python_list()
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .arg("3.12+custom")
+        .arg("--only-downloads")
+        .arg("--all-platforms")
+        .arg("--all-arches")
+        .arg("--python-downloads-json-url").arg(format!("{}/named-build", server.uri())), @"
+    exit_code: 0 (success)
+    ");
+
+    // An unqualified request does not expose a non-default named build.
+    uv_snapshot!(context
+        .python_list()
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .arg("3.12")
+        .arg("--only-downloads")
+        .arg("--all-platforms")
+        .arg("--all-arches")
+        .arg("--python-downloads-json-url").arg(format!("{}/named-build", server.uri())), @"
+    exit_code: 0 (success)
+    ");
+
+    // Partial build names must not match.
+    uv_snapshot!(context
+        .python_list()
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .arg("3.12+custom_int")
+        .arg("--only-downloads")
+        .arg("--all-platforms")
+        .arg("--all-arches")
+        .arg("--python-downloads-json-url").arg(format!("{}/named-build", server.uri())), @"
+    exit_code: 0 (success)
     ");
 
     // test invalid URL path
