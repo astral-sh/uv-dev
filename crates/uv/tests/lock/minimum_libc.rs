@@ -1039,19 +1039,18 @@ fn minimum_libc_invalid_configuration() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock().arg("--offline"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
-    warning: Failed to parse `pyproject.toml` during settings discovery:
-      TOML parse error at line 11, column 34
+    warning: Failed to parse `pyproject.toml` during settings discovery
+      cause: expected a libc version in the form `<major>.<minor>` (e.g., `2.31` or `1.2`)
+        --> pyproject.toml:11:34
          |
       11 | minimum-libc-version = { glibc = "2.31.1" }
          |                                  ^^^^^^^^
-      expected a libc version in the form `<major>.<minor>` (e.g., `2.31` or `1.2`)
-
     error: Failed to parse: `pyproject.toml`
-      cause: TOML parse error at line 11, column 34
-                |
-             11 | minimum-libc-version = { glibc = "2.31.1" }
-                |                                  ^^^^^^^^
-             expected a libc version in the form `<major>.<minor>` (e.g., `2.31` or `1.2`)
+      cause: expected a libc version in the form `<major>.<minor>` (e.g., `2.31` or `1.2`)
+        --> pyproject.toml:11:34
+         |
+      11 | minimum-libc-version = { glibc = "2.31.1" }
+         |                                  ^^^^^^^^
     "#);
 
     pyproject_toml.write_str(indoc! {r#"
@@ -1067,19 +1066,18 @@ fn minimum_libc_invalid_configuration() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    warning: Failed to parse `pyproject.toml` during settings discovery:
-      TOML parse error at line 8, column 33
+    warning: Failed to parse `pyproject.toml` during settings discovery
+      cause: invalid type: boolean `false`, expected a libc version string in the form `<major>.<minor>`
+       --> pyproject.toml:8:33
         |
       8 | minimum-libc-version = { musl = false }
         |                                 ^^^^^
-      invalid type: boolean `false`, expected a libc version string in the form `<major>.<minor>`
-
     error: Failed to parse: `pyproject.toml`
-      cause: TOML parse error at line 8, column 33
-               |
-             8 | minimum-libc-version = { musl = false }
-               |                                 ^^^^^
-             invalid type: boolean `false`, expected a libc version string in the form `<major>.<minor>`
+      cause: invalid type: boolean `false`, expected a libc version string in the form `<major>.<minor>`
+       --> pyproject.toml:8:33
+        |
+      8 | minimum-libc-version = { musl = false }
+        |                                 ^^^^^
     ");
 
     pyproject_toml.write_str(indoc! {r#"
@@ -1095,19 +1093,18 @@ fn minimum_libc_invalid_configuration() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    warning: Failed to parse `pyproject.toml` during settings discovery:
-      TOML parse error at line 8, column 34
+    warning: Failed to parse `pyproject.toml` during settings discovery
+      cause: invalid type: floating point `2.31`, expected a libc version string in the form `<major>.<minor>`
+       --> pyproject.toml:8:34
         |
       8 | minimum-libc-version = { glibc = 2.31 }
         |                                  ^^^^
-      invalid type: floating point `2.31`, expected a libc version string in the form `<major>.<minor>`
-
     error: Failed to parse: `pyproject.toml`
-      cause: TOML parse error at line 8, column 34
-               |
-             8 | minimum-libc-version = { glibc = 2.31 }
-               |                                  ^^^^
-             invalid type: floating point `2.31`, expected a libc version string in the form `<major>.<minor>`
+      cause: invalid type: floating point `2.31`, expected a libc version string in the form `<major>.<minor>`
+       --> pyproject.toml:8:34
+        |
+      8 | minimum-libc-version = { glibc = 2.31 }
+        |                                  ^^^^
     ");
 
     pyproject_toml.write_str(indoc! {r#"
@@ -1123,19 +1120,18 @@ fn minimum_libc_invalid_configuration() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock().arg("--offline"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
-    warning: Failed to parse `pyproject.toml` during settings discovery:
-      TOML parse error at line 8, column 26
+    warning: Failed to parse `pyproject.toml` during settings discovery
+      cause: unknown field `unknown`, expected `glibc` or `musl`
+       --> pyproject.toml:8:26
         |
       8 | minimum-libc-version = { unknown = "1.2" }
         |                          ^^^^^^^
-      unknown field `unknown`, expected `glibc` or `musl`
-
     error: Failed to parse: `pyproject.toml`
-      cause: TOML parse error at line 8, column 26
-               |
-             8 | minimum-libc-version = { unknown = "1.2" }
-               |                          ^^^^^^^
-             unknown field `unknown`, expected `glibc` or `musl`
+      cause: unknown field `unknown`, expected `glibc` or `musl`
+       --> pyproject.toml:8:26
+        |
+      8 | minimum-libc-version = { unknown = "1.2" }
+        |                          ^^^^^^^
     "#);
 
     // Like required-environments, the minimum libc version is a project-only setting.
