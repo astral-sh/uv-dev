@@ -29,7 +29,10 @@ jobs:
 
   cargo-test-linux:
     timeout-minutes: 10
-    runs-on: "namespace-profile-ubuntu-24-04-16;container.privileged=true"
+    runs-on:
+      - nscloud-ubuntu-24.04-amd64-32x64-with-features
+      - namespace-features:container.privileged=true
+      - namespace-features:compute.configuration=d0
     name: "cargo test on linux"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -106,8 +109,14 @@ jobs:
           sudo mount -o loop /tmp/ext4.img /ext4
           sudo chown "$(id -u):$(id -g)" /ext4
 
+      - name: "Create temporary test directory"
+        run: |
+          mkdir -p /tmp/uv-runner-acceptance
+          sudo mount -t tmpfs -o size=16G,mode=1777 tmpfs /tmp/uv-runner-acceptance
+
       - name: "Cargo test"
         env:
+          TMPDIR: /tmp/uv-runner-acceptance
           # Retry more than default to reduce flakes in CI
           UV_HTTP_RETRIES: 5
           RUST_BACKTRACE: 1
