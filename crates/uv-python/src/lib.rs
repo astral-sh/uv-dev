@@ -5,6 +5,7 @@ use thiserror::Error;
 use uv_static::EnvVars;
 
 pub use crate::architecture::PythonArchitecture;
+pub(crate) use crate::discovery::PythonBuildRequest;
 #[cfg(all(test, unix))]
 use crate::discovery::find_python_installations;
 pub use crate::discovery::{

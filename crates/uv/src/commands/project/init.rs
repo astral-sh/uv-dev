@@ -526,7 +526,9 @@ async fn determine_requires_python(
 
                 let python_pin = if pin_python {
                     Some(PythonRequest::Version(VersionRequest::MajorMinor(
-                        *major, *minor, *variant,
+                        *major,
+                        *minor,
+                        variant.clone(),
                     )))
                 } else {
                     None
@@ -548,7 +550,10 @@ async fn determine_requires_python(
 
                 let python_pin = if pin_python {
                     Some(PythonRequest::Version(VersionRequest::MajorMinorPatch(
-                        *major, *minor, *patch, *variant,
+                        *major,
+                        *minor,
+                        *patch,
+                        variant.clone(),
                     )))
                 } else {
                     None
@@ -579,7 +584,7 @@ async fn determine_requires_python(
                     Some(PythonRequest::Version(VersionRequest::MajorMinor(
                         interpreter.python_major(),
                         interpreter.python_minor(),
-                        *variant,
+                        variant.clone(),
                     )))
                 } else {
                     None
@@ -611,7 +616,7 @@ async fn determine_requires_python(
                     Some(PythonRequest::Version(VersionRequest::MajorMinor(
                         interpreter.python_major(),
                         interpreter.python_minor(),
-                        PythonVariant::Default,
+                        PythonVariant::Default.into(),
                     )))
                 } else {
                     None
@@ -636,7 +641,7 @@ async fn determine_requires_python(
             Some(PythonRequest::Version(VersionRequest::MajorMinor(
                 interpreter.python_major(),
                 interpreter.python_minor(),
-                PythonVariant::Default,
+                PythonVariant::Default.into(),
             )))
         } else {
             None
@@ -678,7 +683,7 @@ async fn determine_requires_python(
             Some(PythonRequest::Version(VersionRequest::MajorMinor(
                 interpreter.python_major(),
                 interpreter.python_minor(),
-                PythonVariant::Default,
+                PythonVariant::Default.into(),
             )))
         } else {
             None
@@ -713,7 +718,7 @@ async fn determine_requires_python(
             Some(PythonRequest::Version(VersionRequest::MajorMinor(
                 interpreter.python_major(),
                 interpreter.python_minor(),
-                PythonVariant::Default,
+                PythonVariant::Default.into(),
             )))
         } else {
             None

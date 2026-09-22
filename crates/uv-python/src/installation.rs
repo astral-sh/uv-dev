@@ -18,7 +18,8 @@ use uv_platform::{Arch, Libc, Os, Platform};
 
 use crate::discovery::{
     EnvironmentPreference, PythonRequest, VersionRequest, find_best_python_installation,
-    find_python_installation, parse_python_variant_and_build_name,
+    find_python_installation, find_python_installation_with_catalog,
+    parse_python_variant_and_build_name,
 };
 use crate::downloads::{
     DownloadResult, ManagedPythonDownload, ManagedPythonDownloadList, PythonDownloadRequest,
@@ -116,13 +117,20 @@ impl PythonInstallation {
         download_list: &ManagedPythonDownloadList,
         cache: &Cache,
     ) -> Result<Self, Error> {
-        let installation = Self::find_existing(request, environments, preference, arch, cache)?;
+        let installation = find_python_installation_with_catalog(
+            request,
+            environments,
+            preference,
+            arch,
+            cache,
+            Some(download_list),
+        )??;
         installation.warn_if_outdated_prerelease(request, download_list);
         Ok(installation)
     }
 
     /// Find an existing [`PythonInstallation`].
-    pub fn find_existing(
+    fn find_existing(
         request: &PythonRequest,
         environments: EnvironmentPreference,
         preference: PythonPreference,
@@ -136,6 +144,33 @@ impl PythonInstallation {
             arch,
             cache,
         )??)
+    }
+
+    /// Find an existing installation using the configured catalog's build defaults.
+    pub async fn find_existing_with_catalog(
+        request: &PythonRequest,
+        environments: EnvironmentPreference,
+        preference: PythonPreference,
+        arch: Option<PythonArchitecture>,
+        client_builder: &BaseClientBuilder<'_>,
+        cache: &Cache,
+        python_downloads_json_url: Option<&str>,
+    ) -> Result<Self, Error> {
+        let installation = Self::find_existing(request, environments, preference, arch, cache)?;
+        if !installation.is_managed() || PythonDownloadRequest::from_request(request).is_none() {
+            return Ok(installation);
+        }
+        let download_list =
+            ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url)
+                .await?;
+        Self::find(
+            request,
+            environments,
+            preference,
+            arch,
+            &download_list,
+            cache,
+        )
     }
 
     /// Find or download a [`PythonInstallation`] that satisfies a requested version, if the request
@@ -198,19 +233,28 @@ impl PythonInstallation {
         python_downloads_json_url: Option<&str>,
     ) -> Result<Self, Error> {
         let request = request.unwrap_or(&PythonRequest::Default);
+        if PythonDownloadRequest::from_request(request).is_none() {
+            return Self::find_existing(request, environments, preference, arch, cache);
+        }
+        match Self::find_existing(request, environments, preference, arch, cache) {
+            Ok(installation) if !installation.is_managed() => return Ok(installation),
+            Ok(_) | Err(Error::MissingPython(..)) => {}
+            Err(Error::Discovery(err)) if !err.is_critical() => {}
+            Err(err) => return Err(err),
+        }
 
-        let err = match Self::find_existing(request, environments, preference, arch, cache) {
-            Ok(installation) => {
-                installation
-                    .download_and_warn_if_outdated_prerelease(
-                        request,
-                        client_builder,
-                        cache,
-                        python_downloads_json_url,
-                    )
-                    .await?;
-                return Ok(installation);
-            }
+        let download_list =
+            ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url)
+                .await?;
+        let err = match Self::find(
+            request,
+            environments,
+            preference,
+            arch,
+            &download_list,
+            cache,
+        ) {
+            Ok(installation) => return Ok(installation),
             Err(err) => err,
         };
 
@@ -227,10 +271,6 @@ impl PythonInstallation {
         let Some(download_request) = PythonDownloadRequest::from_request(request) else {
             return Err(err);
         };
-
-        let download_list =
-            ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url)
-                .await?;
 
         let downloads_enabled = preference.allows_managed()
             && python_downloads.is_automatic()
@@ -411,7 +451,7 @@ impl PythonInstallation {
     /// Returns `true` if this is a managed (uv-installed) Python installation.
     ///
     /// Uses the source as a fast path, then falls back to checking the interpreter's base prefix.
-    pub(crate) fn is_managed(&self) -> bool {
+    pub fn is_managed(&self) -> bool {
         self.source.is_managed() || self.interpreter.is_managed()
     }
 
@@ -538,7 +578,7 @@ impl PythonInstallation {
     ///
     /// Avoids loading the Python download list unless the discovered interpreter could require
     /// the warning.
-    pub async fn download_and_warn_if_outdated_prerelease(
+    async fn download_and_warn_if_outdated_prerelease(
         &self,
         request: &PythonRequest,
         client_builder: &BaseClientBuilder<'_>,
@@ -700,15 +740,22 @@ impl PythonInstallationKey {
         &self.variant
     }
 
+    /// Whether two builds share a catalog default: implementation, version, Python variant, and platform.
+    pub(crate) fn same_build_group(&self, other: &Self) -> bool {
+        self.implementation == other.implementation
+            && self.major == other.major
+            && self.minor == other.minor
+            && self.patch == other.patch
+            && self.prerelease == other.prerelease
+            && self.variant == other.variant
+            && self.platform == other.platform
+    }
+
     pub(crate) fn build_name(&self) -> Option<&PythonBuildName> {
         self.build_name.as_ref()
     }
 
-    fn executable_name_variant_suffix(&self) -> String {
-        self.variant.executable_suffix().to_string()
-    }
-
-    fn display_variant_suffix(&self) -> String {
+    fn display_variant_and_build_name(&self) -> String {
         let mut suffix = match self.variant {
             PythonVariant::Default => String::new(),
             _ => format!("+{}", self.variant),
@@ -727,7 +774,7 @@ impl PythonInstallationKey {
             name = self.implementation().executable_install_name(),
             maj = self.major,
             min = self.minor,
-            var = self.executable_name_variant_suffix(),
+            var = self.variant.executable_suffix(),
             exe = std::env::consts::EXE_SUFFIX
         )
     }
@@ -738,7 +785,7 @@ impl PythonInstallationKey {
             "{name}{maj}{var}{exe}",
             name = self.implementation().executable_install_name(),
             maj = self.major,
-            var = self.executable_name_variant_suffix(),
+            var = self.variant.executable_suffix(),
             exe = std::env::consts::EXE_SUFFIX
         )
     }
@@ -748,7 +795,7 @@ impl PythonInstallationKey {
         format!(
             "{name}{var}{exe}",
             name = self.implementation().executable_install_name(),
-            var = self.executable_name_variant_suffix(),
+            var = self.variant.executable_suffix(),
             exe = std::env::consts::EXE_SUFFIX
         )
     }
@@ -756,7 +803,7 @@ impl PythonInstallationKey {
 
 impl fmt::Display for PythonInstallationKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let variant = self.display_variant_suffix();
+        let variant = self.display_variant_and_build_name();
         write!(
             f,
             "{}-{}.{}.{}{}{}-{}",
@@ -899,7 +946,7 @@ impl fmt::Display for PythonInstallationMinorVersionKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Display every field on the wrapped key except the patch
         // and prerelease (with special formatting for the variant).
-        let variant = self.0.display_variant_suffix();
+        let variant = self.0.display_variant_and_build_name();
         write!(
             f,
             "{}-{}.{}{}-{}",
