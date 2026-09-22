@@ -601,15 +601,6 @@ impl PythonDownloadRequest {
             return false;
         }
 
-        if let Some(build_request) = self
-            .version
-            .as_ref()
-            .and_then(VersionRequest::build_request)
-            && !build_request.allows_build_name(download.key(), download.is_default())
-        {
-            return false;
-        }
-
         // Then check the build if specified
         if let Some(ref requested_build) = self.build {
             let Some(download_build) = download.build() else {
@@ -1111,86 +1102,6 @@ impl ManagedPythonDownloadList {
             .filter(move |download| request.satisfied_by_download(download))
     }
 
-    /// Whether an installed build satisfies the request and the catalog's selection policy.
-    ///
-    /// Installations absent from the catalog can still be requested explicitly. Legacy unnamed
-    /// installations remain usable when the catalog has no entries for their version and platform.
-    pub fn matches_installation(
-        &self,
-        request: &PythonDownloadRequest,
-        key: &PythonInstallationKey,
-    ) -> bool {
-        if !request.satisfied_by_key(key) {
-            return false;
-        }
-        self.allows_installed_build(request, key)
-    }
-
-    /// Apply build selection after the version, Python variant, and platform already match.
-    pub(crate) fn allows_installed_build(
-        &self,
-        request: &PythonDownloadRequest,
-        key: &PythonInstallationKey,
-    ) -> bool {
-        let build_request = request
-            .version
-            .as_ref()
-            .and_then(VersionRequest::build_request)
-            .unwrap_or_default();
-        let default = self
-            .iter_all()
-            .find(|download| download.is_default() && download.key().same_build_group(key));
-        if build_request.build_name().is_none() {
-            if let Some(default) = default {
-                return default.key() == key;
-            }
-            if self
-                .iter_all()
-                .any(|download| download.key().same_build_group(key))
-            {
-                return false;
-            }
-        }
-        build_request.allows_build_name(key, default.is_some_and(|download| download.key() == key))
-    }
-
-    /// Apply named-build matching while listing installed builds.
-    pub fn allows_listed_build(
-        &self,
-        request: &PythonDownloadRequest,
-        key: &PythonInstallationKey,
-    ) -> bool {
-        request
-            .version
-            .as_ref()
-            .and_then(VersionRequest::build_request)
-            .is_none_or(|build_request| {
-                let default = self
-                    .iter_all()
-                    .any(|download| download.key() == key && download.is_default());
-                build_request.allows_build_name(key, default)
-            })
-    }
-
-    /// Compare installed builds in discovery order, preferring the catalog default within a group.
-    pub fn compare_installations(
-        &self,
-        left: &PythonInstallationKey,
-        right: &PythonInstallationKey,
-    ) -> std::cmp::Ordering {
-        if left.same_build_group(right) {
-            let is_default = |key| {
-                self.iter_all()
-                    .any(|download| download.key() == key && download.is_default())
-            };
-            is_default(right)
-                .cmp(&is_default(left))
-                .then_with(|| right.cmp(left))
-        } else {
-            right.cmp(left)
-        }
-    }
-
     /// Return the first [`ManagedPythonDownload`] matching a request, if any.
     ///
     /// If there is no stable version matching the request, a compatible pre-release version will
@@ -1206,7 +1117,7 @@ impl ManagedPythonDownloadList {
                 self.iter_matching(request).next()
             } else {
                 self.iter_matching(request)
-                    .find(|download| download.is_default())
+                    .find(|download| download.key().build_name().is_none())
             }
         };
 
@@ -1273,33 +1184,13 @@ impl ManagedPythonDownloadList {
                         .build()
                         .map_err(|err| Error::ClientBuild(Box::new(err)))?,
                 );
-                let response = fetch_downloads_from_url(&client, cache, url).await;
-                // If the server is unavailable, retain the cached catalog's selection policy.
-                // Invalid catalogs must still fail instead of silently using older metadata.
-                let response = match response {
-                    Err(
-                        error @ (Error::RemotePythonDownloadsJSONClient(_)
-                        | Error::NetworkError(..)
-                        | Error::NetworkErrorWithRetries { .. }),
-                    ) if client_builder.connectivity.is_online() => {
-                        let offline_client = CachedClient::new(
-                            client_builder
-                                .clone()
-                                .connectivity(Connectivity::Offline)
-                                .build()
-                                .map_err(|err| Error::ClientBuild(Box::new(err)))?,
-                        );
-                        fetch_downloads_from_url(&offline_client, cache, url)
-                            .await
-                            .or(Err(error))
-                    }
-                    response => response,
-                };
-                response.map_err(|e| match e {
-                    e @ (Error::InvalidPythonDownloadsJSON(..)
-                    | Error::UnsupportedPythonDownloadsJSON(..)) => e,
-                    e => Error::FetchingPythonDownloadsJSONError(url.to_string(), Box::new(e)),
-                })?
+                fetch_downloads_from_url(&client, cache, url)
+                    .await
+                    .map_err(|e| match e {
+                        e @ (Error::InvalidPythonDownloadsJSON(..)
+                        | Error::UnsupportedPythonDownloadsJSON(..)) => e,
+                        e => Error::FetchingPythonDownloadsJSONError(url.to_string(), Box::new(e)),
+                    })?
             }
         };
 
@@ -2017,16 +1908,7 @@ fn parse_json_downloads(
                     .map(|revision| Box::leak(revision.into_boxed_str()) as &'static str),
             })
         })
-        .sorted_by(|left, right| {
-            if left.key.same_build_group(&right.key) {
-                right
-                    .default
-                    .cmp(&left.default)
-                    .then_with(|| right.key.cmp(&left.key))
-            } else {
-                right.key.cmp(&left.key)
-            }
-        })
+        .sorted_by(|left, right| right.key.cmp(&left.key))
         .collect()
 }
 

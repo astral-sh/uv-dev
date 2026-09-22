@@ -329,8 +329,8 @@ Python version instead.
 
 Python download metadata can label artifacts with a publisher-defined build name such as `custom`.
 Select it explicitly with a request like `3.13+custom`. Python variants and build names can be
-composed, as in `3.13+freethreaded+custom`. An unqualified request, such as `3.13`, selects the
-default build from the download metadata.
+composed, as in `3.13+freethreaded+custom`. An unqualified request, such as `3.13`, selects an
+unnamed build.
 
 ## Free-threaded Python
 

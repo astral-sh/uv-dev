@@ -847,7 +847,7 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     exit_code: 0 (success)
     ");
 
-    // An unqualified request does not expose a non-default named build.
+    // An unqualified request does not match a named build.
     uv_snapshot!(context
         .python_list()
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
