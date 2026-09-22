@@ -55,38 +55,41 @@ fn tool_install_git_path(bin_dir: &ChildPath) -> OsString {
 
 #[test]
 fn tool_install() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&_server.index_url())
+        .with_filter((r#"index-url = ".*"\n"#, ""));
+    let context = context
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
 
-    // Install `black`
+    // Install `format-tool`.
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("black")
+        .arg("format-tool")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + black==24.3.0
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    Installed 2 executables: black, blackd
+     + format-support==1.0.0
+     + format-tool==24.3.0
+    Installed 2 executables: format-tool, format-tool-daemon
     ");
 
-    tool_dir.child("black").assert(predicate::path::is_dir());
     tool_dir
-        .child("black")
+        .child("format-tool")
+        .assert(predicate::path::is_dir());
+    tool_dir
+        .child("format-tool")
         .child("uv-receipt.toml")
         .assert(predicate::path::exists());
 
-    let executable = bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX));
+    let executable = bin_dir.child(format!("format-tool{}", std::env::consts::EXE_SUFFIX));
     assert!(executable.exists());
 
     // On Windows, we can't snapshot an executable file.
@@ -94,18 +97,18 @@ fn tool_install() {
     insta::with_settings!({
         filters => context.filters(),
     }, {
-        // Should run black in the virtual environment
+        // Should run format-tool in the virtual environment.
         assert_snapshot!(fs_err::read_to_string(executable).unwrap(), @r#"
-        #![TEMP_DIR]/tools/black/bin/python
+        #![TEMP_DIR]/tools/format-tool/bin/python
         # -*- coding: utf-8 -*-
         import sys
-        from black import patched_main
+        from format_tool import main
         if __name__ == "__main__":
             if sys.argv[0].endswith("-script.pyw"):
                 sys.argv[0] = sys.argv[0][:-11]
             elif sys.argv[0].endswith(".exe"):
                 sys.argv[0] = sys.argv[0][:-4]
-            sys.exit(patched_main())
+            sys.exit(main())
         "#);
 
     });
@@ -114,12 +117,12 @@ fn tool_install() {
         filters => context.filters(),
     }, {
         // We should have a tool receipt
-        assert_snapshot!(fs_err::read_to_string(tool_dir.join("black").join("uv-receipt.toml")).unwrap(), @r#"
+        assert_snapshot!(fs_err::read_to_string(tool_dir.join("format-tool").join("uv-receipt.toml")).unwrap(), @r#"
         [tool]
-        requirements = [{ name = "black" }]
+        requirements = [{ name = "format-tool" }]
         entrypoints = [
-            { name = "black", install-path = "[TEMP_DIR]/bin/black", from = "black" },
-            { name = "blackd", install-path = "[TEMP_DIR]/bin/blackd", from = "black" },
+            { name = "format-tool", install-path = "[TEMP_DIR]/bin/format-tool", from = "format-tool" },
+            { name = "format-tool-daemon", install-path = "[TEMP_DIR]/bin/format-tool-daemon", from = "format-tool" },
         ]
 
         [tool.options]
@@ -127,36 +130,30 @@ fn tool_install() {
         "#);
     });
 
-    uv_snapshot!(context.filters(), Command::new("black").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), Command::new("format-tool").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
-    black, 24.3.0 (compiled: yes)
-    Python (CPython) 3.12.[X]
+    format-tool 24.3.0
     ");
 
-    // Install another tool
+    // Install another tool.
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("flask")
+        .arg("web-tool")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
-    Installed 1 executable: flask
+     + web-runtime==3.0.1
+     + web-tool==3.0.2
+    Installed 1 executable: web-tool
     ");
 
-    tool_dir.child("flask").assert(predicate::path::is_dir());
+    tool_dir.child("web-tool").assert(predicate::path::is_dir());
     assert!(
         bin_dir
-            .child(format!("flask{}", std::env::consts::EXE_SUFFIX))
+            .child(format!("web-tool{}", std::env::consts::EXE_SUFFIX))
             .exists()
     );
 
@@ -164,11 +161,11 @@ fn tool_install() {
     insta::with_settings!({
         filters => context.filters(),
     }, {
-        assert_snapshot!(fs_err::read_to_string(bin_dir.join("flask")).unwrap(), @r#"
-        #![TEMP_DIR]/tools/flask/bin/python
+        assert_snapshot!(fs_err::read_to_string(bin_dir.join("web-tool")).unwrap(), @r#"
+        #![TEMP_DIR]/tools/web-tool/bin/python
         # -*- coding: utf-8 -*-
         import sys
-        from flask.cli import main
+        from web_tool import main
         if __name__ == "__main__":
             if sys.argv[0].endswith("-script.pyw"):
                 sys.argv[0] = sys.argv[0][:-11]
@@ -178,22 +175,20 @@ fn tool_install() {
         "#);
     });
 
-    uv_snapshot!(context.filters(), Command::new("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), Command::new("web-tool").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
-    Flask 3.0.2
-    Werkzeug 3.0.1
+    web-tool 3.0.2
     ");
 
     insta::with_settings!({
         filters => context.filters(),
     }, {
-        assert_snapshot!(fs_err::read_to_string(tool_dir.join("flask").join("uv-receipt.toml")).unwrap(), @r#"
+        assert_snapshot!(fs_err::read_to_string(tool_dir.join("web-tool").join("uv-receipt.toml")).unwrap(), @r#"
         [tool]
-        requirements = [{ name = "flask" }]
+        requirements = [{ name = "web-tool" }]
         entrypoints = [
-            { name = "flask", install-path = "[TEMP_DIR]/bin/flask", from = "flask" },
+            { name = "web-tool", install-path = "[TEMP_DIR]/bin/web-tool", from = "web-tool" },
         ]
 
         [tool.options]
@@ -204,15 +199,17 @@ fn tool_install() {
 
 #[test]
 fn tool_install_relative_exclude_newer_receipt_preserves_span() {
+    let _server = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
+        .with_local_index()
+        .with_default_index(&_server.index_url())
+        .with_filter((r#"index-url = ".*"\n"#, ""));
+    let context = context.with_filtered_exe_suffix().with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
-
     context
         .tool_install()
-        .arg("black==24.2.0")
+        .arg("format-tool==24.2.0")
         .arg("--exclude-newer")
         .arg("3 weeks")
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
@@ -223,22 +220,21 @@ fn tool_install_relative_exclude_newer_receipt_preserves_span() {
         .env(EnvVars::PATH, bin_dir.as_os_str())
         .assert()
         .success();
+    insta::with_settings!({filters => context.filters()}, {
+        assert_snapshot!(
+            fs_err::read_to_string(tool_dir.join("format-tool").join("uv-receipt.toml")).unwrap(),
+            @r#"
+    [tool]
+    requirements = [{ name = "format-tool", specifier = "==24.2.0" }]
+    entrypoints = [
+        { name = "format-tool", install-path = "[TEMP_DIR]/bin/format-tool", from = "format-tool" },
+        { name = "format-tool-daemon", install-path = "[TEMP_DIR]/bin/format-tool-daemon", from = "format-tool" },
+    ]
 
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(fs_err::read_to_string(tool_dir.join("black").join("uv-receipt.toml")).unwrap(), @r#"
-        [tool]
-        requirements = [{ name = "black", specifier = "==24.2.0" }]
-        entrypoints = [
-            { name = "black", install-path = "[TEMP_DIR]/bin/black", from = "black" },
-            { name = "blackd", install-path = "[TEMP_DIR]/bin/blackd", from = "black" },
-        ]
-
-        [tool.options]
-        exclude-newer = "2024-04-10T00:00:00Z"
-        exclude-newer-span = "P3W"
-        "#);
+    [tool.options]
+    exclude-newer = "2024-04-10T00:00:00Z"
+    exclude-newer-span = "P3W"
+    "#);
     });
 }
 
@@ -246,6 +242,7 @@ fn tool_install_relative_exclude_newer_receipt_preserves_span() {
 #[test]
 fn tool_install_prerelease_package_receipt_preserves_policy() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -307,6 +304,7 @@ fn tool_install_prerelease_package_receipt_preserves_policy() {
 #[test]
 fn tool_install_from_directory_ignores_global_pin_outside_requires_python_range() {
     let context = uv_test::test_context_with_versions!(&["3.13", "3.12", "3.11"])
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -380,6 +378,7 @@ fn tool_install_from_directory_ignores_global_pin_outside_requires_python_range(
 #[test]
 fn tool_install_from_directory_uses_global_pin_within_requires_python_range() {
     let context = uv_test::test_context_with_versions!(&["3.13", "3.12", "3.11"])
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -453,6 +452,8 @@ fn tool_install_from_directory_uses_global_pin_within_requires_python_range() {
 #[test]
 fn tool_install_python_from_global_version_file() {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12", "3.13"])
+        .with_local_index()
+        .with_packse_index("packages/tool-run.toml")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -468,30 +469,22 @@ fn tool_install_python_from_global_version_file() {
 
     // Install a tool
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("flask")
+        .arg("python-tool")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
-    Installed 1 executable: flask
+     + python-tool==1.0.0
+    Installed 1 executable: python-tool
     ");
 
     // It should use the version from the global file
-    uv_snapshot!(context.filters(), Command::new("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), Command::new("python-tool").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.[X]
-    Flask 3.0.2
-    Werkzeug 3.0.1
     ");
 
     // Change global version
@@ -502,108 +495,87 @@ fn tool_install_python_from_global_version_file() {
         .assert()
         .success();
 
-    // Installing flask again should be a no-op, even though the global pin changed
+    // Installing python-tool again should be a no-op, even though the global pin changed
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("flask")
+        .arg("python-tool")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    `flask` is already installed
+    `python-tool` is already installed
     ");
 
-    uv_snapshot!(context.filters(), Command::new("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), Command::new("python-tool").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.[X]
-    Flask 3.0.2
-    Werkzeug 3.0.1
     ");
 
     // Using `--upgrade` forces us to check the environment
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("flask")
+        .arg("python-tool")
         .arg("--upgrade")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Checked [N] packages in [TIME]
-    Installed 1 executable: flask
+    Installed 1 executable: python-tool
     ");
 
     // This will not change to the new global pin, since there was not a reinstall request
-    uv_snapshot!(context.filters(), Command::new("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), Command::new("python-tool").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.[X]
-    Flask 3.0.2
-    Werkzeug 3.0.1
     ");
 
-    // Using `--reinstall` forces us to install flask again
+    // Using `--reinstall` forces us to install python-tool again
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("flask")
+        .arg("python-tool")
         .arg("--reinstall")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Ignoring existing environment for `flask`: the Python interpreter does not match the environment interpreter
+    Ignoring existing environment for `python-tool`: the Python interpreter does not match the environment interpreter
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
-    Installed 1 executable: flask
+     + python-tool==1.0.0
+    Installed 1 executable: python-tool
     ");
 
     // This will change to the new global pin, since there was not an explicit request recorded in
     // the receipt
-    uv_snapshot!(context.filters(), Command::new("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), Command::new("python-tool").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.13.[X]
-    Flask 3.0.2
-    Werkzeug 3.0.1
     ");
 
     // If we request a specific Python version, it takes precedence over the pin
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("flask")
+        .arg("python-tool")
         .arg("--python")
         .arg("3.11")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Ignoring existing environment for `flask`: the requested Python interpreter does not match the environment interpreter
+    Ignoring existing environment for `python-tool`: the requested Python interpreter does not match the environment interpreter
     Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
-    Installed 1 executable: flask
+     + python-tool==1.0.0
+    Installed 1 executable: python-tool
     ");
 
-    uv_snapshot!(context.filters(), Command::new("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), Command::new("python-tool").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.11.[X]
-    Flask 3.0.2
-    Werkzeug 3.0.1
     ");
 
-    // Use `--reinstall` to install flask again
+    // Use `--reinstall` to install python-tool again
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("flask")
+        .arg("python-tool")
         .arg("--reinstall")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
@@ -612,29 +584,23 @@ fn tool_install_python_from_global_version_file() {
     Prepared [N] packages in [TIME]
     Uninstalled [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     ~ blinker==1.7.0
-     ~ click==8.1.7
-     ~ flask==3.0.2
-     ~ itsdangerous==2.1.2
-     ~ jinja2==3.1.3
-     ~ markupsafe==2.1.5
-     ~ werkzeug==3.0.1
-    Installed 1 executable: flask
+     ~ python-tool==1.0.0
+    Installed 1 executable: python-tool
     ");
 
     // We should continue to use the version from the install, not the global pin
-    uv_snapshot!(context.filters(), Command::new("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), Command::new("python-tool").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.11.[X]
-    Flask 3.0.2
-    Werkzeug 3.0.1
     ");
 }
 
 #[test]
 fn tool_install_force_respects_global_python_change() {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12", "3.13"])
+        .with_local_index()
+        .with_packse_index("packages/tool-run.toml")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -648,29 +614,21 @@ fn tool_install_force_respects_global_python_change() {
         .success();
 
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("flask")
+        .arg("python-tool")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
-    Installed 1 executable: flask
+     + python-tool==1.0.0
+    Installed 1 executable: python-tool
     ");
 
-    uv_snapshot!(context.filters(), Command::new("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), Command::new("python-tool").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.[X]
-    Flask 3.0.2
-    Werkzeug 3.0.1
     ");
 
     context
@@ -681,36 +639,28 @@ fn tool_install_force_respects_global_python_change() {
         .success();
 
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("flask")
+        .arg("python-tool")
         .arg("--force")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
-    Installed 1 executable: flask
+     + python-tool==1.0.0
+    Installed 1 executable: python-tool
     ");
 
-    uv_snapshot!(context.filters(), Command::new("flask").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), Command::new("python-tool").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.13.[X]
-    Flask 3.0.2
-    Werkzeug 3.0.1
     ");
 }
 
 #[test]
 fn tool_install_with_editable() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_exclude_newer("2025-01-18T00:00:00Z")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -745,7 +695,9 @@ fn tool_install_with_editable() -> Result<()> {
 
 #[test]
 fn tool_install_workspace_members_do_not_override_explicit_with_requirements() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_exe_suffix();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_exe_suffix();
     let with_editable_tool_dir = context.temp_dir.child("tools-with-editable");
     let with_editable_bin_dir = context.temp_dir.child("bin-with-editable");
     let with_tool_dir = context.temp_dir.child("tools-with");
@@ -867,6 +819,7 @@ fn tool_install_workspace_members_do_not_override_explicit_with_requirements() -
 #[test]
 fn tool_install_preserves_mixed_workspace_member_editability() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -973,6 +926,7 @@ fn tool_install_preserves_mixed_workspace_member_editability() -> Result<()> {
 #[test]
 fn tool_install_preserves_mixed_workspace_member_non_editability() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -1080,6 +1034,7 @@ fn tool_install_preserves_mixed_workspace_member_non_editability() -> Result<()>
 #[test]
 fn tool_install_reinstall_converts_workspace_members_to_non_editable() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -1182,6 +1137,7 @@ fn tool_install_reinstall_converts_workspace_members_to_non_editable() -> Result
 #[test]
 fn tool_install_workspace_members_are_non_editable_by_default() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -1274,6 +1230,7 @@ fn tool_install_workspace_members_are_non_editable_by_default() -> Result<()> {
 #[test]
 fn tool_install_workspace_members_honor_editable_flag() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -1367,6 +1324,7 @@ fn tool_install_workspace_members_honor_editable_flag() -> Result<()> {
 #[test]
 fn tool_install_workspace_members_honor_source_editable_flag() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -1477,6 +1435,8 @@ fn tool_install_workspace_members_honor_source_editable_flag() -> Result<()> {
 #[test]
 fn tool_install_with_compatible_build_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.9")
+        .with_local_index()
+        .with_packse_index("packages/tool-build-constraints.toml")
         .with_exclude_newer("2024-05-04T00:00:00Z")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -1488,9 +1448,9 @@ fn tool_install_with_compatible_build_constraints() -> Result<()> {
     constraints_txt.write_str("setuptools>=40")?;
 
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("black")
+        .arg("build-tool")
         .arg("--with")
-        .arg("requests==1.2")
+        .arg("legacy-build-requirement==1.2")
         .arg("--build-constraints")
         .arg("build_constraints.txt")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
@@ -1499,20 +1459,13 @@ fn tool_install_with_compatible_build_constraints() -> Result<()> {
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + black==24.4.2
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.1
-     + requests==1.2.0
-     + tomli==2.0.1
-     + typing-extensions==4.11.0
-    Installed 2 executables: black, blackd
+     + build-tool==1.0.0
+     + legacy-build-requirement==1.2.0
+    Installed 1 executable: build-tool
     ");
 
     tool_dir
-        .child("black")
+        .child("build-tool")
         .child("uv-receipt.toml")
         .assert(predicate::path::exists());
 
@@ -1520,16 +1473,15 @@ fn tool_install_with_compatible_build_constraints() -> Result<()> {
         filters => context.filters(),
     }, {
         // We should have a tool receipt
-        assert_snapshot!(fs_err::read_to_string(tool_dir.join("black").join("uv-receipt.toml")).unwrap(), @r#"
+        assert_snapshot!(fs_err::read_to_string(tool_dir.join("build-tool").join("uv-receipt.toml")).unwrap(), @r#"
         [tool]
         requirements = [
-            { name = "black" },
-            { name = "requests", specifier = "==1.2" },
+            { name = "build-tool" },
+            { name = "legacy-build-requirement", specifier = "==1.2" },
         ]
         build-constraint-dependencies = [{ name = "setuptools", specifier = ">=40" }]
         entrypoints = [
-            { name = "black", install-path = "[TEMP_DIR]/bin/black", from = "black" },
-            { name = "blackd", install-path = "[TEMP_DIR]/bin/blackd", from = "black" },
+            { name = "build-tool", install-path = "[TEMP_DIR]/bin/build-tool", from = "build-tool" },
         ]
 
         [tool.options]
@@ -1543,6 +1495,8 @@ fn tool_install_with_compatible_build_constraints() -> Result<()> {
 #[test]
 fn tool_install_with_incompatible_build_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.9")
+        .with_local_index()
+        .with_packse_index("packages/tool-build-constraints.toml")
         .with_exclude_newer("2024-05-04T00:00:00Z")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -1554,22 +1508,22 @@ fn tool_install_with_incompatible_build_constraints() -> Result<()> {
     constraints_txt.write_str("setuptools==2")?;
 
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("black")
+        .arg("build-tool")
         .arg("--with")
-        .arg("requests==1.2")
+        .arg("legacy-build-requirement==1.2")
         .arg("--build-constraints")
         .arg("build_constraints.txt")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Failed to download and build `requests==1.2.0`
+    error: Failed to download and build `legacy-build-requirement==1.2.0`
       cause: Failed to resolve requirements from `setup.py` build
       cause: No solution found when resolving: `setuptools>=40.8.0`
       cause: Because you require setuptools>=40.8.0 and setuptools==2, we can conclude that your requirements are unsatisfiable.
     ");
 
     tool_dir
-        .child("black")
+        .child("build-tool")
         .child("uv-receipt.toml")
         .assert(predicate::path::missing());
 
@@ -1580,6 +1534,7 @@ fn tool_install_with_incompatible_build_constraints() -> Result<()> {
 fn tool_install_suggest_other_packages_with_executable() {
     // FastAPI 0.111 is only available from this date onwards.
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_exclude_newer("2024-05-04T00:00:00Z")
         .with_filtered_exe_suffix()
         .with_filter(("\\+ uvloop(.+)\n ", ""))
@@ -1592,43 +1547,11 @@ fn tool_install_suggest_other_packages_with_executable() {
     No executables are provided by package `fastapi`; removing tool
 
     ----- stderr -----
-    Resolved 35 packages in [TIME]
-    Prepared 35 packages in [TIME]
-    Installed 35 packages in [TIME]
-     + annotated-types==0.6.0
-     + anyio==4.3.0
-     + certifi==2024.2.2
-     + click==8.1.7
-     + dnspython==2.6.1
-     + email-validator==2.1.1
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
      + fastapi==0.111.0
      + fastapi-cli==0.0.2
-     + h11==0.14.0
-     + httpcore==1.0.5
-     + httptools==0.6.1
-     + httpx==0.27.0
-     + idna==3.7
-     + jinja2==3.1.3
-     + markdown-it-py==3.0.0
-     + markupsafe==2.1.5
-     + mdurl==0.1.2
-     + orjson==3.10.3
-     + pydantic==2.7.1
-     + pydantic-core==2.18.2
-     + pygments==2.17.2
-     + python-dotenv==1.0.1
-     + python-multipart==0.0.9
-     + pyyaml==6.0.1
-     + rich==13.7.1
-     + shellingham==1.5.4
-     + sniffio==1.3.1
-     + starlette==0.37.2
-     + typer==0.12.3
-     + typing-extensions==4.11.0
-     + ujson==5.9.0
-     + uvicorn==0.29.0
-     + watchfiles==0.21.0
-     + websockets==12.0
     error: Failed to install entrypoints for `fastapi`
 
     hint: An executable with the name `fastapi` is available via dependency `fastapi-cli`.
@@ -1640,6 +1563,7 @@ fn tool_install_suggest_other_packages_with_executable() {
 #[test]
 fn tool_install_version() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -1682,13 +1606,13 @@ fn tool_install_version() {
         #![TEMP_DIR]/tools/black/bin/python
         # -*- coding: utf-8 -*-
         import sys
-        from black import patched_main
+        from black import main
         if __name__ == "__main__":
             if sys.argv[0].endswith("-script.pyw"):
                 sys.argv[0] = sys.argv[0][:-11]
             elif sys.argv[0].endswith(".exe"):
                 sys.argv[0] = sys.argv[0][:-4]
-            sys.exit(patched_main())
+            sys.exit(main())
         "#);
 
     });
@@ -1713,8 +1637,7 @@ fn tool_install_version() {
     uv_snapshot!(context.filters(), Command::new("black").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
-    black, 24.2.0 (compiled: yes)
-    Python (CPython) 3.12.[X]
+    black 24.2.0
     ");
 }
 
@@ -1722,6 +1645,7 @@ fn tool_install_version() {
 #[test]
 fn tool_install_editable() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -1865,6 +1789,7 @@ fn tool_install_editable() {
 #[test]
 fn tool_install_editable_rebuilds_explicit_local_directory() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -1992,6 +1917,7 @@ fn tool_install_editable_rebuilds_explicit_local_directory() -> Result<()> {
 #[test]
 fn tool_install_explicit_local_directory_respects_global_python_change() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.13"])
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -2073,6 +1999,7 @@ fn tool_install_explicit_local_directory_respects_global_python_change() -> Resu
 #[test]
 fn tool_install_rebuilds_explicit_local_with_requirement() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -2191,6 +2118,7 @@ fn tool_install_rebuilds_explicit_local_with_requirement() -> Result<()> {
 #[test]
 fn tool_install_remove_on_empty() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -2321,6 +2249,7 @@ fn tool_install_remove_on_empty() -> Result<()> {
 #[test]
 fn tool_install_editable_from() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -2399,6 +2328,7 @@ fn tool_install_editable_from() {
 #[test]
 fn tool_install_from() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -2450,6 +2380,7 @@ fn tool_install_from() {
 #[test]
 fn tool_install_already_installed() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -2493,13 +2424,13 @@ fn tool_install_already_installed() {
         #![TEMP_DIR]/tools/black/bin/python
         # -*- coding: utf-8 -*-
         import sys
-        from black import patched_main
+        from black import main
         if __name__ == "__main__":
             if sys.argv[0].endswith("-script.pyw"):
                 sys.argv[0] = sys.argv[0][:-11]
             elif sys.argv[0].endswith(".exe"):
                 sys.argv[0] = sys.argv[0][:-4]
-            sys.exit(patched_main())
+            sys.exit(main())
         "#);
     });
 
@@ -2611,6 +2542,7 @@ fn tool_install_already_installed() {
 #[test]
 fn tool_install_force() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -2812,13 +2744,13 @@ fn tool_install_force() {
         #![TEMP_DIR]/tools/black/bin/python
         # -*- coding: utf-8 -*-
         import sys
-        from black import patched_main
+        from black import main
         if __name__ == "__main__":
             if sys.argv[0].endswith("-script.pyw"):
                 sys.argv[0] = sys.argv[0][:-11]
             elif sys.argv[0].endswith(".exe"):
                 sys.argv[0] = sys.argv[0][:-4]
-            sys.exit(patched_main())
+            sys.exit(main())
         "#);
 
     });
@@ -2843,8 +2775,7 @@ fn tool_install_force() {
     uv_snapshot!(context.filters(), Command::new("black").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
-    black, 24.3.0 (compiled: yes)
-    Python (CPython) 3.12.[X]
+    black 24.3.0
     ");
 }
 
@@ -2854,7 +2785,9 @@ fn tool_install_force() {
 #[cfg(unix)]
 #[test]
 fn tool_install_home() {
-    let context = uv_test::test_context!("3.12").with_filtered_exe_suffix();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_exe_suffix();
     let tool_dir = context.temp_dir.child("tools");
 
     // Install `black`
@@ -2893,7 +2826,9 @@ fn tool_install_home() {
 /// Test `uv tool install` when the bin directory is inferred from `$XDG_DATA_HOME`
 #[test]
 fn tool_install_xdg_data_home() {
-    let context = uv_test::test_context!("3.12").with_filtered_exe_suffix();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_filtered_exe_suffix();
     let tool_dir = context.temp_dir.child("tools");
     let data_home = context.temp_dir.child("data/home");
     let bin_dir = context.temp_dir.child("data/bin");
@@ -2928,6 +2863,7 @@ fn tool_install_xdg_data_home() {
 #[test]
 fn tool_install_xdg_bin_home() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -2959,6 +2895,7 @@ fn tool_install_xdg_bin_home() {
 #[test]
 fn tool_install_tool_bin_dir() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -2991,6 +2928,7 @@ fn tool_install_tool_bin_dir() {
 #[test]
 fn tool_install_no_entrypoints() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -3024,6 +2962,7 @@ fn tool_install_no_entrypoints() {
 #[test]
 fn tool_install_failure_removes_additional_entrypoints() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -3075,6 +3014,7 @@ fn tool_install_failure_removes_additional_entrypoints() -> Result<()> {
 #[test]
 fn tool_install_no_binary_package_env_var() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -3108,93 +3048,95 @@ fn tool_install_no_binary_package_env_var() {
 
 /// Test installing a package that can't be installed.
 #[test]
-fn tool_install_uninstallable() {
+fn tool_install_uninstallable() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
 
-    let filters = context
-        .filters()
-        .into_iter()
-        .chain([
-            (r"bdist\.[^/\\\s]+(-[^/\\\s]+)?", "bdist.linux-x86_64"),
-            (r"\\\.", ""),
-            (r"#+", "#"),
-            (
-                "Please read the installation instructions at:\n ",
-                "Please read the installation instructions at:\n",
-            ),
-        ])
-        .collect::<Vec<_>>();
-    uv_snapshot!(filters, context.tool_install()
-        .arg("pyenv")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    let package = context.temp_dir.child("failing-tool");
+    package.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "failing-tool"
+        version = "1.0.0"
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    package.child("backend.py").write_str(indoc! {r#"
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            raise RuntimeError("This tool cannot be built")
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg(package.path())
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    error: Failed to build `pyenv==0.0.1`
+    error: Failed to build `failing-tool @ file://[TEMP_DIR]/failing-tool`
       cause: The build backend returned an error
-      cause: Call to `setuptools.build_meta:__legacy__.build_wheel` failed (exit status: 1)
-
-             [stdout]
-             running bdist_wheel
-             running build
-             installing to build/bdist.linux-x86_64/wheel
-             running install
+      cause: Call to `backend.build_wheel` failed (exit status: 1)
 
              [stderr]
-             # NOTE #
-             We are sorry, but this package is not installable with pip.
-
-             Please read the installation instructions at:
-
-             https://github.com/pyenv/pyenv#installation
-             #
+             Traceback (most recent call last):
+               File "<string>", line 11, in <module>
+               File "[TEMP_DIR]/failing-tool/backend.py", line 2, in build_wheel
+                 raise RuntimeError("This tool cannot be built")
+             RuntimeError: This tool cannot be built
 
     hint: Build failures usually indicate a problem with the package or the build environment
-    ");
+    "#);
 
     // Ensure the tool environment is not created.
-    tool_dir.child("pyenv").assert(predicate::path::missing());
-    bin_dir.child("pyenv").assert(predicate::path::missing());
+    tool_dir
+        .child("failing-tool")
+        .assert(predicate::path::missing());
+    bin_dir
+        .child("failing-tool")
+        .assert(predicate::path::missing());
+    Ok(())
 }
 
 /// Test installing a tool with a bare URL requirement.
 #[test]
 fn tool_install_unnamed_package() {
+    let registry_artifacts = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&registry_artifacts.index_url())
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
 
-    // Install `black`
+    // Install `format-tool`
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("https://files.pythonhosted.org/packages/0f/89/294c9a6b6c75a08da55e9d05321d0707e9418735e3062b12ef0f54c33474/black-24.4.2-py3-none-any.whl")
+        .arg(registry_artifacts.file_url("format_tool-24.3.0-py3-none-any.whl"))
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Prepared 6 packages in [TIME]
-    Installed 6 packages in [TIME]
-     + black==24.4.2 (from https://files.pythonhosted.org/packages/0f/89/294c9a6b6c75a08da55e9d05321d0707e9418735e3062b12ef0f54c33474/black-24.4.2-py3-none-any.whl)
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    Installed 2 executables: black, blackd
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + format-support==1.0.0
+     + format-tool==24.3.0 (from http://[LOCALHOST]/files/format_tool-24.3.0-py3-none-any.whl)
+    Installed 2 executables: format-tool, format-tool-daemon
     ");
 
-    tool_dir.child("black").assert(predicate::path::is_dir());
     tool_dir
-        .child("black")
+        .child("format-tool")
+        .assert(predicate::path::is_dir());
+    tool_dir
+        .child("format-tool")
         .child("uv-receipt.toml")
         .assert(predicate::path::exists());
 
-    let executable = bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX));
+    let executable = bin_dir.child(format!("format-tool{}", std::env::consts::EXE_SUFFIX));
     assert!(executable.exists());
 
     // On Windows, we can't snapshot an executable file.
@@ -3202,18 +3144,18 @@ fn tool_install_unnamed_package() {
     insta::with_settings!({
         filters => context.filters(),
     }, {
-        // Should run black in the virtual environment
+        // Should run format-tool in the virtual environment
         assert_snapshot!(fs_err::read_to_string(executable).unwrap(), @r#"
-        #![TEMP_DIR]/tools/black/bin/python
+        #![TEMP_DIR]/tools/format-tool/bin/python
         # -*- coding: utf-8 -*-
         import sys
-        from black import patched_main
+        from format_tool import main
         if __name__ == "__main__":
             if sys.argv[0].endswith("-script.pyw"):
                 sys.argv[0] = sys.argv[0][:-11]
             elif sys.argv[0].endswith(".exe"):
                 sys.argv[0] = sys.argv[0][:-4]
-            sys.exit(patched_main())
+            sys.exit(main())
         "#);
 
     });
@@ -3222,12 +3164,12 @@ fn tool_install_unnamed_package() {
         filters => context.filters(),
     }, {
         // We should have a tool receipt
-        assert_snapshot!(fs_err::read_to_string(tool_dir.join("black").join("uv-receipt.toml")).unwrap(), @r#"
+        assert_snapshot!(fs_err::read_to_string(tool_dir.join("format-tool").join("uv-receipt.toml")).unwrap(), @r#"
         [tool]
-        requirements = [{ name = "black", url = "https://files.pythonhosted.org/packages/0f/89/294c9a6b6c75a08da55e9d05321d0707e9418735e3062b12ef0f54c33474/black-24.4.2-py3-none-any.whl" }]
+        requirements = [{ name = "format-tool", url = "http://[LOCALHOST]/files/format_tool-24.3.0-py3-none-any.whl" }]
         entrypoints = [
-            { name = "black", install-path = "[TEMP_DIR]/bin/black", from = "black" },
-            { name = "blackd", install-path = "[TEMP_DIR]/bin/blackd", from = "black" },
+            { name = "format-tool", install-path = "[TEMP_DIR]/bin/format-tool", from = "format-tool" },
+            { name = "format-tool-daemon", install-path = "[TEMP_DIR]/bin/format-tool-daemon", from = "format-tool" },
         ]
 
         [tool.options]
@@ -3235,50 +3177,49 @@ fn tool_install_unnamed_package() {
         "#);
     });
 
-    uv_snapshot!(context.filters(), Command::new("black").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), Command::new("format-tool").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
-    black, 24.4.2 (compiled: no)
-    Python (CPython) 3.12.[X]
+    format-tool 24.3.0
     ");
 }
 
 /// Test installing a tool with a Git requirement.
 #[test]
 #[cfg(feature = "test-git")]
-fn tool_install_git() {
+fn tool_install_git() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_packse_index("packages/tool-run.toml")
+        .with_filter((r"@[0-9a-f]{40}", "@[COMMIT]"))
         .with_filtered_exe_suffix()
         .with_tool_dirs();
+    let repository_url = crate::git::tool_repository(&context)?;
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
     let path = tool_install_git_path(&bin_dir);
 
     // Unnamed Git Install
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("git+https://github.com/psf/black@24.2.0")
+        .arg(&repository_url)
         .env(EnvVars::PATH, path.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 6 packages in [TIME]
-     + black==24.2.0 (from git+https://github.com/psf/black@6fdf8a4af28071ed1d079c01122b34c5d587207a)
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    Installed 2 executables: black, blackd
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + extra-requirement==2.0.0
+     + git-tool==1.0.0 (from git+file://[TEMP_DIR]/repository@[COMMIT])
+    Installed 2 executables: git-tool, git-tool-helper
     ");
 
-    tool_dir.child("black").assert(predicate::path::is_dir());
+    tool_dir.child("git-tool").assert(predicate::path::is_dir());
     tool_dir
-        .child("black")
+        .child("git-tool")
         .child("uv-receipt.toml")
         .assert(predicate::path::exists());
 
-    let executable = bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX));
+    let executable = bin_dir.child(format!("git-tool{}", std::env::consts::EXE_SUFFIX));
     assert!(executable.exists());
 
     fs_err::remove_dir_all(&bin_dir).expect("Failed to remove bin dir.");
@@ -3286,29 +3227,27 @@ fn tool_install_git() {
 
     // Named Git Install
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("black @ git+https://github.com/psf/black@24.2.0")
+        .arg(format!("git-tool @ {repository_url}"))
         .env(EnvVars::PATH, path.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Installed 6 packages in [TIME]
-     + black==24.2.0 (from git+https://github.com/psf/black@6fdf8a4af28071ed1d079c01122b34c5d587207a)
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    Installed 2 executables: black, blackd
+    Resolved 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + extra-requirement==2.0.0
+     + git-tool==1.0.0 (from git+file://[TEMP_DIR]/repository@[COMMIT])
+    Installed 2 executables: git-tool, git-tool-helper
     ");
 
-    tool_dir.child("black").assert(predicate::path::is_dir());
+    tool_dir.child("git-tool").assert(predicate::path::is_dir());
     tool_dir
-        .child("black")
+        .child("git-tool")
         .child("uv-receipt.toml")
         .assert(predicate::path::exists());
 
-    let executable = bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX));
+    let executable = bin_dir.child(format!("git-tool{}", std::env::consts::EXE_SUFFIX));
     assert!(executable.exists());
+
+    Ok(())
 }
 
 /// Test that installing a tool from Git uses statically available `requires-python` metadata
@@ -3317,6 +3256,7 @@ fn tool_install_git() {
 #[cfg(feature = "test-git")]
 fn tool_install_git_infers_static_requires_python() {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -3355,6 +3295,7 @@ fn tool_install_git_infers_static_requires_python() {
 #[cfg(feature = "test-git")]
 fn tool_install_git_does_not_infer_dynamic_requires_python() {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -3384,6 +3325,7 @@ fn tool_install_git_does_not_infer_dynamic_requires_python() {
 #[cfg(feature = "test-git-lfs")]
 fn tool_install_git_lfs() {
     let context = uv_test::test_context!("3.13")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_git_lfs_config()
         .with_tool_dirs();
@@ -3553,59 +3495,63 @@ fn tool_install_git_lfs() {
 /// name conflict.
 #[test]
 fn tool_install_unnamed_conflict() {
+    let registry_artifacts = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&registry_artifacts.index_url())
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
 
-    // Install `black`
+    // Install `format-tool`
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("black")
+        .arg("format-tool")
         .arg("--from")
-        .arg("https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl")
+        .arg(registry_artifacts.file_url("extra_requirement-2.0.0-py3-none-any.whl"))
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Package name (`iniconfig`) provided with `--from` does not match install request (`black`)
+    error: Package name (`extra-requirement`) provided with `--from` does not match install request (`format-tool`)
     ");
 }
 
 /// Test installing a tool with a bare URL requirement using `--from`.
 #[test]
 fn tool_install_unnamed_from() {
+    let registry_artifacts = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&registry_artifacts.index_url())
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
 
-    // Install `black`
+    // Install `format-tool`
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("black")
+        .arg("format-tool")
         .arg("--from")
-        .arg("https://files.pythonhosted.org/packages/0f/89/294c9a6b6c75a08da55e9d05321d0707e9418735e3062b12ef0f54c33474/black-24.4.2-py3-none-any.whl")
+        .arg(registry_artifacts.file_url("format_tool-24.3.0-py3-none-any.whl"))
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Prepared 6 packages in [TIME]
-    Installed 6 packages in [TIME]
-     + black==24.4.2 (from https://files.pythonhosted.org/packages/0f/89/294c9a6b6c75a08da55e9d05321d0707e9418735e3062b12ef0f54c33474/black-24.4.2-py3-none-any.whl)
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    Installed 2 executables: black, blackd
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + format-support==1.0.0
+     + format-tool==24.3.0 (from http://[LOCALHOST]/files/format_tool-24.3.0-py3-none-any.whl)
+    Installed 2 executables: format-tool, format-tool-daemon
     ");
 
-    tool_dir.child("black").assert(predicate::path::is_dir());
     tool_dir
-        .child("black")
+        .child("format-tool")
+        .assert(predicate::path::is_dir());
+    tool_dir
+        .child("format-tool")
         .child("uv-receipt.toml")
         .assert(predicate::path::exists());
 
-    let executable = bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX));
+    let executable = bin_dir.child(format!("format-tool{}", std::env::consts::EXE_SUFFIX));
     assert!(executable.exists());
 
     // On Windows, we can't snapshot an executable file.
@@ -3613,18 +3559,18 @@ fn tool_install_unnamed_from() {
     insta::with_settings!({
         filters => context.filters(),
     }, {
-        // Should run black in the virtual environment
+        // Should run format-tool in the virtual environment
         assert_snapshot!(fs_err::read_to_string(executable).unwrap(), @r#"
-        #![TEMP_DIR]/tools/black/bin/python
+        #![TEMP_DIR]/tools/format-tool/bin/python
         # -*- coding: utf-8 -*-
         import sys
-        from black import patched_main
+        from format_tool import main
         if __name__ == "__main__":
             if sys.argv[0].endswith("-script.pyw"):
                 sys.argv[0] = sys.argv[0][:-11]
             elif sys.argv[0].endswith(".exe"):
                 sys.argv[0] = sys.argv[0][:-4]
-            sys.exit(patched_main())
+            sys.exit(main())
         "#);
 
     });
@@ -3633,12 +3579,12 @@ fn tool_install_unnamed_from() {
         filters => context.filters(),
     }, {
         // We should have a tool receipt
-        assert_snapshot!(fs_err::read_to_string(tool_dir.join("black").join("uv-receipt.toml")).unwrap(), @r#"
+        assert_snapshot!(fs_err::read_to_string(tool_dir.join("format-tool").join("uv-receipt.toml")).unwrap(), @r#"
         [tool]
-        requirements = [{ name = "black", url = "https://files.pythonhosted.org/packages/0f/89/294c9a6b6c75a08da55e9d05321d0707e9418735e3062b12ef0f54c33474/black-24.4.2-py3-none-any.whl" }]
+        requirements = [{ name = "format-tool", url = "http://[LOCALHOST]/files/format_tool-24.3.0-py3-none-any.whl" }]
         entrypoints = [
-            { name = "black", install-path = "[TEMP_DIR]/bin/black", from = "black" },
-            { name = "blackd", install-path = "[TEMP_DIR]/bin/blackd", from = "black" },
+            { name = "format-tool", install-path = "[TEMP_DIR]/bin/format-tool", from = "format-tool" },
+            { name = "format-tool-daemon", install-path = "[TEMP_DIR]/bin/format-tool-daemon", from = "format-tool" },
         ]
 
         [tool.options]
@@ -3646,51 +3592,51 @@ fn tool_install_unnamed_from() {
         "#);
     });
 
-    uv_snapshot!(context.filters(), Command::new("black").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), Command::new("format-tool").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
-    black, 24.4.2 (compiled: no)
-    Python (CPython) 3.12.[X]
+    format-tool 24.3.0
     ");
 }
 
 /// Test installing a tool with a bare URL requirement using `--with`.
 #[test]
 fn tool_install_unnamed_with() {
+    let registry_artifacts = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&registry_artifacts.index_url())
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
 
-    // Install `black`
+    // Install `format-tool`
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("black")
+        .arg("format-tool")
         .arg("--with")
-        .arg("https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl")
+        .arg(registry_artifacts.file_url("extra_requirement-2.0.0-py3-none-any.whl"))
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 7 packages in [TIME]
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
-     + black==24.3.0
-     + click==8.1.7
-     + iniconfig==2.0.0 (from https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl)
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    Installed 2 executables: black, blackd
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + extra-requirement==2.0.0 (from http://[LOCALHOST]/files/extra_requirement-2.0.0-py3-none-any.whl)
+     + format-support==1.0.0
+     + format-tool==24.3.0
+    Installed 2 executables: format-tool, format-tool-daemon
     ");
 
-    tool_dir.child("black").assert(predicate::path::is_dir());
     tool_dir
-        .child("black")
+        .child("format-tool")
+        .assert(predicate::path::is_dir());
+    tool_dir
+        .child("format-tool")
         .child("uv-receipt.toml")
         .assert(predicate::path::exists());
 
-    let executable = bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX));
+    let executable = bin_dir.child(format!("format-tool{}", std::env::consts::EXE_SUFFIX));
     assert!(executable.exists());
 
     // On Windows, we can't snapshot an executable file.
@@ -3698,18 +3644,18 @@ fn tool_install_unnamed_with() {
     insta::with_settings!({
         filters => context.filters(),
     }, {
-        // Should run black in the virtual environment
+        // Should run format-tool in the virtual environment
         assert_snapshot!(fs_err::read_to_string(executable).unwrap(), @r#"
-        #![TEMP_DIR]/tools/black/bin/python
+        #![TEMP_DIR]/tools/format-tool/bin/python
         # -*- coding: utf-8 -*-
         import sys
-        from black import patched_main
+        from format_tool import main
         if __name__ == "__main__":
             if sys.argv[0].endswith("-script.pyw"):
                 sys.argv[0] = sys.argv[0][:-11]
             elif sys.argv[0].endswith(".exe"):
                 sys.argv[0] = sys.argv[0][:-4]
-            sys.exit(patched_main())
+            sys.exit(main())
         "#);
 
     });
@@ -3718,15 +3664,15 @@ fn tool_install_unnamed_with() {
         filters => context.filters(),
     }, {
         // We should have a tool receipt
-        assert_snapshot!(fs_err::read_to_string(tool_dir.join("black").join("uv-receipt.toml")).unwrap(), @r#"
+        assert_snapshot!(fs_err::read_to_string(tool_dir.join("format-tool").join("uv-receipt.toml")).unwrap(), @r#"
         [tool]
         requirements = [
-            { name = "black" },
-            { name = "iniconfig", url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl" },
+            { name = "format-tool" },
+            { name = "extra-requirement", url = "http://[LOCALHOST]/files/extra_requirement-2.0.0-py3-none-any.whl" },
         ]
         entrypoints = [
-            { name = "black", install-path = "[TEMP_DIR]/bin/black", from = "black" },
-            { name = "blackd", install-path = "[TEMP_DIR]/bin/blackd", from = "black" },
+            { name = "format-tool", install-path = "[TEMP_DIR]/bin/format-tool", from = "format-tool" },
+            { name = "format-tool-daemon", install-path = "[TEMP_DIR]/bin/format-tool-daemon", from = "format-tool" },
         ]
 
         [tool.options]
@@ -3734,17 +3680,17 @@ fn tool_install_unnamed_with() {
         "#);
     });
 
-    uv_snapshot!(context.filters(), Command::new("black").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), Command::new("format-tool").arg("--version").env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
-    black, 24.3.0 (compiled: yes)
-    Python (CPython) 3.12.[X]
+    format-tool 24.3.0
     ");
 }
 
 #[test]
 fn tool_install_with_dependencies_from_script() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -3862,6 +3808,7 @@ fn tool_install_with_dependencies_from_script() -> Result<()> {
 #[test]
 fn tool_install_requirements_txt() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -3956,7 +3903,12 @@ fn tool_install_requirements_txt() {
 /// Ignore and warn when (e.g.) the `--index-url` argument is a provided `requirements.txt`.
 #[test]
 fn tool_install_requirements_txt_arguments() {
+    let default_index = uv_test::packse::PackseServer::new("packages/tool-run.toml");
+    let alternate_index =
+        uv_test::packse::PackseServer::new("packages/tool-requirements-index.toml");
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&default_index.index_url())
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -3964,48 +3916,45 @@ fn tool_install_requirements_txt_arguments() {
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
-        .write_str(indoc! { r"
-        --index-url https://test.pypi.org/simple
-        idna
-        "
-        })
+        .write_str(&format!(
+            "--index-url {}
+extra-requirement
+",
+            alternate_index.index_url()
+        ))
         .unwrap();
 
-    // Install `black`
+    // Install `format-tool`
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("black")
+        .arg("format-tool")
         .arg("--with-requirements")
         .arg("requirements.txt")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: Ignoring `--index-url` from requirements file: `https://test.pypi.org/simple`. Instead, use the `--index-url` command-line argument, or set `index-url` in a `uv.toml` or `pyproject.toml` file.
-    Resolved 7 packages in [TIME]
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
-     + black==24.3.0
-     + click==8.1.7
-     + idna==3.6
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    Installed 2 executables: black, blackd
+    warning: Ignoring `--index-url` from requirements file: `http://[LOCALHOST]/simple/`. Instead, use the `--index-url` command-line argument, or set `index-url` in a `uv.toml` or `pyproject.toml` file.
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + extra-requirement==2.0.0
+     + format-support==1.0.0
+     + format-tool==24.3.0
+    Installed 2 executables: format-tool, format-tool-daemon
     ");
 
     insta::with_settings!({
         filters => context.filters(),
     }, {
         // We should have a tool receipt
-        assert_snapshot!(fs_err::read_to_string(tool_dir.join("black").join("uv-receipt.toml")).unwrap(), @r#"
+        assert_snapshot!(fs_err::read_to_string(tool_dir.join("format-tool").join("uv-receipt.toml")).unwrap(), @r#"
         [tool]
         requirements = [
-            { name = "black" },
-            { name = "idna" },
+            { name = "format-tool" },
+            { name = "extra-requirement" },
         ]
         entrypoints = [
-            { name = "black", install-path = "[TEMP_DIR]/bin/black", from = "black" },
-            { name = "blackd", install-path = "[TEMP_DIR]/bin/blackd", from = "black" },
+            { name = "format-tool", install-path = "[TEMP_DIR]/bin/format-tool", from = "format-tool" },
+            { name = "format-tool-daemon", install-path = "[TEMP_DIR]/bin/format-tool-daemon", from = "format-tool" },
         ]
 
         [tool.options]
@@ -4016,96 +3965,91 @@ fn tool_install_requirements_txt_arguments() {
     // Don't warn, though, if the index URL is the same as the default or as settings.
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
-        .write_str(indoc! { r"
-        --index-url https://pypi.org/simple
-        idna
-        "
-        })
+        .write_str(&format!(
+            "--index-url {}
+extra-requirement
+",
+            default_index.index_url()
+        ))
         .unwrap();
 
-    // Install `black`
+    // Install `format-tool`
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("black")
+        .arg("format-tool")
         .arg("--with-requirements")
         .arg("requirements.txt")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    `black` is already installed
+    `format-tool` is already installed
     ");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
-        .write_str(indoc! { r"
-        --index-url https://test.pypi.org/simple
-        idna
-        "
-        })
+        .write_str(&format!(
+            "--index-url {}
+extra-requirement
+",
+            alternate_index.index_url()
+        ))
         .unwrap();
 
-    // Install `flask`
+    // Install `web-tool`
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("flask")
+        .arg("web-tool")
         .arg("--with-requirements")
         .arg("requirements.txt")
         .arg("--index-url")
-        .arg("https://test.pypi.org/simple")
+        .arg(alternate_index.index_url())
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 8 packages in [TIME]
-    Prepared 8 packages in [TIME]
-    Installed 8 packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + idna==2.7
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
-    Installed 1 executable: flask
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + extra-requirement==1.0.0
+     + web-tool==3.0.2
+    Installed 1 executable: web-tool
     ");
 }
 
 /// Test upgrading an already installed tool.
 #[test]
 fn tool_install_upgrade() {
+    let registry_artifacts = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&registry_artifacts.index_url())
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
 
-    // Install `black`.
+    // Install `format-tool`.
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("black==24.1.1")
+        .arg("format-tool==24.1.1")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + black==24.1.1
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    Installed 2 executables: black, blackd
+     + format-support==1.0.0
+     + format-tool==24.1.1
+    Installed 2 executables: format-tool, format-tool-daemon
     ");
 
     insta::with_settings!({
         filters => context.filters(),
     }, {
         // We should have a tool receipt
-        assert_snapshot!(fs_err::read_to_string(tool_dir.join("black").join("uv-receipt.toml")).unwrap(), @r#"
+        assert_snapshot!(fs_err::read_to_string(tool_dir.join("format-tool").join("uv-receipt.toml")).unwrap(), @r#"
         [tool]
-        requirements = [{ name = "black", specifier = "==24.1.1" }]
+        requirements = [{ name = "format-tool", specifier = "==24.1.1" }]
         entrypoints = [
-            { name = "black", install-path = "[TEMP_DIR]/bin/black", from = "black" },
-            { name = "blackd", install-path = "[TEMP_DIR]/bin/blackd", from = "black" },
+            { name = "format-tool", install-path = "[TEMP_DIR]/bin/format-tool", from = "format-tool" },
+            { name = "format-tool-daemon", install-path = "[TEMP_DIR]/bin/format-tool-daemon", from = "format-tool" },
         ]
 
         [tool.options]
@@ -4116,25 +4060,25 @@ fn tool_install_upgrade() {
     // Install without the constraint. It should be replaced, but the package shouldn't be installed
     // since it's already satisfied in the environment.
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("black")
+        .arg("format-tool")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Checked [N] packages in [TIME]
-    Installed 2 executables: black, blackd
+    Installed 2 executables: format-tool, format-tool-daemon
     ");
 
     insta::with_settings!({
         filters => context.filters(),
     }, {
         // We should have a tool receipt
-        assert_snapshot!(fs_err::read_to_string(tool_dir.join("black").join("uv-receipt.toml")).unwrap(), @r#"
+        assert_snapshot!(fs_err::read_to_string(tool_dir.join("format-tool").join("uv-receipt.toml")).unwrap(), @r#"
         [tool]
-        requirements = [{ name = "black" }]
+        requirements = [{ name = "format-tool" }]
         entrypoints = [
-            { name = "black", install-path = "[TEMP_DIR]/bin/black", from = "black" },
-            { name = "blackd", install-path = "[TEMP_DIR]/bin/blackd", from = "black" },
+            { name = "format-tool", install-path = "[TEMP_DIR]/bin/format-tool", from = "format-tool" },
+            { name = "format-tool-daemon", install-path = "[TEMP_DIR]/bin/format-tool-daemon", from = "format-tool" },
         ]
 
         [tool.options]
@@ -4144,32 +4088,32 @@ fn tool_install_upgrade() {
 
     // Install with a `with`. It should be added to the environment.
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("black")
+        .arg("format-tool")
         .arg("--with")
-        .arg("iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl")
+        .arg(format!("extra-requirement @ {}", registry_artifacts.file_url("extra_requirement-2.0.0-py3-none-any.whl")))
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + iniconfig==2.0.0 (from https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl)
-    Installed 2 executables: black, blackd
+     + extra-requirement==2.0.0 (from http://[LOCALHOST]/files/extra_requirement-2.0.0-py3-none-any.whl)
+    Installed 2 executables: format-tool, format-tool-daemon
     ");
 
     insta::with_settings!({
         filters => context.filters(),
     }, {
         // We should have a tool receipt
-        assert_snapshot!(fs_err::read_to_string(tool_dir.join("black").join("uv-receipt.toml")).unwrap(), @r#"
+        assert_snapshot!(fs_err::read_to_string(tool_dir.join("format-tool").join("uv-receipt.toml")).unwrap(), @r#"
         [tool]
         requirements = [
-            { name = "black" },
-            { name = "iniconfig", url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl" },
+            { name = "format-tool" },
+            { name = "extra-requirement", url = "http://[LOCALHOST]/files/extra_requirement-2.0.0-py3-none-any.whl" },
         ]
         entrypoints = [
-            { name = "black", install-path = "[TEMP_DIR]/bin/black", from = "black" },
-            { name = "blackd", install-path = "[TEMP_DIR]/bin/blackd", from = "black" },
+            { name = "format-tool", install-path = "[TEMP_DIR]/bin/format-tool", from = "format-tool" },
+            { name = "format-tool-daemon", install-path = "[TEMP_DIR]/bin/format-tool-daemon", from = "format-tool" },
         ]
 
         [tool.options]
@@ -4177,10 +4121,10 @@ fn tool_install_upgrade() {
         "#);
     });
 
-    // Install with `--upgrade`. `black` should be reinstalled with a more recent version, and
-    // `iniconfig` should be removed.
+    // Install with `--upgrade`. `format-tool` should be reinstalled with a more recent version, and
+    // `extra-requirement` should be removed.
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("black")
+        .arg("format-tool")
         .arg("--upgrade")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
@@ -4189,22 +4133,22 @@ fn tool_install_upgrade() {
     Prepared [N] packages in [TIME]
     Uninstalled [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     - black==24.1.1
-     + black==24.3.0
-     - iniconfig==2.0.0 (from https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl)
-    Installed 2 executables: black, blackd
+     - extra-requirement==2.0.0 (from http://[LOCALHOST]/files/extra_requirement-2.0.0-py3-none-any.whl)
+     - format-tool==24.1.1
+     + format-tool==24.3.0
+    Installed 2 executables: format-tool, format-tool-daemon
     ");
 
     insta::with_settings!({
         filters => context.filters(),
     }, {
         // We should have a tool receipt
-        assert_snapshot!(fs_err::read_to_string(tool_dir.join("black").join("uv-receipt.toml")).unwrap(), @r#"
+        assert_snapshot!(fs_err::read_to_string(tool_dir.join("format-tool").join("uv-receipt.toml")).unwrap(), @r#"
         [tool]
-        requirements = [{ name = "black" }]
+        requirements = [{ name = "format-tool" }]
         entrypoints = [
-            { name = "black", install-path = "[TEMP_DIR]/bin/black", from = "black" },
-            { name = "blackd", install-path = "[TEMP_DIR]/bin/blackd", from = "black" },
+            { name = "format-tool", install-path = "[TEMP_DIR]/bin/format-tool", from = "format-tool" },
+            { name = "format-tool-daemon", install-path = "[TEMP_DIR]/bin/format-tool-daemon", from = "format-tool" },
         ]
 
         [tool.options]
@@ -4217,6 +4161,7 @@ fn tool_install_upgrade() {
 #[test]
 fn tool_install_python_requests() {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -4263,7 +4208,6 @@ fn tool_install_python_requests() {
     ----- stderr -----
     Ignoring existing environment for `black`: the requested Python interpreter does not match the environment interpreter
     Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
      + black==24.3.0
      + click==8.1.7
@@ -4281,6 +4225,7 @@ fn tool_install_python_requests() {
 #[test]
 fn tool_install_python_preference() {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -4393,6 +4338,7 @@ fn tool_install_python_preference() {
 #[test]
 fn tool_install_preserve_environment() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -4444,6 +4390,7 @@ fn tool_install_preserve_environment() {
 #[cfg(unix)]
 fn tool_install_warn_path() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -4472,6 +4419,7 @@ fn tool_install_warn_path() {
 #[test]
 fn tool_install_bad_receipt() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -4533,6 +4481,7 @@ fn tool_install_bad_receipt() -> Result<()> {
 #[test]
 fn tool_install_malformed_dist_info() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_exclude_newer("2025-01-18T00:00:00Z")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -4606,6 +4555,7 @@ fn tool_install_malformed_dist_info() {
 #[test]
 fn tool_install_settings() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -4650,7 +4600,7 @@ fn tool_install_settings() {
         #![TEMP_DIR]/tools/flask/bin/python
         # -*- coding: utf-8 -*-
         import sys
-        from flask.cli import main
+        from flask import main
         if __name__ == "__main__":
             if sys.argv[0].endswith("-script.pyw"):
                 sys.argv[0] = sys.argv[0][:-11]
@@ -4746,6 +4696,7 @@ fn tool_install_settings() {
 #[test]
 fn tool_install_at_version() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -4803,6 +4754,7 @@ fn tool_install_at_version() {
 #[test]
 fn tool_install_at_latest() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -4848,6 +4800,7 @@ fn tool_install_at_latest() {
 #[test]
 fn tool_install_from_at_latest() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_exclude_newer("2025-01-18T00:00:00Z")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -4889,6 +4842,7 @@ fn tool_install_from_at_latest() {
 #[test]
 fn tool_install_from_at_version() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_exclude_newer("2025-01-18T00:00:00Z")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -4930,6 +4884,7 @@ fn tool_install_from_at_version() {
 #[test]
 fn tool_install_at_latest_upgrade() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -5037,6 +4992,7 @@ fn tool_install_at_latest_upgrade() {
 #[test]
 fn tool_install_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -5062,7 +5018,7 @@ fn tool_install_constraints() -> Result<()> {
     Installed [N] packages in [TIME]
      + black==24.3.0
      + click==8.1.7
-     + mypy-extensions==0.4.4
+     + mypy-extensions==0.4.3
      + packaging==24.0
      + pathspec==0.12.1
      + platformdirs==4.2.0
@@ -5130,6 +5086,7 @@ fn tool_install_constraints() -> Result<()> {
 #[test]
 fn tool_install_overrides() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -5154,7 +5111,7 @@ fn tool_install_overrides() -> Result<()> {
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
      + black==24.3.0
-     + click==7.1.2
+     + click==7.0.0
      + mypy-extensions==1.0.0
      + packaging==24.0
      + pathspec==0.12.1
@@ -5190,6 +5147,7 @@ fn tool_install_overrides() -> Result<()> {
 #[test]
 fn tool_install_python() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -5216,48 +5174,52 @@ fn tool_install_python() {
 
 #[test]
 fn tool_install_mismatched_name() {
+    let registry_artifacts = uv_test::packse::PackseServer::new("packages/tool-run.toml");
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&registry_artifacts.index_url())
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
 
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("black")
+        .arg("format-tool")
         .arg("--from")
-        .arg("https://files.pythonhosted.org/packages/af/47/93213ee66ef8fae3b93b3e29206f6b251e65c97bd91d8e1c5596ef15af0a/flask-3.1.0-py3-none-any.whl")
+        .arg(registry_artifacts.file_url("run_tool-8.1.1-py3-none-any.whl"))
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Package name (`flask`) provided with `--from` does not match install request (`black`)
+    error: Package name (`run-tool`) provided with `--from` does not match install request (`format-tool`)
     ");
 
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("black")
+        .arg("format-tool")
         .arg("--from")
-        .arg("flask @ https://files.pythonhosted.org/packages/af/47/93213ee66ef8fae3b93b3e29206f6b251e65c97bd91d8e1c5596ef15af0a/flask-3.1.0-py3-none-any.whl")
+        .arg(format!("run-tool @ {}", registry_artifacts.file_url("run_tool-8.1.1-py3-none-any.whl")))
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Package name (`flask`) provided with `--from` does not match install request (`black`)
+    error: Package name (`run-tool`) provided with `--from` does not match install request (`format-tool`)
     ");
 
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("flask")
+        .arg("run-tool")
         .arg("--from")
-        .arg("black @ https://files.pythonhosted.org/packages/af/47/93213ee66ef8fae3b93b3e29206f6b251e65c97bd91d8e1c5596ef15af0a/flask-3.1.0-py3-none-any.whl")
+        .arg(format!("format-tool @ {}", registry_artifacts.file_url("run_tool-8.1.1-py3-none-any.whl")))
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Package name (`black`) provided with `--from` does not match install request (`flask`)
+    error: Package name (`format-tool`) provided with `--from` does not match install request (`run-tool`)
     ");
 }
 
 /// When installing from an authenticated index, the credentials should be omitted from the receipt.
 #[tokio::test]
 async fn tool_install_credentials() {
-    let proxy = crate::pypi_proxy::start().await;
+    let proxy = crate::pypi_proxy::start_local().await;
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_exclude_newer("2025-01-18T00:00:00Z")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -5333,8 +5295,9 @@ async fn tool_install_credentials() {
 /// When installing from an authenticated index, the credentials should be omitted from the receipt.
 #[tokio::test]
 async fn tool_install_default_credentials() -> Result<()> {
-    let proxy = crate::pypi_proxy::start().await;
+    let proxy = crate::pypi_proxy::start_local().await;
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_exclude_newer("2025-01-18T00:00:00Z")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -5471,6 +5434,7 @@ fn tool_install_with_executables_from() -> Result<()> {
     "#})?;
     let index = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -5552,7 +5516,9 @@ fn tool_install_sdist_entry_point() -> Result<()> {
         entry_points = ["scenario.tool"]
     "#})?;
     let index = PackseServer::from_scenario(&scenario);
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
 
     context
@@ -5577,6 +5543,7 @@ fn tool_install_sdist_entry_point() -> Result<()> {
 #[test]
 fn tool_install_with_executables_from_no_entrypoints() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -5617,6 +5584,7 @@ fn tool_install_with_executables_from_no_entrypoints() {
 #[test]
 fn tool_install_find_links() {
     let context = uv_test::test_context!("3.13")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -5701,8 +5669,7 @@ fn tool_install_find_links() {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving tool dependencies
-      cause: Because basic-app==0.1 needs to be downloaded from a registry and only basic-app==0.1 is available, we can conclude that all versions of basic-app cannot be used.
-             And because you require basic-app, we can conclude that your requirements are unsatisfiable.
+      cause: Because basic-app was not found in the cache and you require basic-app, we can conclude that your requirements are unsatisfiable.
 
     hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
     ");
@@ -5711,6 +5678,7 @@ fn tool_install_find_links() {
 #[test]
 fn tool_install_python_platform() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -5744,12 +5712,7 @@ fn tool_install_python_platform() {
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Uninstalled [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     ~ black==24.3.0
-    Installed 2 executables: black, blackd
+    `black` is already installed
     ");
 }
 
@@ -5759,6 +5722,7 @@ fn tool_install_python_platform() {
 #[test]
 fn tool_install_removed_python() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -5838,7 +5802,9 @@ fn tool_install_removed_python() {
 
 #[test]
 fn tool_install_locks_are_preview() {
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
     let links = context.workspace_root.join("test/links");
@@ -5892,7 +5858,9 @@ fn tool_install_locks_are_preview() {
 
 #[test]
 fn tool_install_lock_supports_local_wheel() {
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
     let wheel = context
         .workspace_root
@@ -5933,7 +5901,9 @@ fn tool_install_lock_supports_local_wheel() {
 
 #[test]
 fn tool_install_lock_verifies_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
     let wheel = context
@@ -5978,6 +5948,7 @@ fn tool_install_lock_verifies_hashes() -> Result<()> {
 #[test]
 fn tool_install_lock_refreshes_local_directory_constraint() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -6096,6 +6067,7 @@ fn tool_install_lock_refreshes_local_directory_constraint() -> Result<()> {
 #[test]
 fn tool_install_lock_revalidates_changed_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -6138,6 +6110,7 @@ fn tool_install_lock_revalidates_changed_constraints() -> Result<()> {
 fn tool_install_with_build_hashes() -> Result<()> {
     for preview in ["--no-preview", "--preview-features=tool-install-locks"] {
         let context = uv_test::test_context!("3.12")
+            .with_local_index()
             .with_filtered_exe_suffix()
             .with_tool_dirs();
         let bin_dir = context.temp_dir.child("bin");
