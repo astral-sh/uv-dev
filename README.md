@@ -16,6 +16,11 @@ The behavior is specific to the default-only shape. With the same group also lis
 observation: the `pip install` and `pip sync` paths apply `lock.default_groups` as defaults, then
 obtain concrete marker groups by filtering against `lock.dependency_groups`.
 
+Explicit selection is not a workaround. The reporter corrected the original claim after retesting
+the minimal lock on uv 0.12.17: `--group mygroup` also makes no changes when `mygroup` appears only
+in `default-groups`. It selects the package only when the name is present in the lock's
+`dependency-groups` array.
+
 ## Classification
 
 This is a bug in the experimental pylock installation path, not a request for general dependency
@@ -79,8 +84,19 @@ Would install 1 package
 ```
 
 On the installed uv 0.12.13, explicitly passing `--group mygroup` to the original default-only file
-also produced `Would make no changes`; this differs from the reporter's ancillary observation on uv
-0.12.17 but does not affect reproduction of the default invocation.
+also produced `Would make no changes`. The reporter subsequently corrected the original workaround
+claim and independently confirmed the same result on uv 0.12.17. Their targeted matrix was:
+
+| Lock fields | No `--group` | `--group mygroup` |
+| --- | --- | --- |
+| `default-groups = ["mygroup"]` only | No changes | No changes |
+| `dependency-groups = ["mygroup"]` only | No changes | Installs `mypy-extensions` |
+| Both fields | No changes | Installs `mypy-extensions` |
+
+The reporter also observed on uv 0.12.17 that `--group totallybogus` is accepted without a warning
+and exits successfully without changes. This diagnostic behavior was not independently reproduced
+as part of the existing reproduction, but it is consistent with the implementation filtering
+requested names against the lock's declared `dependency_groups`.
 
 Existing integration coverage does not exercise the reported shape. The test
 `crates/uv/tests/pip_install/pip_install.rs::pep_751_groups` verifies default group marker
