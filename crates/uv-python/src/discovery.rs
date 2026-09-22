@@ -201,10 +201,7 @@ pub struct VariantRequest {
 }
 
 impl VariantRequest {
-    pub(crate) const fn new(
-        python: PythonVariant,
-        build: Option<PythonBuildVariant>,
-    ) -> Self {
+    pub(crate) const fn new(python: PythonVariant, build: Option<PythonBuildVariant>) -> Self {
         Self { python, build }
     }
 
@@ -4161,8 +4158,7 @@ mod tests {
     use super::{
         DiscoveryPreferences, EnvironmentPreference, Error, InterpreterError, PythonBuildVariant,
         PythonExecutableGroup, PythonPreference, PythonSource, PythonVariant, QueryStrategy,
-        VariantRequest,
-        python_installations_from_executables, sort_installations_by_key,
+        VariantRequest, python_installations_from_executables, sort_installations_by_key,
     };
 
     // Testing this at a higher level would necessitate relying on filesystem ordering.
@@ -4615,6 +4611,7 @@ mod tests {
             ("CUSTOM", "custom"),
             ("custom_internal", "custom_internal"),
             ("custom20260825", "custom20260825"),
+            ("20260825", "20260825"),
             ("avx2", "avx2"),
             ("pgo", "pgo"),
         ] {
@@ -5016,15 +5013,7 @@ mod tests {
 
         case("4", &["python4", "python"]);
 
-        for request in [
-            "3.13",
-            "3.13+custom",
-            "3.13+pgo",
-            "3.13+lto",
-            "3.13+pgo+lto",
-            "3.13+noopt",
-            "3.13+custom+pgo+lto",
-        ] {
+        for request in ["3.13", "3.13+custom", "3.13+pgo", "3.13+lto", "3.13+noopt"] {
             case(request, &["python3.13", "python3", "python"]);
         }
 
@@ -5045,8 +5034,7 @@ mod tests {
         for request in [
             "3.13t",
             "3.13+freethreaded+custom",
-            "3.13+freethreaded+pgo+lto",
-            "3.13+freethreaded+custom+pgo+lto",
+            "3.13+custom+freethreaded",
         ] {
             case(
                 request,
@@ -5239,6 +5227,7 @@ mod tests {
     fn python_request_variants() {
         for (request, build) in [
             ("3+custom", "custom"),
+            ("3+20260825", "20260825"),
             ("cpython@3.12+avx2", "avx2"),
             (
                 "cpython-3.13.2+custom20260825-linux-x86_64-gnu",

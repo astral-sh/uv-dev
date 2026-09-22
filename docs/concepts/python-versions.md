@@ -34,7 +34,7 @@ The following Python version request formats are supported:
 - `<version>` (e.g., `3`, `3.12`, `3.12.3`)
 - `<version-specifier>` (e.g., `>=3.12,<3.13`)
 - `<version><short-variant>` (e.g., `3.13t`, `3.12.0d`)
-- `<version>+<variant-tags>` (e.g., `3.13+freethreaded`, `3.13+pgo+lto`, `3.13+custom`)
+- `<version>+<variants>` (e.g., `3.13+freethreaded`, `3.13+custom`, `3.13+freethreaded+custom`)
 - `<implementation>` (e.g., `cpython` or `cp`)
 - `<implementation>@<version>` (e.g., `cpython@3.12`)
 - `<implementation><version>` (e.g., `cpython3.12` or `cp312`)
@@ -326,10 +326,10 @@ Python version instead.
 
 ## Python build variants
 
-Python download metadata can label artifacts with build variants such as `pgo+lto` or a
-provider-defined tag such as `custom`. Select them explicitly with requests like `3.13+pgo+lto` or
-`3.13+custom`. Runtime and build variants can be composed, as in `3.13+freethreaded+custom`.
-Unqualified requests continue to select the default artifact from the download metadata.
+Python download metadata can label artifacts with a publisher-defined build name such as `custom`.
+Select it explicitly with a request like `3.13+custom`. Runtime and build variants can be composed,
+as in `3.13+freethreaded+custom`. Unqualified requests continue to select the default artifact from
+the download metadata.
 
 ## Free-threaded Python
 

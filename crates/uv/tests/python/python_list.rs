@@ -657,17 +657,15 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
         .await;
 
     let versioned_json = format!(r#"{{"version": 1, "downloads": {remote_json}}}"#);
-    let build_variants_json = versioned_json
-        .replace("+custom", "+custom+pgo+lto")
+    let named_build_json = versioned_json
+        .replace("+custom", "+custom_internal")
         .replace(
             r#""build_variant": "custom""#,
-            r#""build_variant": "custom+pgo+lto""#,
+            r#""build_variant": "custom_internal""#,
         );
     Mock::given(method("GET"))
-        .and(path("/build-variants"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_raw(build_variants_json, "application/json"),
-        )
+        .and(path("/named-build"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(named_build_json, "application/json"))
         .mount(&server)
         .await;
 
@@ -730,22 +728,22 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     cpython-3.12.9+custom-linux-x86_64-gnu    https://custom.com/cpython-3.12.9+custom-linux-x86_64-gnu.tar.gz
     ");
 
-    // Composite build tags can be reordered.
+    // A named build can be selected explicitly.
     uv_snapshot!(context
         .python_list()
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
-        .arg("3.12+lto+pgo+custom")
+        .arg("3.12+custom_internal")
         .arg("--only-downloads")
         .arg("--all-platforms")
         .arg("--all-arches")
         .arg("--show-urls")
-        .arg("--python-downloads-json-url").arg(format!("{}/build-variants", server.uri())), @"
+        .arg("--python-downloads-json-url").arg(format!("{}/named-build", server.uri())), @"
     exit_code: 0 (success)
     ----- stdout -----
-    cpython-3.12.9+custom+pgo+lto-linux-x86_64-gnu    https://custom.com/cpython-3.12.9+custom+pgo+lto-linux-x86_64-gnu.tar.gz
+    cpython-3.12.9+custom_internal-linux-x86_64-gnu    https://custom.com/cpython-3.12.9+custom_internal-linux-x86_64-gnu.tar.gz
     ");
 
-    // A request must include every build tag on the artifact.
+    // A different build name does not match.
     uv_snapshot!(context
         .python_list()
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
@@ -753,43 +751,31 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
         .arg("--only-downloads")
         .arg("--all-platforms")
         .arg("--all-arches")
-        .arg("--python-downloads-json-url").arg(format!("{}/build-variants", server.uri())), @"
+        .arg("--python-downloads-json-url").arg(format!("{}/named-build", server.uri())), @"
     exit_code: 0 (success)
     ");
 
-    // Optimization tags alone must not expose a non-default provider build.
+    // An unqualified request does not expose a non-default named build.
     uv_snapshot!(context
         .python_list()
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
-        .arg("3.12+pgo+lto")
+        .arg("3.12")
         .arg("--only-downloads")
         .arg("--all-platforms")
         .arg("--all-arches")
-        .arg("--python-downloads-json-url").arg(format!("{}/build-variants", server.uri())), @"
+        .arg("--python-downloads-json-url").arg(format!("{}/named-build", server.uri())), @"
     exit_code: 0 (success)
     ");
 
-    // Every requested tag must be present.
+    // Partial build names must not match.
     uv_snapshot!(context
         .python_list()
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
-        .arg("3.12+custom+noopt")
+        .arg("3.12+custom_int")
         .arg("--only-downloads")
         .arg("--all-platforms")
         .arg("--all-arches")
-        .arg("--python-downloads-json-url").arg(format!("{}/build-variants", server.uri())), @"
-    exit_code: 0 (success)
-    ");
-
-    // Partial tag names must not match.
-    uv_snapshot!(context
-        .python_list()
-        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
-        .arg("3.12+cust")
-        .arg("--only-downloads")
-        .arg("--all-platforms")
-        .arg("--all-arches")
-        .arg("--python-downloads-json-url").arg(format!("{}/build-variants", server.uri())), @"
+        .arg("--python-downloads-json-url").arg(format!("{}/named-build", server.uri())), @"
     exit_code: 0 (success)
     ");
 

@@ -1071,7 +1071,7 @@ impl ManagedPythonDownloadList {
         variants.allows_build_variant(key, default.is_some_and(|download| download.key() == key))
     }
 
-    /// Apply provider-tag matching while listing installed builds, including non-default optimizations.
+    /// Apply named-build matching while listing installed builds.
     pub fn allows_listed_build(
         &self,
         request: &PythonDownloadRequest,
@@ -2185,8 +2185,8 @@ mod tests {
         let downloads = ManagedPythonDownloadList { downloads };
         assert_eq!(downloads.find(&request)?.key(), &default_key);
 
-        let request = PythonDownloadRequest::default()
-            .with_version(VersionRequest::from_str("3.13+custom")?);
+        let request =
+            PythonDownloadRequest::default().with_version(VersionRequest::from_str("3.13+custom")?);
         assert_eq!(downloads.find(&request)?.key(), &custom_key);
 
         let mut newer = entry("custom", false);
@@ -2206,10 +2206,7 @@ mod tests {
                 ])),
             };
             for (request, expected) in [
-                (
-                    "3.13",
-                    if custom_default { Some("custom") } else { None },
-                ),
+                ("3.13", if custom_default { Some("custom") } else { None }),
                 ("3.13+custom", Some("custom")),
                 ("3.13+other", Some("other")),
                 ("3.13+freethreaded", Some("custom")),
@@ -2224,10 +2221,7 @@ mod tests {
                     expected.map(ToString::to_string),
                 );
             }
-            for request in [
-                "3.13+custom_internal",
-                "3.13+freethreaded+other",
-            ] {
+            for request in ["3.13+custom_internal", "3.13+freethreaded+other"] {
                 let request = PythonDownloadRequest::default()
                     .with_version(VersionRequest::from_str(request).expect("Valid request"));
                 assert!(

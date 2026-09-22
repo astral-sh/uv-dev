@@ -434,29 +434,29 @@ fn python_pin_build_variant() {
     ");
 
     // Preserve composed runtime and build variants on a bounded range.
-    uv_snapshot!(context.filters(), context.python_pin().arg(">=3.13,<3.14+freethreaded+custom+pgo+lto"), @"
+    uv_snapshot!(context.filters(), context.python_pin().arg(">=3.13,<3.14+freethreaded+custom"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    Updated `.python-version` from `>=3.12+custom` -> `>=3.13, <3.14+freethreaded+custom+pgo+lto`
+    Updated `.python-version` from `>=3.12+custom` -> `>=3.13, <3.14+freethreaded+custom`
 
     ----- stderr -----
-    warning: No interpreter found for Python >=3.13, <3.14+freethreaded+custom+pgo+lto in managed installations or search path
+    warning: No interpreter found for Python >=3.13, <3.14+freethreaded+custom in managed installations or search path
     ");
 
     let python_version = context.read(PYTHON_VERSION_FILENAME);
-    assert_snapshot!(python_version, @">=3.13, <3.14+freethreaded+custom+pgo+lto");
+    assert_snapshot!(python_version, @">=3.13, <3.14+freethreaded+custom");
 
     uv_snapshot!(context.filters(), context.python_pin(), @"
     exit_code: 0 (success)
     ----- stdout -----
-    >=3.13, <3.14+freethreaded+custom+pgo+lto
+    >=3.13, <3.14+freethreaded+custom
     ");
 
     // Sorting the constraints can place a wildcard immediately before the build variant.
     uv_snapshot!(context.filters(), context.python_pin().arg("==3.13.*,>=3.12+custom"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    Updated `.python-version` from `>=3.13, <3.14+freethreaded+custom+pgo+lto` -> `>=3.12, ==3.13.*+custom`
+    Updated `.python-version` from `>=3.13, <3.14+freethreaded+custom` -> `>=3.12, ==3.13.*+custom`
 
     ----- stderr -----
     warning: No interpreter found for Python >=3.12, ==3.13.*+custom in managed installations or search path
