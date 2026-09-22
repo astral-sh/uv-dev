@@ -97,13 +97,63 @@ impl LockfileRecovery {
         &self.lock_path
     }
 
-    /// Return the operation needed to retain the original command's inputs.
-    pub(crate) fn action(&self) -> LockfileRecoveryAction {
-        self.action
+    /// Describe how to update the selected lockfile without losing the command's inputs.
+    pub(crate) fn update_hint(&self) -> String {
+        match self.action.retry_instruction() {
+            None => format!(
+                "To update the lockfile, run `uv lock --no-locked --no-frozen` with {}, using the original command's working directory and applicable index, constraint, and other resolution options.",
+                self.selectors(),
+            ),
+            Some(retry) => format!(
+                "To apply the {} and update the lockfile, {retry}.",
+                self.action.change_description(),
+            ),
+        }
+    }
+
+    /// Describe how to create the missing lockfile and retain any rolled-back edit.
+    pub(crate) fn create_hint(&self) -> String {
+        let Some(retry) = self.action.retry_instruction() else {
+            return self.create_lockfile_hint();
+        };
+        if self.script.is_some()
+            && matches!(
+                self.action,
+                LockfileRecoveryAction::RetryAdd | LockfileRecoveryAction::RetryRemove
+            )
+        {
+            // Adding or removing script dependencies only writes an existing script lockfile.
+            // Create it first so the retry can apply its edit and resolve transient inputs.
+            format!("{} Then {retry}.", self.create_lockfile_hint())
+        } else {
+            format!(
+                "To apply the {} and create the lockfile, {retry}.",
+                self.action.change_description(),
+            )
+        }
+    }
+
+    /// Describe how to rewrite non-canonical formatting before retrying a rolled-back edit.
+    pub(crate) fn format_hint(&self) -> String {
+        let retry = self
+            .action
+            .retry_instruction()
+            .map_or_else(String::new, |retry| format!(" Then {retry}."));
+        format!(
+            "To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check --no-locked --no-frozen --no-offline` with {}, using the original command's working directory and applicable index, constraint, and other resolution options.{retry}",
+            self.selectors(),
+        )
+    }
+
+    fn create_lockfile_hint(&self) -> String {
+        format!(
+            "To create the lockfile, run `uv lock --no-locked --no-frozen` with {}, using the original command's working directory and applicable index, constraint, and other resolution options.",
+            self.selectors(),
+        )
     }
 
     /// Describe the CLI arguments that retain the original discovery and lock targets.
-    pub(crate) fn selectors(&self) -> String {
+    fn selectors(&self) -> String {
         let project = self.project_dir.simplified_display();
         if let Some(script) = &self.script {
             format!(
@@ -456,11 +506,12 @@ impl<'lock> LockTarget<'lock> {
         project_dir: &Path,
         recovery_action: LockfileRecoveryAction,
     ) -> Result<Lock, ProjectError> {
-        let lock_filename = self.lock_filename();
-        let existing = self
-            .read()
-            .await?
-            .ok_or(ProjectError::MissingLockfile(source, lock_filename))?;
+        let existing = self.read().await?.ok_or_else(|| {
+            ProjectError::MissingLockfile(
+                source,
+                Box::new(self.recovery_target(project_dir, recovery_action)),
+            )
+        })?;
 
         // Check if the discovered workspace members match the locked workspace members.
         if let Self::Workspace(workspace) = self {
