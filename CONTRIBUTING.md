@@ -192,19 +192,21 @@ unclassified. Inventories containing local-version candidates are also unclassif
 absence leaves can be omitted from the displayed derivation. Transport, build, metadata,
 unsupported-policy, and exhausted proof-budget errors are not resolver counterexamples.
 
-For direct witnessed checks, `--lock-evidence structured-v1` selects an internal original-derivation
-capture instead of the default `printed-v1` grammar. This requires a uv binary with the matching
-capture protocol. The checker binds one online lock command to its actual child process and
-executable digest, checks the exact local index and generated project, and tests every original
-absence range against the raw scenario versions using uv's native range representation. It rejects
-authentication failures, unsupported availability or source policy, custom resolver claims, and
-incomplete or mismatched captures. It never falls back to printed diagnostics or starts a diagnostic
-second resolution. The whole-domain witness is still required; the captured derivation is not a
-separate satisfiability certificate or a verified PubGrub proof. Structured evidence is not yet
-available to `minimize-scenario`.
+For witnessed checks and reductions, `--lock-evidence structured-v1` selects an internal
+original-derivation capture instead of the default `printed-v1` grammar. This requires a uv binary
+with the matching capture protocol. The checker binds one online lock command to its actual child
+process and executable digest, checks the exact local index and generated project, and tests every
+original absence range against the raw scenario versions using uv's native range representation. It
+rejects authentication failures, unsupported availability or source policy, custom resolver claims,
+and incomplete or mismatched captures. It never falls back to printed diagnostics or starts a
+diagnostic second resolution. The whole-domain witness is still required; the captured derivation is
+not a separate satisfiability certificate or a verified PubGrub proof. The reducer requires a saved
+witness and re-certifies its assignment before checking each candidate deletion with the selected
+evidence mode.
 
 ```shell
 cargo dev check-scenarios --uv target/debug/uv --lock --project-selections --lock-evidence structured-v1 --witness scenario.witness.json scenario.toml
+cargo dev minimize-scenario --uv target/debug/uv --lock --project-selections --lock-evidence structured-v1 --witness scenario.witness.json --output reduced.toml scenario.toml
 ```
 
 When a generated check fails, the checker also saves the commands, output, and exact served
