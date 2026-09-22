@@ -139,28 +139,17 @@ impl EnvironmentMarkersDiagnostic {
 
     pub(super) fn diagnostic(&self) -> Diagnostic<'_> {
         Diagnostic::default()
-            .with_snippet(source_location(
-                &self.source,
-                SourceAnnotation::primary(self.primary.clone()),
-            ))
+            .with_snippet(
+                SourceSnippet::new(self.source.clone())
+                    .with_annotation(SourceAnnotation::primary(self.primary.clone())),
+            )
             .with_info(
-                Info::new("The other environment is declared here").with_snippet(source_location(
-                    &self.source,
-                    SourceAnnotation::secondary(self.related.clone()),
-                )),
+                Info::new("The other environment is declared here").with_snippet(
+                    SourceSnippet::new(self.source.clone())
+                        .with_annotation(SourceAnnotation::secondary(self.related.clone())),
+                ),
             )
     }
-}
-
-fn source_location(
-    source: &SourceFile,
-    annotation: SourceAnnotation<'static>,
-) -> SourceSnippet<'static> {
-    // Marker values and neighboring configuration can contain arbitrary private text. The
-    // original occurrence is useful without exposing its complete physical line.
-    SourceSnippet::new(source.clone())
-        .with_annotation(annotation)
-        .without_source_text()
 }
 
 #[cfg(test)]
@@ -169,7 +158,7 @@ mod tests {
     use std::str::FromStr;
 
     use anyhow::{Context, Result};
-    use insta::assert_snapshot;
+    use insta::{assert_json_snapshot, assert_snapshot};
     use uv_errors::{
         Diagnostic, ErrorFormat, ErrorOptions, Hinted, Hints, SourceFile, SuggestionApplicability,
         write_error_chain_with_options,
@@ -241,7 +230,7 @@ mod tests {
 
     #[test]
     fn environment_suggestion_targets_the_validated_occurrence() -> Result<()> {
-        let source = "# café\r\n[tool.uv]\r\nenvironments = [\r\n  \"sys_platform == 'linux'\",\r\n  \"sys_platform == 'win32'\",\r\n  \"sys_platform == \\u0027linux\\u0027 or sys_platform == 'darwin'\", # sentinel-secret\r\n]\r\n[tool.private]\r\ntoken = 'sentinel-secret'\r\n";
+        let source = "# café\r\n[tool.uv]\r\nenvironments = [\r\n  \"sys_platform == 'linux'\",\r\n  \"sys_platform == 'win32'\",\r\n  \"sys_platform == \\u0027linux\\u0027 or sys_platform == 'darwin'\", # Linux and macOS\r\n]\r\n[tool.private]\r\ntoken = 'sentinel-secret'\r\n";
         let markers = markers(&[
             "sys_platform == 'linux'",
             "sys_platform == 'win32'",
@@ -281,19 +270,83 @@ mod tests {
         assert!(markers[1].is_disjoint(declared));
         PyProjectToml::from_string(updated, "pyproject.toml")?;
 
-        assert_snapshot!(format_error(&error, ErrorFormat::Text)?, @"
+        assert_snapshot!(format_error(&error, ErrorFormat::Text)?, @r#"
         error: Supported environments must be disjoint, but the following markers overlap: `sys_platform == 'linux'` and `sys_platform == 'darwin' or sys_platform == 'linux'`
            --> pyproject.toml:6:3
+            |
+          6 |   "sys_platform == \u0027linux\u0027 or sys_platform == 'darwin'", # Linux and macOS
+            |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
           info: The other environment is declared here
            --> pyproject.toml:4:3
+            |
+          4 |   "sys_platform == 'linux'",
+            |   -------------------------
 
         hint: replace `sys_platform == 'darwin' or sys_platform == 'linux'` with `sys_platform == 'darwin'`
            --> pyproject.toml:6:3
-        ");
+        "#);
         let json = format_error(&error, ErrorFormat::Json)?;
         assert!(!json.contains("sentinel-secret"));
         let report: serde_json::Value = serde_json::from_str(&json)?;
         assert_eq!(report["errors"].as_array().map(Vec::len), Some(1));
+        assert_json_snapshot!(report["errors"][0]["sources"], @r#"
+        [
+          {
+            "kind": "snippet",
+            "name": "pyproject.toml",
+            "windows": [
+              {
+                "annotations": [
+                  {
+                    "kind": "primary",
+                    "range": {
+                      "end": {
+                        "byte_column": 65,
+                        "line": 6
+                      },
+                      "start": {
+                        "byte_column": 2,
+                        "line": 6
+                      }
+                    }
+                  }
+                ],
+                "line_start": 6,
+                "text": "  \"sys_platform == \\u0027linux\\u0027 or sys_platform == 'darwin'\", # Linux and macOS\r\n"
+              }
+            ]
+          }
+        ]
+        "#);
+        assert_json_snapshot!(report["errors"][0]["info"][0]["sources"], @r#"
+        [
+          {
+            "kind": "snippet",
+            "name": "pyproject.toml",
+            "windows": [
+              {
+                "annotations": [
+                  {
+                    "kind": "secondary",
+                    "range": {
+                      "end": {
+                        "byte_column": 27,
+                        "line": 4
+                      },
+                      "start": {
+                        "byte_column": 2,
+                        "line": 4
+                      }
+                    }
+                  }
+                ],
+                "line_start": 4,
+                "text": "  \"sys_platform == 'linux'\",\r\n"
+              }
+            ]
+          }
+        ]
+        "#);
         assert_eq!(
             report["errors"][0]["hints"][0]["suggestion"]["source"]["kind"],
             "location"
@@ -314,14 +367,200 @@ mod tests {
             "sys_platform == 'linux'",
         ])?;
         let error = error(source, EnvironmentMarkersKind::Required, &markers, 0, 2)?;
-        assert_snapshot!(format_error(&error, ErrorFormat::Text)?, @"
+        assert_snapshot!(format_error(&error, ErrorFormat::Text)?, @r#"
         error: Supported environments must be disjoint, but the following markers overlap: `sys_platform == 'linux'` and `sys_platform == 'linux'`
            --> pyproject.toml:6:3
+            |
+          6 |   "sys_platform == 'linux'",
+            |   ^^^^^^^^^^^^^^^^^^^^^^^^^
           info: The other environment is declared here
            --> pyproject.toml:4:3
+            |
+          4 |   "sys_platform == 'linux'",
+            |   -------------------------
 
         hint: make the environment markers disjoint, or remove one of the overlapping environments
-        ");
+        "#);
+        Ok(())
+    }
+
+    #[test]
+    fn unrelated_environment_values_are_shown() -> Result<()> {
+        let source = "[tool.uv]\nenvironments = [\"sys_platform == 'linux'\", \"sys_platform == 'linux'\", \"os_name == 'posix'\"]\n";
+        let markers = markers(&[
+            "sys_platform == 'linux'",
+            "sys_platform == 'linux'",
+            "os_name == 'posix'",
+        ])?;
+        let error = error(source, EnvironmentMarkersKind::Supported, &markers, 0, 1)?;
+        assert_snapshot!(format_error(&error, ErrorFormat::Text)?, @r#"
+        error: Supported environments must be disjoint, but the following markers overlap: `sys_platform == 'linux'` and `sys_platform == 'linux'`
+           --> pyproject.toml:2:44
+            |
+          2 | environments = ["sys_platform == 'linux'", "sys_platform == 'linux'", "os_name == 'posix'"]
+            |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^
+          info: The other environment is declared here
+           --> pyproject.toml:2:17
+            |
+          2 | environments = ["sys_platform == 'linux'", "sys_platform == 'linux'", "os_name == 'posix'"]
+            |                 -------------------------
+
+        hint: make the environment markers disjoint, or remove one of the overlapping environments
+        "#);
+        let json = format_error(&error, ErrorFormat::Json)?;
+        let report: serde_json::Value = serde_json::from_str(&json)?;
+        assert_json_snapshot!(
+            serde_json::json!({
+                "primary": report["errors"][0]["sources"],
+                "related": report["errors"][0]["info"][0]["sources"],
+            }),
+            @r#"
+        {
+          "primary": [
+            {
+              "kind": "snippet",
+              "name": "pyproject.toml",
+              "windows": [
+                {
+                  "annotations": [
+                    {
+                      "kind": "primary",
+                      "range": {
+                        "end": {
+                          "byte_column": 68,
+                          "line": 2
+                        },
+                        "start": {
+                          "byte_column": 43,
+                          "line": 2
+                        }
+                      }
+                    }
+                  ],
+                  "line_start": 2,
+                  "text": "environments = [\"sys_platform == 'linux'\", \"sys_platform == 'linux'\", \"os_name == 'posix'\"]\n"
+                }
+              ]
+            }
+          ],
+          "related": [
+            {
+              "kind": "snippet",
+              "name": "pyproject.toml",
+              "windows": [
+                {
+                  "annotations": [
+                    {
+                      "kind": "secondary",
+                      "range": {
+                        "end": {
+                          "byte_column": 41,
+                          "line": 2
+                        },
+                        "start": {
+                          "byte_column": 16,
+                          "line": 2
+                        }
+                      }
+                    }
+                  ],
+                  "line_start": 2,
+                  "text": "environments = [\"sys_platform == 'linux'\", \"sys_platform == 'linux'\", \"os_name == 'posix'\"]\n"
+                }
+              ]
+            }
+          ]
+        }
+        "#
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn inline_environment_siblings_are_shown() -> Result<()> {
+        let source = "tool = { uv = { environments = [\"sys_platform == 'linux'\", \"sys_platform == 'linux'\"], index = [{ url = 'https://example.invalid/simple' }] } }\n";
+        let markers = markers(&["sys_platform == 'linux'", "sys_platform == 'linux'"])?;
+        let error = error(source, EnvironmentMarkersKind::Supported, &markers, 0, 1)?;
+        assert_snapshot!(format_error(&error, ErrorFormat::Text)?, @r#"
+        error: Supported environments must be disjoint, but the following markers overlap: `sys_platform == 'linux'` and `sys_platform == 'linux'`
+           --> pyproject.toml:1:60
+            |
+          1 | tool = { uv = { environments = ["sys_platform == 'linux'", "sys_platform == 'linux'"], index = [{ url = 'https://example.invalid/simple' }] } }
+            |                                                            ^^^^^^^^^^^^^^^^^^^^^^^^^
+          info: The other environment is declared here
+           --> pyproject.toml:1:33
+            |
+          1 | tool = { uv = { environments = ["sys_platform == 'linux'", "sys_platform == 'linux'"], index = [{ url = 'https://example.invalid/simple' }] } }
+            |                                 -------------------------
+
+        hint: make the environment markers disjoint, or remove one of the overlapping environments
+        "#);
+        let json = format_error(&error, ErrorFormat::Json)?;
+        let report: serde_json::Value = serde_json::from_str(&json)?;
+        assert_json_snapshot!(
+            serde_json::json!({
+                "primary": report["errors"][0]["sources"],
+                "related": report["errors"][0]["info"][0]["sources"],
+            }),
+            @r#"
+        {
+          "primary": [
+            {
+              "kind": "snippet",
+              "name": "pyproject.toml",
+              "windows": [
+                {
+                  "annotations": [
+                    {
+                      "kind": "primary",
+                      "range": {
+                        "end": {
+                          "byte_column": 84,
+                          "line": 1
+                        },
+                        "start": {
+                          "byte_column": 59,
+                          "line": 1
+                        }
+                      }
+                    }
+                  ],
+                  "line_start": 1,
+                  "text": "tool = { uv = { environments = [\"sys_platform == 'linux'\", \"sys_platform == 'linux'\"], index = [{ url = 'https://example.invalid/simple' }] } }\n"
+                }
+              ]
+            }
+          ],
+          "related": [
+            {
+              "kind": "snippet",
+              "name": "pyproject.toml",
+              "windows": [
+                {
+                  "annotations": [
+                    {
+                      "kind": "secondary",
+                      "range": {
+                        "end": {
+                          "byte_column": 57,
+                          "line": 1
+                        },
+                        "start": {
+                          "byte_column": 32,
+                          "line": 1
+                        }
+                      }
+                    }
+                  ],
+                  "line_start": 1,
+                  "text": "tool = { uv = { environments = [\"sys_platform == 'linux'\", \"sys_platform == 'linux'\"], index = [{ url = 'https://example.invalid/simple' }] } }\n"
+                }
+              ]
+            }
+          ]
+        }
+        "#
+        );
         Ok(())
     }
 
@@ -371,14 +610,20 @@ mod tests {
                 .and_then(|diagnostic| diagnostic.suggestion(*replacement))
                 .is_none()
         );
-        assert_snapshot!(format_error(&error, ErrorFormat::Text)?, @"
+        assert_snapshot!(format_error(&error, ErrorFormat::Text)?, @r#"
         error: Supported environments must be disjoint, but the following markers overlap: `sys_platform != 'win32'` and `sys_platform == 'linux'`
            --> pyproject.toml:1:52
+            |
+          1 | tool.uv.environments = ["sys_platform != 'win32'", "sys_platform == 'linux'"]
+            |                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^
           info: The other environment is declared here
            --> pyproject.toml:1:25
+            |
+          1 | tool.uv.environments = ["sys_platform != 'win32'", "sys_platform == 'linux'"]
+            |                         -------------------------
 
         hint: make the environment markers disjoint, or remove one of the overlapping environments
-        ");
+        "#);
         Ok(())
     }
 }
