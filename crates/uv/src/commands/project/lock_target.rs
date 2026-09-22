@@ -53,7 +53,7 @@ pub(crate) enum LockfileRecoveryAction {
 
 impl LockfileRecoveryAction {
     /// Describe the authored change that the failed operation rolled back.
-    pub(super) fn change_description(self) -> &'static str {
+    fn change_description(self) -> &'static str {
         match self {
             Self::UpdateLockfile => "lockfile changes",
             Self::RetryAdd | Self::RetryRemove => "dependency changes",
@@ -62,7 +62,7 @@ impl LockfileRecoveryAction {
     }
 
     /// Retain the original command's editing arguments and resolution inputs.
-    pub(super) fn retry_instruction(self) -> Option<&'static str> {
+    fn retry_instruction(self) -> Option<&'static str> {
         match self {
             Self::UpdateLockfile => None,
             Self::RetryAdd => Some(
