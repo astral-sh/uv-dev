@@ -13,24 +13,26 @@ use crate::{
 /// but retain the original spelling instead of serializing a parsed URL. Callers can mask these
 /// ranges without changing source locations or suggested edits.
 ///
-/// This recognizes `scheme://` URLs delimited by whitespace or source quotes. Percent-encoded
-/// query names are decoded when checking the sensitive-parameter policy. Ambiguous credentials
-/// are checked in the original path and fragment, including segments URL normalization would
-/// remove. It does not decode the enclosing source language, expand variables, or identify
-/// arbitrary secrets. In particular, source escapes that obscure URL delimiters require a
+/// This recognizes `scheme://` URLs delimited by whitespace or source quotes. Within `#`
+/// comments, only whitespace ends a URL, since quotes may belong to its credentials.
+/// Percent-encoded query names are decoded when checking the sensitive-parameter policy.
+/// Ambiguous credentials are checked in the original path and fragment, including segments URL
+/// normalization would remove. It does not decode the enclosing source language, expand variables,
+/// or identify arbitrary secrets. In particular, source escapes that obscure URL delimiters require a
 /// producer-specific source mapping.
 pub fn url_redaction_ranges(text: &str) -> Vec<Range<usize>> {
     let mut ranges = Vec::new();
     let mut cursor = 0;
     let mut search = 0;
-    let mut quote = None;
+    let mut context = SourceContext::Unquoted;
     while let Some(colon) = text[search..].find("://").map(|index| search + index) {
         let Some(start) = scheme_start(text, colon) else {
             search = colon + 3;
             continue;
         };
-        quote = source_quote(text, cursor..start, quote);
-        let end = url_end(text, colon + 3, quote);
+        context = source_context(text, cursor..start, context);
+        let quote = context.quote();
+        let end = url_end(text, colon + 3, context);
         redact_url_token(&text[start..end], start, quote, &mut ranges);
         cursor = end;
         search = end;
@@ -99,23 +101,39 @@ impl SourceQuote {
     }
 }
 
-fn source_quote(
-    text: &str,
-    range: Range<usize>,
-    mut quote: Option<SourceQuote>,
-) -> Option<SourceQuote> {
+#[derive(Clone, Copy)]
+enum SourceContext {
+    Unquoted,
+    Quoted(SourceQuote),
+    Comment,
+}
+
+impl SourceContext {
+    fn quote(self) -> Option<SourceQuote> {
+        match self {
+            Self::Quoted(quote) => Some(quote),
+            Self::Unquoted | Self::Comment => None,
+        }
+    }
+}
+
+fn source_context(text: &str, range: Range<usize>, mut context: SourceContext) -> SourceContext {
     let mut cursor = range.start;
     while cursor < range.end {
         let remaining = &text[cursor..range.end];
         let Some(character) = remaining.chars().next() else {
             break;
         };
-        if let Some(current) = quote {
+        if let SourceContext::Comment = context {
+            if matches!(character, '\r' | '\n') {
+                context = SourceContext::Unquoted;
+            }
+        } else if let SourceContext::Quoted(current) = context {
             if current.uses_escapes() && character == '\\' {
                 cursor += 1;
                 if let Some(next) = text[cursor..range.end].chars().next() {
                     if current.width == 1 && matches!(next, '\r' | '\n') {
-                        quote = None;
+                        context = SourceContext::Unquoted;
                     }
                     cursor += next.len_utf8();
                 }
@@ -123,12 +141,15 @@ fn source_quote(
             }
             if current.matches(remaining) {
                 cursor += current.width;
-                quote = None;
+                context = SourceContext::Unquoted;
                 continue;
             }
             if current.width == 1 && matches!(character, '\r' | '\n') {
-                quote = None;
+                context = SourceContext::Unquoted;
             }
+        } else if character == '#' {
+            // TOML and requirements comments cannot open an enclosing source string.
+            context = SourceContext::Comment;
         } else if let Some(current) = SourceQuote::at(remaining)
             && (current.uses_escapes()
                 || current.width == 3
@@ -137,20 +158,26 @@ fn source_quote(
                     .next_back()
                     .is_none_or(|previous| !previous.is_alphanumeric() && previous != '_'))
         {
-            quote = Some(current);
+            context = SourceContext::Quoted(current);
             cursor += current.width;
             continue;
         }
         cursor += character.len_utf8();
     }
-    quote
+    context
 }
 
-fn url_end(text: &str, authority_start: usize, quote: Option<SourceQuote>) -> usize {
+fn url_end(text: &str, authority_start: usize, context: SourceContext) -> usize {
+    let quote = context.quote();
     let mut escaped = false;
     for (index, character) in text[authority_start..].char_indices() {
-        if character.is_whitespace() || (quote.is_none() && matches!(character, '<' | '>' | '`')) {
+        if character.is_whitespace()
+            || (matches!(context, SourceContext::Unquoted) && matches!(character, '<' | '>' | '`'))
+        {
             return authority_start + index;
+        }
+        if matches!(context, SourceContext::Comment) {
+            continue;
         }
         if escaped {
             escaped = false;
@@ -456,6 +483,26 @@ mod tests {
         assert!(
             components(r#"url = "https://example.invalid/safe", note = "user:secret@host""#)
                 .is_empty(),
+        );
+    }
+
+    #[test]
+    fn source_url_comments_do_not_open_quotes() {
+        assert_eq!(
+            components(
+                "# \"\"\"\nindex = [{ url = 'https://user:pa\"\"\"ss@example.invalid/?sig=si\"\"\"gned', explicit = \"yes\" }]\n",
+            ),
+            ["pa\"\"\"ss", "si\"\"\"gned"],
+        );
+        assert_eq!(
+            components(
+                "# \"\"\" https://example.invalid/ \"\"\"\nurl = 'https://user:pa\"\"\"ss@example.invalid/?sig=si\"\"\"gned'\n",
+            ),
+            ["pa\"\"\"ss", "si\"\"\"gned"],
+        );
+        assert_eq!(
+            components("no-build = ! # 'https://user:pa\"ss@example.invalid/?sig=si\"gned'\n",),
+            ["pa\"ss", "si\"gned'"],
         );
     }
 
