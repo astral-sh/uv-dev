@@ -3638,9 +3638,9 @@ impl FromStr for PythonBuildVariant {
         let variant = s.to_ascii_lowercase();
         if variant.is_empty()
             || PythonVariant::from_str(&variant).is_ok()
-            || !variant.chars().all(|character| {
-                character.is_ascii_alphanumeric() || character == '_' || character == '.'
-            })
+            || !variant
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '_')
         {
             return Err(());
         }
@@ -4392,7 +4392,6 @@ mod tests {
             ("custom", "custom"),
             ("CUSTOM", "custom"),
             ("custom_internal", "custom_internal"),
-            ("custom.public", "custom.public"),
             ("custom20260825", "custom20260825"),
             ("avx2", "avx2"),
             ("pgo", "pgo"),
@@ -4408,6 +4407,7 @@ mod tests {
             "custom+internal",
             "custom+custom",
             "pgo+lto",
+            "custom.public",
             "custom-internal",
             "custom/internal",
             "custom internal",
