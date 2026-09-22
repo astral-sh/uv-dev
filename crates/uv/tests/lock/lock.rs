@@ -27622,6 +27622,8 @@ fn lock_named_index_cli() -> Result<()> {
       cause: Failed to parse entry: `jinja2`
       cause: Package `jinja2` references an undeclared index: `pytorch`
        --> pyproject.toml:9:28
+
+    hint: Define index `pytorch` in the project's `pyproject.toml`
     ");
 
     // But it's fine if it comes from the CLI.
@@ -27731,6 +27733,8 @@ fn lock_named_index_source_locations() -> Result<()> {
       cause: Failed to parse entry: `demo-pkg`
       cause: Package `demo-pkg` references an undeclared index: `member-missing`
        --> packages/member/pyproject.toml:13:15
+
+    hint: Define index `member-missing` in the project's `pyproject.toml`
     ");
 
     // Without the member override, the root declaration is the source of the missing index.
@@ -27742,6 +27746,8 @@ fn lock_named_index_source_locations() -> Result<()> {
       cause: Failed to parse entry: `demo-pkg`
       cause: Package `demo-pkg` references an undeclared index: `root-missing`
        --> pyproject.toml:12:24
+
+    hint: Define index `root-missing` in the project's `pyproject.toml`
     ");
 
     Ok(())
@@ -27786,8 +27792,9 @@ fn lock_named_index_config_file_hint() -> Result<()> {
       cause: Failed to parse entry: `jinja2`
       cause: Package `jinja2` references an undeclared index: `pytorch`
        --> pyproject.toml:9:28
+      info: Index `pytorch` was found in a project-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
 
-    hint: Index `pytorch` was found in a project-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
+    hint: Define index `pytorch` in the project's `pyproject.toml`
     ");
 
     Ok(())
@@ -27841,8 +27848,9 @@ fn lock_named_index_user_config_file_hint() -> Result<()> {
       cause: Failed to parse entry: `jinja2`
       cause: Package `jinja2` references an undeclared index: `pytorch`
        --> pyproject.toml:9:28
+      info: Index `pytorch` was found in a user-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
 
-    hint: Index `pytorch` was found in a user-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
+    hint: Define index `pytorch` in the project's `pyproject.toml`
     ");
 
     Ok(())
