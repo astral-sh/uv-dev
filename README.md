@@ -13,6 +13,13 @@ components with `licenses: None`. Although parsed distribution metadata can cont
 stored in `uv.lock` currently retains requirements, provided extras, and dependency groups rather
 than licenses.
 
+A maintainer clarified that license metadata is not part of the standard index API and therefore
+cannot be assumed to exist on arbitrary non-PyPI indexes. PEP 658 sidecar metadata is the closest
+standard mechanism, but support is optional and not widely available across third-party indexes.
+Even when detached or local metadata is available, the modern parseable `License-Expression` and
+`License-File` fields require Metadata 2.4 or newer. Consequently, a straightforward implementation
+could only cover a subset of packages and would not generalize cleanly across registries.
+
 No existing issue tracks license population in CycloneDX output. The closest open discussion,
 astral-sh/uv#8156, concerns acquiring the same dependency-license metadata but proposes a dedicated
 license-audit command. The original SBOM issue and implementation established a minimal,
@@ -43,6 +50,22 @@ of an already-supported behavior. GitHub also currently labels astral-sh/uv#2161
 This is not a duplicate of astral-sh/uv#8156: that issue requests license auditing as a separate
 user-facing capability. The metadata work may overlap, but either interface can be implemented or
 designed independently.
+
+## Maintainer guidance and feasibility
+
+In astral-sh/uv#21617, maintainer `woodruffw` established the following constraints:
+
+- The standard package index API does not expose license metadata, so uv cannot rely on it for
+  arbitrary indexes.
+- PEP 658 can provide detached distribution metadata, but it is optional and is not widely adopted
+  by third-party indexes.
+- Modern parseable license fields require Metadata 2.4 or newer.
+- Partial support may be possible when uv already has local Metadata 2.4+ with well-formed license
+  fields, but that would not provide consistent coverage for all registries and dependency types.
+
+This narrows the design space but does not select an implementation. Any proposal still needs to
+define whether partial output is acceptable, how unavailable or legacy metadata is represented,
+and whether export may perform additional metadata or artifact retrieval.
 
 ## Related
 
