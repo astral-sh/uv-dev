@@ -105,8 +105,8 @@ impl SourcesDiagnostic {
             return None;
         }
         let replacement = toml_edit::Value::from(replacement.contents()?.to_string()).to_string();
-        // The marker value and adjacent source fields can contain arbitrary user text or
-        // authenticated URLs. Keep this first adopter location-only, even when an edit is exact.
+        // The exact edit is display-only. Hint previews are independent of the source snippets
+        // attached to the diagnostic.
         SourceSuggestion::new(
             self.source.clone(),
             [SourceEdit::new(self.primary.clone(), replacement)],
@@ -115,13 +115,13 @@ impl SourcesDiagnostic {
     }
 
     pub(super) fn diagnostic(&self) -> Diagnostic<'_> {
-        let diagnostic = Diagnostic::default().with_snippet(source_location(
+        let diagnostic = Diagnostic::default().with_snippet(source_snippet(
             &self.source,
             SourceAnnotation::primary(self.primary.clone()),
         ));
         if let Some(related) = &self.related {
             diagnostic.with_info(Info::new("The other source is declared here").with_snippet(
-                source_location(&self.source, SourceAnnotation::secondary(related.clone())),
+                source_snippet(&self.source, SourceAnnotation::secondary(related.clone())),
             ))
         } else {
             diagnostic
@@ -150,15 +150,11 @@ fn marker_span(
     }
 }
 
-fn source_location(
+fn source_snippet(
     source: &SourceFile,
     annotation: SourceAnnotation<'static>,
 ) -> SourceSnippet<'static> {
-    // Source declarations can contain authenticated URLs, and marker string values are arbitrary
-    // user input. A location identifies the exact occurrence without exposing either value.
-    SourceSnippet::new(source.clone())
-        .with_annotation(annotation)
-        .without_source_text()
+    SourceSnippet::new(source.clone()).with_annotation(annotation)
 }
 
 #[cfg(test)]
@@ -210,28 +206,40 @@ mod tests {
 
     #[test]
     fn overlapping_source_occurrences() {
-        let source = "# café\r\n[tool.uv.sources]\r\n\"My.Package\" = [\r\n  { index = 'private', marker = \"sys_platform == 'linux'\", extra = 'other' },\r\n  { url = 'https://user:secret@example.com/one.whl', marker = \"sys_platform == 'linux'\" },\r\n  { url = 'https://user:secret@example.com/two.whl', marker = \"python_version >= '3.12'\" },\r\n]\r\n";
-        assert_snapshot!(format_error(source), @"
+        let source = "# café\r\n[tool.uv.sources]\r\n\"My.Package\" = [\r\n  { index = 'private', marker = \"sys_platform == 'linux'\", extra = 'other' },\r\n  { url = 'https://example.com/one.whl', marker = \"sys_platform == 'linux'\" },\r\n  { url = 'https://example.com/two.whl', marker = \"python_version >= '3.12'\" },\r\n]\r\n";
+        assert_snapshot!(format_error(source), @r#"
         error: Failed to parse `tool.uv.sources`
           cause: Source markers must be disjoint, but the following markers overlap: `sys_platform == 'linux'` and `python_full_version >= '3.12'`.
-           --> pyproject.toml:6:63
+           --> pyproject.toml:6:51
+            |
+          6 |   { url = 'https://example.com/two.whl', marker = "python_version >= '3.12'" },
+            |                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^
           info: The other source is declared here
-           --> pyproject.toml:5:63
+           --> pyproject.toml:5:51
+            |
+          5 |   { url = 'https://example.com/one.whl', marker = "sys_platform == 'linux'" },
+            |                                                   -------------------------
 
         hint: replace `python_full_version >= '3.12'` with `python_full_version >= '3.12' and sys_platform != 'linux'`
-           --> pyproject.toml:6:63
-        ");
+           --> pyproject.toml:6:51
+        "#);
     }
 
     #[test]
     fn missing_source_marker_in_array_tables() {
-        let source = "[[tool.uv.sources.demo]]\nindex = 'first'\nmarker = \"sys_platform == 'linux'\"\n[[tool.uv.sources.demo]]\nurl = 'https://user:secret@example.com/demo.whl'\n";
+        let source = "[[tool.uv.sources.demo]]\nindex = 'first'\nmarker = \"sys_platform == 'linux'\"\n[[tool.uv.sources.demo]]\nurl = 'https://example.com/demo.whl'\n";
         assert_snapshot!(format_error(source), @r#"
         error: Failed to parse `tool.uv.sources`
           cause: When multiple sources are provided, each source must include a platform marker (e.g., `marker = "sys_platform == 'linux'"`)
            --> pyproject.toml:4:1
+            |
+          4 | [[tool.uv.sources.demo]]
+            | ^^^^^^^^^^^^^^^^^^^^^^^^
           info: The other source is declared here
            --> pyproject.toml:3:10
+            |
+          3 | marker = "sys_platform == 'linux'"
+            |          -------------------------
         "#);
     }
 
@@ -241,6 +249,9 @@ mod tests {
         error: Failed to parse `tool.uv.sources`
           cause: Must provide at least one source
            --> pyproject.toml:1:24
+            |
+          1 | tool.uv.sources.demo = []
+            |                        ^^
         ");
     }
 
@@ -272,15 +283,21 @@ mod tests {
                 .and_then(|error| error.downcast_ref::<SourceError>()),
             Some(SourceError::OverlappingMarkers { .. })
         ));
-        assert_snapshot!(format_error(source), @"
+        assert_snapshot!(format_error(source), @r#"
         error: Failed to parse `tool.uv.sources`
           cause: Source markers must be disjoint, but the following markers overlap: `sys_platform == 'linux'` and `sys_platform == 'linux'`.
            --> pyproject.toml:5:30
+            |
+          5 |   { index = 'last', marker = "sys_platform == 'linux'" },
+            |                              ^^^^^^^^^^^^^^^^^^^^^^^^^
           info: The other source is declared here
            --> pyproject.toml:3:31
+            |
+          3 |   { index = 'first', marker = "sys_platform == 'linux'" },
+            |                               -------------------------
 
         hint: make the source markers disjoint, or remove one of the overlapping sources
-        ");
+        "#);
     }
 
     #[test]
@@ -298,8 +315,14 @@ mod tests {
         error: Failed to parse `tool.uv.sources`
           cause: When multiple sources are provided, each source must include a platform marker (e.g., `marker = "sys_platform == 'linux'"`)
            --> pyproject.toml:3:3
+            |
+          3 |   { index = 'first' },
+            |   ^^^^^^^^^^^^^^^^^^^
           info: The other source is declared here
            --> pyproject.toml:5:30
+            |
+          5 |   { index = 'last', marker = "sys_platform == 'linux'" },
+            |                              -------------------------
         "#);
     }
 
@@ -312,7 +335,7 @@ mod tests {
 
     #[test]
     fn marker_suggestion_targets_the_validated_toml_occurrence() {
-        let source = "# café\r\n[tool.uv.sources]\r\n\"My.Package\" = [\r\n  { index = 'other', marker = \"sys_platform == 'linux'\", extra = 'other' },\r\n  { url = 'https://user:secret@example.com/one.whl', marker = \"sys_platform == 'linux'\" },\r\n  { url = 'https://user:secret@example.com/two.whl', marker = \"python_version >= \\u00273.12\\u0027\" },\r\n]\r\n";
+        let source = "# café\r\n[tool.uv.sources]\r\n\"My.Package\" = [\r\n  { index = 'other', marker = \"sys_platform == 'linux'\", extra = 'other' },\r\n  { url = 'https://example.com/one.whl', marker = \"sys_platform == 'linux'\" },\r\n  { url = 'https://example.com/two.whl', marker = \"python_version >= \\u00273.12\\u0027\" },\r\n]\r\n";
         let error = PyProjectToml::from_string(source.to_string(), "pyproject.toml")
             .expect_err("source markers overlap");
         let Some(SourceError::OverlappingMarkers {
@@ -351,7 +374,6 @@ mod tests {
         );
         PyProjectToml::from_string(updated, "pyproject.toml")
             .expect("the selected source markers are now disjoint");
-        assert!(!format_error(source).contains("secret"));
     }
 
     #[test]

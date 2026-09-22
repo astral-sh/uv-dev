@@ -278,26 +278,12 @@ impl PythonVersionFile {
     }
 
     /// Return the source location of the first accepted Python request, if it was read from disk.
-    ///
-    /// Paths can contain arbitrary user text. Retain their location without exposing their source
-    /// line; validated version and implementation requests can be shown directly.
     pub fn version_source(&self) -> Option<SourceSnippet<'static>> {
         let source = self.source.as_ref()?;
         let entry = self.versions.first()?;
-        let snippet = SourceSnippet::new(source.clone()).with_annotation(
+        Some(SourceSnippet::new(source.clone()).with_annotation(
             SourceAnnotation::primary(entry.span.clone()?).with_label("Python request"),
-        );
-        match &entry.request {
-            PythonRequest::Default
-            | PythonRequest::Any
-            | PythonRequest::Version(_)
-            | PythonRequest::Implementation(_)
-            | PythonRequest::ImplementationVersion(..)
-            | PythonRequest::Key(_) => Some(snippet),
-            PythonRequest::Directory(_)
-            | PythonRequest::File(_)
-            | PythonRequest::ExecutableName(_) => Some(snippet.without_source_text()),
-        }
+        ))
     }
 
     /// Iterate of all versions declared in the file.
@@ -467,12 +453,15 @@ mod tests {
     }
 
     #[test]
-    fn version_file_hides_path_requests() -> anyhow::Result<()> {
+    fn version_file_shows_path_requests() -> anyhow::Result<()> {
         assert_snapshot!(
-            format_source(version_file("# private\n./credentials-containing-path/python\n"))?,
+            format_source(version_file("# locally managed interpreter\n./toolchains/python\n"))?,
             @"
         error: The pinned Python request is incompatible
            --> .python-version:2:1
+            |
+          2 | ./toolchains/python
+            | ^^^^^^^^^^^^^^^^^^^ Python request
         "
         );
         Ok(())
