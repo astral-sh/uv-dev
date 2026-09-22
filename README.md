@@ -22,6 +22,16 @@ No existing open issue or pull request tracks this exact empty-directory failure
 history is a prior false rejection of data-descriptor ZIPs in astral-sh/uv#12677, its fix in
 astral-sh/uv#12722, and the comprehensive streaming ZIP validation added by astral-sh/uv#15136.
 
+## Priority and real-world impact
+
+A maintainer noted that the issue's importance remains unclear because there is not yet enough
+signal about real-world usage. The failure and source-level bug are independently reproduced, but
+the targeted reproduction is synthetic. The issue reports that an official `ibapi` source archive
+also triggers the failure; that external archive has not been independently exercised in the
+reproduction work recorded here, and the discussion does not yet establish whether a user reached
+the bug through a production dependency workflow. This uncertainty affects prioritization, not the
+bug classification or the validity of the isolated reproduction.
+
 ## Reproduction
 
 Outcome: **reproducible**.
