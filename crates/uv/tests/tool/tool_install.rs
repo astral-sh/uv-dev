@@ -4396,6 +4396,227 @@ fn tool_install_preflight_reuses_prepared_source_wheels() -> Result<()> {
     Ok(())
 }
 
+/// A shared build can be prepared before mutation when its isolated phase has no changes.
+#[test]
+fn tool_install_preflight_preserves_unchanged_shared_environment() -> Result<()> {
+    for preview in [None, Some("tool-install-locks")] {
+        for conflict in [false, true] {
+            let context = uv_test::test_context!("3.13").with_tool_dirs();
+            let context = if let Some(preview) = preview {
+                context.with_env(EnvVars::UV_PREVIEW_FEATURES, preview)
+            } else {
+                context
+            };
+            let links = context.temp_dir.child("links");
+            links.create_dir_all()?;
+            write_recovery_wheel(
+                links.path(),
+                "recovery-old-build",
+                "1.0.0",
+                &[],
+                &[("old-build", "old")],
+            )?;
+            write_recovery_wheel(
+                links.path(),
+                "recovery-root",
+                "1.0.0",
+                &["recovery-old-build==1"],
+                &[("recovery-root", "root-1")],
+            )?;
+            context
+                .tool_install()
+                .args(["recovery-root", "--no-index", "--find-links"])
+                .arg(links.path())
+                .assert()
+                .success();
+            let tool = context.temp_dir.child("tools").child("recovery-root");
+            let bin = context.temp_dir.child("bin");
+            let root_export = bin.child(format!("recovery-root{}", std::env::consts::EXE_SUFFIX));
+            let new_export = bin.child(format!("new-command{}", std::env::consts::EXE_SUFFIX));
+            if conflict {
+                new_export.write_str("external command")?;
+            }
+            let before = dirhash_path(tool.path())?;
+            #[cfg(windows)]
+            let opened_export = if conflict {
+                let file = fs_err::File::open(root_export.path())?;
+                let identity = uv_windows::FileIdentity::from_file(&file)?;
+                Some((file, identity))
+            } else {
+                None
+            };
+            let source = context.temp_dir.child("source");
+            write_recovery_source(
+                source.path(),
+                "recovery-root",
+                "2.0.0",
+                &[],
+                &[("recovery-root", "root-2"), ("new-command", "new")],
+                "import importlib.metadata\nassert importlib.metadata.version('recovery-root') == '1.0.0'\nimport recovery_old_build.commands",
+            )?;
+            let mut command = context.tool_install();
+            command
+                .arg(source.path())
+                .args([
+                    "--no-build-isolation-package",
+                    "recovery-root",
+                    "--no-index",
+                ])
+                .env("PYTHONDONTWRITEBYTECODE", "1");
+            if conflict {
+                command
+                    .assert()
+                    .code(2)
+                    .stderr(predicate::str::contains("Executable already exists:"));
+                assert_eq!(dirhash_path(tool.path())?, before, "{preview:?}");
+                new_export.assert("external command");
+                #[cfg(windows)]
+                if let Some((file, identity)) = &opened_export {
+                    assert_eq!(uv_windows::FileIdentity::from_file(file)?, *identity);
+                    assert_eq!(
+                        uv_windows::FileIdentity::from_file(&fs_err::File::open(
+                            root_export.path()
+                        )?)?,
+                        *identity
+                    );
+                }
+            } else {
+                command.assert().success();
+                let packages = site_packages_path(tool.path(), "python3.13");
+                assert!(
+                    packages
+                        .join("recovery_root-2.0.0.dist-info/METADATA")
+                        .exists()
+                );
+                assert!(
+                    !packages
+                        .join("recovery_old_build-1.0.0.dist-info/METADATA")
+                        .exists()
+                );
+                Command::new(root_export.path())
+                    .env("PYTHONDONTWRITEBYTECODE", "1")
+                    .assert()
+                    .success()
+                    .stdout(predicate::str::diff("root-2\n").normalize());
+            }
+            source.child("build-count").assert("build\n");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn tool_install_preflight_shared_backend_failure_preserves_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    write_recovery_wheel(
+        links.path(),
+        "recovery-root",
+        "1.0.0",
+        &[],
+        &[("recovery-root", "root-1")],
+    )?;
+    context
+        .tool_install()
+        .args(["recovery-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .success();
+    let tool = context.temp_dir.child("tools").child("recovery-root");
+    let before = dirhash_path(tool.path())?;
+    let source = context.temp_dir.child("source");
+    write_recovery_source(
+        source.path(),
+        "recovery-root",
+        "2.0.0",
+        &[],
+        &[("recovery-root", "root-2")],
+        "raise RuntimeError('deliberate shared build failure')",
+    )?;
+    context
+        .tool_install()
+        .arg(source.path())
+        .args([
+            "--no-build-isolation-package",
+            "recovery-root",
+            "--no-index",
+        ])
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("deliberate shared build failure"));
+    assert_eq!(dirhash_path(tool.path())?, before);
+    source
+        .child("build-count")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+/// Replacement builds must not borrow packages from the environment that will be removed.
+#[test]
+fn tool_install_preflight_shared_replacement_uses_new_environment() -> Result<()> {
+    for arguments in [vec!["--force"], vec!["--python", "3.12"]] {
+        let context = uv_test::test_context_with_versions!(&["3.13", "3.12"]).with_tool_dirs();
+        let links = context.temp_dir.child("links");
+        links.create_dir_all()?;
+        write_recovery_wheel(
+            links.path(),
+            "recovery-old-build",
+            "1.0.0",
+            &[],
+            &[("old-build", "old")],
+        )?;
+        write_recovery_wheel(
+            links.path(),
+            "recovery-root",
+            "1.0.0",
+            &["recovery-old-build==1"],
+            &[("recovery-root", "root-1")],
+        )?;
+        context
+            .tool_install()
+            .args([
+                "recovery-root",
+                "--python",
+                "3.13",
+                "--no-index",
+                "--find-links",
+            ])
+            .arg(links.path())
+            .assert()
+            .success();
+        let source = context.temp_dir.child("source");
+        write_recovery_source(
+            source.path(),
+            "recovery-root",
+            "2.0.0",
+            &[],
+            &[("recovery-root", "root-2")],
+            "import recovery_old_build.commands",
+        )?;
+        context
+            .tool_install()
+            .arg(source.path())
+            .args([
+                "--no-build-isolation-package",
+                "recovery-root",
+                "--no-index",
+            ])
+            .args(&arguments)
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains(
+                "No module named 'recovery_old_build'",
+            ));
+        source
+            .child("build-count")
+            .assert(predicate::path::missing());
+    }
+    Ok(())
+}
+
 /// Shared source builds still see the installed isolated phase and the old extraneous packages.
 /// Their new commands cannot be admitted until that same-environment build has completed.
 #[test]
@@ -4438,6 +4659,13 @@ fn tool_install_preflight_retains_shared_build_order() -> Result<()> {
         &[],
         &[("new-build", "new")],
     )?;
+    // Even a cached wheel must be installed into the real environment before the shared build.
+    context
+        .tool_install()
+        .args(["recovery-new-build", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .success();
     let source = context.temp_dir.child("source");
     write_recovery_source(
         source.path(),

@@ -59,7 +59,9 @@ use uv_workspace::pyproject::{ExtraBuildDependency, PyProjectToml};
 use uv_workspace::{ProjectEnvironmentSelection, RequiresPythonSources, Workspace, WorkspaceCache};
 
 use crate::commands::pip::loggers::{InstallLogger, ResolveLogger};
-use crate::commands::pip::operations::{Changelog, InstallationPlan, Modifications};
+use crate::commands::pip::operations::{
+    Changelog, InstallationPlan, Modifications, PreparationMode,
+};
 use crate::commands::project::install_target::InstallTarget;
 use crate::commands::reporters::{PythonDownloadReporter, ResolverReporter};
 use crate::commands::{capitalize, conjunction, pip};
@@ -2932,13 +2934,14 @@ async fn install_environment(
         preview,
     );
 
-    let (preflight, prepared, prepare_only) = match mode {
+    let (preflight, prepared, preparation_mode) = match mode {
         EnvironmentInstallMode::Sync {
             preflight,
             prepared,
-        } => (preflight, prepared, false),
-        EnvironmentInstallMode::Prepare => (None, None, true),
+        } => (preflight, prepared, PreparationMode::CurrentEnvironment),
+        EnvironmentInstallMode::Prepare => (None, None, PreparationMode::ReplacementEnvironment),
     };
+    let prepare_only = matches!(preparation_mode, PreparationMode::ReplacementEnvironment);
     let mut plan = if let Some(prepared) = prepared {
         prepared
     } else {
@@ -2977,7 +2980,8 @@ async fn install_environment(
     };
     if prepare_only || preflight.is_some() {
         if plan
-            .prepare_if_isolated(
+            .prepare_before_mutation(
+                preparation_mode,
                 resolution,
                 build_options,
                 &hasher,
@@ -3313,7 +3317,8 @@ pub(crate) async fn update_environment(
     )?;
     if let Some(preflight) = preflight {
         if plan
-            .prepare_if_isolated(
+            .prepare_before_mutation(
+                PreparationMode::CurrentEnvironment,
                 &resolution,
                 build_options,
                 &hasher,

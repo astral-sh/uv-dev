@@ -820,7 +820,7 @@ fn generate_wheel_compatibility_hint(
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Plan {
     /// The distributions that are not already installed in the current environment, but are
     /// available in the local cache.

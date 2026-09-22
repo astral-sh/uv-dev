@@ -273,7 +273,8 @@ fn replacement_layout(root: &Path, interpreter: &Interpreter) -> Layout {
 
 impl ToolEntrypointSnapshot {
     /// Admit a complete selected wheel inventory before any package changes. The caller must only
-    /// use this with a fully prepared plan; unresolved shared builds require the final preflight.
+    /// use this with a fully prepared plan; shared builds that require earlier environment changes
+    /// still require the final preflight.
     fn preflight_selected(
         &self,
         layout: &Layout,
