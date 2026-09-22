@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 14740,
+        "title": "`uv pip install -r pylock.toml` doesn't work with dependency_groups groups",
+        "url": "https://github.com/astral-sh/uv/issues/14740",
+        "state": "closed",
+        "reason": "Closest adjacent issue: it covered a parse failure for PEP 751 dependency_groups markers. astral-sh/uv#21917 parses successfully but loses default-only groups before marker evaluation."
+      },
+      {
+        "kind": "pull_request",
+        "number": 14755,
+        "title": "Support `extras` and `dependency_groups` markers on `uv pip install` and `uv pip sync`",
+        "url": "https://github.com/astral-sh/uv/pull/14755",
+        "state": "merged",
+        "reason": "This fixed astral-sh/uv#14740 by adding marker evaluation. Its implementation applies default_groups but then enumerates only declared dependency_groups, leaving the reported default-only shape uncovered."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for default-groups, dependency_groups, dependency-groups, pylock, PEP 751, marker evaluation, group selection, silent package omission, and historical fixes. Inspected astral-sh/uv#12584 and astral-sh/uv#12992 but ruled them out as broad initial PEP 751 support work; astral-sh/uv#14005 concerns project/workspace scoping rather than pylock installation. No existing tracker for this exact omission was found."
+  },
+  "type": "bug",
+  "type_reason": "The source confirms a correctness gap: pip install and pip sync apply lock.default_groups, then filter marker groups through lock.dependency_groups. PEP 751 permits default groups to be absent from dependency-groups, so valid default-only groups are silently discarded. The existing integration test declares its default group in both fields and does not cover this case.",
+  "summary": "No duplicate was found. astral-sh/uv#14740 and astral-sh/uv#14755 are closely related historical marker-support work, but the new issue identifies a distinct default-group selection bug.",
+  "draft_response": "Thanks for the focused reproduction. This is a bug in the current pylock group-selection path, separate from astral-sh/uv#14740 and astral-sh/uv#14755. Those added parsing and evaluation for PEP 751 dependency_groups markers. The current pip install and pip sync paths read default-groups, but build the marker group list by enumerating only dependency-groups, so a default-only group is dropped before marker evaluation. Our existing test covers only the case where the default group is also declared in dependency-groups.\n\nThe next step is to add pip install and pip sync regression cases with a group present only in default-groups, then ensure those default names are passed to marker evaluation."
+}
