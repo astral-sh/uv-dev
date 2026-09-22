@@ -936,6 +936,7 @@ dependencies = ["flask==1.0.x"]
     ----- stderr -----
     error: Failed to build `project @ file://[TEMP_DIR]/path_dep`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `setuptools.build_meta:__legacy__.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stdout]
@@ -988,8 +989,6 @@ dependencies = ["flask==1.0.x"]
                  raise ValueError(f"{error}/n{summary}") from None
              ValueError: invalid pyproject.toml config: `project.dependencies[0]`.
              configuration error: `project.dependencies[0]` must be pep508
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     "##
     );
 
@@ -11235,6 +11234,7 @@ fn sklearn() {
     ----- stderr -----
     error: Failed to build `sklearn==0.0.post12`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `setuptools.build_meta:__legacy__.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
@@ -11255,8 +11255,6 @@ fn sklearn() {
              https://github.com/scikit-learn/sklearn-pypi-package
 
     hint: `sklearn` is often confused for `scikit-learn`. Did you mean to install `scikit-learn` instead?
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     "
     );
 }
@@ -11281,7 +11279,9 @@ fn resolve_derivation_chain() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to build `wsgiref==0.1.2`
+      info: `wsgiref` (v0.1.2) was included because `project` (v0.1.0) depends on `wsgiref`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `setuptools.build_meta:__legacy__.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
@@ -11301,10 +11301,6 @@ fn resolve_derivation_chain() -> Result<()> {
                  print "Setuptools version",version,"or greater has been installed."
                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
              SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?
-
-    hint: `wsgiref` (v0.1.2) was included because `project` (v0.1.0) depends on `wsgiref`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     "#
     );
 
@@ -11673,6 +11669,7 @@ fn direct_url_hash_source_tree_dependency() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: Failed to download `protobug @ https://files.pythonhosted.org/packages/f2/cc/db26b91cddffbcf0c6df7834fd642578f737fe34197635ae8ea64643a35f/protobug-0.3.0-py3-none-any.whl#sha256=ee81583f376bb38e5e7af425d2453e5e8d4b57bfbf45e5dba1a75329c2026520`
+      info: `protobug` (v0.3.0) was included because `pylock` (v0.1.0) depends on `protobug`
       cause: Hash mismatch for `protobug @ https://files.pythonhosted.org/packages/f2/cc/db26b91cddffbcf0c6df7834fd642578f737fe34197635ae8ea64643a35f/protobug-0.3.0-py3-none-any.whl#sha256=ee81583f376bb38e5e7af425d2453e5e8d4b57bfbf45e5dba1a75329c2026520`
 
              Expected:
@@ -11680,8 +11677,6 @@ fn direct_url_hash_source_tree_dependency() -> Result<()> {
 
              Computed:
                sha256:ee81583f376bb38e5e7af425d2453e5e8d4b57bfbf45e5dba1a75329c202652e
-
-    hint: `protobug` (v0.3.0) was included because `pylock` (v0.1.0) depends on `protobug`
     "
     );
 
@@ -16114,15 +16109,13 @@ fn pip_install_build_dependencies_respect_locked_versions() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
+      info: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `build_backend.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
              Expected `a` version 0.1 but got 0.3.0
-
-    hint: `child` was included because `parent` (v0.1.0) depends on `child`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     // Now constrain the `a` build dependency to match the runtime
@@ -16174,15 +16167,13 @@ fn pip_install_build_dependencies_respect_locked_versions() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
+      info: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `build_backend.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
              Expected `a` version 0.2 but got 0.1.0
-
-    hint: `child` was included because `parent` (v0.1.0) depends on `child`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     uv_snapshot!(context.filters(), context.pip_install().arg("--index-url").arg(server.index_url()).arg(".")
@@ -16769,8 +16760,7 @@ fn install_with_system_interpreter() {
     error: The interpreter at managed/cpython-3.12.[LATEST]-[PLATFORM] is externally managed, and indicates the following:
 
       This Python installation is managed by uv and should not be modified.
-
-    hint: Virtual environments were not considered due to the `--system` flag
+      info: Virtual environments were not considered due to the `--system` flag
     "
     );
 }
