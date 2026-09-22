@@ -2,6 +2,7 @@
 //! [installer][`uv_installer`] and [build][`uv_build`] through [`BuildDispatch`]
 //! implementing [`BuildContext`].
 
+use std::error::Error as StdError;
 use std::ffi::{OsStr, OsString};
 use std::future::{self, Future};
 use std::path::Path;
@@ -88,6 +89,22 @@ impl uv_errors::Hinted for BuildDispatchError {
             }
             _ => uv_errors::Hints::none(),
         }
+    }
+
+    fn own_hints(&self) -> uv_errors::Hints<'_> {
+        uv_errors::Hints::none()
+    }
+
+    fn transparent_source(&self) -> Option<&(dyn StdError + 'static)> {
+        Some(match self {
+            Self::BuildFrontend(error) => error,
+            Self::Tags(error) => error,
+            Self::Resolve(error) => error,
+            Self::Join(error) => error,
+            Self::Anyhow(error) => error.as_ref(),
+            Self::Prepare(error) => error,
+            Self::Lookahead(error) => error,
+        })
     }
 }
 

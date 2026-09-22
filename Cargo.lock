@@ -5921,6 +5921,7 @@ dependencies = [
  "uv-client",
  "uv-configuration",
  "uv-distribution-types",
+ "uv-errors",
  "uv-normalize",
  "uv-pep440",
  "uv-pypi-types",
@@ -7225,6 +7226,7 @@ dependencies = [
  "uv-distribution",
  "uv-distribution-filename",
  "uv-distribution-types",
+ "uv-errors",
  "uv-fs",
  "uv-normalize",
  "uv-pep508",
@@ -7533,6 +7535,7 @@ dependencies = [
  "uv-configuration",
  "uv-dirs",
  "uv-distribution-types",
+ "uv-errors",
  "uv-fs",
  "uv-install-wheel",
  "uv-installer",
@@ -7592,6 +7595,7 @@ name = "uv-types"
 version = "0.0.84"
 dependencies = [
  "anyhow",
+ "insta",
  "papaya",
  "rustc-hash",
  "thiserror",
