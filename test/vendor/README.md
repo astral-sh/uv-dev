@@ -5,5 +5,6 @@ specific archive contents. Ordinary dependency-resolution tests should use gener
 `test/scenarios` instead.
 
 `crates/uv-test/src/vendor.rs` records the distribution filenames and SHA-256 digests. The local
-test servers verify those digests before serving an artifact. The archives retain their upstream
-metadata and license files.
+test servers read only these checked-in files and verify their digests before serving them. Missing
+or changed files are errors; the servers do not download replacement artifacts. The archives retain
+their upstream metadata and license files.
