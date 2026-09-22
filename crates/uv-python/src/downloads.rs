@@ -24,7 +24,7 @@ use tracing::{debug, instrument};
 use url::Url;
 
 use uv_cache::{Cache, CacheBucket};
-use uv_cache_key::cache_digest;
+use uv_cache_key::{CanonicalUrl, cache_digest};
 use uv_client::{
     BaseClient, BaseClientBuilder, CacheControl, CachedClient, CachedClientError, ClientBuildError,
     Connectivity, RetriableError, RetryState, WrappedReqwestError, fetch_with_url_fallback,
@@ -1282,14 +1282,7 @@ impl ManagedPythonDownload {
         {
             let python_builds_dir = PathBuf::from(python_builds_dir);
             fs_err::create_dir_all(&python_builds_dir)?;
-            let hash_prefix = match self.sha256.as_deref() {
-                Some(sha) => {
-                    // Shorten the hash to avoid too-long-filename errors
-                    &sha[..9]
-                }
-                None => "none",
-            };
-            let cache_filename = format!("{hash_prefix}-{filename}");
+            let cache_filename = self.cache_filename(&url, &filename);
             let target_cache_file = python_builds_dir.join(&cache_filename);
             let cache_lock_file =
                 python_builds_dir.join(archive_cache_lock_filename(&cache_filename));
@@ -1448,6 +1441,19 @@ impl ManagedPythonDownload {
             })?;
 
         Ok(DownloadResult::Fetched(path))
+    }
+
+    fn cache_filename(&self, url: &DisplaySafeUrl, filename: &str) -> String {
+        let hash_prefix = match self.sha256.as_deref() {
+            // Shorten the hash to avoid too-long-filename errors.
+            Some(sha) => Cow::Borrowed(&sha[..9]),
+            // A filename alone is not provenance for a custom checksumless archive.
+            None => Cow::Owned(format!(
+                "none-{}",
+                cache_digest(&CanonicalUrl::new(url.clone()))
+            )),
+        };
+        format!("{hash_prefix}-{filename}")
     }
 
     /// Download the managed Python archive into the cache directory.
@@ -1946,6 +1952,61 @@ mod tests {
     use uv_platform::{Arch, Libc, Os, Platform};
 
     use super::*;
+
+    #[test]
+    fn checksumless_custom_downloads_do_not_collide_in_cache() {
+        let parse_download = |url| {
+            let json = format!(
+                r#"{{"cpython-3.14.0-linux-x86_64-gnu":{{"name":"cpython","arch":{{"family":"x86_64","variant":null}},"os":"linux","libc":"gnu","major":3,"minor":14,"patch":0,"prerelease":null,"url":"{url}","sha256":null,"variant":null,"build":null}}}}"#
+            );
+            parse_json_downloads(
+                parse_downloads_json(json.as_bytes(), "downloads.json".to_string())
+                    .expect("custom downloads should parse"),
+            )
+            .pop()
+            .expect("custom download should be retained")
+        };
+
+        let first_url = DisplaySafeUrl::parse("https://example.com/first/python.tar.gz")
+            .expect("URL should parse");
+        let second_url = DisplaySafeUrl::parse("https://example.com/second/python.tar.gz")
+            .expect("URL should parse");
+        let first = parse_download(first_url.as_str());
+        let second = parse_download(second_url.as_str());
+
+        let first_cache_file = first.cache_filename(&first_url, "python.tar.gz");
+        let second_cache_file = second.cache_filename(&second_url, "python.tar.gz");
+        assert_ne!(first_cache_file, second_cache_file);
+        assert_ne!(first_cache_file, "none-python.tar.gz");
+        assert_ne!(second_cache_file, "none-python.tar.gz");
+        assert!(first_cache_file.starts_with("none-"));
+        assert!(second_cache_file.starts_with("none-"));
+        assert!(first_cache_file.ends_with("-python.tar.gz"));
+        assert!(second_cache_file.ends_with("-python.tar.gz"));
+
+        let equivalent_url =
+            DisplaySafeUrl::parse("https://user:password@example.com/first/%70ython.tar.gz")
+                .expect("URL should parse");
+        assert_eq!(
+            first.cache_filename(&equivalent_url, "python.tar.gz"),
+            first_cache_file
+        );
+    }
+
+    #[test]
+    fn python_download_cache_filename_preserves_checksum_key() {
+        let url =
+            DisplaySafeUrl::parse("https://example.com/python.tar.gz").expect("URL should parse");
+        let mut download = cpython_download_for_url("https://example.com/python.tar.gz");
+        download.sha256 = Some(Cow::Borrowed(
+            "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+        ));
+
+        assert_eq!(
+            download.cache_filename(&url, "python.tar.gz"),
+            "c3c3c3c3c-python.tar.gz"
+        );
+    }
 
     #[test]
     fn cached_archive_lock_filename_preserves_lowercase_names() {
