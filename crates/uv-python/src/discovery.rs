@@ -1894,6 +1894,15 @@ impl PythonVariant {
         }
     }
 
+    /// Return the executable suffix for Windows, e.g., `_d` for `python_d.exe`.
+    pub fn windows_executable_suffix(self) -> &'static str {
+        match self {
+            Self::Debug | Self::GilDebug => "_d",
+            Self::FreethreadedDebug => "t_d",
+            _ => self.executable_suffix(),
+        }
+    }
+
     /// Return the suffix for display purposes, e.g., `+gil`.
     pub fn display_suffix(self) -> &'static str {
         match self {
@@ -2821,7 +2830,17 @@ impl fmt::Display for ExecutableName {
         if let Some(prerelease) = &self.prerelease {
             write!(f, "{prerelease}")?;
         }
-        f.write_str(self.variant.executable_suffix())?;
+        f.write_str(
+            if cfg!(windows)
+                && self
+                    .implementation
+                    .is_none_or(|implementation| implementation == ImplementationName::CPython)
+            {
+                self.variant.windows_executable_suffix()
+            } else {
+                self.variant.executable_suffix()
+            },
+        )?;
         f.write_str(EXE_SUFFIX)?;
         Ok(())
     }
@@ -2947,6 +2966,10 @@ impl VersionRequest {
             for i in 0..names.len() {
                 let name = names[i].with_variant(variant);
                 names.push(name);
+            }
+            if cfg!(windows) && variant == PythonVariant::FreethreadedDebug {
+                // Standalone free-threaded debug distributions also provide `python_d.exe`.
+                names.push(ExecutableName::default().with_variant(PythonVariant::Debug));
             }
         }
 
@@ -4622,6 +4645,55 @@ mod tests {
             ],
         );
         case("3t", &["python3t", "python3", "pythont", "python"]);
+
+        if cfg!(windows) {
+            case(
+                "3.13d",
+                &[
+                    "python3.13_d",
+                    "python3.13",
+                    "python3_d",
+                    "python3",
+                    "python_d",
+                    "python",
+                ],
+            );
+            case(
+                "3.13td",
+                &[
+                    "python3.13t_d",
+                    "python3.13",
+                    "python3t_d",
+                    "python3",
+                    "pythont_d",
+                    "python_d",
+                    "python",
+                ],
+            );
+        } else {
+            case(
+                "3.13d",
+                &[
+                    "python3.13d",
+                    "python3.13",
+                    "python3d",
+                    "python3",
+                    "pythond",
+                    "python",
+                ],
+            );
+            case(
+                "3.13td",
+                &[
+                    "python3.13td",
+                    "python3.13",
+                    "python3td",
+                    "python3",
+                    "pythontd",
+                    "python",
+                ],
+            );
+        }
 
         case(
             "3.13.2",

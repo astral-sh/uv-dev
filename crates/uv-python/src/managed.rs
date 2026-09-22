@@ -387,7 +387,7 @@ impl ManagedPythonInstallation {
     ///
     /// If the installation has multiple executables i.e., `python`, `python3`, etc., this will
     /// return the _canonical_ executable name which the other names link to. On Unix, this is
-    /// `python{major}.{minor}{variant}` and on Windows, this is `python{exe}`.
+    /// `python{major}.{minor}{variant}` and on Windows, this is `python.exe` or `python_d.exe`.
     ///
     /// If windowed is true, `pythonw.exe` is selected over `python.exe` on windows, with no changes
     /// on non-windows.
@@ -407,12 +407,17 @@ impl ManagedPythonInstallation {
             ImplementationName::GraalPy => String::new(),
         };
 
-        // On Windows, the executable is just `python.exe` even for alternative variants
+        // Windows CPython uses an unversioned executable, with `_d` for debug builds.
         // GraalPy always uses `graalpy.exe` as the main executable
         let variant = if self.implementation() == ImplementationName::GraalPy {
             ""
         } else if cfg!(unix) {
             self.key.variant.executable_suffix()
+        } else if cfg!(windows)
+            && self.implementation() == ImplementationName::CPython
+            && self.key.variant.is_debug()
+        {
+            if windowed { "w_d" } else { "_d" }
         } else if cfg!(windows) && windowed {
             // Use windowed Python that doesn't open a terminal.
             "w"
@@ -438,14 +443,23 @@ impl ManagedPythonInstallation {
         //
         // See https://github.com/astral-sh/uv/issues/8298
         if cfg!(windows)
-            && matches!(self.key.variant, PythonVariant::Freethreaded)
+            && matches!(
+                self.key.variant,
+                PythonVariant::Freethreaded | PythonVariant::FreethreadedDebug
+            )
             && !executable.exists()
         {
             // This is the alternative executable name for the freethreaded variant
             return self.python_dir().join(format!(
-                "python{}.{}t{}",
+                "python{}{}.{}t{}{}",
+                if windowed { "w" } else { "" },
                 self.key.major,
                 self.key.minor,
+                if self.key.variant.is_debug() {
+                    "_d"
+                } else {
+                    ""
+                },
                 std::env::consts::EXE_SUFFIX
             ));
         }
@@ -499,6 +513,13 @@ impl ManagedPythonInstallation {
 
     /// Ensure the environment contains the canonical Python executable names.
     pub fn ensure_canonical_executables(&self) -> Result<(), Error> {
+        // CPython's Windows stdlib uses the `_d` executable suffix to select debug launchers.
+        if cfg!(windows)
+            && self.implementation() == ImplementationName::CPython
+            && self.key.variant.is_debug()
+        {
+            return Ok(());
+        }
         let python = self.executable(false);
 
         let canonical_names = &["python"];
@@ -1004,6 +1025,52 @@ mod tests {
     use std::str::FromStr;
     use uv_pep440::{Prerelease, PrereleaseKind};
     use uv_platform::Platform;
+
+    #[test]
+    #[cfg(windows)]
+    fn test_windows_debug_executables() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        for variant in ["debug", "freethreaded+debug"] {
+            let root = temp
+                .path()
+                .join(format!("cpython-3.13.0+{variant}-windows-x86_64-none"));
+            let install = root.join("install");
+            fs_err::create_dir_all(&install)?;
+            for name in ["python_d.exe", "pythonw_d.exe"] {
+                fs_err::write(install.join(name), [])?;
+            }
+            let installation = ManagedPythonInstallation::from_path(root)?;
+            assert_eq!(installation.executable(false), install.join("python_d.exe"));
+            assert_eq!(installation.executable(true), install.join("pythonw_d.exe"));
+            installation.ensure_canonical_executables()?;
+            assert!(!install.join("python.exe").exists());
+            assert!(!install.join("pythonw.exe").exists());
+
+            let suffix = if variant == "debug" { "_d" } else { "t_d" };
+            assert_eq!(
+                installation.key().executable_name_minor(),
+                format!("python3.13{suffix}.exe")
+            );
+
+            if variant == "freethreaded+debug" {
+                for name in ["python_d.exe", "pythonw_d.exe"] {
+                    fs_err::remove_file(install.join(name))?;
+                }
+                for name in ["python3.13t_d.exe", "pythonw3.13t_d.exe"] {
+                    fs_err::write(install.join(name), [])?;
+                }
+                assert_eq!(
+                    installation.executable(false),
+                    install.join("python3.13t_d.exe")
+                );
+                assert_eq!(
+                    installation.executable(true),
+                    install.join("pythonw3.13t_d.exe")
+                );
+            }
+        }
+        Ok(())
+    }
 
     fn create_test_installation(
         implementation: ImplementationName,
