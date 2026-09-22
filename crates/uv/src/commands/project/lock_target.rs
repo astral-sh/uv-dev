@@ -41,10 +41,41 @@ pub(crate) enum LockTarget<'lock> {
 /// The operation needed to recover from a lockfile check failure.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum LockfileRecoveryAction {
-    /// Write the selected lockfile. Any authored edits are already present on disk.
+    /// Write the selected lockfile from the inputs currently on disk.
     UpdateLockfile,
-    /// Repeat `uv add`, which rolls back its edits and owns transient external constraints.
+    /// Repeat a rolled-back dependency addition and its transient external constraints.
     RetryAdd,
+    /// Repeat a rolled-back dependency removal.
+    RetryRemove,
+    /// Repeat a rolled-back version change.
+    RetryVersion,
+}
+
+impl LockfileRecoveryAction {
+    /// Describe the authored change that the failed operation rolled back.
+    pub(crate) fn change_description(self) -> &'static str {
+        match self {
+            Self::UpdateLockfile => "lockfile changes",
+            Self::RetryAdd | Self::RetryRemove => "dependency changes",
+            Self::RetryVersion => "version change",
+        }
+    }
+
+    /// Retain the original command's editing arguments and resolution inputs.
+    pub(crate) fn retry_instruction(self) -> Option<&'static str> {
+        match self {
+            Self::UpdateLockfile => None,
+            Self::RetryAdd => Some(
+                "repeat the original `uv add` command from the same working directory, adding `--no-locked --no-frozen` and keeping the same requirements, constraints, and other options",
+            ),
+            Self::RetryRemove => Some(
+                "repeat the original `uv remove` command from the same working directory, adding `--no-locked --no-frozen` and keeping the same packages, dependency selection, and other options",
+            ),
+            Self::RetryVersion => Some(
+                "repeat the original `uv version` command from the same working directory, adding `--no-locked --no-frozen` and keeping the same version or `--bump` arguments and other options",
+            ),
+        }
+    }
 }
 
 /// Owned inputs for updating the intended lockfile after a failed operation.

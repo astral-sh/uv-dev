@@ -31,7 +31,7 @@ use crate::commands::project::add::{AddTarget, PythonTarget};
 use crate::commands::project::edit::ProjectEdit;
 use crate::commands::project::install_target::InstallTarget;
 use crate::commands::project::lock::LockMode;
-use crate::commands::project::lock_target::LockTarget;
+use crate::commands::project::lock_target::{LockTarget, LockfileRecoveryAction};
 use crate::commands::project::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectError,
     ProjectInterpreter, ScriptInterpreter, UniversalState, WorkspacePython,
@@ -346,6 +346,7 @@ pub(crate) async fn remove(
             printer,
             preview,
         )
+        .with_recovery_action(LockfileRecoveryAction::RetryRemove)
         .execute((&target).into()),
     )
     .await
