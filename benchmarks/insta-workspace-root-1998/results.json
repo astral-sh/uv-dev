@@ -1,0 +1,689 @@
+{
+  "base": "6142e13ac0b33f0adea07f28bd0835f378b8a8f4",
+  "candidate": "9ef883c1197733d9859af3045015b92a9c7d45f4",
+  "method": "Reuse the pinned baseline test binaries and compare INSTA_WORKSPACE_ROOT absent versus set to the workspace. Exclude compilation and warmup pairs. Record nextest test-execution summary seconds. Use two-sided 95% Student t intervals on paired differences and percentage reductions; the independent CI observations are runner means.",
+  "local": {
+    "platform": "macOS-26.7-arm64-arm-64bit-Mach-O",
+    "scope": "All uv-pep508 library tests",
+    "threads": 12,
+    "warmups": [
+      {
+        "baseline": 0.876,
+        "candidate": 0.53
+      },
+      {
+        "baseline": 0.715,
+        "candidate": 0.55
+      }
+    ],
+    "pairs": [
+      {
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "baseline_seconds": 0.714,
+        "candidate_seconds": 0.475
+      },
+      {
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "baseline_seconds": 0.798,
+        "candidate_seconds": 0.571
+      },
+      {
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "baseline_seconds": 0.718,
+        "candidate_seconds": 0.51
+      },
+      {
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "baseline_seconds": 0.706,
+        "candidate_seconds": 0.506
+      },
+      {
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline_seconds": 0.779,
+        "candidate_seconds": 0.535
+      },
+      {
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline_seconds": 0.776,
+        "candidate_seconds": 0.528
+      },
+      {
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline_seconds": 0.763,
+        "candidate_seconds": 0.497
+      },
+      {
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "baseline_seconds": 0.704,
+        "candidate_seconds": 0.468
+      },
+      {
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "baseline_seconds": 0.717,
+        "candidate_seconds": 0.508
+      },
+      {
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline_seconds": 0.733,
+        "candidate_seconds": 0.508
+      },
+      {
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline_seconds": 0.771,
+        "candidate_seconds": 0.627
+      },
+      {
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "baseline_seconds": 0.806,
+        "candidate_seconds": 0.598
+      },
+      {
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline_seconds": 0.781,
+        "candidate_seconds": 0.509
+      },
+      {
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline_seconds": 0.768,
+        "candidate_seconds": 0.56
+      },
+      {
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline_seconds": 0.765,
+        "candidate_seconds": 0.504
+      },
+      {
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline_seconds": 0.742,
+        "candidate_seconds": 0.503
+      },
+      {
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline_seconds": 0.74,
+        "candidate_seconds": 0.48
+      },
+      {
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "baseline_seconds": 0.74,
+        "candidate_seconds": 0.48
+      },
+      {
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline_seconds": 0.765,
+        "candidate_seconds": 0.709
+      },
+      {
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "baseline_seconds": 0.872,
+        "candidate_seconds": 0.692
+      },
+      {
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "baseline_seconds": 0.731,
+        "candidate_seconds": 0.514
+      },
+      {
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline_seconds": 0.762,
+        "candidate_seconds": 0.488
+      },
+      {
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "baseline_seconds": 0.735,
+        "candidate_seconds": 0.487
+      },
+      {
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "baseline_seconds": 0.745,
+        "candidate_seconds": 0.511
+      },
+      {
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "baseline_seconds": 0.798,
+        "candidate_seconds": 0.59
+      },
+      {
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "baseline_seconds": 0.74,
+        "candidate_seconds": 0.665
+      },
+      {
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "baseline_seconds": 0.781,
+        "candidate_seconds": 0.559
+      },
+      {
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline_seconds": 0.752,
+        "candidate_seconds": 0.519
+      },
+      {
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline_seconds": 0.775,
+        "candidate_seconds": 0.516
+      },
+      {
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline_seconds": 0.742,
+        "candidate_seconds": 0.526
+      }
+    ],
+    "summary": {
+      "base": "6142e13ac0b33f0adea07f28bd0835f378b8a8f4",
+      "head": "9ef883c1197733d9859af3045015b92a9c7d45f4",
+      "method": "Two-sided 95% Student t intervals on paired differences and relative reductions",
+      "independent_unit": "pair",
+      "independent_observations": 30,
+      "pairs": 30,
+      "tests": 116,
+      "baseline_seconds": {
+        "mean": 0.7573,
+        "ci95": [
+          0.7442511636929301,
+          0.7703488363070699
+        ]
+      },
+      "candidate_seconds": {
+        "mean": 0.5381,
+        "ci95": [
+          0.5143885633075649,
+          0.5618114366924352
+        ]
+      },
+      "reduction_seconds": {
+        "mean": 0.2192,
+        "ci95": [
+          0.20032444364589447,
+          0.23807555635410554
+        ]
+      },
+      "reduction_percent": {
+        "mean": 29.020557419628293,
+        "ci95": [
+          26.459550836527505,
+          31.58156400272908
+        ]
+      }
+    }
+  },
+  "local_direct": {
+    "test": "uv-pep508 tests::error_empty",
+    "source": {
+      "baseline": {
+        "commit": "6142e13ac0b33f0adea07f28bd0835f378b8a8f4",
+        "sha256": "639818bc776ee5c600dc5a9e050d24b5912c4e983d606cf9a1433ddd47f4d017"
+      },
+      "candidate": {
+        "commit": "9ef883c1197733d9859af3045015b92a9c7d45f4",
+        "sha256": "b397ba66effaf9920afbfb13979581b30a235e79418a6f97517ac3d16d4f397c"
+      }
+    },
+    "pairs": [
+      {
+        "baseline": 0.06645979199674912,
+        "candidate": 0.008917458995711058
+      },
+      {
+        "baseline": 0.06570766700315289,
+        "candidate": 0.010045208007795736
+      },
+      {
+        "candidate": 0.010715917000197805,
+        "baseline": 0.06752012499782722
+      },
+      {
+        "baseline": 0.06612608299474232,
+        "candidate": 0.009862917009741068
+      },
+      {
+        "baseline": 0.06766629200137686,
+        "candidate": 0.012992292002309114
+      },
+      {
+        "candidate": 0.010302291993866675,
+        "baseline": 0.06770174999837764
+      },
+      {
+        "candidate": 0.011651374996290542,
+        "baseline": 0.06759454200800974
+      },
+      {
+        "candidate": 0.011832999996840954,
+        "baseline": 0.0659013750118902
+      },
+      {
+        "baseline": 0.06801024999003857,
+        "candidate": 0.011683750009979121
+      },
+      {
+        "candidate": 0.00903679100156296,
+        "baseline": 0.06526741699781269
+      },
+      {
+        "baseline": 0.06851679198734928,
+        "candidate": 0.011803749992395751
+      },
+      {
+        "candidate": 0.011129457998322323,
+        "baseline": 0.06577062499127351
+      },
+      {
+        "baseline": 0.0666439999913564,
+        "candidate": 0.011044957995181903
+      },
+      {
+        "candidate": 0.009044165999512188,
+        "baseline": 0.06661045800137799
+      },
+      {
+        "candidate": 0.011308290995657444,
+        "baseline": 0.0635931669967249
+      },
+      {
+        "baseline": 0.06676962500205263,
+        "candidate": 0.011383374992874451
+      },
+      {
+        "candidate": 0.010243249998893589,
+        "baseline": 0.06624216699856333
+      },
+      {
+        "candidate": 0.010960708998027258,
+        "baseline": 0.06672237499151379
+      },
+      {
+        "candidate": 0.011159000001498498,
+        "baseline": 0.06412237499898765
+      },
+      {
+        "baseline": 0.06744629099557642,
+        "candidate": 0.01197854099154938
+      },
+      {
+        "baseline": 0.06730499998957384,
+        "candidate": 0.012038791988743469
+      },
+      {
+        "candidate": 0.009521167012280785,
+        "baseline": 0.06520062500203494
+      },
+      {
+        "candidate": 0.013042291000601836,
+        "baseline": 0.0630666659999406
+      },
+      {
+        "baseline": 0.06620183399354573,
+        "candidate": 0.011235250000027008
+      },
+      {
+        "candidate": 0.010490083004697226,
+        "baseline": 0.06537379199289717
+      },
+      {
+        "candidate": 0.01126770899281837,
+        "baseline": 0.06476758400094695
+      },
+      {
+        "baseline": 0.06575837499985937,
+        "candidate": 0.011016625008778647
+      },
+      {
+        "baseline": 0.06555699999444187,
+        "candidate": 0.011719582995283417
+      },
+      {
+        "baseline": 0.06665749999228865,
+        "candidate": 0.011468334007076919
+      },
+      {
+        "baseline": 0.06564870799775235,
+        "candidate": 0.0111368749930989
+      }
+    ],
+    "summary": {
+      "baseline_seconds": {
+        "mean": 0.0661976750639345,
+        "ci95": [
+          0.06571868071530668,
+          0.06667666941256231
+        ]
+      },
+      "candidate_seconds": {
+        "mean": 0.011001106932720479,
+        "ci95": [
+          0.0106126343533587,
+          0.011389579512082259
+        ]
+      },
+      "reduction_seconds": {
+        "mean": 0.055196568131214006,
+        "ci95": [
+          0.05459924088640414,
+          0.055793895376023875
+        ]
+      },
+      "reduction_percent": {
+        "mean": 83.37681470523991,
+        "ci95": [
+          82.77988666579826,
+          83.97374274468156
+        ]
+      }
+    }
+  },
+  "ci": {
+    "runner": "depot-ubuntu-24.04-16",
+    "scope": "Linux workspace suite with test-python-patch,test-universal,native-auth,secret-service",
+    "excluded_test": "uv-python interpreter::tests::test_cache_invalidation",
+    "threads": 20,
+    "replicates": [
+      {
+        "replicate": 1,
+        "job": "https://github.com/astral-sh/uv-dev/actions/runs/35770023193/job/106889108212",
+        "warmups": [
+          {
+            "baseline": 257.252,
+            "candidate": 330.162
+          }
+        ],
+        "pairs": [
+          {
+            "order": [
+              "candidate",
+              "baseline"
+            ],
+            "baseline_seconds": 315.582,
+            "candidate_seconds": 325.15
+          },
+          {
+            "order": [
+              "baseline",
+              "candidate"
+            ],
+            "baseline_seconds": 289.045,
+            "candidate_seconds": 299.495
+          },
+          {
+            "order": [
+              "baseline",
+              "candidate"
+            ],
+            "baseline_seconds": 298.375,
+            "candidate_seconds": 274.609
+          }
+        ]
+      },
+      {
+        "replicate": 2,
+        "job": "https://github.com/astral-sh/uv-dev/actions/runs/35770023193/job/106889108314",
+        "warmups": [
+          {
+            "baseline": 251.181,
+            "candidate": 308.711
+          }
+        ],
+        "pairs": [
+          {
+            "order": [
+              "candidate",
+              "baseline"
+            ],
+            "baseline_seconds": 325.431,
+            "candidate_seconds": 313.862
+          },
+          {
+            "order": [
+              "baseline",
+              "candidate"
+            ],
+            "baseline_seconds": 327.008,
+            "candidate_seconds": 309.289
+          },
+          {
+            "order": [
+              "candidate",
+              "baseline"
+            ],
+            "baseline_seconds": 304.061,
+            "candidate_seconds": 314.274
+          }
+        ]
+      },
+      {
+        "replicate": 3,
+        "job": "https://github.com/astral-sh/uv-dev/actions/runs/35770023193/job/106889108467",
+        "warmups": [
+          {
+            "baseline": 228.007,
+            "candidate": 275.528
+          }
+        ],
+        "pairs": [
+          {
+            "order": [
+              "candidate",
+              "baseline"
+            ],
+            "baseline_seconds": 344.242,
+            "candidate_seconds": 334.128
+          },
+          {
+            "order": [
+              "baseline",
+              "candidate"
+            ],
+            "baseline_seconds": 313.481,
+            "candidate_seconds": 295.986
+          },
+          {
+            "order": [
+              "baseline",
+              "candidate"
+            ],
+            "baseline_seconds": 304.91,
+            "candidate_seconds": 274.308
+          }
+        ]
+      },
+      {
+        "replicate": 4,
+        "job": "https://github.com/astral-sh/uv-dev/actions/runs/35773013656/job/106899107600",
+        "warmups": [
+          {
+            "baseline": 233.987,
+            "candidate": 273.803
+          }
+        ],
+        "pairs": [
+          {
+            "order": [
+              "baseline",
+              "candidate"
+            ],
+            "baseline_seconds": 305.933,
+            "candidate_seconds": 288.574
+          },
+          {
+            "order": [
+              "baseline",
+              "candidate"
+            ],
+            "baseline_seconds": 288.067,
+            "candidate_seconds": 268.723
+          },
+          {
+            "order": [
+              "candidate",
+              "baseline"
+            ],
+            "baseline_seconds": 264.933,
+            "candidate_seconds": 264.357
+          }
+        ]
+      },
+      {
+        "replicate": 5,
+        "job": "https://github.com/astral-sh/uv-dev/actions/runs/35770023193/job/106889108452",
+        "warmups": [
+          {
+            "baseline": 231.597,
+            "candidate": 263.757
+          }
+        ],
+        "pairs": [
+          {
+            "order": [
+              "baseline",
+              "candidate"
+            ],
+            "baseline_seconds": 295.184,
+            "candidate_seconds": 308.663
+          },
+          {
+            "order": [
+              "candidate",
+              "baseline"
+            ],
+            "baseline_seconds": 266.21,
+            "candidate_seconds": 268.76
+          },
+          {
+            "order": [
+              "candidate",
+              "baseline"
+            ],
+            "baseline_seconds": 283.641,
+            "candidate_seconds": 278.335
+          }
+        ]
+      }
+    ],
+    "summary": {
+      "base": "6142e13ac0b33f0adea07f28bd0835f378b8a8f4",
+      "head": "9ef883c1197733d9859af3045015b92a9c7d45f4",
+      "method": "Two-sided 95% Student t intervals on paired differences and relative reductions",
+      "independent_unit": "runner",
+      "independent_observations": 5,
+      "pairs": 15,
+      "tests": 5038,
+      "baseline_seconds": {
+        "mean": 301.7402,
+        "ci95": [
+          279.3600593071062,
+          324.1203406928938
+        ]
+      },
+      "candidate_seconds": {
+        "mean": 294.56753333333336,
+        "ci95": [
+          275.84148506105885,
+          313.29358160560787
+        ]
+      },
+      "reduction_seconds": {
+        "mean": 7.172666666666669,
+        "ci95": [
+          -4.078710550534528,
+          18.424043883867867
+        ]
+      },
+      "reduction_percent": {
+        "mean": 2.2960677414466693,
+        "ci95": [
+          -1.3628066454368484,
+          5.954942128330186
+        ]
+      }
+    }
+  }
+}
