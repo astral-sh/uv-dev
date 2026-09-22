@@ -5386,23 +5386,23 @@ fn python_find_build_variant_revision_variables() -> anyhow::Result<()> {
 }
 
 #[test]
-fn python_find_build_variant_revision_reordered_tags() -> anyhow::Result<()> {
-    let (context, _installation) = python_build_variant_revision_context("custom+pgo+lto")?;
+fn python_find_build_variant_revision_exact_name() -> anyhow::Result<()> {
+    let (context, _installation) = python_build_variant_revision_context("custom_internal")?;
     let context = context.with_filtered_python_sources();
 
     uv_snapshot!(context.filters(), context.python_find()
-        .args(["3.13+lto+pgo+custom", "--show-version"])
+        .args(["3.13+custom_internal", "--show-version"])
         .env(EnvVars::UV_PYTHON_BUILD, "20260825"), @"
     exit_code: 0 (success)
     ----- stdout -----
     3.13.7
     ");
     uv_snapshot!(context.filters(), context.python_find()
-        .args(["3.13+lto+pgo+custom", "--show-version"])
+        .args(["3.13+custom_internal", "--show-version"])
         .env(EnvVars::UV_PYTHON_BUILD, "20260901"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: No interpreter found for Python 3.13+lto+pgo+custom in [PYTHON SOURCES]
+    error: No interpreter found for Python 3.13+custom_internal in [PYTHON SOURCES]
     ");
 
     Ok(())
@@ -5918,8 +5918,14 @@ fn python_project_build_variant_revision() -> anyhow::Result<()> {
 }
 
 #[test]
-fn python_project_optimization_build_revision() -> anyhow::Result<()> {
-    for build_variant in ["pgo", "lto", "pgo+lto", "lto+pgo", "noopt"] {
+fn python_project_named_build_revision() -> anyhow::Result<()> {
+    for build_variant in [
+        "custom",
+        "other",
+        "custom_internal",
+        "custom_public",
+        "custom20260825",
+    ] {
         let (context, installation) = python_build_variant_revision_context(build_variant)?;
         // Explicit build variants use UV_PYTHON_BUILD for revision selection.
         let context = context.with_env(EnvVars::UV_PYTHON_CPYTHON_BUILD, "missing-build");

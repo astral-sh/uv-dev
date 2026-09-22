@@ -555,8 +555,7 @@ impl EnvVars {
 
     /// Pin an explicitly requested managed Python build variant to a specific build revision.
     ///
-    /// This applies to provider-defined variants, such as `3.13+custom`, and optimization
-    /// variants, such as `3.13+pgo+lto`.
+    /// This applies to provider-defined variants, such as `3.13+custom`.
     ///
     /// Version requests without an explicit build variant, such as `3.13` or `3.13+freethreaded`,
     /// use implementation-specific variables such as `UV_PYTHON_CPYTHON_BUILD`.
