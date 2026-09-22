@@ -29,7 +29,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: python3 -m unittest discover -s scripts/tests -p test_report_flaky_benchmark.py
+      - name: "Install uv"
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          # renovate: datasource=github-release-attachments depName=astral-sh/uv
+          version: "0.12.13"
+          checksum: "745765a3b6e360ad76743599ae5c42e9278c7edf8bbff9fc76d05bf2623a04dd"
+      - run: uv run --no-project --python 3.10 -m unittest discover -s scripts/tests -p test_report_flaky_benchmark.py
 
   ruff:
     timeout-minutes: 10

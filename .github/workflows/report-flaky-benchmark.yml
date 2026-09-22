@@ -40,6 +40,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: "Install uv"
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          # renovate: datasource=github-release-attachments depName=astral-sh/uv
+          version: "0.12.13"
+          checksum: "745765a3b6e360ad76743599ae5c42e9278c7edf8bbff9fc76d05bf2623a04dd"
+
       - name: "Collect CodSpeed report"
         id: context
         env:
@@ -49,7 +56,7 @@ jobs:
           COMMENT_ID: ${{ inputs.comment_id }}
           UPDATED_AT: ${{ inputs.updated_at }}
         run: |
-          python3 scripts/report-flaky-benchmark.py collect \
+          uv run --no-project --locked scripts/report-flaky-benchmark.py collect \
             --pull-request "$PULL_REQUEST" --head-sha "$HEAD_SHA" \
             --comment-id "$COMMENT_ID" --updated-at "$UPDATED_AT" \
             --context .benchmark-flake-event.json >> "$GITHUB_OUTPUT"
@@ -107,6 +114,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: "Install uv"
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          # renovate: datasource=github-release-attachments depName=astral-sh/uv
+          version: "0.12.13"
+          checksum: "745765a3b6e360ad76743599ae5c42e9278c7edf8bbff9fc76d05bf2623a04dd"
+
       - name: "Download report context"
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -130,7 +144,7 @@ jobs:
           GH_TOKEN: ${{ steps.token.outputs.token }}
         run: |
           printf '%s\n' "$DIAGNOSIS" > "$RUNNER_TEMP/benchmark-flake/diagnosis.json"
-          python3 scripts/report-flaky-benchmark.py report \
+          uv run --no-project --locked scripts/report-flaky-benchmark.py report \
             --context "$RUNNER_TEMP/benchmark-flake/.benchmark-flake-event.json" \
             --diagnosis "$RUNNER_TEMP/benchmark-flake/diagnosis.json" \
             >> "$GITHUB_STEP_SUMMARY"
