@@ -26,6 +26,14 @@
     {
       "caller": "uv-dev",
       "environment": "automations",
+      "caller_workflow": "report-flaky-benchmark.yml",
+      "on": ["workflow_dispatch"],
+      "permissions": { "issues": "write", "pull_requests": "read" },
+      "target": "uv-dev"
+    },
+    {
+      "caller": "uv-dev",
+      "environment": "automations",
       "caller_workflow": "import-codspeed-profiles.yml",
       "on": ["push", "workflow_dispatch"],
       "permissions": { "actions": "read" },
