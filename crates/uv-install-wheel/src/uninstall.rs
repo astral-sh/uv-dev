@@ -966,6 +966,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_filter_egg_top_level_duplicate_threshold() {
+        for namespace_count in [64, 65] {
+            let namespace_packages = "\u{2003}shared\u{2003}\r\n".repeat(namespace_count);
+            for top_level_count in [0, 1, 96] {
+                let top_level = "shared\nkeep\nkeep\nSHARED\n".repeat(top_level_count);
+
+                assert_eq!(
+                    filter_egg_top_level(&namespace_packages, &top_level),
+                    ["keep", "keep", "SHARED"].repeat(top_level_count)
+                );
+            }
+        }
+    }
+
     /// Uninstall must not remove files outside the install scheme.
     #[test]
     fn test_uninstall_record_path_traversal() {

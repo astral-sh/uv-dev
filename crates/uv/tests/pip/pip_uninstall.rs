@@ -420,6 +420,92 @@ fn uninstall_egg_info_adjacent_module_files() -> Result<()> {
     Ok(())
 }
 
+/// Namespace filtering precedes top-level validation on both sides of the indexing threshold.
+#[test]
+fn uninstall_egg_info_namespace_filter_boundary() -> Result<()> {
+    for namespace_count in [64, 65] {
+        let context = uv_test::test_context!("3.12");
+        let site_packages = ChildPath::new(context.site_packages());
+        let egg_info = site_packages.child("namespace_filter-0.1.0.egg-info");
+        egg_info.create_dir_all()?;
+        egg_info
+            .child("PKG-INFO")
+            .write_str("Metadata-Version: 2.1\nName: namespace-filter\nVersion: 0.1.0\n")?;
+        egg_info
+            .child("namespace_packages.txt")
+            .write_str(&format!(
+                "{}../escape\n",
+                "\u{2003}shared\u{2003}\r\n".repeat(namespace_count - 1)
+            ))?;
+        egg_info
+            .child("top_level.txt")
+            .write_str("owned\nshared\n../escape\nowned\n")?;
+
+        let owned = site_packages.child("owned/__init__.py");
+        owned.write_str("VALUE = 'owned'\n")?;
+        let shared = site_packages.child("shared/__init__.py");
+        shared.write_str("VALUE = 'shared'\n")?;
+
+        uv_snapshot!(context.pip_uninstall()
+            .arg("--python")
+            .arg(context.interpreter())
+            .arg("namespace-filter"), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Uninstalled 1 package in [TIME]
+         - namespace-filter==0.1.0
+        ");
+
+        assert!(!owned.exists());
+        assert!(!egg_info.exists());
+        assert_eq!(fs_err::read_to_string(shared)?, "VALUE = 'shared'\n");
+        context
+            .assert_command("import shared; assert shared.VALUE == 'shared'")
+            .success();
+    }
+
+    Ok(())
+}
+
+/// A present empty record bypasses namespace and top-level fallback metadata.
+#[test]
+fn uninstall_egg_info_empty_record_bypasses_namespace_fallback() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let site_packages = ChildPath::new(context.site_packages());
+    let egg_info = site_packages.child("namespace_filter-0.1.0.egg-info");
+    egg_info.create_dir_all()?;
+    egg_info
+        .child("PKG-INFO")
+        .write_str("Metadata-Version: 2.1\nName: namespace-filter\nVersion: 0.1.0\n")?;
+    egg_info.child("installed-files.txt").write_str("")?;
+    egg_info
+        .child("namespace_packages.txt")
+        .write_str(&"shared\n".repeat(65))?;
+    egg_info
+        .child("top_level.txt")
+        .write_str("retained\n../escape\n")?;
+    let retained = site_packages.child("retained.py");
+    retained.write_str("VALUE = 'retained'\n")?;
+
+    uv_snapshot!(context.pip_uninstall()
+        .arg("--python")
+        .arg(context.interpreter())
+        .arg("namespace-filter"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+     - namespace-filter==0.1.0
+    ");
+
+    assert!(!egg_info.exists());
+    assert_eq!(fs_err::read_to_string(retained)?, "VALUE = 'retained'\n");
+    context
+        .assert_command("import retained; assert retained.VALUE == 'retained'")
+        .success();
+
+    Ok(())
+}
+
 /// Uninstall files and generated scripts recorded by a legacy `.egg-info` installation.
 #[test]
 fn uninstall_egg_info_recorded_files() -> Result<()> {
