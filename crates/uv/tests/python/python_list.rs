@@ -824,6 +824,38 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     ");
 
     // Test selecting a publisher-defined build name explicitly.
+    let mut revisions: serde_json::Value = serde_json::from_str(&versioned_json)?;
+    let downloads = revisions["downloads"]
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("Missing downloads"))?;
+    let latest = downloads
+        .get_mut("cpython-3.12.9+custom-linux-x86_64-gnu")
+        .ok_or_else(|| anyhow::anyhow!("Missing named build"))?;
+    latest["build_revision"] = serde_json::json!("10");
+    let mut older = latest.clone();
+    older["build_revision"] = serde_json::json!("9");
+    older["url"] = serde_json::json!("https://custom.com/z-older.tar.gz");
+    downloads.insert("older-revision".to_string(), older);
+    Mock::given(method("GET"))
+        .and(path("/revisions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(revisions))
+        .mount(&server)
+        .await;
+
+    // Listing selects the numerically latest revision, not the greatest URL or revision string.
+    uv_snapshot!(context
+        .python_list()
+        .arg("3.12+custom")
+        .arg("--only-downloads")
+        .arg("--all-platforms")
+        .arg("--all-arches")
+        .arg("--show-urls")
+        .arg("--python-downloads-json-url").arg(format!("{}/revisions", server.uri())), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.12.9+custom-linux-x86_64-gnu    https://custom.com/cpython-3.12.9+custom-linux-x86_64-gnu.tar.gz
+    ");
+
     uv_snapshot!(context
         .python_list()
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
