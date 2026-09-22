@@ -2,6 +2,11 @@ name: Insta workspace-root benchmark
 
 on:
   workflow_dispatch:
+    inputs:
+      replicates:
+        description: JSON array of replicate numbers
+        type: string
+        default: "[1, 2, 3, 4, 5]"
 
 permissions:
   contents: read
@@ -27,7 +32,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        replicate: [1, 2, 3, 4, 5]
+        replicate: ${{ fromJSON(inputs.replicates) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
