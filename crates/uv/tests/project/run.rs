@@ -778,10 +778,11 @@ fn run_pep723_script_metadata() -> Result<()> {
 /// Run a PEP 723-compatible script with a `[[tool.uv.index]]`.
 #[test]
 fn run_pep723_script_index() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_local_index();
+    let index = PackseServer::new("packages/run.toml");
 
     let test_script = context.temp_dir.child("main.py");
-    test_script.write_str(indoc! { r#"
+    test_script.write_str(&indoc::formatdoc! { r#"
         # /// script
         # requires-python = ">=3.11"
         # dependencies = [
@@ -790,15 +791,16 @@ fn run_pep723_script_index() -> Result<()> {
         #
         # [[tool.uv.index]]
         # name = "test"
-        # url = "https://test.pypi.org/simple"
+        # url = "{}"
         # explicit = true
         #
         # [tool.uv.sources]
-        # idna = { index = "test" }
+        # idna = {{ index = "test" }}
         # ///
 
         import idna
-       "#
+       "#,
+        index.index_url(),
     })?;
 
     uv_snapshot!(context.filters(), context.run().arg("main.py"), @"
@@ -807,7 +809,7 @@ fn run_pep723_script_index() -> Result<()> {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + idna==2.7
+     + idna==3.6
     ");
 
     Ok(())
@@ -4399,6 +4401,8 @@ fn run_linked_environment_path() -> Result<()> {
     use anyhow::Ok;
 
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_packse_index("packages/run.toml")
         .with_filtered_virtualenv_bin()
         .with_filtered_python_names();
 
@@ -4421,7 +4425,7 @@ fn run_linked_environment_path() -> Result<()> {
         .env(EnvVars::UV_PROJECT_ENVIRONMENT, "target"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 8 packages in [TIME]
+    Resolved 7 packages in [TIME]
     Prepared 6 packages in [TIME]
     Installed 6 packages in [TIME]
      + black==24.3.0
@@ -4443,7 +4447,7 @@ fn run_linked_environment_path() -> Result<()> {
     [TEMP_DIR]/target/[BIN]/[PYTHON]
 
     ----- stderr -----
-    Resolved 8 packages in [TIME]
+    Resolved 7 packages in [TIME]
     Checked 6 packages in [TIME]
     ");
 
