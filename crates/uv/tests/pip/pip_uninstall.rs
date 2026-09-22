@@ -5,6 +5,7 @@ use anyhow::Result;
 use assert_cmd::prelude::*;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
+use insta::allow_duplicates;
 
 use uv_test::uv_snapshot;
 
@@ -446,15 +447,17 @@ fn uninstall_egg_info_namespace_filter_boundary() -> Result<()> {
         let shared = site_packages.child("shared/__init__.py");
         shared.write_str("VALUE = 'shared'\n")?;
 
-        uv_snapshot!(context.pip_uninstall()
-            .arg("--python")
-            .arg(context.interpreter())
-            .arg("namespace-filter"), @"
-        exit_code: 0 (success)
-        ----- stderr -----
-        Uninstalled 1 package in [TIME]
-         - namespace-filter==0.1.0
-        ");
+        allow_duplicates! {
+            uv_snapshot!(context.pip_uninstall()
+                .arg("--python")
+                .arg(context.interpreter())
+                .arg("namespace-filter"), @"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Uninstalled 1 package in [TIME]
+             - namespace-filter==0.1.0
+            ");
+        }
 
         assert!(!owned.exists());
         assert!(!egg_info.exists());
