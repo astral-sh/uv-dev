@@ -19,7 +19,10 @@ use uv_test::{uv_snapshot, venv_bin_path};
 
 #[test]
 fn tool_upgrade_empty() {
+    let server = PackseServer::new("packages/tool-upgrade-current.toml");
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_default_index(&server.index_url())
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -43,11 +46,9 @@ fn tool_upgrade_empty() {
     Nothing to upgrade
     ");
 
-    // Install the latest `babel`.
+    // Install the newest registry version to check the no-op with an installed tool.
     uv_snapshot!(context.filters(), context.tool_install()
         .arg("babel")
-        .arg("--index-url")
-        .arg("https://pypi.org/simple/")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -80,6 +81,7 @@ fn tool_upgrade_empty() {
 #[test]
 fn tool_upgrade_all_ignores_invalid_tool_name() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -101,7 +103,9 @@ fn tool_upgrade_all_ignores_invalid_tool_name() -> Result<()> {
 
 #[test]
 fn tool_upgrade_all_unreadable_receipt() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
 
     tool_dir.child("babel").create_dir_all()?;
@@ -123,6 +127,7 @@ fn tool_upgrade_all_unreadable_receipt() -> Result<()> {
 #[test]
 fn tool_upgrade_preserves_workspace_member_editability() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -234,6 +239,7 @@ fn tool_upgrade_preserves_workspace_member_editability() -> Result<()> {
 #[test]
 fn tool_upgrade_preserves_mixed_workspace_member_editability() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -368,6 +374,7 @@ fn tool_upgrade_preserves_mixed_workspace_member_editability() -> Result<()> {
 #[test]
 fn tool_upgrade_preserves_mixed_workspace_member_non_editability() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -506,12 +513,13 @@ fn tool_upgrade_name() {
     let new_index = new_tool_index();
 
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
 
-    // Install `babel` from the old index.
+    // Install `babel` from the older index, to get an outdated version.
     uv_snapshot!(context.filters(), context.tool_install()
         .arg("babel")
         .arg("--index-url")
@@ -527,7 +535,7 @@ fn tool_upgrade_name() {
     Installed 1 executable: pybabel
     ");
 
-    // Upgrade `babel` by installing from the new index, which should upgrade to the latest version.
+    // Upgrade `babel` by installing from the newer index, which should upgrade to the latest version.
     uv_snapshot!(context.filters(), context.tool_upgrade()
         .arg("babel")
         .arg("--index-url")
@@ -546,6 +554,8 @@ fn tool_upgrade_name() {
 #[test]
 fn tool_upgrade_recomputes_relative_exclude_newer() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_packse_index("packages/tool-run.toml")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
@@ -553,7 +563,7 @@ fn tool_upgrade_recomputes_relative_exclude_newer() {
 
     context
         .tool_install()
-        .arg("black")
+        .arg("format-tool")
         .arg("--exclude-newer")
         .arg("3 weeks")
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
@@ -566,29 +576,27 @@ fn tool_upgrade_recomputes_relative_exclude_newer() {
         .success();
 
     uv_snapshot!(context.filters(), context.tool_upgrade()
-        .arg("black")
+        .arg("format-tool")
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .env(EnvVars::UV_INTERNAL__TEST_CURRENT_TIMESTAMP, "2024-04-15T00:00:00Z")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Updated black v24.2.0 -> v24.3.0
-     - black==24.2.0
-     + black==24.3.0
-     - packaging==23.2
-     + packaging==24.0
-    Installed 2 executables: black, blackd
+    Updated format-tool v24.2.0 -> v24.3.0
+     - format-tool==24.2.0
+     + format-tool==24.3.0
+    Installed 2 executables: format-tool, format-tool-daemon
     ");
 
     insta::with_settings!({
         filters => context.filters(),
     }, {
-        assert_snapshot!(fs_err::read_to_string(tool_dir.join("black").join("uv-receipt.toml")).unwrap(), @r#"
+        assert_snapshot!(fs_err::read_to_string(tool_dir.join("format-tool").join("uv-receipt.toml")).unwrap(), @r#"
         [tool]
-        requirements = [{ name = "black" }]
+        requirements = [{ name = "format-tool" }]
         entrypoints = [
-            { name = "black", install-path = "[TEMP_DIR]/bin/black", from = "black" },
-            { name = "blackd", install-path = "[TEMP_DIR]/bin/blackd", from = "black" },
+            { name = "format-tool", install-path = "[TEMP_DIR]/bin/format-tool", from = "format-tool" },
+            { name = "format-tool-daemon", install-path = "[TEMP_DIR]/bin/format-tool-daemon", from = "format-tool" },
         ]
 
         [tool.options]
@@ -604,12 +612,13 @@ fn tool_upgrade_multiple_names() {
     let new_index = new_tool_index();
 
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
 
-    // Install `python-dotenv` from the old index.
+    // Install `python-dotenv` from the older index, to get an outdated version.
     uv_snapshot!(context.filters(), context.tool_install()
         .arg("python-dotenv")
         .arg("--index-url")
@@ -624,7 +633,7 @@ fn tool_upgrade_multiple_names() {
     Installed 1 executable: dotenv
     ");
 
-    // Install `babel` from the old index.
+    // Install `babel` from the older index, to get an outdated version.
     uv_snapshot!(context.filters(), context.tool_install()
         .arg("babel")
         .arg("--index-url")
@@ -640,7 +649,7 @@ fn tool_upgrade_multiple_names() {
     Installed 1 executable: pybabel
     ");
 
-    // Upgrade `babel` and `python-dotenv` from the new index.
+    // Upgrade `babel` and `python-dotenv` from the newer index.
     uv_snapshot!(context.filters(), context.tool_upgrade()
         .arg("babel")
         .arg("python-dotenv")
@@ -667,6 +676,7 @@ fn tool_upgrade_pinned_hint() {
     let new_index = new_tool_index();
 
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -710,6 +720,7 @@ fn tool_upgrade_pinned_hint_with_mixed_constraint() {
     let new_index = new_tool_index();
 
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -754,13 +765,14 @@ fn tool_upgrade_all() -> Result<()> {
     let new_index = new_tool_index();
 
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
 
-    // Install `python-dotenv` from the old index.
+    // Install `python-dotenv` from the older index, to get an outdated version.
     uv_snapshot!(context.filters(), context.tool_install()
         .arg("python-dotenv")
         .arg("--index-url")
@@ -775,7 +787,7 @@ fn tool_upgrade_all() -> Result<()> {
     Installed 1 executable: dotenv
     ");
 
-    // Install `babel` from the old index.
+    // Install `babel` from the older index, to get an outdated version.
     uv_snapshot!(context.filters(), context.tool_install()
         .arg("babel")
         .arg("--index-url")
@@ -794,7 +806,7 @@ fn tool_upgrade_all() -> Result<()> {
     // An invalid directory must not prevent valid tools from being upgraded.
     tool_dir.child("tool backup").create_dir_all()?;
 
-    // Upgrade all from the new index.
+    // Upgrade all from the newer index.
     uv_snapshot!(context.filters(), context.tool_upgrade()
         .arg("--all")
         .arg("--index-url")
@@ -820,6 +832,7 @@ fn tool_upgrade_all() -> Result<()> {
 #[test]
 fn tool_upgrade_non_existing_package() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -851,13 +864,14 @@ fn tool_upgrade_not_stop_if_upgrade_fails() -> anyhow::Result<()> {
     let new_index = new_tool_index();
 
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
 
-    // Install `python-dotenv` from the old index.
+    // Install `python-dotenv` from the older index, to get an outdated version.
     uv_snapshot!(context.filters(), context.tool_install()
         .arg("python-dotenv")
         .arg("--index-url")
@@ -872,7 +886,7 @@ fn tool_upgrade_not_stop_if_upgrade_fails() -> anyhow::Result<()> {
     Installed 1 executable: dotenv
     ");
 
-    // Install `babel` from the old index.
+    // Install `babel` from the older index, to get an outdated version.
     uv_snapshot!(context.filters(), context.tool_install()
         .arg("babel")
         .arg("--index-url")
@@ -894,7 +908,7 @@ fn tool_upgrade_not_stop_if_upgrade_fails() -> anyhow::Result<()> {
         .child("uv-receipt.toml")
         .write_str("Invalid receipt")?;
 
-    // Upgrade all from the new index.
+    // Upgrade all from the newer index.
     uv_snapshot!(context.filters(), context.tool_upgrade()
         .arg("--all")
         .arg("--index-url")
@@ -917,14 +931,16 @@ fn tool_upgrade_not_stop_if_upgrade_fails() -> anyhow::Result<()> {
 #[test]
 fn tool_upgrade_settings() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_packse_index("packages/tool-run.toml")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
 
-    // Install `black` with `lowest-direct`.
+    // Install `format-tool` with `lowest-direct`.
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("black>=23")
+        .arg("format-tool>=23")
         .arg("--resolution=lowest-direct")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
@@ -932,84 +948,78 @@ fn tool_upgrade_settings() {
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + black==23.1.0
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    Installed 2 executables: black, blackd
+     + format-support==1.0.0
+     + format-tool==23.1.0
+    Installed 2 executables: format-tool, format-tool-daemon
     ");
 
-    // Upgrade `black`. This should be a no-op, since the resolution is set to `lowest-direct`.
+    // Upgrade `format-tool`. This should be a no-op, since the resolution is set to `lowest-direct`.
     uv_snapshot!(context.filters(), context.tool_upgrade()
-        .arg("black")
+        .arg("format-tool")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Nothing to upgrade
     ");
 
-    // Upgrade `black`, but override the resolution.
+    // Upgrade `format-tool`, but override the resolution.
     uv_snapshot!(context.filters(), context.tool_upgrade()
-        .arg("black")
+        .arg("format-tool")
         .arg("--resolution=highest")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Updated black v23.1.0 -> v24.3.0
-     - black==23.1.0
-     + black==24.3.0
-    Installed 2 executables: black, blackd
+    Updated format-tool v23.1.0 -> v24.3.0
+     - format-tool==23.1.0
+     + format-tool==24.3.0
+    Installed 2 executables: format-tool, format-tool-daemon
     ");
 }
 
 #[test]
 fn tool_upgrade_no_binary_package_env_var() {
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_packse_index("packages/tool-run.toml")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
 
     uv_snapshot!(context.filters(), context.tool_install()
-        .arg("black>=23")
+        .arg("format-tool>=23")
         .arg("--resolution=lowest-direct")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Prepared 6 packages in [TIME]
-    Installed 6 packages in [TIME]
-     + black==23.1.0
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    Installed 2 executables: black, blackd
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + format-support==1.0.0
+     + format-tool==23.1.0
+    Installed 2 executables: format-tool, format-tool-daemon
     ");
 
     uv_snapshot!(context.filters(), context.tool_upgrade()
-        .arg("black")
+        .arg("format-tool")
         .arg("--resolution=highest")
-        .env(EnvVars::UV_NO_BINARY_PACKAGE, "iniconfig")
+        .env(EnvVars::UV_NO_BINARY_PACKAGE, "extra-requirement")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Updated black v23.1.0 -> v24.3.0
-     - black==23.1.0
-     + black==24.3.0
-    Installed 2 executables: black, blackd
+    Updated format-tool v23.1.0 -> v24.3.0
+     - format-tool==23.1.0
+     + format-tool==24.3.0
+    Installed 2 executables: format-tool, format-tool-daemon
     ");
 
     let receipt: toml::Value = toml::from_str(
-        &fs_err::read_to_string(tool_dir.join("black").join("uv-receipt.toml")).unwrap(),
+        &fs_err::read_to_string(tool_dir.join("format-tool").join("uv-receipt.toml")).unwrap(),
     )
     .unwrap();
     assert_snapshot!(
         receipt["tool"]["options"]["no-binary-package"].to_string(),
-        @r#"["iniconfig"]"#
+        @r#"["extra-requirement"]"#
     );
 }
 
@@ -1019,12 +1029,13 @@ fn tool_upgrade_respect_constraints() {
     let new_index = new_tool_index();
 
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
 
-    // Install `babel` from the old index.
+    // Install `babel` from the older index, to get an outdated version.
     uv_snapshot!(context.filters(), context.tool_install()
         .arg("babel<2.10")
         .arg("--index-url")
@@ -1040,7 +1051,7 @@ fn tool_upgrade_respect_constraints() {
     Installed 1 executable: pybabel
     ");
 
-    // Upgrade `babel` from the new index. It should be updated, but not beyond the constraint.
+    // Upgrade `babel` from the newer index. It should be updated, but not beyond the constraint.
     uv_snapshot!(context.filters(), context.tool_upgrade()
         .arg("babel")
         .arg("--index-url")
@@ -1063,12 +1074,13 @@ fn tool_upgrade_constraint() {
     let new_index = new_tool_index();
 
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
 
-    // Install `babel` from the old index.
+    // Install `babel` from the older index, to get an outdated version.
     uv_snapshot!(context.filters(), context.tool_install()
         .arg("babel")
         .arg("--index-url")
@@ -1155,6 +1167,7 @@ fn tool_upgrade_with() {
     let new_index = new_tool_index();
 
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -1199,6 +1212,7 @@ fn tool_upgrade_python() {
     let old_index = old_tool_index();
 
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -1251,6 +1265,7 @@ fn tool_upgrade_python_with_all() {
     let old_index = old_tool_index();
 
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -1330,33 +1345,31 @@ fn tool_upgrade_python_with_all() {
 #[test]
 fn test_tool_upgrade_additional_entrypoints() {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+        .with_local_index()
+        .with_packse_index("packages/tool-run.toml")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
 
-    // Install `babel` entrypoint, and all additional ones from `black` too.
+    // Install `additional-tool` entrypoint, and all additional ones from `format-tool` too.
     uv_snapshot!(context.filters(), context.tool_install()
         .arg("--python")
         .arg("3.11")
         .arg("--with-executables-from")
-        .arg("black")
-        .arg("babel==2.14.0")
+        .arg("format-tool")
+        .arg("additional-tool==1.0.0")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + babel==2.14.0
-     + black==24.3.0
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    Installed 2 executables from `black`: black, blackd
-    Installed 1 executable: pybabel
+     + additional-tool==1.0.0
+     + format-support==1.0.0
+     + format-tool==24.3.0
+    Installed 2 executables from `format-tool`: format-tool, format-tool-daemon
+    Installed 1 executable: additional-tool
     ");
 
     // Upgrade python, and make sure that all the entrypoints above get
@@ -1364,22 +1377,18 @@ fn test_tool_upgrade_additional_entrypoints() {
     uv_snapshot!(context.filters(), context.tool_upgrade()
         .arg("--python")
         .arg("3.12")
-        .arg("babel")
+        .arg("additional-tool")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
-     + babel==2.14.0
-     + black==24.3.0
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    Installed 2 executables from `black`: black, blackd
-    Installed 1 executable: pybabel
-    Upgraded tool environment for `babel` to Python 3.12
+     + additional-tool==1.0.0
+     + format-support==1.0.0
+     + format-tool==24.3.0
+    Installed 2 executables from `format-tool`: format-tool, format-tool-daemon
+    Installed 1 executable: additional-tool
+    Upgraded tool environment for `additional-tool` to Python 3.12
     ");
 }
 
@@ -1394,6 +1403,7 @@ fn tool_upgrade_excludes() {
     let new_index = new_tool_index();
 
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -1402,7 +1412,7 @@ fn tool_upgrade_excludes() {
     let excludes_txt = context.temp_dir.child("excludes.txt");
     excludes_txt.write_str("pytz").unwrap();
 
-    // Install `babel` from the old index.
+    // Install `babel` from the older index, to get an outdated version.
     // `pytz` is excluded, so it won't be installed despite being a dependency.
     uv_snapshot!(context.filters(), context.tool_install()
         .arg("babel<2.10")
@@ -1420,7 +1430,7 @@ fn tool_upgrade_excludes() {
     Installed 1 executable: pybabel
     ");
 
-    // Upgrade `babel` from the new index. Babel should be updated (within the `<2.10`
+    // Upgrade `babel` from the newer index. Babel should be updated (within the `<2.10`
     // constraint), but `pytz` should remain excluded.
     uv_snapshot!(context.filters(), context.tool_upgrade()
         .arg("babel")
@@ -1441,9 +1451,14 @@ fn tool_upgrade_excludes() {
 /// See: <https://github.com/astral-sh/uv/issues/21216>
 #[tokio::test]
 async fn tool_upgrade_index_url_keyring_auth() -> Result<()> {
-    let keyring_context = uv_test::test_context!("3.12");
+    let keyring_context = uv_test::test_context!("3.12").with_local_index();
     keyring_context
         .pip_install()
+        .arg(
+            keyring_context
+                .workspace_root
+                .join("test/packages/keyring_stub"),
+        )
         .arg(
             keyring_context
                 .workspace_root
@@ -1454,8 +1469,9 @@ async fn tool_upgrade_index_url_keyring_auth() -> Result<()> {
         .assert()
         .success();
 
-    let proxy = crate::pypi_proxy::start().await;
+    let proxy = crate::pypi_proxy::start_local().await;
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_exclude_newer("2025-01-18T00:00:00Z")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -1535,8 +1551,9 @@ async fn tool_upgrade_index_url_keyring_auth() -> Result<()> {
 /// See: <https://github.com/astral-sh/uv/issues/18120>
 #[tokio::test]
 async fn tool_upgrade_invalid_auth() -> Result<()> {
-    let proxy = crate::pypi_proxy::start().await;
+    let proxy = crate::pypi_proxy::start_local().await;
     let context = uv_test::test_context!("3.12")
+        .with_local_index()
         .with_exclude_newer("2025-01-18T00:00:00Z")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -1596,7 +1613,9 @@ async fn tool_upgrade_invalid_auth() -> Result<()> {
 
 #[test]
 fn tool_upgrade_writes_preview_lock() {
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
 
@@ -1692,7 +1711,9 @@ async fn mount_simple_launcher_index(server: &MockServer, hash: &str, wheel: &[u
 
 #[tokio::test]
 async fn tool_upgrade_resolution_hints() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
     let wheel = fs_err::read(
         context
@@ -1746,7 +1767,9 @@ async fn tool_upgrade_resolution_hints() -> Result<()> {
 /// source preference remains valid, while the index changes the advertised hash before upgrade.
 #[tokio::test]
 async fn tool_upgrade_lock_verifies_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let context = uv_test::test_context!("3.12")
+        .with_local_index()
+        .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
     let wheel_filename = "simple_launcher-0.1.0-py3-none-any.whl";
     let wheel = fs_err::read(
@@ -1809,6 +1832,7 @@ async fn tool_upgrade_lock_verifies_hashes() -> Result<()> {
 #[test]
 fn tool_upgrade_lock_uses_requested_python() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+        .with_local_index()
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();

@@ -1,0 +1,47 @@
+name = "tool-list"
+description = "Representative tools and optional requirements for tool list tests."
+
+[root]
+requires = ["list-tool"]
+
+[expected]
+satisfiable = true
+
+[expected.packages]
+list-tool = "2.0.0"
+
+[packages.list-tool.versions."1.0.0"]
+sdist_backend = "in-tree"
+
+[packages.list-tool.versions."1.0.0".scripts]
+list-tool = "list_tool:main"
+list-tool-helper = "list_tool:main"
+
+[packages.list-tool.versions."2.0.0"]
+sdist_backend = "in-tree"
+
+[packages.list-tool.versions."2.0.0".scripts]
+list-tool = "list_tool:main"
+list-tool-helper = "list_tool:main"
+
+[packages.list-flags.versions."3.0.2"]
+sdist_backend = "in-tree"
+
+[packages.list-flags.versions."3.0.2".scripts]
+list-flags = "list_flags:main"
+
+[packages.list-flags.versions."3.0.2".extras]
+async = []
+dotenv = []
+
+[packages.list-other.versions."0.3.4"]
+sdist_backend = "in-tree"
+
+[packages.list-other.versions."0.3.4".scripts]
+list-other = "list_other:main"
+
+[packages.list-dependency.versions."2.31.0"]
+sdist_backend = "in-tree"
+
+[testgen]
+disable = true
