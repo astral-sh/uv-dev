@@ -7573,10 +7573,12 @@ fn lock_requires_python() -> Result<()> {
              And because only pygls<=1.3.0 is available, we can conclude that pygls>=1.3.0 cannot be used.
              And because we know from (1) that pygls>=1.1.0,<1.3.0 cannot be used, we can conclude that pygls>=1.1.0 cannot be used.
              And because your project depends on pygls>=1.1.0, we can conclude that your project's requirements are unsatisfiable.
+      info: While the active Python version is 3.12, the resolution failed for other Python versions supported by your project
+      info: The `requires-python` value (>=3.7) includes Python versions that are not supported by your dependencies (e.g., pygls>=1.1.0,<=1.2.1 only supports >=3.7.9, <4)
 
-    hint: While the active Python version is 3.12, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
+    hint: Limit your project's supported Python versions using `requires-python`
 
-    hint: The `requires-python` value (>=3.7) includes Python versions that are not supported by your dependencies (e.g., pygls>=1.1.0,<=1.2.1 only supports >=3.7.9, <4). Consider using a more restrictive `requires-python` value (like >=3.7.9, <4).
+    hint: Use a more restrictive `requires-python` value, such as `>=3.7.9, <4`
     ");
 
     // Require >=3.7, and allow locking to a version of `pygls` that is compatible (==1.0.1).
@@ -8660,10 +8662,10 @@ fn lock_requires_python_fork_wheels() -> Result<()> {
              And because only a<=3.0.0 is available, we can conclude that a>=3.0.0 cannot be used.
              And because we know from (1) that a>=2.0.0,<3.0.0 cannot be used, we can conclude that a>=2.0.0 cannot be used.
              And because your project depends on a>=2, we can conclude that your project's requirements are unsatisfiable.
+      info: Wheels are available for `a` (v2.0.0) with the following Python ABI tag: `cp313`
+      info: The `requires-python` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., a==3.0.0 only supports >=3.13)
 
-    hint: Wheels are available for `a` (v2.0.0) with the following Python ABI tag: `cp313`
-
-    hint: The `requires-python` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., a==3.0.0 only supports >=3.13). Consider using a more restrictive `requires-python` value (like >=3.13).
+    hint: Use a more restrictive `requires-python` value, such as `>=3.13`
     ");
 
     Ok(())
@@ -8797,8 +8799,7 @@ fn lock_requires_python_wheels_stable_abi() -> Result<()> {
     error: No solution found when resolving dependencies
       cause: Because a==1.0.0 has no wheels with a matching Python version tag (e.g., `cp312`) and only a==1.0.0 is available, we can conclude that all versions of a cannot be used.
              And because your project depends on a, we can conclude that your project's requirements are unsatisfiable.
-
-    hint: Wheels are available for `a` (v1.0.0) with the following Python ABI tag: `abi3`
+      info: Wheels are available for `a` (v1.0.0) with the following Python ABI tag: `abi3`
     ");
 
     Ok(())
@@ -13088,8 +13089,7 @@ fn lock_requires_python_no_wheels() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because dearpygui==1.9.1 has no wheels with a matching Python version tag (e.g., `cp312`) and your project depends on dearpygui==1.9.1, we can conclude that your project's requirements are unsatisfiable.
-
-    hint: Wheels are available for `dearpygui` (v1.9.1) with the following Python ABI tags: `cp37m`, `cp38`, `cp39`, `cp310`, `cp311`
+      info: Wheels are available for `dearpygui` (v1.9.1) with the following Python ABI tags: `cp37m`, `cp38`, `cp39`, `cp310`, `cp311`
     ");
 
     Ok(())
@@ -15054,8 +15054,7 @@ async fn lock_env_credentials() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because iniconfig was not found in the package registry and your project depends on iniconfig, we can conclude that your project's requirements are unsatisfiable.
-
-    hint: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
+      info: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
     ");
 
     // Provide credentials via environment variables.
@@ -20036,8 +20035,7 @@ fn lock_add_member_with_build_system() -> Result<()> {
     error: No solution found when resolving dependencies
       cause: Because anyio was not found in the cache and leaf depends on anyio>3, we can conclude that leaf's requirements are unsatisfiable.
              And because your workspace requires leaf, we can conclude that your workspace's requirements are unsatisfiable.
-
-    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
+      info: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
     ");
 
     // Re-run without `--locked`.
@@ -20229,8 +20227,7 @@ fn lock_add_member_without_build_system() -> Result<()> {
     error: No solution found when resolving dependencies
       cause: Because anyio was not found in the cache and leaf depends on anyio>3, we can conclude that leaf's requirements are unsatisfiable.
              And because your workspace requires leaf, we can conclude that your workspace's requirements are unsatisfiable.
-
-    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
+      info: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
     ");
 
     // Re-run without `--locked`.
@@ -21694,8 +21691,9 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     error: No solution found when resolving dependencies for split (markers: python_full_version >= '3.12' and sys_platform == 'win32')
       cause: Because only urllib3==1.0.0 is available and your project depends on urllib3>=2, we can conclude that your project's requirements are unsatisfiable.
              And because your project requires project[empty], we can conclude that your project's requirements are unsatisfiable.
+      info: The resolution failed for an environment that is not the current one
 
-    hint: The resolution failed for an environment that is not the current one, consider limiting the environments with `tool.uv.environments`.
+    hint: Limit the environments with `tool.uv.environments`
     ");
 
     pyproject_toml.write_str(&original_pyproject.replace(
@@ -22321,8 +22319,9 @@ fn lock_regenerates_incompatible_self_requirement() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because your project depends on itself at an incompatible version (project>=2.0.0), we can conclude that your project's requirements are unsatisfiable.
+      info: The project `project` depends on itself at an incompatible version. This is likely a mistake
 
-    hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
+    hint: If you intended to depend on a third-party package named `project`, rename the project `project` to avoid creating a conflict
     ");
 
     pyproject_toml.write_str(&formatdoc! {r#"
@@ -22340,8 +22339,9 @@ fn lock_regenerates_incompatible_self_requirement() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because project[feature] depends on itself at an incompatible version (project>=2.0.0) and your project requires project[feature], we can conclude that your project's requirements are unsatisfiable.
+      info: The project `project` depends on itself at an incompatible version. This is likely a mistake
 
-    hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
+    hint: If you intended to depend on a third-party package named `project`, rename the project `project` to avoid creating a conflict
     ");
 
     Ok(())
@@ -23575,8 +23575,9 @@ fn lock_metadata_free_dynamic_version_excluded_source() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because leaf was not found in the provided package locations and your project depends on leaf, we can conclude that your project's requirements are unsatisfiable.
+      info: Packages were unavailable because index lookups were disabled and no additional package locations were provided
 
-    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    hint: Provide additional package locations with `--find-links <uri>`
     ");
 
     Ok(())
@@ -30895,8 +30896,7 @@ async fn lock_keyring_explicit_always() -> Result<()> {
     Keyring request for [LOCALHOST]
     error: No solution found when resolving dependencies
       cause: Because iniconfig was not found in the package registry and your project depends on iniconfig, we can conclude that your project's requirements are unsatisfiable.
-
-    hint: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
+      info: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
     ");
 
     // With valid credentials, we should succeed
@@ -36488,8 +36488,9 @@ fn lock_self_incompatible() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because your project depends on itself at an incompatible version (project==0.2.0), we can conclude that your project's requirements are unsatisfiable.
+      info: The project `project` depends on itself at an incompatible version. This is likely a mistake
 
-    hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
+    hint: If you intended to depend on a third-party package named `project`, rename the project `project` to avoid creating a conflict
     ");
 
     Ok(())
@@ -36612,8 +36613,9 @@ fn lock_self_extra_to_same_extra_incompatible() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because project[foo] depends on itself at an incompatible version (project==0.2.0) and your project requires project[foo], we can conclude that your project's requirements are unsatisfiable.
+      info: The project `project` depends on itself at an incompatible version. This is likely a mistake
 
-    hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
+    hint: If you intended to depend on a third-party package named `project`, rename the project `project` to avoid creating a conflict
     ");
 
     Ok(())
@@ -36644,8 +36646,9 @@ fn lock_self_extra_to_other_extra_incompatible() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because project[foo] depends on itself at an incompatible version (project==0.2.0) and your project requires project[foo], we can conclude that your project's requirements are unsatisfiable.
+      info: The project `project` depends on itself at an incompatible version. This is likely a mistake
 
-    hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
+    hint: If you intended to depend on a third-party package named `project`, rename the project `project` to avoid creating a conflict
     ");
 
     Ok(())
@@ -36768,8 +36771,9 @@ fn lock_self_extra_incompatible() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because project[foo] depends on itself at an incompatible version (project==0.2.0) and your project requires project[foo], we can conclude that your project's requirements are unsatisfiable.
+      info: The project `project` depends on itself at an incompatible version. This is likely a mistake
 
-    hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
+    hint: If you intended to depend on a third-party package named `project`, rename the project `project` to avoid creating a conflict
     ");
 
     Ok(())
@@ -36885,8 +36889,9 @@ fn lock_self_marker_incompatible() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because your project depends on itself at an incompatible version (project{sys_platform == 'win32'}>0.1), we can conclude that your project's requirements are unsatisfiable.
+      info: The project `project` depends on itself at an incompatible version. This is likely a mistake
 
-    hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
+    hint: If you intended to depend on a third-party package named `project`, rename the project `project` to avoid creating a conflict
     ");
 
     Ok(())
@@ -40274,8 +40279,9 @@ fn lock_conflict_for_disjoint_python_version() -> Result<()> {
     error: No solution found when resolving dependencies for split (markers: python_full_version >= '3.11')
       cause: Because pandas==1.5.3 depends on numpy{python_full_version >= '3.10'}>=1.21.0 and your project depends on numpy==1.20.3, we can conclude that your project and pandas==1.5.3 are incompatible.
              And because your project depends on pandas==1.5.3, we can conclude that your project's requirements are unsatisfiable.
+      info: While the active Python version is 3.9, the resolution failed for other Python versions supported by your project
 
-    hint: While the active Python version is 3.9, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
+    hint: Limit your project's supported Python versions using `requires-python`
     ");
 
     // Check that the resolution passes on the restricted Python environment.
@@ -40484,8 +40490,9 @@ fn lock_conflict_for_disjoint_platform() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies for split (markers: sys_platform == 'exotic')
       cause: Because your project depends on numpy{sys_platform == 'exotic'}>=1.24,<1.26 and numpy>=1.26, we can conclude that your project's requirements are unsatisfiable.
+      info: The resolution failed for an environment that is not the current one
 
-    hint: The resolution failed for an environment that is not the current one, consider limiting the environments with `tool.uv.environments`.
+    hint: Limit the environments with `tool.uv.environments`
     ");
 
     // Check that the resolution passes on the restricted environment.
@@ -41722,8 +41729,9 @@ fn lock_exclude_newer_hint() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because there are no versions of iniconfig and your project depends on iniconfig, we can conclude that your project's requirements are unsatisfiable.
+      info: `iniconfig` was filtered by `exclude-newer` to only include packages uploaded before 2000-01-01T00:00:00Z. The latest version satisfying the requirement is v2.0.0, published at 2023-01-07T11:08:09.864Z.
 
-    hint: `iniconfig` was filtered by `exclude-newer` to only include packages uploaded before 2000-01-01T00:00:00Z. The latest version satisfying the requirement is v2.0.0, published at 2023-01-07T11:08:09.864Z. Consider using `exclude-newer-package` to override the cutoff for this package.
+    hint: Use `exclude-newer-package` to override the cutoff for `iniconfig`
     ");
 
     Ok(())
@@ -41770,8 +41778,9 @@ async fn lock_exclude_newer_index_disable() -> Result<()> {
     warning: iniconfig-2.0.0-py3-none-any.whl is missing an upload date, but user provided: 2024-03-25T00:00:00Z
     error: No solution found when resolving dependencies
       cause: Because there are no versions of iniconfig and your project depends on iniconfig>=2, we can conclude that your project's requirements are unsatisfiable.
+      info: `iniconfig` was filtered by `exclude-newer` to only include packages uploaded before 2024-03-25T00:00:00Z. The latest version satisfying the requirement is v2.0.0.
 
-    hint: `iniconfig` was filtered by `exclude-newer` to only include packages uploaded before 2024-03-25T00:00:00Z. The latest version satisfying the requirement is v2.0.0. Consider using `exclude-newer-package` to override the cutoff for this package.
+    hint: Use `exclude-newer-package` to override the cutoff for `iniconfig`
     ");
 
     pyproject_toml.write_str(&format!(
@@ -41849,8 +41858,9 @@ async fn lock_exclude_newer_index_value() -> Result<()> {
     warning: iniconfig-2.0.0-py3-none-any.whl is missing an upload date, but user provided: 2025-01-01T00:00:00Z
     error: No solution found when resolving dependencies
       cause: Because there are no versions of iniconfig and your project depends on iniconfig>=2, we can conclude that your project's requirements are unsatisfiable.
+      info: `iniconfig` was filtered by the index-specific `exclude-newer` setting to only include packages uploaded before 2025-01-01T00:00:00Z. The latest version satisfying the requirement is v2.0.0.
 
-    hint: `iniconfig` was filtered by the index-specific `exclude-newer` setting to only include packages uploaded before 2025-01-01T00:00:00Z. The latest version satisfying the requirement is v2.0.0. Consider updating that index's cutoff, setting it to `false`, or using `exclude-newer-package` to override the cutoff for this package.
+    hint: Update the index's `exclude-newer` cutoff, set it to `false`, or use `exclude-newer-package` to override the cutoff for `iniconfig`
     ");
 
     uv_snapshot!(context.filters(), context
@@ -41863,8 +41873,9 @@ async fn lock_exclude_newer_index_value() -> Result<()> {
     warning: iniconfig-2.0.0-py3-none-any.whl is missing an upload date, but user provided: 2025-01-01T00:00:00Z
     error: No solution found when resolving dependencies
       cause: Because there are no versions of iniconfig and your project depends on iniconfig>=2, we can conclude that your project's requirements are unsatisfiable.
+      info: `iniconfig` was filtered by the index-specific `exclude-newer` setting to only include packages uploaded before 2025-01-01T00:00:00Z. The latest version satisfying the requirement is v2.0.0.
 
-    hint: `iniconfig` was filtered by the index-specific `exclude-newer` setting to only include packages uploaded before 2025-01-01T00:00:00Z. The latest version satisfying the requirement is v2.0.0. Consider updating that index's cutoff, setting it to `false`, or using `exclude-newer-package` to override the cutoff for this package.
+    hint: Update the index's `exclude-newer` cutoff, set it to `false`, or use `exclude-newer-package` to override the cutoff for `iniconfig`
     ");
 
     pyproject_toml.write_str(&format!(
@@ -41929,8 +41940,9 @@ fn lock_exclude_newer_hint_pinned_version() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because there is no version of iniconfig==2.0.0 and your project depends on iniconfig==2.0.0, we can conclude that your project's requirements are unsatisfiable.
+      info: `iniconfig` was filtered by `exclude-newer` to only include packages uploaded before 2022-01-01T00:00:00Z. The requested version, v2.0.0, was published at 2023-01-07T11:08:09.864Z.
 
-    hint: `iniconfig` was filtered by `exclude-newer` to only include packages uploaded before 2022-01-01T00:00:00Z. The requested version, v2.0.0, was published at 2023-01-07T11:08:09.864Z. Consider using `exclude-newer-package` to override the cutoff for this package.
+    hint: Use `exclude-newer-package` to override the cutoff for `iniconfig`
     ");
 
     Ok(())
@@ -41966,8 +41978,9 @@ fn lock_exclude_newer_hint_compatible_release() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because only iniconfig<=1.1.1 is available and your project depends on iniconfig>=2.0,<3.dev0, we can conclude that your project's requirements are unsatisfiable.
+      info: `iniconfig` was filtered by `exclude-newer` to only include packages uploaded before 2022-01-01T00:00:00Z. The latest version satisfying the requirement is v2.0.0, published at 2023-01-07T11:08:09.864Z.
 
-    hint: `iniconfig` was filtered by `exclude-newer` to only include packages uploaded before 2022-01-01T00:00:00Z. The latest version satisfying the requirement is v2.0.0, published at 2023-01-07T11:08:09.864Z. Consider using `exclude-newer-package` to override the cutoff for this package.
+    hint: Use `exclude-newer-package` to override the cutoff for `iniconfig`
     ");
 
     Ok(())
@@ -43054,8 +43067,9 @@ fn collapsed_error_with_marker_packages() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies for split (markers: python_full_version < '3.14' and sys_platform == 'other')
       cause: Because your project depends on anyio{sys_platform == 'other'} and anyio{python_full_version < '3.14'}>=4.4.0, we can conclude that your project's requirements are unsatisfiable.
+      info: The resolution failed for an environment that is not the current one
 
-    hint: The resolution failed for an environment that is not the current one, consider limiting the environments with `tool.uv.environments`.
+    hint: Limit the environments with `tool.uv.environments`
     ");
 
     Ok(())
@@ -43140,8 +43154,8 @@ fn lock_unsupported_wheel_url_supported_platform() -> Result<()> {
         .filters()
         .into_iter()
         .chain([(
-            // This hint is only shown when the current platform doesn't match the target.
-            r"\n\nhint: The resolution failed for an environment that is not the current one[^\n]*",
+            // This context and hint are only shown when the current platform doesn't match the target.
+            r"\n(?:  info: The resolution failed for an environment that is not the current one|\nhint: Limit the environments with `tool\.uv\.environments`)[^\n]*",
             "",
         )])
         .collect();
@@ -43432,8 +43446,9 @@ fn lock_required_environment_macos_release() -> Result<()> {
     error: No solution found when resolving dependencies for split (markers: python_full_version >= '3.12' and platform_machine == 'arm64' and platform_release < '25' and sys_platform == 'darwin')
       cause: Because only a==2.0.0 is available and a==2.0.0 has no `platform_machine == 'arm64' and sys_platform == 'darwin'`-compatible wheels, we can conclude that all versions of a cannot be used.
              And because your project depends on a, we can conclude that your project's requirements are unsatisfiable.
+      info: The resolution failed for an environment that is not the current one
 
-    hint: The resolution failed for an environment that is not the current one, consider limiting the environments with `tool.uv.environments`.
+    hint: Limit the environments with `tool.uv.environments`
     ");
     Ok(())
 }
@@ -43736,8 +43751,8 @@ fn lock_required_environment_cycle_reports_resolution_error() -> Result<()> {
         .filters()
         .into_iter()
         .chain([(
-            // This hint is only shown when the current platform doesn't match the target.
-            r"\n\nhint: The resolution failed for an environment that is not the current one[^\n]*",
+            // This context and hint are only shown when the current platform doesn't match the target.
+            r"\n(?:  info: The resolution failed for an environment that is not the current one|\nhint: Limit the environments with `tool\.uv\.environments`)[^\n]*",
             "",
         )])
         .collect();
@@ -43780,8 +43795,8 @@ fn lock_supported_environment_wheel_only_package_requires_compatible_wheels() ->
         .filters()
         .into_iter()
         .chain([(
-            // This hint is only shown when the current platform doesn't match the target.
-            r"\n\nhint: The resolution failed for an environment that is not the current one[^\n]*",
+            // This context and hint are only shown when the current platform doesn't match the target.
+            r"\n(?:  info: The resolution failed for an environment that is not the current one|\nhint: Limit the environments with `tool\.uv\.environments`)[^\n]*",
             "",
         )])
         .collect();
@@ -43795,8 +43810,7 @@ fn lock_supported_environment_wheel_only_package_requires_compatible_wheels() ->
                  pywin32>=306
              we can conclude that pywin32<306 cannot be used.
              And because pywin32>=306 has no Linux-compatible wheels and your project depends on pywin32, we can conclude that your project's requirements are unsatisfiable.
-
-    hint: Wheels are available for `pywin32` (v305) with the following Python ABI tags: `cp36m`, `cp37m`, `cp38`, `cp39`, `cp310`, `cp311`
+      info: Wheels are available for `pywin32` (v305) with the following Python ABI tags: `cp36m`, `cp37m`, `cp38`, `cp39`, `cp310`, `cp311`
     ");
 
     Ok(())

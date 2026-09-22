@@ -2700,8 +2700,9 @@ fn build_fast_path_exact_pin() -> Result<()> {
       cause: Failed to resolve requirements from `build-system.requires`
       cause: No solution found when resolving: `uv-build==0.11.33`
       cause: Because uv-build was not found in the provided package locations and you require uv-build==0.11.33, we can conclude that your requirements are unsatisfiable.
+      info: Packages were unavailable because index lookups were disabled and no additional package locations were provided
 
-    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    hint: Provide additional package locations with `--find-links <uri>`
     ");
 
     for requirement in [
@@ -2766,8 +2767,9 @@ fn build_fast_path_constraint_exact_pin() -> Result<()> {
       cause: Failed to resolve requirements from `build-system.requires`
       cause: No solution found when resolving: `uv-build>=0.11, <10000`
       cause: Because uv-build was not found in the provided package locations and you require uv-build==0.11.33, we can conclude that your requirements are unsatisfiable.
+      info: Packages were unavailable because index lookups were disabled and no additional package locations were provided
 
-    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    hint: Provide additional package locations with `--find-links <uri>`
     ");
 
     constraints.write_str("uv_build>=0.11,==0.11.33")?;
@@ -2785,8 +2787,9 @@ fn build_fast_path_constraint_exact_pin() -> Result<()> {
       cause: Failed to resolve requirements from `build-system.requires`
       cause: No solution found when resolving: `uv-build>=0.11, <10000`
       cause: Because uv-build was not found in the provided package locations and you require uv-build==0.11.33, we can conclude that your requirements are unsatisfiable.
+      info: Packages were unavailable because index lookups were disabled and no additional package locations were provided
 
-    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    hint: Provide additional package locations with `--find-links <uri>`
     ");
 
     // Listing files requires the fast path and must reject the incompatible constraint.
