@@ -688,6 +688,68 @@ mod tests {
     }
 
     #[test]
+    fn source_urls_keep_multiline_quote_context() -> Result<(), Box<dyn Error>> {
+        let text = "url = \"\"\"\r\nhttps://user:pā\"ss@example.invalid/pkg?SIG=si\"gned&safe=yes\r\n\"\"\"\r\n";
+        let source = SourceFile::new("uv.toml", text).with_line_start(7);
+        let range = range_of(text, "safe=yes");
+        let error = InputError(vec![
+            SourceSnippet::new(source.clone())
+                .with_annotation(SourceAnnotation::primary(range.clone())),
+        ]);
+        let suggestion = SourceSuggestion::new(
+            source.clone(),
+            [SourceEdit::new(range, "safe=no")],
+            SuggestionApplicability::DisplayOnly,
+        )
+        .ok_or("the edit has a valid source range")?;
+        let hints = Hint::new("Replace the option")
+            .with_suggestion(suggestion)
+            .into();
+        let report =
+            serde_json::to_value(ErrorReport::new(&error, Some(input_diagnostic), &hints))?;
+        assert_json_snapshot!(report["errors"][0]["sources"], @r#"
+        [
+          {
+            "kind": "snippet",
+            "name": "uv.toml",
+            "windows": [
+              {
+                "annotations": [
+                  {
+                    "kind": "primary",
+                    "range": {
+                      "end": {
+                        "byte_column": 60,
+                        "line": 8
+                      },
+                      "start": {
+                        "byte_column": 52,
+                        "line": 8
+                      }
+                    }
+                  }
+                ],
+                "line_start": 8,
+                "text": "https://user:******@example.invalid/pkg?SIG=*******&safe=yes\r\n"
+              }
+            ]
+          }
+        ]
+        "#);
+        let edit = &report["errors"][0]["hints"][0]["suggestion"]["edits"][0];
+        assert_eq!(edit["replacement"], "safe=no");
+        assert_eq!(
+            edit["range"],
+            serde_json::json!({
+                "start": {"line": 8, "byte_column": 52},
+                "end": {"line": 8, "byte_column": 60},
+            })
+        );
+        assert_eq!(source.text(), text);
+        Ok(())
+    }
+
+    #[test]
     fn source_url_masks_do_not_change_exact_edits() -> Result<(), Box<dyn Error>> {
         let text = "url = 'https://user:original-secret@example.invalid'; marker = 'old'\n";
         let source = SourceFile::new("pyproject.toml", text);
