@@ -499,10 +499,12 @@ fn python_executables_from_installed<'a>(
 
                 registry_pythons()
                     .map(|entries| {
+                        let include_debug = version.variant().is_none_or(PythonVariant::is_debug);
                         entries
                             .into_iter()
                             .filter(version_filter)
-                            .map(|entry| (PythonSource::Registry, entry.path))
+                            .flat_map(move |entry| entry.executables(include_debug))
+                            .map(|path| (PythonSource::Registry, path))
                             .chain(
                                 find_microsoft_store_pythons()
                                     .filter(version_filter)
@@ -751,16 +753,17 @@ fn find_all_minor(
         | VersionRequest::Default
         | VersionRequest::Major(_, _)
         | VersionRequest::Range(_, _) => {
+            let variant_suffix = if cfg!(windows) { "t?(?:_d)?" } else { "t?" };
             let regex = if let Some(implementation) = implementation {
                 Regex::new(&format!(
-                    r"^({}|python3)\.(?<minor>\d\d?)t?{}$",
+                    r"^({}|python3)\.(?<minor>\d\d?){variant_suffix}{}$",
                     regex::escape(&implementation.to_string()),
                     regex::escape(EXE_SUFFIX)
                 ))
                 .unwrap()
             } else {
                 Regex::new(&format!(
-                    r"^python3\.(?<minor>\d\d?)t?{}$",
+                    r"^python3\.(?<minor>\d\d?){variant_suffix}{}$",
                     regex::escape(EXE_SUFFIX)
                 ))
                 .unwrap()
@@ -1895,7 +1898,7 @@ impl PythonVariant {
     }
 
     /// Return the executable suffix for Windows, e.g., `_d` for `python_d.exe`.
-    pub fn windows_executable_suffix(self) -> &'static str {
+    pub(crate) fn windows_executable_suffix(self) -> &'static str {
         match self {
             Self::Debug | Self::GilDebug => "_d",
             Self::FreethreadedDebug => "t_d",
@@ -4569,6 +4572,43 @@ mod tests {
                 PythonVariant::Default
             )
         );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_debug_minor_executables() -> io::Result<()> {
+        let temp = tempfile::tempdir()?;
+        for name in [
+            "python3.12t_d.exe",
+            "python3.14.exe",
+            "python3.14_d.exe",
+            "python3.14t.exe",
+            "python3.14t_d.exe",
+            "python3.16t_d.exe",
+            "pythont_d.exe",
+        ] {
+            fs_err::write(temp.path().join(name), b"")?;
+        }
+        let request = VersionRequest::Range(
+            VersionSpecifiers::from_str(">=3.13,<3.16").expect("valid version range"),
+            PythonVariant::FreethreadedDebug,
+        );
+        for implementation in [None, Some(&ImplementationName::CPython)] {
+            let mut paths =
+                super::find_all_minor(implementation, &request, temp.path()).collect::<Vec<_>>();
+            paths.sort();
+            assert_eq!(
+                paths,
+                [
+                    "python3.14.exe",
+                    "python3.14_d.exe",
+                    "python3.14t.exe",
+                    "python3.14t_d.exe",
+                ]
+                .map(|name| temp.path().join(name))
+            );
+        }
+        Ok(())
     }
 
     #[test]
