@@ -1,4 +1,4 @@
-name: Tuned Namespace Linux samples
+name: Tuned Namespace worker samples
 
 on:
   workflow_dispatch:
@@ -28,20 +28,20 @@ env:
 
 jobs:
   cargo-test-linux:
-    timeout-minutes: 10
+    timeout-minutes: 30
     runs-on:
       - nscloud-ubuntu-24.04-amd64-32x64-with-features
       - namespace-features:container.privileged=true
       - namespace-features:compute.configuration=d0
-    name: "Namespace d0 ${{ matrix.storage }} / sample ${{ matrix.sample }}"
+    name: "Namespace d0 workers / sample ${{ matrix.sample }}"
     env:
-      TEMP_STORAGE: ${{ matrix.storage }}
+      TEMP_STORAGE: tmpfs
+      WORKER_SAMPLE: ${{ matrix.sample }}
     strategy:
       fail-fast: false
       max-parallel: 5
       matrix:
         sample: ${{ fromJSON(inputs.samples) }}
-        storage: [tmpfs, disk]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -118,7 +118,6 @@ jobs:
           sudo chown "$(id -u):$(id -g)" /ext4
 
       - name: "Create temporary test directory"
-        if: matrix.storage == 'tmpfs'
         run: |
           mkdir -p /tmp/uv-runner-acceptance
           sudo mount -t tmpfs -o size=16G,mode=1777 tmpfs /tmp/uv-runner-acceptance
@@ -126,7 +125,7 @@ jobs:
       - name: "Record runner inventory"
         run: python3 .github/runner-experiments/inventory.py benchmark-evidence/before.json
 
-      - name: "Cargo test"
+      - name: "Compare test workers"
         env:
           # Retry more than default to reduce flakes in CI
           UV_HTTP_RETRIES: 5
@@ -140,26 +139,18 @@ jobs:
           INSTA_UPDATE: new
           INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
         run: |
-          if [[ "$TEMP_STORAGE" == tmpfs ]]; then
-            export TMPDIR=/tmp/uv-runner-acceptance
-          fi
-          uv run --only-dev cargo nextest run \
-            --cargo-profile fast-build-nightly \
-            -Z panic-abort-tests \
-            -Z checksum-freshness \
-            --features test-python-patch,test-universal,native-auth,secret-service \
-            --workspace \
-            --profile ci-linux
+          export TMPDIR=/tmp/uv-runner-acceptance
+          python3 .github/runner-experiments/workers.py
 
       - name: "Record final runner counters"
         if: always()
         run: python3 .github/runner-experiments/inventory.py benchmark-evidence/after.json
 
-      - name: "Upload runner inventory"
+      - name: "Upload worker comparison"
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: runner-inventory-${{ matrix.storage }}-${{ matrix.sample }}
+          name: worker-comparison-${{ matrix.sample }}
           path: benchmark-evidence/
           if-no-files-found: error
           retention-days: 14
@@ -172,7 +163,7 @@ jobs:
         if: ${{ failure() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: pending-snapshots-linux-${{ matrix.storage }}-${{ matrix.sample }}
+          name: pending-snapshots-linux-${{ matrix.sample }}
           path: pending-snapshots/
           if-no-files-found: ignore
           include-hidden-files: true
@@ -182,7 +173,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: junit-results-linux-${{ matrix.storage }}-${{ matrix.sample }}
+          name: junit-results-linux-${{ matrix.sample }}
           path: target/nextest/ci*/junit.xml
           if-no-files-found: ignore
           retention-days: 14
