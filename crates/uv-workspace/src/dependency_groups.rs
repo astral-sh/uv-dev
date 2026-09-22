@@ -1,3 +1,5 @@
+mod diagnostics;
+
 use std::collections::btree_map::Entry;
 use std::str::FromStr;
 use std::{collections::BTreeMap, path::Path};
@@ -13,6 +15,10 @@ use uv_pypi_types::{DependencyGroupSpecifier, VerbatimParsedUrl};
 
 use crate::pyproject::{DependencyGroupSettings, PyProjectToml, ToolUvDependencyGroups};
 
+use self::diagnostics::{DependencyGroupDiagnostic, DependencyGroupProvenance, GroupInclude};
+
+pub use diagnostics::diagnostic_for_error;
+
 /// PEP 735 dependency groups, with any `include-group` entries resolved.
 #[derive(Debug, Default, Clone)]
 pub struct FlatDependencyGroups(BTreeMap<GroupName, FlatDependencyGroup>);
@@ -26,7 +32,7 @@ pub struct FlatDependencyGroup {
 impl FlatDependencyGroups {
     /// Gather and flatten all the dependency-groups defined in the given pyproject.toml
     ///
-    /// The path is only used in diagnostics.
+    /// The path is the directory containing `pyproject.toml` and is only used in diagnostics.
     pub fn from_pyproject_toml(
         path: &Path,
         pyproject_toml: &PyProjectToml,
@@ -57,14 +63,24 @@ impl FlatDependencyGroups {
         // Flatten the dependency groups.
         let mut dependency_groups =
             Self::from_dependency_groups(&dependency_groups, group_settings.inner()).map_err(
-                |err| DependencyGroupError {
-                    package: pyproject_toml
-                        .project
-                        .as_ref()
-                        .map(|project| project.name.to_string())
-                        .unwrap_or_default(),
-                    path: path.user_display().to_string(),
-                    error: err.with_dev_dependencies(dev_dependencies),
+                |failure| {
+                    let DependencyGroupFailure { error, provenance } = failure;
+                    let error = error.with_dev_dependencies(dev_dependencies);
+                    let diagnostic = provenance
+                        .and_then(|provenance| {
+                            DependencyGroupDiagnostic::new(path, pyproject_toml, &error, provenance)
+                        })
+                        .map(Box::new);
+                    DependencyGroupError {
+                        package: pyproject_toml
+                            .project
+                            .as_ref()
+                            .map(|project| project.name.to_string())
+                            .unwrap_or_default(),
+                        path: path.user_display().to_string(),
+                        error,
+                        diagnostic,
+                    }
                 },
             )?;
 
@@ -91,14 +107,15 @@ impl FlatDependencyGroups {
     fn from_dependency_groups(
         groups: &BTreeMap<&GroupName, &Vec<DependencyGroupSpecifier>>,
         settings: &BTreeMap<GroupName, DependencyGroupSettings>,
-    ) -> Result<Self, DependencyGroupErrorInner> {
+    ) -> Result<Self, DependencyGroupFailure> {
         fn resolve_group<'data>(
             resolved: &mut BTreeMap<GroupName, FlatDependencyGroup>,
             groups: &'data BTreeMap<&GroupName, &Vec<DependencyGroupSpecifier>>,
             settings: &BTreeMap<GroupName, DependencyGroupSettings>,
             name: &'data GroupName,
             parents: &mut Vec<&'data GroupName>,
-        ) -> Result<(), DependencyGroupErrorInner> {
+            includes: &mut Vec<GroupInclude>,
+        ) -> Result<(), DependencyGroupFailure> {
             let Some(specifiers) = groups.get(name) else {
                 // Missing group
                 let parent_name = parents
@@ -106,18 +123,26 @@ impl FlatDependencyGroups {
                     .last()
                     .copied()
                     .expect("parent when group is missing");
-                return Err(DependencyGroupErrorInner::GroupNotFound(
-                    name.clone(),
-                    parent_name.clone(),
-                ));
+                return Err(DependencyGroupFailure {
+                    error: DependencyGroupErrorInner::GroupNotFound(
+                        name.clone(),
+                        parent_name.clone(),
+                    ),
+                    provenance: Some(DependencyGroupProvenance::Includes(includes.clone())),
+                });
             };
 
             // "Dependency Group Includes MUST NOT include cycles, and tools SHOULD report an error if they detect a cycle."
             if let Some(start) = parents.iter().position(|parent| *parent == name) {
                 // Earlier parents lead into the cycle but are not part of it.
-                return Err(DependencyGroupErrorInner::DependencyGroupCycle(Cycle(
-                    parents[start..].iter().copied().cloned().collect(),
-                )));
+                return Err(DependencyGroupFailure {
+                    error: DependencyGroupErrorInner::DependencyGroupCycle(Cycle(
+                        parents[start..].iter().copied().cloned().collect(),
+                    )),
+                    provenance: includes
+                        .get(start..)
+                        .map(|includes| DependencyGroupProvenance::Includes(includes.to_vec())),
+                });
             }
 
             // If we already resolved this group, short-circuit.
@@ -128,7 +153,7 @@ impl FlatDependencyGroups {
             parents.push(name);
             let mut requirements = Vec::with_capacity(specifiers.len());
             let mut requires_python_intersection = VersionSpecifiers::empty();
-            for specifier in *specifiers {
+            for (index, specifier) in specifiers.iter().enumerate() {
                 match specifier {
                     DependencyGroupSpecifier::Requirement(requirement) => {
                         match uv_pep508::Requirement::<VerbatimParsedUrl>::from_str(requirement) {
@@ -138,12 +163,26 @@ impl FlatDependencyGroups {
                                     name.clone(),
                                     requirement.clone(),
                                     Box::new(err),
-                                ));
+                                )
+                                .into());
                             }
                         }
                     }
                     DependencyGroupSpecifier::IncludeGroup { include_group } => {
-                        resolve_group(resolved, groups, settings, include_group, parents)?;
+                        includes.push(GroupInclude {
+                            group: name.clone(),
+                            index,
+                            included: include_group.clone(),
+                        });
+                        resolve_group(
+                            resolved,
+                            groups,
+                            settings,
+                            include_group,
+                            parents,
+                            includes,
+                        )?;
+                        includes.pop();
                         if let Some(included) = resolved.get(include_group) {
                             requirements.extend(included.requirements.iter().cloned());
 
@@ -159,7 +198,8 @@ impl FlatDependencyGroups {
                             DependencyGroupErrorInner::DependencyObjectSpecifierNotSupported(
                                 name.clone(),
                                 map.clone(),
-                            ),
+                            )
+                            .into(),
                         );
                     }
                 }
@@ -205,16 +245,25 @@ impl FlatDependencyGroups {
         // Validate the settings
         for (group_name, ..) in settings {
             if !groups.contains_key(group_name) {
-                return Err(DependencyGroupErrorInner::SettingsGroupNotFound(
-                    group_name.clone(),
-                ));
+                return Err(DependencyGroupFailure {
+                    error: DependencyGroupErrorInner::SettingsGroupNotFound(group_name.clone()),
+                    provenance: Some(DependencyGroupProvenance::Settings(group_name.clone())),
+                });
             }
         }
 
         let mut resolved = BTreeMap::new();
         for name in groups.keys() {
             let mut parents = Vec::new();
-            resolve_group(&mut resolved, groups, settings, name, &mut parents)?;
+            let mut includes = Vec::new();
+            resolve_group(
+                &mut resolved,
+                groups,
+                settings,
+                name,
+                &mut parents,
+                &mut includes,
+            )?;
         }
         Ok(Self(resolved))
     }
@@ -265,6 +314,23 @@ pub struct DependencyGroupError {
     path: String,
     #[source]
     error: DependencyGroupErrorInner,
+    diagnostic: Option<Box<DependencyGroupDiagnostic>>,
+}
+
+/// A semantic error and the traversal entries that produced it.
+#[derive(Debug)]
+struct DependencyGroupFailure {
+    error: DependencyGroupErrorInner,
+    provenance: Option<DependencyGroupProvenance>,
+}
+
+impl From<DependencyGroupErrorInner> for DependencyGroupFailure {
+    fn from(error: DependencyGroupErrorInner) -> Self {
+        Self {
+            error,
+            provenance: None,
+        }
+    }
 }
 
 #[derive(Debug, Error)]
