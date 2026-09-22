@@ -39,6 +39,8 @@ def run(args):
         "--profile", args.profile, "--test-threads", str(args.threads),
         "--retries", "0", "--status-level", "fail", "--final-status-level", "fail",
     ]
+    if args.filter_expr:
+        command.extend(["--filter-expr", args.filter_expr])
     result = {
         "base": BASE, "head": HEAD, "replicate": args.replicate,
         "platform": platform.platform(), "machine": platform.machine(),
@@ -97,6 +99,7 @@ def main():
     parser.add_argument("--pairs", type=int, default=3)
     parser.add_argument("--warmups", type=int, default=1)
     parser.add_argument("--seed", type=int, default=1998)
+    parser.add_argument("--filter-expr")
     args = parser.parse_args()
     run(args)
 

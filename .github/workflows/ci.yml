@@ -133,6 +133,7 @@ jobs:
             --output benchmark-results/samples \
             --replicate "$BENCHMARK_REPLICATE" \
             --profile ci-linux --threads 20 --pairs 3 --warmups 1 \
+            --filter-expr 'not (package(=uv-python) and test(=interpreter::tests::test_cache_invalidation))' \
             --seed "$BENCHMARK_REPLICATE"
 
       - name: Upload measurements
