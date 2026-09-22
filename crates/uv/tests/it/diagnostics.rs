@@ -35,12 +35,235 @@ fn json_configuration_error_has_safe_source_coordinates() -> Result<()> {
         .find(|source| source["kind"] == "snippet")
         .context("the TOML parser retains its source location")?;
     assert_eq!(source["windows"][0]["line_start"], 2);
-    assert_eq!(source["windows"][0]["text"], "no-build = !");
+    assert_eq!(source["windows"][0]["text"], "no-build = !\n");
     assert_eq!(
         source["windows"][0]["annotations"][0]["range"]["start"],
         serde_json::json!({"line": 2, "byte_column": 11})
     );
     assert!(!String::from_utf8_lossy(&output.stderr).contains("secret"));
+    Ok(())
+}
+
+#[test]
+fn configuration_error_redacts_inline_url_credentials() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let source = "index = [{ url = 'https://user:sentinel-secret@example.invalid/simple?X-Amz%2DSignature=sentinel-signature&safe=value', explicit = \"yes\" }]\r\n";
+    context.temp_dir.child("uv.toml").write_str(source)?;
+
+    let text = context
+        .command()
+        .env("COLUMNS", "300")
+        .args(["--config-file=uv.toml", "--offline", "cache", "dir"])
+        .output()?;
+    let json = context
+        .command()
+        .args([
+            "--error-format=json",
+            "--config-file=uv.toml",
+            "--offline",
+            "cache",
+            "dir",
+        ])
+        .output()?;
+    assert_eq!(text.status.code(), Some(2));
+    assert_eq!(json.status.code(), text.status.code());
+    assert!(text.stdout.is_empty());
+    assert!(json.stdout.is_empty());
+
+    let expected = source
+        .replace("sentinel-secret", &"*".repeat("sentinel-secret".len()))
+        .replace(
+            "sentinel-signature",
+            &"*".repeat("sentinel-signature".len()),
+        );
+    let text_stderr = String::from_utf8(text.stderr)?;
+    assert!(text_stderr.contains(expected.trim_end_matches(['\r', '\n'])));
+    for output in [text_stderr.as_str(), std::str::from_utf8(&json.stderr)?] {
+        assert!(!output.contains("sentinel-secret"));
+        assert!(!output.contains("sentinel-signature"));
+    }
+
+    let report: Value = serde_json::from_slice(&json.stderr)?;
+    let window = report["errors"]
+        .as_array()
+        .context("error chain is an array")?
+        .iter()
+        .flat_map(|error| error["sources"].as_array().into_iter().flatten())
+        .flat_map(|source| source["windows"].as_array().into_iter().flatten())
+        .next()
+        .context("the TOML parser retains the source window")?;
+    assert_eq!(window["text"], expected);
+    let start = source
+        .find("\"yes\"")
+        .context("invalid boolean in fixture")?;
+    assert_eq!(
+        window["annotations"][0]["range"],
+        serde_json::json!({
+            "start": {"line": 1, "byte_column": start},
+            "end": {"line": 1, "byte_column": start + "\"yes\"".len()},
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn configuration_error_redacts_multiline_url_credentials() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let line = "https://user:sentinel-pa\"ss@example.invalid/?SIG=sentinel-si\"gned \\q\n";
+    let source = format!("no-build = \"\"\"\n{line}\"\"\"\n");
+    context.temp_dir.child("uv.toml").write_str(&source)?;
+
+    let text = context
+        .command()
+        .env("COLUMNS", "300")
+        .args(["--config-file=uv.toml", "--offline", "cache", "dir"])
+        .output()?;
+    let json = context
+        .command()
+        .args([
+            "--error-format=json",
+            "--config-file=uv.toml",
+            "--offline",
+            "cache",
+            "dir",
+        ])
+        .output()?;
+    assert_eq!(text.status.code(), Some(2));
+    assert_eq!(json.status.code(), text.status.code());
+    assert!(text.stdout.is_empty());
+    assert!(json.stdout.is_empty());
+
+    let expected = line
+        .replace("sentinel-pa\"ss", &"*".repeat("sentinel-pa\"ss".len()))
+        .replace("sentinel-si\"gned", &"*".repeat("sentinel-si\"gned".len()));
+    let text_stderr = String::from_utf8(text.stderr)?;
+    assert!(text_stderr.contains(expected.trim_end()));
+    for output in [text_stderr.as_str(), std::str::from_utf8(&json.stderr)?] {
+        assert!(!output.contains("sentinel-pa"));
+        assert!(!output.contains("sentinel-si"));
+    }
+
+    let report: Value = serde_json::from_slice(&json.stderr)?;
+    let window = report["errors"]
+        .as_array()
+        .context("error chain is an array")?
+        .iter()
+        .flat_map(|error| error["sources"].as_array().into_iter().flatten())
+        .flat_map(|source| source["windows"].as_array().into_iter().flatten())
+        .next()
+        .context("the TOML parser retains the source window")?;
+    assert_eq!(window["line_start"], 2);
+    assert_eq!(window["text"], expected);
+    let column = line.find("\\q").context("invalid escape in fixture")? + 1;
+    assert_eq!(
+        window["annotations"][0]["range"],
+        serde_json::json!({
+            "start": {"line": 2, "byte_column": column},
+            "end": {"line": 2, "byte_column": column},
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn configuration_error_ignores_quotes_in_source_comments() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let line = "index = [{ url = 'https://user:sentinel-pa\"\"\"ss@example.invalid/?sig=sentinel-si\"\"\"gned', explicit = \"yes\" }]\n";
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&format!("# \"\"\"\n{line}"))?;
+
+    let text = context
+        .command()
+        .env("COLUMNS", "300")
+        .args(["--config-file=uv.toml", "--offline", "cache", "dir"])
+        .output()?;
+    let json = context
+        .command()
+        .args([
+            "--error-format=json",
+            "--config-file=uv.toml",
+            "--offline",
+            "cache",
+            "dir",
+        ])
+        .output()?;
+    assert_eq!(text.status.code(), Some(2));
+    assert_eq!(json.status.code(), text.status.code());
+    assert!(text.stdout.is_empty());
+    assert!(json.stdout.is_empty());
+
+    let expected = line
+        .replace(
+            "sentinel-pa\"\"\"ss",
+            &"*".repeat("sentinel-pa\"\"\"ss".len()),
+        )
+        .replace(
+            "sentinel-si\"\"\"gned",
+            &"*".repeat("sentinel-si\"\"\"gned".len()),
+        );
+    let text_stderr = String::from_utf8(text.stderr)?;
+    assert!(text_stderr.contains(expected.trim_end()));
+    for output in [text_stderr.as_str(), std::str::from_utf8(&json.stderr)?] {
+        assert!(!output.contains("sentinel-pa"));
+        assert!(!output.contains("sentinel-si"));
+    }
+
+    let report: Value = serde_json::from_slice(&json.stderr)?;
+    let window = report["errors"]
+        .as_array()
+        .context("error chain is an array")?
+        .iter()
+        .flat_map(|error| error["sources"].as_array().into_iter().flatten())
+        .flat_map(|source| source["windows"].as_array().into_iter().flatten())
+        .next()
+        .context("the TOML parser retains the source window")?;
+    assert_eq!(window["line_start"], 2);
+    assert_eq!(window["text"], expected);
+    Ok(())
+}
+
+#[test]
+fn configuration_error_redacts_urls_in_source_comments() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let source =
+        "no-build = ! # 'https://user:sentinel-pa\"ss@example.invalid/?sig=sentinel-si\"gned'\n";
+    context.temp_dir.child("uv.toml").write_str(source)?;
+    let expected = source
+        .replace("sentinel-pa\"ss", &"*".repeat("sentinel-pa\"ss".len()))
+        .replace(
+            "sentinel-si\"gned'",
+            &"*".repeat("sentinel-si\"gned'".len()),
+        );
+
+    for format in ["text", "json"] {
+        let output = context
+            .command()
+            .env("COLUMNS", "300")
+            .arg(format!("--error-format={format}"))
+            .args(["--config-file=uv.toml", "--offline", "cache", "dir"])
+            .output()?;
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(!stderr.contains("sentinel-pa"));
+        assert!(!stderr.contains("sentinel-si"));
+        if format == "json" {
+            let report: Value = serde_json::from_str(&stderr)?;
+            let window = report["errors"]
+                .as_array()
+                .context("error chain is an array")?
+                .iter()
+                .flat_map(|error| error["sources"].as_array().into_iter().flatten())
+                .flat_map(|source| source["windows"].as_array().into_iter().flatten())
+                .next()
+                .context("the TOML parser retains the source window")?;
+            assert_eq!(window["text"], expected);
+        } else {
+            assert!(stderr.contains(expected.trim_end()));
+        }
+    }
     Ok(())
 }
 
