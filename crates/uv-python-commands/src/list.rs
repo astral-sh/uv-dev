@@ -180,7 +180,7 @@ pub async fn list(
                 Kind::System
             };
             output.insert((
-                installation.key(),
+                installation.key().clone(),
                 kind,
                 Either::Left(installation.interpreter().real_executable().to_path_buf()),
             ));

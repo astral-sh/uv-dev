@@ -30,14 +30,18 @@ pub struct PythonInstallation {
     // Public in the crate for test assertions
     pub(crate) source: PythonSource,
     pub(crate) interpreter: Interpreter,
+    key: PythonInstallationKey,
 }
 
 impl PythonInstallation {
     /// Create a new [`PythonInstallation`] from a source and interpreter.
     pub(crate) fn new(source: PythonSource, interpreter: Interpreter) -> Self {
+        let key = ManagedPythonInstallation::key_from_interpreter(&interpreter)
+            .unwrap_or_else(|| interpreter.key());
         Self {
             source,
             interpreter,
+            key,
         }
     }
 
@@ -367,10 +371,10 @@ impl PythonInstallation {
             e.warn_user(&installed);
         }
 
-        Ok(Self {
-            source: PythonSource::Managed,
-            interpreter: Interpreter::query(installed.executable(false), cache)?,
-        })
+        Ok(Self::new(
+            PythonSource::Managed,
+            Interpreter::query(installed.executable(false), cache)?,
+        ))
     }
 
     /// Return the [`PythonSource`] of the Python installation, indicating where it was found.
@@ -378,8 +382,8 @@ impl PythonInstallation {
         &self.source
     }
 
-    pub fn key(&self) -> PythonInstallationKey {
-        self.interpreter.key()
+    pub fn key(&self) -> &PythonInstallationKey {
+        &self.key
     }
 
     /// Return the Python [`Version`] of the Python installation as reported by its interpreter.
