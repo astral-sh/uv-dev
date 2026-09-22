@@ -22,7 +22,7 @@ pub use crate::interpreter::{
 };
 pub use crate::pointer_size::PointerSize;
 pub use crate::prefix::Prefix;
-pub use crate::python_version::{BuildVersionError, PythonVersion};
+pub use crate::python_version::{BuildRevisionError, PythonVersion};
 pub use crate::target::Target;
 pub use crate::version_files::{
     ConfigDiscovery, DiscoveryOptions as VersionFileDiscoveryOptions,
@@ -910,7 +910,7 @@ mod tests {
                             ),
                         ];
 
-                        context.run(|| {
+                        context.run(|| -> Result<()> {
                             assert_eq!(
                                 Some(PythonBuildRequest::from_interpreter(&interpreter)),
                                 PythonRequest::parse(&format!("3.13{variant}{build_name}"))
@@ -928,12 +928,13 @@ mod tests {
                                     "Interpreter properties for {request:?} against {key}",
                                 );
                                 assert_eq!(
-                                    request.satisfied(&interpreter, &context.cache),
+                                    request.satisfied(&interpreter, &context.cache)?,
                                     identity_matches,
                                     "Build identity for {request:?} against {key}",
                                 );
                             }
-                        });
+                            Ok(())
+                        })?;
                     }
                 }
             }

@@ -725,7 +725,7 @@ pub(crate) async fn refine_interpreter(
     if let Some(python_request) = python_request
         && !python_request
             .with_default_arch(python_arch.map(PythonArchitecture::into_inner))
-            .satisfied(&interpreter, cache)
+            .satisfied(&interpreter, cache)?
     {
         return Ok(None);
     }

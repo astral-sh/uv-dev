@@ -551,7 +551,7 @@ fn python_upgrade_implementation() {
 }
 
 #[test]
-fn python_upgrade_build_version() {
+fn python_upgrade_build_revision() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -573,7 +573,7 @@ fn python_upgrade_build_version() {
     Python 3.12 is already on the latest supported patch release
     ");
 
-    // Overwrite the BUILD file with an older build version
+    // Overwrite the BUILD file with an older build revision.
     let installation_dir = context.temp_dir.child("managed").child(format!(
         "cpython-{}-{}",
         LATEST_PYTHON_3_12,
@@ -597,7 +597,7 @@ fn python_upgrade_build_version() {
         &fs_err::metadata(&python_executable).unwrap(),
     );
 
-    // Now upgrade should detect the outdated build version and reinstall
+    // Now upgrade should detect the outdated build revision and reinstall.
     uv_snapshot!(context.filters(), context.python_upgrade().arg("3.12"), @"
     exit_code: 0 (success)
     ----- stderr -----
