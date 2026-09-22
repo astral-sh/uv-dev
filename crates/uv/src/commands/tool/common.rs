@@ -38,8 +38,8 @@ use uv_preview::Preview;
 use uv_pypi_types::Conflicts;
 use uv_python::{
     ConfigDiscovery, EnvironmentPreference, Interpreter, PythonArchitecture, PythonDownloads,
-    PythonEnvironment, PythonInstallation, PythonPreference, PythonRequest, PythonVariant,
-    PythonVersionFile, VersionFileDiscoveryOptions, VersionRequest,
+    PythonEnvironment, PythonInstallation, PythonPreference, PythonRequest, PythonVersionFile,
+    VersionFileDiscoveryOptions, VersionRequest,
 };
 use uv_requirements::RequirementsSpecification;
 use uv_resolver::{FlatIndex, OptionsBuilder, Preference, ResolverOutput};
@@ -697,7 +697,9 @@ pub(crate) async fn refine_interpreter(
 
     let requires_python_request = PythonRequest::Version(VersionRequest::from_specifiers(
         VersionSpecifiers::from_iter([lower_bound, upper_bound]),
-        PythonVariant::default(),
+        python_request
+            .and_then(PythonRequest::build_request)
+            .unwrap_or_default(),
     ));
 
     debug!("Refining interpreter with: {requires_python_request}");
@@ -720,13 +722,12 @@ pub(crate) async fn refine_interpreter(
 
     // If the user passed a `--python` request, and the refined interpreter is incompatible, we
     // can't use it.
-    if let Some(python_request) = python_request {
-        if !python_request
+    if let Some(python_request) = python_request
+        && !python_request
             .with_default_arch(python_arch.map(PythonArchitecture::into_inner))
             .satisfied(&interpreter, cache)
-        {
-            return Ok(None);
-        }
+    {
+        return Ok(None);
     }
 
     Ok(Some(interpreter))
