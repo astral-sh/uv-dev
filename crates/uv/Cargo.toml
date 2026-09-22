@@ -62,6 +62,7 @@ uv-shell = { workspace = true }
 uv-static = { workspace = true }
 uv-threads = { workspace = true }
 uv-test = { workspace = true, optional = true }
+uv-toml = { workspace = true }
 uv-tool = { workspace = true }
 uv-torch = { workspace = true }
 uv-trampoline-builder = { workspace = true }

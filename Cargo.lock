@@ -5884,6 +5884,7 @@ dependencies = [
  "uv-static",
  "uv-test",
  "uv-threads",
+ "uv-toml",
  "uv-tool",
  "uv-torch",
  "uv-trampoline-builder",
