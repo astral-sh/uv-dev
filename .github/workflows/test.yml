@@ -109,8 +109,14 @@ jobs:
           sudo mount -o loop /tmp/ext4.img /ext4
           sudo chown "$(id -u):$(id -g)" /ext4
 
+      - name: "Create temporary test directory"
+        run: |
+          mkdir -p /tmp/uv-runner-acceptance
+          sudo mount -t tmpfs -o size=16G,mode=1777 tmpfs /tmp/uv-runner-acceptance
+
       - name: "Cargo test"
         env:
+          TMPDIR: /tmp/uv-runner-acceptance
           # Retry more than default to reduce flakes in CI
           UV_HTTP_RETRIES: 5
           RUST_BACKTRACE: 1
