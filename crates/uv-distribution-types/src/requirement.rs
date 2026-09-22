@@ -1,11 +1,15 @@
+use std::borrow::Cow;
 use std::fmt::{Display, Formatter};
 use std::io;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 
 use thiserror::Error;
 use uv_cache_key::{CacheKey, CacheKeyHasher};
 use uv_distribution_filename::DistExtension;
+use uv_errors::{SourceAnnotation, SourceFile, SourceSnippet};
 use uv_fs::{CWD, PortablePath, PortablePathBuf, normalize_path, try_relative_to_if};
 use uv_git_types::{GitLfs, GitOid, GitReference, GitUrl, GitUrlParseError, OidParseError};
 use uv_normalize::{ExtraName, GroupName, PackageName};
@@ -44,7 +48,7 @@ enum RequirementError {
 /// Additionally, this requirement type makes room for dependency groups, which lack a standardized
 /// representation in PEP 508. In the context of this type, extras and groups are assumed to be
 /// mutually exclusive, in that if `extras` is non-empty, `groups` must be empty and vice versa.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Requirement {
     pub name: PackageName,
     #[serde(skip_serializing_if = "<[ExtraName]>::is_empty", default)]
@@ -63,6 +67,96 @@ pub struct Requirement {
     pub scope: RequirementScope,
     #[serde(skip)]
     pub origin: Option<RequirementOrigin>,
+    /// An exact authored occurrence, used only for diagnostics.
+    ///
+    /// This is not part of requirement equality, ordering, hashing, serialization, or cache keys.
+    #[serde(skip)]
+    pub provenance: Option<RequirementProvenance>,
+}
+
+/// An exact source occurrence whose identity is independent of requirement semantics.
+///
+/// Requirements are cloned during marker transformations and resolution. Sharing the occurrence
+/// keeps those clones cheap without making source text part of a resolver or cache key.
+#[derive(Clone, Debug)]
+pub struct RequirementProvenance {
+    occurrence: Arc<RequirementOccurrence>,
+    show_source: bool,
+}
+
+#[derive(Debug)]
+struct RequirementOccurrence {
+    source: SourceFile,
+    span: Range<usize>,
+}
+
+impl RequirementProvenance {
+    /// Retain a location in the exact decoded source used by a requirement parser.
+    ///
+    /// Source text is hidden until the producer has checked that the complete annotated lines
+    /// are safe to display.
+    pub fn new(source: SourceFile, span: Range<usize>) -> Self {
+        Self {
+            occurrence: Arc::new(RequirementOccurrence { source, span }),
+            show_source: false,
+        }
+    }
+
+    /// Allow the validated source lines to be displayed.
+    #[must_use]
+    pub fn with_source_text(mut self) -> Self {
+        self.show_source = true;
+        self
+    }
+
+    /// Combine two witnesses only when they identify the same exact authored occurrence.
+    ///
+    /// Clones retain an opaque occurrence identity. Independently parsed requirements are not
+    /// assumed to share an occurrence, even if their display-safe source names and text match.
+    /// The stricter visibility policy wins.
+    pub fn unambiguous_with(&self, other: &Self) -> Option<Self> {
+        Arc::ptr_eq(&self.occurrence, &other.occurrence).then(|| Self {
+            occurrence: self.occurrence.clone(),
+            show_source: self.show_source && other.show_source,
+        })
+    }
+
+    /// Render this occurrence with a label chosen by the error that cites it.
+    pub fn snippet(&self, label: impl Into<Cow<'static, str>>) -> SourceSnippet<'static> {
+        let snippet = SourceSnippet::new(self.occurrence.source.clone()).with_annotation(
+            SourceAnnotation::primary(self.occurrence.span.clone()).with_label(label),
+        );
+        if self.show_source {
+            snippet
+        } else {
+            snippet.without_source_text()
+        }
+    }
+}
+
+impl std::fmt::Debug for Requirement {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            name,
+            extras,
+            groups,
+            marker,
+            source,
+            scope,
+            origin,
+            provenance: _,
+        } = self;
+        formatter
+            .debug_struct("Requirement")
+            .field("name", name)
+            .field("extras", extras)
+            .field("groups", groups)
+            .field("marker", marker)
+            .field("source", source)
+            .field("scope", scope)
+            .field("origin", origin)
+            .finish()
+    }
 }
 
 /// Whether a requirement is global or belongs to a package's dependency group.
@@ -160,6 +254,7 @@ impl std::hash::Hash for Requirement {
             source,
             scope,
             origin: _,
+            provenance: _,
         } = self;
         name.hash(state);
         extras.hash(state);
@@ -180,6 +275,7 @@ impl PartialEq for Requirement {
             source,
             scope,
             origin: _,
+            provenance: _,
         } = self;
         let Self {
             name: other_name,
@@ -189,6 +285,7 @@ impl PartialEq for Requirement {
             source: other_source,
             scope: other_scope,
             origin: _,
+            provenance: _,
         } = other;
         name == other_name
             && extras == other_extras
@@ -211,6 +308,7 @@ impl Ord for Requirement {
             source,
             scope,
             origin: _,
+            provenance: _,
         } = self;
         let Self {
             name: other_name,
@@ -220,6 +318,7 @@ impl Ord for Requirement {
             source: other_source,
             scope: other_scope,
             origin: _,
+            provenance: _,
         } = other;
         name.cmp(other_name)
             .then_with(|| extras.cmp(other_extras))
@@ -365,6 +464,7 @@ impl From<uv_pep508::Requirement<VerbatimParsedUrl>> for Requirement {
             source,
             scope: RequirementScope::Global,
             origin: requirement.origin,
+            provenance: None,
         }
     }
 }
@@ -1259,11 +1359,100 @@ impl TryFrom<RequirementSourceWire> for RequirementSource {
 
 #[cfg(test)]
 mod tests {
+    use std::cmp::Ordering;
     use std::path::PathBuf;
 
+    use uv_cache_key::{cache_digest, hash_digest};
+    use uv_errors::SourceFile;
     use uv_pep508::{MarkerTree, VerbatimUrl};
+    use uv_pypi_types::VerbatimParsedUrl;
 
-    use crate::{Requirement, RequirementScope, RequirementSource};
+    use crate::{Requirement, RequirementProvenance, RequirementScope, RequirementSource};
+
+    #[test]
+    fn provenance_is_not_requirement_identity() -> Result<(), Box<dyn std::error::Error>> {
+        let plain = Requirement::from(
+            "pypyp==1,>=1.2".parse::<uv_pep508::Requirement<VerbatimParsedUrl>>()?,
+        );
+        let scoped = Requirement {
+            scope: RequirementScope::Group {
+                package: "project".parse()?,
+                group: "test".parse()?,
+            },
+            ..plain.clone()
+        };
+        assert_ne!(plain, scoped);
+        assert_ne!(plain.cmp(&scoped), Ordering::Equal);
+        assert_ne!(hash_digest(&plain), hash_digest(&scoped));
+        for plain in [plain, scoped] {
+            let first = Requirement {
+                provenance: Some(
+                    RequirementProvenance::new(
+                        SourceFile::new("first.in", "pypyp==1,>=1.2\n"),
+                        0..14,
+                    )
+                    .with_source_text(),
+                ),
+                ..plain.clone()
+            };
+            let second = Requirement {
+                provenance: Some(RequirementProvenance::new(
+                    SourceFile::new("second.in", "# another occurrence\npypyp==1,>=1.2\n"),
+                    21..35,
+                )),
+                ..plain.clone()
+            };
+
+            assert_eq!(first, plain);
+            assert_eq!(first, second);
+            assert_eq!(first.cmp(&second), Ordering::Equal);
+            assert_eq!(hash_digest(&first), hash_digest(&plain));
+            assert_eq!(hash_digest(&first), hash_digest(&second));
+            assert_eq!(cache_digest(&first), cache_digest(&plain));
+            assert_eq!(cache_digest(&first), cache_digest(&second));
+
+            let encoded = toml::Value::try_from(&first)?;
+            assert_eq!(encoded, toml::Value::try_from(&plain)?);
+            assert_eq!(encoded, toml::Value::try_from(&second)?);
+            let decoded: Requirement = encoded.try_into()?;
+            assert_eq!(
+                decoded,
+                Requirement {
+                    scope: RequirementScope::Global,
+                    ..plain.clone()
+                }
+            );
+            assert!(decoded.provenance.is_none());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn provenance_requires_an_unambiguous_occurrence() {
+        let text = "pypyp==1,>=1.2\npypyp==1,>=1.2\n";
+        let first = RequirementProvenance::new(SourceFile::new("requirements.in", text), 0..14);
+        let visible = first.clone().with_source_text();
+        let reparsed = RequirementProvenance::new(SourceFile::new("requirements.in", text), 0..14);
+        let second = RequirementProvenance::new(SourceFile::new("requirements.in", text), 15..29);
+        let changed = RequirementProvenance::new(
+            SourceFile::new("requirements.in", "pypyp==2,>=2.2\n"),
+            0..14,
+        );
+
+        assert!(
+            visible
+                .unambiguous_with(&visible.clone())
+                .is_some_and(|merged| merged.show_source)
+        );
+        assert!(
+            visible
+                .unambiguous_with(&first)
+                .is_some_and(|merged| !merged.show_source)
+        );
+        assert!(first.unambiguous_with(&reparsed).is_none());
+        assert!(first.unambiguous_with(&second).is_none());
+        assert!(first.unambiguous_with(&changed).is_none());
+    }
 
     #[test]
     fn roundtrip() {
@@ -1279,6 +1468,7 @@ mod tests {
             },
             scope: RequirementScope::Global,
             origin: None,
+            provenance: None,
         };
 
         let raw = toml::to_string(&requirement).unwrap();
@@ -1303,6 +1493,7 @@ mod tests {
             },
             scope: RequirementScope::Global,
             origin: None,
+            provenance: None,
         };
 
         let raw = toml::to_string(&requirement).unwrap();
@@ -1330,6 +1521,7 @@ mod tests {
             source,
             scope: RequirementScope::Global,
             origin: None,
+            provenance: None,
         };
         assert_eq!(
             requirement.to_string(),

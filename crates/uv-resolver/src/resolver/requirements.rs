@@ -156,6 +156,7 @@ impl<'a> RequirementExpander<'a> {
                             source: requirement.source.clone(),
                             scope: requirement.scope.clone(),
                             origin: requirement.origin.clone(),
+                            provenance: requirement.provenance.clone(),
                             marker: marker.simplify_extras(slice::from_ref(&extra)),
                         }
                     }
@@ -200,6 +201,7 @@ impl<'a> RequirementExpander<'a> {
                     source: req.source.clone(),
                     scope: req.scope.clone(),
                     origin: req.origin.clone(),
+                    provenance: req.provenance.clone(),
                     marker: req.marker,
                 });
             }
@@ -361,6 +363,7 @@ impl<'a> RequirementExpander<'a> {
                             source: constraint.source.clone(),
                             scope: constraint.scope.clone(),
                             origin: constraint.origin.clone(),
+                            provenance: constraint.provenance.clone(),
                             marker,
                         })
                     }
@@ -399,6 +402,7 @@ impl<'a> RequirementExpander<'a> {
                             source: constraint.source.clone(),
                             scope: constraint.scope.clone(),
                             origin: constraint.origin.clone(),
+                            provenance: constraint.provenance.clone(),
                             marker,
                         })
                     }

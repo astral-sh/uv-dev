@@ -402,6 +402,7 @@ impl FlatRequiresDist {
                     source: requirement.source.clone(),
                     scope: requirement.scope.clone(),
                     origin: requirement.origin.clone(),
+                    provenance: requirement.provenance.clone(),
                     marker,
                 };
                 if requirement.name == *name {
@@ -433,6 +434,7 @@ impl FlatRequiresDist {
                     source: req.source.clone(),
                     scope: req.scope.clone(),
                     origin: req.origin.clone(),
+                    provenance: req.provenance.clone(),
                     marker: req.marker,
                 });
             }

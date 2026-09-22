@@ -735,6 +735,7 @@ mod tests {
             },
             scope: RequirementScope::Global,
             origin: None,
+            provenance: None,
         }
     }
 
