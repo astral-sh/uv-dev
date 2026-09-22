@@ -1320,7 +1320,7 @@ impl CacheBucket {
             Self::Files => "files-v0",
             Self::Builds => "builds-v0",
             Self::Environments => "environments-v2",
-            Self::Python => "python-v0",
+            Self::Python => "python-v1",
             Self::Binaries => "binaries-v0",
             Self::Osv => "osv-v0",
         }
