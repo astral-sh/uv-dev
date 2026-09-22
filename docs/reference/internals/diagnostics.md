@@ -102,25 +102,37 @@ and width policy. Source text is clipped or folded as source, not reflowed as pr
 Source text, paths, labels, and server responses are untrusted terminal input. In particular,
 `annotate-snippets` treats [`secondary_title` and `Level::message`][annotate-trust] as potentially
 styled text. The adapter normalizes terminal controls and remaps the affected offsets before
-rendering. Source excerpts also must not reveal credentials that ordinary error messages redact,
-including credentials in index URLs or nearby configuration entries. Surrounding context defaults to
-zero lines. `SourceFile::lines_for_span` and `line_range_for_span` expose the same LF-delimited
-windows used by the renderer, including CR bytes, so producers can decide whether the entire visible
-window is safe. Additional context needs its own safety review.
+rendering. Source snippets select complete annotated physical lines, with no surrounding lines by
+default. `SourceFile::lines_for_span` and `line_range_for_span` expose the same LF-delimited
+windows, including CR bytes, so producers can inspect the complete text they choose to show. Broader
+context or merging distant windows can reveal additional configuration and requires an explicit
+producer decision.
 
-Privacy decisions remain with the producer; the renderer does not understand credentials. The group
-and duplicate-name diagnostics use typed provenance and conservative visibility checks. Generic TOML
-parse errors retain the parser's message and show only the first selected physical line, but that
-does not establish a general redaction policy for malformed TOML values or parser messages. When
-source cannot be shown safely, a location without an excerpt is still useful.
+Selected source windows apply the credential and supported signed-query policy used by
+`DisplaySafeUrl` to visibly spelled, whitespace-delimited absolute URLs. Terminal rendering masks
+sensitive Unicode scalars and remaps annotation offsets; JSON masks sensitive bytes while retaining
+the original UTF-8 byte coordinates. The retained source and exact edit replacements are unchanged.
+This policy does not decode source-language escapes or continued values, rewrite pre-rendered error
+messages, or recognize arbitrary secrets. Generic TOML parse errors retain the parser's message and
+show the first selected physical line; their message text is outside the source-window policy.
+
+Producers remain responsible for accurate provenance and deciding whether an excerpt is appropriate.
+Known authored dependency groups, project names, source and index declarations, and environment
+markers can show their complete selected lines after the semantic values and occurrences have been
+checked against the retained syntax. Uncertain mappings use a location without source text or leave
+the error unannotated. A location-only snippet remains available when the source contains sensitive
+content outside the narrow URL policy.
 
 The renderer is not an error classifier. Formatting changes must leave error-chain traversal,
 downcasting, hints, command exit codes, quiet-mode behavior, and external-command status propagation
 unchanged. Presentation-only provenance must also stay out of resolver identity and cache keys;
 `uv-distribution-types::Requirement` already excludes its `origin` from equality, ordering, hashing,
-and serialization. `RequirementOrigin` is not itself a presentation-only field, however:
-`RequirementOrigin::Group` participates in group-scoped explicit-index selection. Exact diagnostic
-occurrences and any future solver-origin arena must remain separate from that semantic context.
+and serialization. Semantic dependency-group context is represented separately by
+`RequirementScope`, whose `Group { package, group }` variant participates in requirement equality,
+ordering, and hashing. It controls group-scoped explicit-index selection and supplies the conflict
+item used by resolver fork filtering; requirement transformations must retain it even when
+diagnostic origin is absent. Exact diagnostic occurrences and any future solver-origin arena must
+remain separate from that semantic scope.
 
 ## Structured reports and suggestions
 
@@ -168,8 +180,8 @@ implemented examples exercise several boundaries:
   concise cause with its location. Full-line excerpts retain their original line numbers.
 - **Dependency groups.** Retain normalized group identities and exact include occurrences through
   semantic traversal. Missing groups point to the failed include; cycles point to the closing edge
-  and related earlier edges. URL-bearing requirements, arbitrary marker text, and uncertain source
-  layouts use location-only output.
+  and related earlier edges. Matching authored groups show their complete selected lines; uncertain
+  or transformed group layouts use location-only output.
 - **Duplicate workspace names.** Retain both parsed project sources at the conflict boundary. The
   second declaration is primary and the first is a related location, including when their original
   spellings normalize to the same package name.
@@ -181,10 +193,11 @@ implemented examples exercise several boundaries:
   commented script, accounting for CRLF, UTF-8, removed prefixes, and EOF. Unknown mappings fall
   back instead of inventing script columns.
 - **Sources and indexes.** Validation and lowering retain exact original array occurrences before
-  marker, extra, or group filtering. Source-marker conflicts and missing named indexes use
-  location-only output. Source validation checks every pair with matching extra and group selectors.
-  A nonempty marker remainder can carry a display-only edit for the verified TOML value; a fully
-  covered source receives disjointness or removal advice instead of an impossible replacement.
+  marker, extra, or group filtering. Source-marker conflicts and missing named indexes show the
+  verified declarations. Source validation checks every pair with matching extra and group
+  selectors. A nonempty marker remainder can carry a display-only edit for the verified TOML value;
+  a fully covered source receives disjointness or removal advice instead of an impossible
+  replacement.
 - **Configured environments.** Supported and required environment lists also check every pair for
   overlap. Exact workspace-owned arrays can identify both conflicting declarations and offer a
   display-only edit for a nonempty remainder. Merged configuration and scripts remain unlocated.
@@ -233,13 +246,15 @@ error: No solution found when resolving dependencies
 The source model and renderer are no longer the main unknowns. Further work has distinct provenance
 and product boundaries:
 
-| Work                          | Current boundary                                                                           | What is still needed                                                                                                                                                                        |
-| ----------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| More source-bearing errors    | Representative TOML, requirements, project Python, group, script, source, and index errors | Retain exact occurrences for each new semantic validator; decide whether its complete source lines are safe. Standalone or transformed inputs need explicit coordinate mappings.            |
-| More project metadata         | Known-static PEP 621 dependency order                                                      | Explicit provenance for dependency groups, build requirements, dynamic/backend metadata, `PKG-INFO`, wheels, and remote `METADATA`; never infer declarations from cached normalized values. |
-| General resolver explanations | Empty-range witnesses and unambiguous unnamed-root clauses                                 | Merge-aware one-to-many PubGrub origin identities, with unlocated contributors and source-aware report rewrites.                                                                            |
-| Stable structured output      | Hidden experimental error-chain JSON                                                       | Decide schema evolution, stable codes, source/document identity, and the relationship to warnings, progress, Clap, and child-process output.                                                |
-| Applying suggestions          | Validated single-source edits and explicit applicability                                   | Define source version verification, decoded-to-file byte mappings, multi-file atomicity, conflicting edit groups, and opt-in behavior-changing edits.                                       |
+| Work                                               | Current boundary                                                                                                           | What is still needed                                                                                                                                                                               |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| More source-bearing errors                         | Representative TOML, requirements, project Python, group, script, source, and index errors                                 | Retain exact occurrences for each new semantic validator; decide whether its complete source lines are appropriate to display. Standalone or transformed inputs need explicit coordinate mappings. |
+| More project metadata                              | Known-static PEP 621 dependency order                                                                                      | Explicit provenance for dependency groups, build requirements, dynamic/backend metadata, `PKG-INFO`, wheels, and remote `METADATA`; never infer declarations from cached normalized values.        |
+| General resolver explanations                      | Empty-range witnesses and unambiguous unnamed-root clauses                                                                 | Merge-aware one-to-many PubGrub origin identities, with unlocated contributors and source-aware report rewrites.                                                                                   |
+| Captured build-backend output                      | Typed build requirement context and actionable advice; captured streams still live in error `Display` implementations      | Model captured `stdout` and `stderr` as owned `Info` details without changing stream separation, `BuildOutput` selection, live output, or subprocess exit status.                                  |
+| Standalone warnings and manually reported failures | Some malformed tool-lockfile, ignored existing-lockfile, and interpreter-validation warnings still format strings directly | Decide which paths should retain and pass their typed errors to the common renderer, preserving whether the operation continues and its quiet-mode behavior.                                       |
+| Stable structured output                           | Hidden experimental error-chain JSON                                                                                       | Decide schema evolution, stable codes, source/document identity, and the relationship to warnings, progress, Clap, and child-process output.                                                       |
+| Applying suggestions                               | Validated single-source edits and explicit applicability                                                                   | Define source version verification, decoded-to-file byte mappings, multi-file atomicity, conflicting edit groups, and opt-in behavior-changing edits.                                              |
 
 The resolver boundary is substantial. The pinned `astral-pubgrub` `0.6.1` [insertion
 API][pubgrub-insertion] accepts package/range dependencies, while its [exported dependency
@@ -258,8 +273,16 @@ must drop, retain, or union those origins alongside the actual explanation it re
 package metadata and Python-compatibility edges can be adopted after that contract exists.
 
 New transparent or type-erased error owners still need registration and source-contract coverage.
-Source-only producers do not need artificial `Hinted` implementations. Full resolver provenance, a
-stable structured format, and automatic edits remain independent changes.
+Source-only producers do not need artificial `Hinted` implementations. The build-output cleanup in
+[uv-dev#1115](https://github.com/astral-sh/uv-dev/pull/1115) shares the existing captured-output
+selection and formatting; typed `Info` output remains a separate adopter. Missing-lockfile command
+advice also overlaps the independently maintained
+[uv#21406](https://github.com/astral-sh/uv/pull/21406). The diagnostic stack's target and input
+provenance must be reconciled with that command-aware recovery behavior when either change is
+integrated. The shared command-report work beginning with
+[uv-dev#1628](https://github.com/astral-sh/uv-dev/pull/1628) is relevant to a future
+structured-output contract, but it does not establish a uniform diagnostic event stream. Full
+resolver provenance, stable structured diagnostics, and automatic edits remain independent changes.
 
 [ty-model]:
   https://github.com/astral-sh/ruff/blob/6c8eb98a0295a31b90df12d2307f910376f3bbcc/crates/ruff_db/src/diagnostic/mod.rs#L630-L760
