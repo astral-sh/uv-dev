@@ -6392,6 +6392,7 @@ dependencies = [
  "uv-extract",
  "uv-git",
  "uv-installer",
+ "uv-lock",
  "uv-macros",
  "uv-normalize",
  "uv-options-metadata",

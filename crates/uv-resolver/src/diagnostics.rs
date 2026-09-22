@@ -5,21 +5,16 @@ use uv_errors::Diagnostic;
 
 use crate::NoSolutionError;
 
-/// Resolve rejection context and retained requirement locations without changing error sources.
+/// Resolve resolver-owned presentation data without changing error sources.
 pub fn diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Option<Diagnostic<'a>> {
+    downcast_error::<NoSolutionError>(error)?.diagnostic()
+}
+
+fn downcast_error<'a, E: Error + 'static>(error: &'a (dyn Error + 'static)) -> Option<&'a E> {
     error
-        .downcast_ref::<NoSolutionError>()
-        .or_else(|| {
-            error
-                .downcast_ref::<Box<NoSolutionError>>()
-                .map(AsRef::as_ref)
-        })
-        .or_else(|| {
-            error
-                .downcast_ref::<Arc<NoSolutionError>>()
-                .map(AsRef::as_ref)
-        })?
-        .diagnostic()
+        .downcast_ref::<E>()
+        .or_else(|| error.downcast_ref::<Box<E>>().map(AsRef::as_ref))
+        .or_else(|| error.downcast_ref::<Arc<E>>().map(AsRef::as_ref))
 }
 
 #[cfg(test)]
