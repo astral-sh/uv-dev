@@ -155,9 +155,13 @@ pub struct PackageMetadata {
     )]
     pub wheel: Option<ArtifactMetadata>,
 
-    /// Whether this version is yanked.
+    /// Whether this version is yanked, including an optional reason.
     #[serde(default)]
-    pub yanked: bool,
+    pub yanked: Yanked,
+
+    /// Upload time shared by artifacts without a more specific upload time.
+    #[serde(default)]
+    pub upload_time: Option<String>,
 
     /// Specific wheel tags to produce (e.g., `["cp312-abi3-win_amd64"]`).
     /// An empty list means produce only the default `py3-none-any` wheel.
@@ -198,6 +202,47 @@ pub enum SdistBackend {
     Hatchling,
     /// A legacy setuptools project without `pyproject.toml` or static metadata.
     LegacySetuptools,
+}
+
+/// Yanked release metadata exposed by the Simple API.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(from = "YankedValue")]
+pub enum Yanked {
+    #[default]
+    No,
+    Yes,
+    Reason(String),
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum YankedValue {
+    Enabled(bool),
+    Reason(String),
+}
+
+impl From<YankedValue> for Yanked {
+    fn from(value: YankedValue) -> Self {
+        match value {
+            YankedValue::Enabled(false) => Self::No,
+            YankedValue::Enabled(true) => Self::Yes,
+            YankedValue::Reason(reason) => Self::Reason(reason),
+        }
+    }
+}
+
+impl Yanked {
+    pub fn is_yanked(&self) -> bool {
+        !matches!(self, Self::No)
+    }
+
+    pub(super) fn simple_api_value(&self) -> Option<serde_json::Value> {
+        match self {
+            Self::No => None,
+            Self::Yes => Some(serde_json::Value::Bool(true)),
+            Self::Reason(reason) => Some(serde_json::Value::String(reason.clone())),
+        }
+    }
 }
 
 fn deserialize_artifact<'de, D>(
@@ -451,6 +496,25 @@ raw_requires_dist = ["deliberately invalid ;"]
         )?;
         assert!(metadata.requires_python.is_none());
         assert_eq!(metadata.raw_requires_dist, ["deliberately invalid ;"]);
+        Ok(())
+    }
+
+    #[test]
+    fn parse_release_metadata() -> Result<()> {
+        let metadata: PackageMetadata = toml::from_str(
+            r#"
+yanked = "broken release"
+upload_time = "2024-01-01T00:00:00Z"
+"#,
+        )?;
+        assert_eq!(
+            metadata.yanked.simple_api_value(),
+            Some(serde_json::json!("broken release"))
+        );
+        assert_eq!(
+            metadata.upload_time.as_deref(),
+            Some("2024-01-01T00:00:00Z")
+        );
         Ok(())
     }
 
