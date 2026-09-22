@@ -350,7 +350,7 @@ async fn perform_install(
     let installations_dir = installations.root();
     let scratch_dir = installations.scratch();
     let _lock = installations.lock().await?;
-    let mut existing_installations: Vec<_> = installations
+    let existing_installations: Vec<_> = installations
         .find_all()?
         .inspect(|installation| trace!("Found existing installation {}", installation.key()))
         .collect();
@@ -365,8 +365,6 @@ async fn perform_install(
         python_downloads_json_url.as_deref(),
     )
     .await?;
-    existing_installations
-        .sort_by(|left, right| download_list.compare_installations(left.key(), right.key()));
     // Python downloads are performing their own retries to catch stream errors, disable the
     // default retries to avoid the middleware from performing uncontrolled retries.
     let client = client_builder.retries(0).build()?;
@@ -557,9 +555,10 @@ async fn perform_install(
                     debug!("No installation found for request `{}`", request);
                     unsatisfied.push(Cow::Borrowed(request));
                 }
-            } else if let Some(installation) = existing_installations.iter().find(|inst| {
-                download_list.matches_installation(&request.download_request, inst.key())
-            }) {
+            } else if let Some(installation) = existing_installations
+                .iter()
+                .find(|inst| request.matches_installation(inst))
+            {
                 debug!("Found `{}` for request `{}`", installation.key(), request);
                 satisfied.push(installation);
             } else {

@@ -88,15 +88,20 @@ pub(crate) async fn find(
     .await?;
 
     let python_request = python_request.unwrap_or_default();
-    let python = PythonInstallation::find_existing_with_catalog(
+    let python = PythonInstallation::find_existing(
         &python_request,
         environment_preference,
         python_preference,
-        client_builder,
         cache,
-        python_downloads_json_url,
-    )
-    .await?;
+    )?;
+    python
+        .download_and_warn_if_outdated_prerelease(
+            &python_request,
+            client_builder,
+            cache,
+            python_downloads_json_url,
+        )
+        .await?;
 
     // Warn if the discovered Python version is incompatible with the current workspace
     if let Some(requires_python) = requires_python {
