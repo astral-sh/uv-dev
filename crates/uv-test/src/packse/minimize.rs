@@ -628,7 +628,7 @@ fn fixed_environment_document(
     ScenarioDocument::from_value(value)
 }
 
-/// Preserve the universal Python range while recording the all-root outcome at one target.
+/// Preserve the universal resolver policy while recording the all-root outcome at one target.
 fn universal_document(
     document: &ScenarioDocument,
     target: &ScenarioTarget,
@@ -668,14 +668,7 @@ fn universal_document(
     expected.remove("explanation");
     let resolver = table_entry(root, "resolver_options")?;
     resolver.insert("universal".to_string(), toml::Value::Boolean(true));
-    resolver.insert(
-        "python".to_string(),
-        toml::Value::String(target.python.to_string()),
-    );
-    resolver.insert(
-        "python_platform".to_string(),
-        toml::Value::String(target.platform.as_str().to_string()),
-    );
+    // The reference target describes the saved expectation, not a new resolution override.
     table_entry(root, "environment")?.insert(
         "python".to_string(),
         toml::Value::String(target.python.to_string()),
@@ -707,6 +700,7 @@ mod tests {
     use crate::packse::check::ScenarioPlatform;
     use crate::packse::project::ProjectSelection;
     use crate::packse::scenario::ScenarioTest;
+    use crate::packse::structured::validate_scenario_policy;
 
     fn document() -> Result<ScenarioDocument> {
         r#"
@@ -1004,6 +998,29 @@ packages = { a = "1" }
     }
 
     #[test]
+    fn universal_expectations_preserve_explicit_python_policy() -> Result<()> {
+        let document: ScenarioDocument = r#"
+name = "project-python-policy"
+[root]
+requires_python = ">=3.12,<3.15"
+[expected]
+satisfiable = true
+[resolver_options]
+universal = true
+python = "3.13"
+python_platform = "x86_64-pc-windows-msvc"
+"#
+        .parse()?;
+        let normalized = universal_document(&document, &target(), true, 100)?;
+        assert_eq!(
+            normalized.value().get("resolver_options"),
+            document.value().get("resolver_options")
+        );
+        assert_eq!(normalized.scenario()?.environment.python, target().python);
+        Ok(())
+    }
+
+    #[test]
     fn lock_reduction_stops_on_unclassified_candidate_errors() -> Result<()> {
         let document = document()?;
         let mut checks = 0;
@@ -1079,6 +1096,37 @@ packages = { a = "1" }
                 .to_string(),
             ">=3.12, <3.15"
         );
+        certify_project_marker_witness(
+            &result.reduction.document,
+            result.witness.assignment(),
+            1_000,
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn witnessed_final_replay_retains_structured_policy() -> Result<()> {
+        let result = minimize_witnessed_project_lock_scenario(
+            &witnessed_document()?,
+            &[target()],
+            100,
+            200,
+            1_000,
+            |candidate| {
+                validate_scenario_policy(&candidate.document.scenario()?)?;
+                witnessed_mismatch(candidate)
+            },
+        )?;
+        assert!(result.reduction.accepted > 0);
+        assert!(result.reduction.deletion_minimal);
+        assert_eq!(
+            result.reduction.failure,
+            LockScenarioFailureKind::FalseUnsatisfiable
+        );
+        let scenario = result.reduction.document.scenario()?;
+        validate_scenario_policy(&scenario)?;
+        assert!(scenario.resolver_options.python.is_none());
+        assert!(scenario.resolver_options.python_platform.is_none());
         certify_project_marker_witness(
             &result.reduction.document,
             result.witness.assignment(),
