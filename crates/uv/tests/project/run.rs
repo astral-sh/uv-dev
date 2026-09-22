@@ -434,7 +434,7 @@ fn run_pep723_script() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving script dependencies
-      cause: Because there are no versions of add and you require add, we can conclude that your requirements are unsatisfiable.
+      cause: there are no versions of add and you require add.
     ");
 
     // If the script can't be resolved, we should reference the script.
@@ -453,7 +453,7 @@ fn run_pep723_script() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving script dependencies
-      cause: Because there are no versions of add and you require add, we can conclude that your requirements are unsatisfiable.
+      cause: there are no versions of add and you require add.
     ");
 
     // If the script contains an unclosed PEP 723 tag, we should error.
@@ -1056,7 +1056,7 @@ fn run_pep723_script_build_constraints() -> Result<()> {
     error: Failed to download and build `requests==1.2.0`
       cause: Failed to resolve requirements from `setup.py` build
       cause: No solution found when resolving: `setuptools>=40.8.0`
-      cause: Because you require setuptools>=40.8.0 and setuptools==1, we can conclude that your requirements are unsatisfiable.
+      cause: you require setuptools>=40.8.0 and setuptools==1.
     ");
 
     // Compatible build constraints.
@@ -1493,7 +1493,7 @@ fn run_with() -> Result<()> {
     Resolved 2 packages in [TIME]
     Checked 2 packages in [TIME]
     error: No solution found when resolving `--with` dependencies
-      cause: Because there are no versions of add and you require add, we can conclude that your requirements are unsatisfiable.
+      cause: there are no versions of add and you require add.
     ");
 
     Ok(())
@@ -1985,7 +1985,7 @@ fn run_with_build_constraints() -> Result<()> {
     error: Failed to download and build `requests==1.2.0`
       cause: Failed to resolve requirements from `setup.py` build
       cause: No solution found when resolving: `setuptools>=40.8.0`
-      cause: Because you require setuptools>=40.8.0 and setuptools==1, we can conclude that your requirements are unsatisfiable.
+      cause: you require setuptools>=40.8.0 and setuptools==1.
     ");
 
     // Change the build constraint to be compatible with `requests==1.2`.

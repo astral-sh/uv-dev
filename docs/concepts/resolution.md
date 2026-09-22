@@ -629,10 +629,10 @@ If you run `uv lock` with the above dependencies, resolution will fail:
 
 ```console
 $ uv lock
-  x No solution found when resolving dependencies:
-  `-> Because myproject[extra2] depends on numpy==2.0.0 and myproject[extra1] depends on numpy==2.1.2, we can conclude that myproject[extra1] and
-      myproject[extra2] are incompatible.
-      And because your project requires myproject[extra1] and myproject[extra2], we can conclude that your projects's requirements are unsatisfiable.
+error: No solution found when resolving dependencies
+  cause: myproject[extra2] depends on numpy==2.0.0 and myproject[extra1] depends on numpy==2.1.2,
+         so myproject[extra1] and myproject[extra2] are incompatible.
+         And your project requires myproject[extra1] and myproject[extra2].
 ```
 
 To work around this, uv supports explicit declaration of conflicts. If you specify that `extra1` and

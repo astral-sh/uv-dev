@@ -439,13 +439,7 @@ impl ReportFormatter<PubGrubPackage, Range<Version>, UnavailableReason>
         current_terms: &Map<PubGrubPackage, Term<Range<Version>>>,
     ) -> String {
         let external = self.format_both_external(external1, external2);
-        let terms = self.format_terms(current_terms);
-
-        format!(
-            "Because {}we can conclude that {}",
-            padded("", &external, ", "),
-            padded("", &terms, "."),
-        )
+        self.format_explanation(&external, current_terms)
     }
 
     /// Both causes have already been explained so we use their refs.
@@ -461,16 +455,14 @@ impl ReportFormatter<PubGrubPackage, Range<Version>, UnavailableReason>
 
         let derived1_terms = self.format_terms(&derived1.terms);
         let derived2_terms = self.format_terms(&derived2.terms);
-        let current_terms = self.format_terms(current_terms);
-
-        format!(
-            "Because we know from ({}) that {}and we know from ({}) that {}{}",
-            ref_id1,
+        let premises = format!(
+            "{}({}) and {}({})",
             padded("", &derived1_terms, " "),
+            ref_id1,
+            padded("", &derived2_terms, " "),
             ref_id2,
-            padded("", &derived2_terms, ", "),
-            padded("", &current_terms, "."),
-        )
+        );
+        self.format_explanation(&premises, current_terms)
     }
 
     /// One cause is derived (already explained so one-line),
@@ -487,15 +479,13 @@ impl ReportFormatter<PubGrubPackage, Range<Version>, UnavailableReason>
 
         let derived_terms = self.format_terms(&derived.terms);
         let external = self.format_external(external);
-        let current_terms = self.format_terms(current_terms);
-
-        format!(
-            "Because we know from ({}) that {}and {}we can conclude that {}",
-            ref_id,
+        let premises = format!(
+            "{}({}) and {}",
             padded("", &derived_terms, " "),
-            padded("", &external, ", "),
-            padded("", &current_terms, "."),
-        )
+            ref_id,
+            external,
+        );
+        self.format_explanation(&premises, current_terms)
     }
 
     /// Add an external cause to the chain of explanations.
@@ -505,13 +495,7 @@ impl ReportFormatter<PubGrubPackage, Range<Version>, UnavailableReason>
         current_terms: &Map<PubGrubPackage, Term<Range<Version>>>,
     ) -> String {
         let external = self.format_external(external);
-        let terms = self.format_terms(current_terms);
-
-        format!(
-            "And because {}we can conclude that {}",
-            padded("", &external, ", "),
-            padded("", &terms, "."),
-        )
+        self.format_explanation(&format!("And {external}"), current_terms)
     }
 
     /// Add an already explained incompat to the chain of explanations.
@@ -522,14 +506,8 @@ impl ReportFormatter<PubGrubPackage, Range<Version>, UnavailableReason>
         current_terms: &Map<PubGrubPackage, Term<Range<Version>>>,
     ) -> String {
         let derived = self.format_terms(&derived.terms);
-        let current = self.format_terms(current_terms);
-
-        format!(
-            "And because we know from ({}) that {}we can conclude that {}",
-            ref_id,
-            padded("", &derived, ", "),
-            padded("", &current, "."),
-        )
+        let premises = format!("And {}({})", padded("", &derived, " "), ref_id);
+        self.format_explanation(&premises, current_terms)
     }
 
     /// Add an already explained incompat to the chain of explanations.
@@ -540,17 +518,39 @@ impl ReportFormatter<PubGrubPackage, Range<Version>, UnavailableReason>
         current_terms: &Map<PubGrubPackage, Term<Range<Version>>>,
     ) -> String {
         let external = self.format_both_external(prior_external, external);
-        let terms = self.format_terms(current_terms);
-
-        format!(
-            "And because {}we can conclude that {}",
-            padded("", &external, ", "),
-            padded("", &terms, "."),
-        )
+        self.format_explanation(&format!("And {external}"), current_terms)
     }
 }
 
 impl PubGrubReportFormatter<'_> {
+    /// Join a derivation's premises and conclusion. The error heading already states that the
+    /// root requirements cannot be satisfied, so only intermediate conclusions need to be shown.
+    fn format_explanation(
+        &self,
+        premises: &str,
+        terms: &Map<PubGrubPackage, Term<Range<Version>>>,
+    ) -> String {
+        let is_root_conclusion = terms.is_empty()
+            || (terms.len() == 1
+                && terms.iter().any(|(package, term)| {
+                    Self::is_root(package)
+                        || match term {
+                            Term::Positive(_) => self.is_single_project_workspace_member(package),
+                            Term::Negative(_) => false,
+                        }
+                }));
+        if is_root_conclusion {
+            return padded("", premises, ".").to_string();
+        }
+
+        let conclusion = self.format_terms(terms);
+        format!(
+            "{}so {}",
+            padded("", premises, ", "),
+            padded("", &conclusion, "."),
+        )
+    }
+
     /// Return the formatting for "the root package requires", if the given
     /// package is the root package.
     ///
@@ -2783,6 +2783,7 @@ mod tests {
     use pubgrub::{DefaultStringReporter, Reporter};
     use uv_distribution_types::RequiresPython;
     use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder};
+    use uv_resolver_types::PackageNodeKind;
 
     use super::*;
 
@@ -2842,6 +2843,64 @@ mod tests {
                 tags: None,
             }
         }
+    }
+
+    #[test]
+    fn omits_root_conclusions_and_retains_package_conclusions() {
+        let mut fixture = FormatterFixture::new();
+        let root = PubGrubPackage::from(PubGrubPackageInner::Root(None));
+        let foo_name: PackageName = "foo".parse().expect("valid package name");
+        let foo =
+            PubGrubPackage::from_package(foo_name.clone(), PackageNodeKind::Base, MarkerTree::TRUE);
+        let bar = PubGrubPackage::from_package(
+            "bar".parse().expect("valid package name"),
+            PackageNodeKind::Base,
+            MarkerTree::TRUE,
+        );
+        let requirement =
+            External::FromDependencyOf(foo.clone(), Range::full(), bar.clone(), Range::full());
+        let unavailable = External::NoVersions(bar, Range::full());
+        let root_terms = Map::from_iter([(root, Term::Positive(Range::full()))]);
+        let foo_terms = Map::from_iter([(foo.clone(), Term::Positive(Range::full()))]);
+
+        assert_eq!(
+            fixture
+                .formatter()
+                .explain_both_external(&requirement, &unavailable, &root_terms),
+            "all versions of foo depend on bar and there are no versions of bar."
+        );
+        assert_eq!(
+            fixture
+                .formatter()
+                .explain_both_external(&requirement, &unavailable, &Map::default()),
+            "all versions of foo depend on bar and there are no versions of bar."
+        );
+        assert_eq!(
+            fixture
+                .formatter()
+                .explain_both_external(&requirement, &unavailable, &foo_terms),
+            "all versions of foo depend on bar and there are no versions of bar, so all versions of foo cannot be used."
+        );
+
+        // A single-project workspace uses the project itself as the report's root.
+        fixture.workspace_members.insert(foo_name);
+        assert_eq!(
+            fixture
+                .formatter()
+                .explain_both_external(&requirement, &unavailable, &foo_terms),
+            "your project depends on bar and there are no versions of bar."
+        );
+
+        // A member's failure remains useful evidence in a larger workspace.
+        fixture
+            .workspace_members
+            .insert("baz".parse().expect("valid package name"));
+        assert_eq!(
+            fixture
+                .formatter()
+                .explain_both_external(&requirement, &unavailable, &foo_terms),
+            "foo depends on bar and there are no versions of bar, so foo's requirements are unsatisfiable."
+        );
     }
 
     #[test]

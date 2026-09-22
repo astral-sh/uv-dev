@@ -1008,7 +1008,7 @@ fn build_constraints() -> Result<()> {
     error: Failed to build `[TEMP_DIR]/project`
       cause: Failed to resolve requirements from `build-system.requires`
       cause: No solution found when resolving: `hatchling>=1.0`
-      cause: Because you require hatchling>=1.0 and hatchling==0.1.0, we can conclude that your requirements are unsatisfiable.
+      cause: you require hatchling>=1.0 and hatchling==0.1.0.
     ");
 
     project
@@ -1522,9 +1522,7 @@ fn build_all_respects_workspace_build_constraint_dependencies() -> Result<()> {
         "expected build constraint failure in stderr:\n{stderr}"
     );
     assert!(
-        stderr.contains(
-            "Because you require hatchling>=1.0 and hatchling==0.1.0, we can conclude that your requirements are unsatisfiable."
-        ),
+        stderr.contains("you require hatchling>=1.0 and hatchling==0.1.0."),
         "expected incompatible build constraints in stderr:\n{stderr}"
     );
 
@@ -2702,7 +2700,7 @@ fn build_fast_path_exact_pin() -> Result<()> {
     error: Failed to build `[TEMP_DIR]/project`
       cause: Failed to resolve requirements from `build-system.requires`
       cause: No solution found when resolving: `uv-build==0.11.33`
-      cause: Because uv-build was not found in the provided package locations and you require uv-build==0.11.33, we can conclude that your requirements are unsatisfiable.
+      cause: uv-build was not found in the provided package locations and you require uv-build==0.11.33.
 
     hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
     ");
@@ -2768,7 +2766,7 @@ fn build_fast_path_constraint_exact_pin() -> Result<()> {
     error: Failed to build `project @ file://[TEMP_DIR]/project`
       cause: Failed to resolve requirements from `build-system.requires`
       cause: No solution found when resolving: `uv-build>=0.11, <10000`
-      cause: Because uv-build was not found in the provided package locations and you require uv-build==0.11.33, we can conclude that your requirements are unsatisfiable.
+      cause: uv-build was not found in the provided package locations and you require uv-build==0.11.33.
 
     hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
     ");
@@ -2787,7 +2785,7 @@ fn build_fast_path_constraint_exact_pin() -> Result<()> {
     error: Failed to build `[TEMP_DIR]/project`
       cause: Failed to resolve requirements from `build-system.requires`
       cause: No solution found when resolving: `uv-build>=0.11, <10000`
-      cause: Because uv-build was not found in the provided package locations and you require uv-build==0.11.33, we can conclude that your requirements are unsatisfiable.
+      cause: uv-build was not found in the provided package locations and you require uv-build==0.11.33.
 
     hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
     ");
