@@ -327,10 +327,129 @@ Python version instead.
 
 ## Python build names
 
-Python download metadata can label artifacts with a publisher-defined build name such as `custom`.
-Select it explicitly with a request like `3.13+custom`. Python variants and build names can be
-composed, as in `3.13+freethreaded+custom`. An unqualified request, such as `3.13`, selects an
-unnamed build.
+Python download metadata can assign a publisher-defined **build name**, such as `custom`, to a
+Python build. A build without a build name is an **unnamed build**. A **build revision**
+distinguishes replaceable revisions of the same build; it does not change the build's name or
+installation key.
+
+Select a named build explicitly with a request like `3.13+custom`. Build-name input is
+case-insensitive and uv normalizes it to lowercase. Python variants and build names can be composed,
+as in `3.13+freethreaded+custom`. In this section, an **unqualified request** means a request
+without a build name, such as `3.13` or `3.13+freethreaded`. An unqualified version request selects
+an unnamed build; it does not fall back to a named build. A complete installation key also
+identifies its build name exactly, including an unnamed build when the key has no build name.
+
+!!! warning "Choose build names carefully"
+
+    Avoid generic names describing optimizations, runtime features, instrumentation, or CPU targets,
+    such as `pgo`, `lto`, `jit`, `asan`, or `avx2`. These names are not reserved today, but future uv
+    versions may give them built-in meanings, requiring publishers to rename affected builds.
+    Existing Python variant names and aliases cannot be used as build names.
+
+### Hosting Python builds
+
+To offer a publisher-defined build alongside the existing Python downloads, host its archive and add
+an entry to a remotely hosted copy of uv's Python downloads JSON. The configured JSON replaces uv's
+bundled catalog; uv does not merge multiple catalogs. Retain every entry that should remain
+available for download.
+
+Build names are not scoped to a catalog URL. Catalogs that share a managed Python installation
+directory must use consistent meanings for their build names; changing URLs does not create a
+separate installation namespace.
+
+For example, add an entry like this to the catalog:
+
+```json title="python-downloads.json"
+{
+  "version": 1,
+  "downloads": {
+    "cpython-3.13.7+custom-linux-x86_64-gnu": {
+      "name": "cpython",
+      "arch": {
+        "family": "x86_64",
+        "variant": null
+      },
+      "os": "linux",
+      "libc": "gnu",
+      "major": 3,
+      "minor": 13,
+      "patch": 7,
+      "prerelease": "",
+      "url": "https://example.com/python/cpython-3.13.7-custom.tar.gz",
+      "sha256": "<sha256-of-archive>",
+      "variant": null,
+      "build_name": "custom",
+      "build_revision": "20260825"
+    }
+  }
+}
+```
+
+The versioned catalog fields have distinct roles:
+
+- `variant` identifies a Python variant, such as `freethreaded`.
+- `build_name` is the publisher-defined name used after `+` in Python requests. It may be omitted
+  for an unnamed build. When provided, it must be a non-null, canonical lowercase value matching
+  `[a-z][a-z0-9_]*`.
+- `build_revision` is required for every entry, including unnamed builds. It must be a non-empty
+  string of ASCII digits, such as `"20260825"` or `"42"`. Publishers should increase this number for
+  each new revision of a build.
+
+A catalog can contain multiple revisions of the same installation key. Give each record a distinct
+key in the `downloads` object; the entry's fields determine the installation identity. When
+selecting a download without a revision pin, uv chooses the numerically greatest revision for the
+matching implementation, Python version, Python variant, build name, and platform. For example,
+revision `"10"` is newer than `"9"`. The catalog has no `default` field.
+
+The versioned envelope ensures clients that do not understand build names reject the catalog instead
+of treating a named build as unnamed. The legacy unversioned format still supports its optional
+`build` strings, including nonnumeric values. When migrating to the versioned format, assign a
+numeric `build_revision` to every entry instead of copying nonnumeric legacy values.
+
+Revisions must be ABI-compatible, drop-in replacements with a compatible installation layout. A
+build name distinguishes managed installations, but does not create a separate wheel ABI or wheel
+cache namespace. uv still relies on the interpreter's standard compatibility tags when selecting
+wheels.
+
+Configure the remote catalog in `uv.toml`:
+
+```toml title="uv.toml"
+python-downloads-json-url = "https://example.com/python/python-downloads.json"
+```
+
+The named build can then be listed, installed, and discovered explicitly:
+
+```console
+$ uv python list 3.13+custom --only-downloads --show-urls
+$ uv python install 3.13+custom
+$ uv python find 3.13+custom
+```
+
+Use [`UV_PYTHON_BUILD_REVISION`](../reference/environment.md#uv_python_build_revision) to select a
+particular revision exactly, including an older revision retained in the catalog:
+
+```console
+$ UV_PYTHON_BUILD_REVISION=20260825 uv python install 3.13+custom
+```
+
+`UV_PYTHON_BUILD_REVISION` applies to requests with an explicit build name. For CPython requests
+without a build name, use
+[`UV_PYTHON_CPYTHON_BUILD`](../reference/environment.md#uv_python_cpython_build) to select a build
+revision.
+
+Installed Python versions and existing environments are matched using their local build identity and
+recorded revision; their continued use does not require the catalog to list them or be reachable.
+Without a revision pin, a matching installed revision remains usable even when the catalog offers a
+newer one. Use `uv python install --upgrade 3.13+custom` to select the latest available revision
+explicitly. Different revisions of the same installation key replace one another rather than being
+installed side by side.
+
+Named builds use ordinary executable names. Pass `--default` when the selected build should own the
+`python`, `python3`, and versioned aliases in uv's executable directory.
+
+For a named free-threaded build, set `variant` to `freethreaded` and use a composed request such as
+`3.13+freethreaded+custom`. The Python variant and build name can appear in either order, so
+`3.13+custom+freethreaded` is equivalent.
 
 ## Free-threaded Python
 
