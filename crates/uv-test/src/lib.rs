@@ -19,6 +19,7 @@ use std::sync::LazyLock;
 use std::{env, io};
 use uv_python::downloads::ManagedPythonDownloadList;
 
+use anyhow::Context;
 use assert_cmd::assert::{Assert, OutputAssertExt};
 use assert_fs::assert::PathAssert;
 use assert_fs::fixture::{
@@ -40,6 +41,8 @@ use uv_python::{
     EnvironmentPreference, PythonInstallation, PythonPreference, PythonRequest, PythonVersion,
 };
 use uv_static::EnvVars;
+
+use crate::packse::scenario::{ArtifactMetadata, Package, PackageMetadata, Scenario};
 
 // Shared test timestamp for deterministic package availability and relative times.
 static TEST_TIMESTAMP: &str = "2024-03-25T00:00:00Z";
@@ -257,6 +260,45 @@ impl TestContext {
         ));
         self.packse_servers.push(server);
         self
+    }
+
+    /// Serve the real in-tree `uv_build` Python shim, backed by this context's uv executable.
+    pub fn with_uv_build_backend(mut self) -> anyhow::Result<Self> {
+        let shim = fs_err::read_to_string(
+            self.workspace_root
+                .join("crates/uv-build/python/uv_build/__init__.py"),
+        )?;
+        anyhow::ensure!(shim.contains("USE_UV_EXECUTABLE = False"));
+        let shim = shim.replace("USE_UV_EXECUTABLE = False", "USE_UV_EXECUTABLE = True");
+        let mut scenario = Scenario::empty();
+        scenario.packages.insert(
+            "uv-build".parse()?,
+            Package {
+                versions: std::collections::BTreeMap::from([(
+                    uv_version::version().parse()?,
+                    PackageMetadata {
+                        init_py: Some(shim),
+                        wheel: Some(ArtifactMetadata::default()),
+                        ..PackageMetadata::default()
+                    },
+                )]),
+            },
+        );
+        let server = packse::PackseServer::from_scenario(&scenario);
+        let mut path = vec![
+            self.uv_bin
+                .parent()
+                .context("uv binary must have a parent")?
+                .to_path_buf(),
+        ];
+        path.extend(env::split_paths(
+            &env::var_os(EnvVars::PATH).unwrap_or_default(),
+        ));
+        self = self
+            .with_default_index(&server.index_url())
+            .with_env(EnvVars::PATH, env::join_paths(path)?);
+        self.packse_servers.push(server);
+        Ok(self)
     }
 
     /// Set the "exclude newer" timestamp for all commands in this context.
@@ -2631,6 +2673,9 @@ pub async fn download_to_disk(url: &str, path: &Path) {
     }
     file.sync_all().await.unwrap();
 }
+
+/// Download a local fixture artifact.
+pub use download_to_disk as download_local_to_disk;
 
 /// A guard that sets a directory to read-only and restores original permissions when dropped.
 ///
