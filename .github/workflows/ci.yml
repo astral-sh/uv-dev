@@ -1,4 +1,4 @@
-name: Tuned Namespace worker samples
+name: Tuned Namespace higher worker samples
 
 on:
   workflow_dispatch:

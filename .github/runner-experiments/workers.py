@@ -18,19 +18,19 @@ EXPECTED_TESTS = 5044
 EXPECTED_IDENTITY = "d8f2099c869cb128d68d327a9731b8d948c654a306a79041f86e8f56cdb4563d"
 # Each order occurs twice in the fixed twelve-runner cohort. Sample zero is a pilot.
 ORDERS = {
-    0: (20, 32, 40),
-    1: (32, 40, 20),
-    2: (20, 32, 40),
-    3: (40, 20, 32),
-    4: (32, 20, 40),
-    5: (40, 32, 20),
-    6: (20, 40, 32),
-    7: (40, 32, 20),
-    8: (32, 20, 40),
-    9: (20, 40, 32),
-    10: (40, 20, 32),
-    11: (20, 32, 40),
-    12: (32, 40, 20),
+    0: (40, 48, 64),
+    1: (48, 64, 40),
+    2: (40, 48, 64),
+    3: (64, 40, 48),
+    4: (48, 40, 64),
+    5: (64, 48, 40),
+    6: (40, 64, 48),
+    7: (64, 48, 40),
+    8: (48, 40, 64),
+    9: (40, 64, 48),
+    10: (64, 40, 48),
+    11: (40, 48, 64),
+    12: (48, 64, 40),
 }
 COMMAND = [
     "uv",
@@ -106,7 +106,7 @@ def summarize_log(text):
     return result
 
 
-def run_phase(label, workers, *, warmup):
+def run_phase(label, workers, *, warmup, diagnostic=False):
     command = [*COMMAND, "--test-threads", str(workers)]
     log_path = RESULTS / f"{label}.log"
     time_path = RESULTS / f"{label}.time.txt"
@@ -115,7 +115,10 @@ def run_phase(label, workers, *, warmup):
         path.unlink()
     write_json(RESULTS / f"{label}.before.json", inventory())
     started_at, started = now(), time.monotonic()
-    print(f"Starting {label}: {workers} workers (warmup={warmup})", flush=True)
+    print(
+        f"Starting {label}: {workers} workers (warmup={warmup}, diagnostic={diagnostic})",
+        flush=True,
+    )
     with log_path.open("w") as output:
         process = subprocess.Popen(
             ["/usr/bin/time", "-v", "-o", str(time_path), *command],
@@ -145,6 +148,7 @@ def run_phase(label, workers, *, warmup):
         "label": label,
         "workers": workers,
         "warmup": warmup,
+        "diagnostic": diagnostic,
         "command": command,
         "started_at": started_at,
         "completed_at": completed_at,
@@ -173,12 +177,16 @@ def main():
     path = RESULTS / "worker-results.json"
     write_json(path, result)
     # A full excluded pass preconditions test and package caches on every runner.
-    phases = [("warmup-20", 20, True)] + [
-        (f"period-{period}-workers-{workers}", workers, False)
+    phases = [("warmup-20", 20, True, False)] + [
+        (f"period-{period}-workers-{workers}", workers, False, False)
         for period, workers in enumerate(order, start=1)
     ]
-    for label, workers, warmup in phases:
-        result["phases"].append(run_phase(label, workers, warmup=warmup))
+    # A same-count repeat probes within-runner variation separately from scaling.
+    phases.append(("repeat-40", 40, False, True))
+    for label, workers, warmup, diagnostic in phases:
+        result["phases"].append(
+            run_phase(label, workers, warmup=warmup, diagnostic=diagnostic)
+        )
         write_json(path, result)
     result["complete"] = True
     result["valid"] = all(phase["valid"] for phase in result["phases"])
