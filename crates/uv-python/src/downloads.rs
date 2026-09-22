@@ -44,7 +44,7 @@ use uv_static::{
 use crate::implementation::{
     Error as ImplementationError, ImplementationName, LenientImplementationName,
 };
-use crate::installation::PythonInstallationKey;
+use crate::installation::{PythonInstallation, PythonInstallationKey};
 use crate::managed::ManagedPythonInstallation;
 use crate::python_version::{BuildVersionError, python_build_version_from_env};
 use crate::{
@@ -642,6 +642,20 @@ impl PythonDownloadRequest {
         self.implementation
             .is_some_and(|implementation| !matches!(implementation, ImplementationName::CPython))
             || self.os.is_some_and(|os| os.is_emscripten())
+    }
+
+    /// Check both the local installation identity and the interpreter's properties.
+    pub(crate) fn satisfied_by_discovered_installation(
+        &self,
+        installation: &PythonInstallation,
+    ) -> bool {
+        if !self.version().map_or_else(
+            || installation.key().build_name().is_none(),
+            |version| version.matches_installation_key(installation.key()),
+        ) {
+            return false;
+        }
+        self.satisfied_by_interpreter(installation.interpreter())
     }
 
     pub(crate) fn satisfied_by_interpreter(&self, interpreter: &Interpreter) -> bool {
