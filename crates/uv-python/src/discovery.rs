@@ -189,6 +189,10 @@ pub enum PythonVariant {
     GilDebug,
 }
 
+/// A publisher-defined name identifying a Python build, such as `custom`.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PythonBuildName(String);
+
 /// A Python discovery version request.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum VersionRequest {
@@ -864,10 +868,7 @@ fn python_installation_from_executable(
     cache: &Cache,
 ) -> Result<PythonInstallation, Error> {
     Interpreter::query(&path, cache)
-        .map(|interpreter| PythonInstallation {
-            source,
-            interpreter,
-        })
+        .map(|interpreter| PythonInstallation::new(source, interpreter))
         .inspect(|installation| {
             debug!(
                 "Found `{}` at `{}` ({source})",
@@ -931,16 +932,20 @@ fn python_installations_from_executable_group(
 }
 
 /// Sort successful installations without moving them across critical query errors.
-fn sort_installations_by_key<T, K: Ord>(
+fn sort_installations_by_key<T, K: Ord + ?Sized>(
     installations: &mut [Result<T, Error>],
-    key: impl Fn(&T) -> K,
+    key: impl for<'a> Fn(&'a T) -> &'a K,
 ) {
     // Critical errors preserve discovery order; non-critical errors must not interrupt
     // installation-key ordering and can follow successful queries.
     for candidates in
         installations.split_mut(|result| result.as_ref().is_err_and(Error::is_critical))
     {
-        candidates.sort_by_key(|result| Reverse(result.as_ref().ok().map(&key)));
+        candidates.sort_by(|left, right| {
+            let left = left.as_ref().ok().map(&key);
+            let right = right.as_ref().ok().map(&key);
+            Reverse(left).cmp(&Reverse(right))
+        });
     }
 }
 
@@ -1119,10 +1124,10 @@ fn python_installation_from_directory(
     cache: &Cache,
 ) -> Result<PythonInstallation, crate::interpreter::Error> {
     let executable = virtualenv_python_executable(path);
-    Ok(PythonInstallation {
-        source: PythonSource::ProvidedPath,
-        interpreter: Interpreter::query(&executable, cache)?,
-    })
+    Ok(PythonInstallation::new(
+        PythonSource::ProvidedPath,
+        Interpreter::query(&executable, cache)?,
+    ))
 }
 
 /// Lazily iterate over all Python executable paths on the path with the given executable name.
@@ -1184,10 +1189,10 @@ fn find_python_installations_with_strategy<'a>(
             if preference.allows_source(PythonSource::ProvidedPath) {
                 debug!("Checking for Python interpreter at {request}");
                 match Interpreter::query(path, cache) {
-                    Ok(interpreter) => Ok(Ok(PythonInstallation {
-                        source: PythonSource::ProvidedPath,
+                    Ok(interpreter) => Ok(Ok(PythonInstallation::new(
+                        PythonSource::ProvidedPath,
                         interpreter,
-                    })),
+                    ))),
                     Err(InterpreterError::NotFound(_) | InterpreterError::BrokenLink(_)) => {
                         Ok(Err(PythonNotFound {
                             request: request.clone(),
@@ -3559,6 +3564,57 @@ impl FromStr for VersionRequest {
     }
 }
 
+/// Parse a [`PythonVariant`] and an optional [`PythonBuildName`] written after `+`.
+pub(crate) fn parse_python_variant_and_build_name(
+    value: &str,
+) -> Result<(PythonVariant, Option<PythonBuildName>), ()> {
+    let value = value.to_ascii_lowercase();
+    if let Ok(python) = PythonVariant::from_str(&value) {
+        return Ok((python, None));
+    }
+
+    let mut gil_disabled = None;
+    let mut debug_enabled = false;
+    let mut build_name = None;
+    for variant in value.split('+') {
+        let (variant_gil_disabled, variant_debug) = match PythonVariant::from_str(variant) {
+            Ok(PythonVariant::Default) => return Err(()),
+            Ok(PythonVariant::Debug) => (None, true),
+            Ok(PythonVariant::Freethreaded) => (Some(true), false),
+            Ok(PythonVariant::FreethreadedDebug) => (Some(true), true),
+            Ok(PythonVariant::Gil) => (Some(false), false),
+            Ok(PythonVariant::GilDebug) => (Some(false), true),
+            Err(()) => {
+                if build_name.is_some() {
+                    return Err(());
+                }
+                build_name = Some(PythonBuildName::from_str(variant)?);
+                continue;
+            }
+        };
+
+        if let Some(variant_gil_disabled) = variant_gil_disabled
+            && gil_disabled.replace(variant_gil_disabled).is_some()
+        {
+            return Err(());
+        }
+        if variant_debug && debug_enabled {
+            return Err(());
+        }
+        debug_enabled |= variant_debug;
+    }
+
+    let python = match (gil_disabled, debug_enabled) {
+        (None, false) => PythonVariant::Default,
+        (None, true) => PythonVariant::Debug,
+        (Some(true), false) => PythonVariant::Freethreaded,
+        (Some(true), true) => PythonVariant::FreethreadedDebug,
+        (Some(false), false) => PythonVariant::Gil,
+        (Some(false), true) => PythonVariant::GilDebug,
+    };
+    Ok((python, build_name))
+}
+
 impl FromStr for PythonVariant {
     type Err = ();
 
@@ -3575,6 +3631,23 @@ impl FromStr for PythonVariant {
     }
 }
 
+impl FromStr for PythonBuildName {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let name = s.to_ascii_lowercase();
+        if PythonVariant::from_str(&name).is_ok()
+            || !name.starts_with(|character: char| character.is_ascii_lowercase())
+            || !name.chars().all(|character| {
+                character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_'
+            })
+        {
+            return Err(());
+        }
+        Ok(Self(name))
+    }
+}
+
 impl fmt::Display for PythonVariant {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
@@ -3585,6 +3658,12 @@ impl fmt::Display for PythonVariant {
             Self::Gil => f.write_str("gil"),
             Self::GilDebug => f.write_str("gil+debug"),
         }
+    }
+}
+
+impl fmt::Display for PythonBuildName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
     }
 }
 
@@ -3859,7 +3938,7 @@ mod tests {
     use uv_platform::{Arch, Libc, Os};
 
     use super::{
-        DiscoveryPreferences, EnvironmentPreference, Error, InterpreterError,
+        DiscoveryPreferences, EnvironmentPreference, Error, InterpreterError, PythonBuildName,
         PythonExecutableGroup, PythonPreference, PythonSource, PythonVariant, QueryStrategy,
         python_installations_from_executables, sort_installations_by_key,
     };
@@ -3887,7 +3966,7 @@ mod tests {
             Ok(3),
         ];
 
-        sort_installations_by_key(&mut installations, |key| *key);
+        sort_installations_by_key(&mut installations, |key| key);
 
         assert_matches!(
             &installations[..],
@@ -4305,6 +4384,46 @@ mod tests {
             "./foo",
             "A string with a file system separator is treated as a file"
         );
+    }
+
+    #[test]
+    fn build_name_from_str() {
+        for (name, variant) in [
+            ("custom", "custom"),
+            ("CUSTOM", "custom"),
+            ("custom_internal", "custom_internal"),
+            ("custom20260825", "custom20260825"),
+            ("avx2", "avx2"),
+            ("openssl3", "openssl3"),
+            ("pgo", "pgo"),
+        ] {
+            assert_eq!(
+                PythonBuildName::from_str(name).map(|variant| variant.to_string()),
+                Ok(variant.to_string()),
+                "name: {name}"
+            );
+        }
+        for name in [
+            "",
+            "custom+internal",
+            "custom+custom",
+            "pgo+lto",
+            "custom.public",
+            "custom-internal",
+            "custom/internal",
+            "custom internal",
+            "cüstom",
+            "20260825",
+            "_custom",
+            "t",
+            "d",
+            "td",
+            "freethreaded",
+            "debug",
+            "gil",
+        ] {
+            assert!(PythonBuildName::from_str(name).is_err(), "name: {name}");
+        }
     }
 
     #[test]
