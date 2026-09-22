@@ -645,6 +645,157 @@ fn lock_recovery_creates_before_retrying_add() -> Result<()> {
     Ok(())
 }
 
+/// Missing project locks must be created by retrying the rolled-back editing command.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_recovery_creates_after_rolled_back_remove_and_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let selected = context.temp_dir.child("selected's project");
+    let pyproject_toml = selected.child("pyproject.toml");
+    let lockfile = selected.child("uv.lock");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "selected"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["removed ; python_version < '0'"]
+    "#})?;
+    let original_pyproject = fs_err::read_to_string(&pyproject_toml)?;
+
+    uv_snapshot!(context.filters(), context.remove()
+        .arg("--project").arg(selected.path())
+        .arg("--no-sync")
+        .arg("--locked")
+        .arg("--offline")
+        .arg("removed"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: Unable to find lockfile at `selected's project/uv.lock`, but `--locked` was provided.
+
+    hint: To apply the dependency changes and create the lockfile, repeat the original `uv remove` command from the same working directory, adding `--no-locked --no-frozen` and keeping the same packages, dependency selection, and other options.
+    ");
+    assert_eq!(fs_err::read_to_string(&pyproject_toml)?, original_pyproject);
+    assert!(!lockfile.path().exists());
+
+    context
+        .remove()
+        .arg("--project")
+        .arg(selected.path())
+        .arg("--no-sync")
+        .arg("--no-locked")
+        .arg("--no-frozen")
+        .arg("--offline")
+        .arg("removed")
+        .env(EnvVars::UV_LOCKED, "1")
+        .env(EnvVars::UV_FROZEN, "1")
+        .assert()
+        .success();
+    let removed_pyproject = fs_err::read_to_string(&pyproject_toml)?;
+    assert!(!removed_pyproject.contains("removed"));
+    assert!(lockfile.path().is_file());
+    fs_err::remove_file(&lockfile)?;
+
+    uv_snapshot!(context.filters(), context.version()
+        .arg("--project").arg(selected.path())
+        .arg("--bump").arg("patch")
+        .arg("--no-sync")
+        .arg("--locked")
+        .arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: Unable to find lockfile at `selected's project/uv.lock`, but `--locked` was provided.
+
+    hint: To apply the version change and create the lockfile, repeat the original `uv version` command from the same working directory, adding `--no-locked --no-frozen` and keeping the same version or `--bump` arguments and other options.
+    ");
+    assert_eq!(fs_err::read_to_string(&pyproject_toml)?, removed_pyproject);
+    assert!(!lockfile.path().exists());
+
+    context
+        .version()
+        .arg("--project")
+        .arg(selected.path())
+        .arg("--bump")
+        .arg("patch")
+        .arg("--no-sync")
+        .arg("--no-locked")
+        .arg("--no-frozen")
+        .arg("--offline")
+        .env(EnvVars::UV_LOCKED, "1")
+        .env(EnvVars::UV_FROZEN, "1")
+        .assert()
+        .success();
+    assert!(lockfile.path().is_file());
+    uv_snapshot!(context.filters(), context.version()
+        .arg("--project").arg(selected.path())
+        .arg("--short")
+        .arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    0.1.1
+    ");
+
+    Ok(())
+}
+
+/// A locked script removal must retry the authored edit after restoring the script and lockfile.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_recovery_retries_rolled_back_script_remove() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let script = context.temp_dir.child("scripts/selected's script.py");
+    let script_lock = context.temp_dir.child("scripts/selected's script.py.lock");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["removed ; python_version < '0'"]
+        # ///
+    "#})?;
+    let original_script = fs_err::read_to_string(&script)?;
+    context
+        .lock()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--offline")
+        .assert()
+        .success();
+    let original_lock = fs_err::read_to_string(&script_lock)?;
+
+    uv_snapshot!(context.filters(), context.remove()
+        .arg("--script").arg(script.path())
+        .arg("--locked")
+        .arg("--offline")
+        .arg("removed"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: `--locked` is a no-op for Python scripts with inline metadata, which always run in isolation
+    Resolved in [TIME]
+    error: The lockfile at `scripts/selected's script.py.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To apply the dependency changes and update the lockfile, repeat the original `uv remove` command from the same working directory, adding `--no-locked --no-frozen` and keeping the same packages, dependency selection, and other options.
+    ");
+    assert_eq!(fs_err::read_to_string(&script)?, original_script);
+    assert_eq!(fs_err::read_to_string(&script_lock)?, original_lock);
+
+    context
+        .remove()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--no-locked")
+        .arg("--no-frozen")
+        .arg("--offline")
+        .arg("removed")
+        .env(EnvVars::UV_LOCKED, "1")
+        .env(EnvVars::UV_FROZEN, "1")
+        .assert()
+        .success();
+    assert!(!fs_err::read_to_string(&script)?.contains("removed"));
+    assert_ne!(fs_err::read_to_string(&script_lock)?, original_lock);
+
+    Ok(())
+}
+
 /// Lock recovery retains the workspace member used for Python pin discovery.
 #[cfg(feature = "test-universal")]
 #[test]
