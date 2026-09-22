@@ -15,7 +15,7 @@ use uv_static::EnvVars;
 use crate::implementation::ImplementationName;
 
 #[derive(Error, Debug)]
-pub enum BuildVersionError {
+pub enum BuildRevisionError {
     #[error("`{0}` is not valid unicode: {1:?}")]
     NotUnicode(&'static str, OsString),
 }
@@ -213,7 +213,7 @@ impl PythonVersion {
 }
 
 /// Get the environment variable name for the build constraint for a given implementation.
-fn python_build_version_variable(implementation: ImplementationName) -> &'static str {
+fn python_build_revision_variable(implementation: ImplementationName) -> &'static str {
     match implementation {
         ImplementationName::CPython => EnvVars::UV_PYTHON_CPYTHON_BUILD,
         ImplementationName::PyPy => EnvVars::UV_PYTHON_PYPY_BUILD,
@@ -222,21 +222,30 @@ fn python_build_version_variable(implementation: ImplementationName) -> &'static
     }
 }
 
-/// Get the build version number from the environment variable for a given implementation.
-pub(crate) fn python_build_version_from_env(
+/// Get the build revision number from the environment variable for a given implementation.
+pub(crate) fn python_build_revision_from_env(
     implementation: ImplementationName,
-) -> Result<Option<String>, BuildVersionError> {
-    let variable = python_build_version_variable(implementation);
+) -> Result<Option<String>, BuildRevisionError> {
+    let variable = python_build_revision_variable(implementation);
 
-    let Some(build_os) = env::var_os(variable) else {
+    build_revision_from_env(variable)
+}
+
+/// Get the build revision for an explicitly requested build name.
+pub(crate) fn python_named_build_revision_from_env() -> Result<Option<String>, BuildRevisionError> {
+    build_revision_from_env(EnvVars::UV_PYTHON_BUILD_REVISION)
+}
+
+fn build_revision_from_env(variable: &'static str) -> Result<Option<String>, BuildRevisionError> {
+    let Some(revision_os) = env::var_os(variable) else {
         return Ok(None);
     };
 
-    let build = build_os
+    let revision = revision_os
         .into_string()
-        .map_err(|raw| BuildVersionError::NotUnicode(variable, raw))?;
+        .map_err(|raw| BuildRevisionError::NotUnicode(variable, raw))?;
 
-    let trimmed = build.trim();
+    let trimmed = revision.trim();
     if trimmed.is_empty() {
         return Ok(None);
     }
@@ -244,17 +253,17 @@ pub(crate) fn python_build_version_from_env(
     Ok(Some(trimmed.to_string()))
 }
 
-/// Get the build version numbers for all Python implementations.
-pub(crate) fn python_build_versions_from_env()
--> Result<BTreeMap<ImplementationName, String>, BuildVersionError> {
-    let mut versions = BTreeMap::new();
+/// Get the build revision numbers for all Python implementations.
+pub(crate) fn python_build_revisions_from_env()
+-> Result<BTreeMap<ImplementationName, String>, BuildRevisionError> {
+    let mut revisions = BTreeMap::new();
     for implementation in ImplementationName::iter_all() {
-        let Some(build) = python_build_version_from_env(implementation)? else {
+        let Some(revision) = python_build_revision_from_env(implementation)? else {
             continue;
         };
-        versions.insert(implementation, build);
+        revisions.insert(implementation, revision);
     }
-    Ok(versions)
+    Ok(revisions)
 }
 
 #[cfg(test)]

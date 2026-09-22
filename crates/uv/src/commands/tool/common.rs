@@ -719,7 +719,7 @@ pub(crate) async fn refine_interpreter(
     // If the user passed a `--python` request, and the refined interpreter is incompatible, we
     // can't use it.
     if let Some(python_request) = python_request
-        && !python_request.satisfied(&interpreter, cache)
+        && !python_request.satisfied(&interpreter, cache)?
     {
         return Ok(None);
     }
