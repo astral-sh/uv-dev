@@ -643,7 +643,6 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
             "sha256": "7f3d0e0d0ff7e70e8df69c81f1b4bd0a7a9e8ea3b6d4c7a6c13c2b6f6bc0a4f2",
             "variant": null,
             "build_name": "custom",
-            "default": false,
             "build_revision": "20250317"
         }
     }
@@ -676,9 +675,12 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
         .await;
 
     Mock::given(method("GET"))
-        .and(path("/versioned-invalid-default"))
+        .and(path("/versioned-invalid-revision"))
         .respond_with(ResponseTemplate::new(200).set_body_raw(
-            versioned_json.replace(r#""default": false"#, r#""default": "false""#),
+            versioned_json.replace(
+                r#""build_revision": "20251028""#,
+                r#""build_revision": "invalid""#,
+            ),
             "application/json",
         ))
         .mount(&server)
@@ -757,11 +759,11 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     uv_snapshot!(context.filters(), context
         .python_list()
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
-        .arg("--python-downloads-json-url").arg(format!("{}/versioned-invalid-default", server.uri())), @r#"
+        .arg("--python-downloads-json-url").arg(format!("{}/versioned-invalid-revision", server.uri())), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Unable to parse the JSON Python download list at http://[LOCALHOST]/versioned-invalid-default
-      cause: invalid type: string "false", expected a boolean at line 53 column 30
+    error: Unable to parse the JSON Python download list at http://[LOCALHOST]/versioned-invalid-revision
+      cause: Python build revision `invalid` in `cpython-3.14.0-darwin-aarch64-none` must be a non-empty string of ASCII digits
     "#);
 
     uv_snapshot!(context.filters(), context

@@ -136,7 +136,7 @@ fn prune_stale_directory() -> Result<()> {
 fn prune_python_downloads() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    let python_cache = context.cache_dir.child("python-v0");
+    let python_cache = context.cache_dir.child("python-v1");
     python_cache.create_dir_all()?;
     let download = python_cache.child("python.tar.gz");
     download.write_binary(b"cached Python download")?;
