@@ -1325,6 +1325,10 @@ impl TestContext {
             // Installations are not allowed by default; see `Self::with_managed_python_dirs`
             .env(EnvVars::UV_PYTHON_DOWNLOADS, "never")
             .env(EnvVars::UV_PYTHON_SEARCH_PATH, self.python_path())
+            .env(
+                EnvVars::UV_INTERNAL__TEST_VIRTUALENV_DISCOVERY_ROOT,
+                self.root.path(),
+            )
             .env(EnvVars::UV_EXCLUDE_NEWER, TEST_TIMESTAMP)
             .env(EnvVars::UV_INTERNAL__TEST_CURRENT_TIMESTAMP, TEST_TIMESTAMP)
             .env(
