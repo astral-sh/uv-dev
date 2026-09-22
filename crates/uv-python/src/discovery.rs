@@ -29,7 +29,9 @@ use crate::implementation::ImplementationName;
 use crate::installation::{PythonInstallation, PythonInstallationKey};
 use crate::interpreter::Error as InterpreterError;
 use crate::interpreter::{StatusCodeError, UnexpectedResponseError};
-use crate::managed::{ManagedPythonInstallations, PythonMinorVersionLink};
+use crate::managed::{
+    ManagedPythonInstallation, ManagedPythonInstallations, PythonMinorVersionLink,
+};
 #[cfg(windows)]
 use crate::microsoft_store::find_microsoft_store_pythons;
 use crate::python_version::python_build_versions_from_env;
@@ -1421,7 +1423,7 @@ fn find_python_installations_with_strategy<'a>(
                     strategy,
                 )
                 .filter_ok(move |installation| {
-                    request.satisfied_by_interpreter(&installation.interpreter)
+                    request.satisfied_by_discovered_installation(installation)
                 })
                 .map_ok(Ok)
             })
@@ -2254,8 +2256,27 @@ impl PythonRequest {
         }
     }
 
-    /// Check if a given interpreter satisfies the interpreter request.
+    /// Check the interpreter's properties and local managed build identity against this request.
     pub fn satisfied(&self, interpreter: &Interpreter, cache: &Cache) -> bool {
+        if !self.satisfied_by_interpreter(interpreter, cache) {
+            return false;
+        }
+        let Some(request) = PythonDownloadRequest::from_request(self) else {
+            return true;
+        };
+        let key = ManagedPythonInstallation::key_from_interpreter(interpreter)
+            .unwrap_or_else(|| interpreter.key());
+        request.version().map_or_else(
+            || key.build_name().is_none(),
+            |version| version.matches_installation_key(&key),
+        )
+    }
+
+    /// Check the interpreter's reported properties or executable path against this request.
+    ///
+    /// Build names are not checked. Use [`Self::satisfied`]
+    /// when deciding whether to reuse an environment.
+    pub fn satisfied_by_interpreter(&self, interpreter: &Interpreter, cache: &Cache) -> bool {
         /// Returns `true` if the two paths refer to the same interpreter executable.
         fn is_same_executable(path1: &Path, path2: &Path) -> bool {
             path1 == path2 || is_same_file(path1, path2).unwrap_or(false)
@@ -2428,8 +2449,7 @@ impl PythonRequest {
     }
 
     /// Return the owned build request carried by this request, if any.
-    #[cfg(test)]
-    fn build_request(&self) -> Option<PythonBuildRequest> {
+    pub fn build_request(&self) -> Option<PythonBuildRequest> {
         match self {
             Self::Version(version) | Self::ImplementationVersion(_, version) => {
                 version.build_request()
@@ -3215,7 +3235,9 @@ impl VersionRequest {
             .is_none_or(|build_request| build_request.matches_build_name(key))
     }
 
-    /// Check if a interpreter matches the request.
+    /// Check the interpreter's reported version and Python variant.
+    ///
+    /// Use [`Self::matches_installation_key`] to validate the installation identity as well.
     pub(crate) fn matches_interpreter(&self, interpreter: &Interpreter) -> bool {
         match self {
             Self::Any => true,
