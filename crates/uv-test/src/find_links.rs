@@ -151,6 +151,9 @@ fn normalize_page_path(page_path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Result;
+    use reqwest::StatusCode;
+
     use super::FindLinksServer;
     use crate::vendor::vendor_artifacts;
 
@@ -159,5 +162,21 @@ mod tests {
         let _server = FindLinksServer::vendor();
 
         assert!(vendor_artifacts().all(|artifact| !artifact.is_loaded()));
+    }
+
+    #[tokio::test]
+    async fn vendor_server_rejects_unknown_artifacts() -> Result<()> {
+        let server = FindLinksServer::vendor();
+        let client = reqwest::Client::builder().no_proxy().build()?;
+
+        assert_eq!(
+            client
+                .get(server.file_url("missing-vendor-artifact.whl"))
+                .send()
+                .await?
+                .status(),
+            StatusCode::NOT_FOUND,
+        );
+        Ok(())
     }
 }
