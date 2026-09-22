@@ -18,6 +18,13 @@ after an earlier concurrency fix, and was explicitly closed by a maintainer as a
 astral-sh/uv#2810. The antivirus environment is also covered by the broader tracking resource
 astral-sh/uv#20792, but the current report does not establish which process owns the lock.
 
+## Current maintainer request
+
+A maintainer referred the reporter to astral-sh/uv#20792 and asked for the AV/EDR vendor name and
+version, plus whether the reporter has contacted the vendor through its commercial representative to
+file a bug report. Those details have not yet been provided. This request makes AV/EDR interference
+the current investigation path, but does not establish it as the cause of the lock.
+
 ## Draft response
 
 Thanks for the report. This matches the intermittent Windows file-locking failures tracked in
