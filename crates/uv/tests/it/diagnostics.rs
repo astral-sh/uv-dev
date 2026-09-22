@@ -107,6 +107,65 @@ fn configuration_error_redacts_inline_url_credentials() -> Result<()> {
 }
 
 #[test]
+fn configuration_error_redacts_multiline_url_credentials() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let line = "https://user:sentinel-pa\"ss@example.invalid/?SIG=sentinel-si\"gned \\q\n";
+    let source = format!("no-build = \"\"\"\n{line}\"\"\"\n");
+    context.temp_dir.child("uv.toml").write_str(&source)?;
+
+    let text = context
+        .command()
+        .env("COLUMNS", "300")
+        .args(["--config-file=uv.toml", "--offline", "cache", "dir"])
+        .output()?;
+    let json = context
+        .command()
+        .args([
+            "--error-format=json",
+            "--config-file=uv.toml",
+            "--offline",
+            "cache",
+            "dir",
+        ])
+        .output()?;
+    assert_eq!(text.status.code(), Some(2));
+    assert_eq!(json.status.code(), text.status.code());
+    assert!(text.stdout.is_empty());
+    assert!(json.stdout.is_empty());
+
+    let expected = line
+        .replace("sentinel-pa\"ss", &"*".repeat("sentinel-pa\"ss".len()))
+        .replace("sentinel-si\"gned", &"*".repeat("sentinel-si\"gned".len()));
+    let text_stderr = String::from_utf8(text.stderr)?;
+    assert!(text_stderr.contains(expected.trim_end()));
+    for output in [text_stderr.as_str(), std::str::from_utf8(&json.stderr)?] {
+        assert!(!output.contains("sentinel-pa"));
+        assert!(!output.contains("sentinel-si"));
+    }
+
+    let report: Value = serde_json::from_slice(&json.stderr)?;
+    let window = report["errors"]
+        .as_array()
+        .context("error chain is an array")?
+        .iter()
+        .flat_map(|error| error["sources"].as_array().into_iter().flatten())
+        .flat_map(|source| source["windows"].as_array().into_iter().flatten())
+        .next()
+        .context("the TOML parser retains the source window")?;
+    assert_eq!(window["line_start"], 2);
+    assert_eq!(window["text"], expected);
+    let column = line.find("\\q").context("invalid escape in fixture")? + 1;
+    assert_eq!(
+        window["annotations"][0]["range"],
+        serde_json::json!({
+            "start": {"line": 2, "byte_column": column},
+            "end": {"line": 2, "byte_column": column},
+        })
+    );
+    Ok(())
+}
+
+#[test]
 #[cfg(feature = "test-python")]
 fn json_resolution_error_keeps_failure_status() -> Result<()> {
     let context = uv_test::test_context!("3.12");

@@ -178,7 +178,7 @@ impl<'a> SourceSnippet<'a> {
     /// Select the first physical line touched by a valid UTF-8 byte span.
     ///
     /// Parser diagnostics use this bounded excerpt because surrounding configuration may contain
-    /// credentials. Values on the selected line are not redacted.
+    /// credentials. The complete source is retained so URL masking can use its enclosing quotes.
     pub fn from_span(source: SourceFile, span: Range<usize>) -> Option<Self> {
         let text = source.text();
         text.get(span.clone())?;
@@ -190,12 +190,10 @@ impl<'a> SourceSnippet<'a> {
         if newline.is_some() && text.get(start..end)?.ends_with('\r') {
             end -= 1;
         }
-        let range = (span.start.min(end) - start)..(span.end.min(end) - start);
-        let line_start = source
+        let range = span.start.min(end)..span.end.min(end);
+        source
             .line_start
             .checked_add(before.bytes().filter(|byte| *byte == b'\n').count())?;
-        let source =
-            SourceFile::new(source.name.clone(), &text[start..end]).with_line_start(line_start);
         Some(Self::new(source).with_annotation(SourceAnnotation::primary(range)))
     }
 
@@ -584,6 +582,9 @@ pub(crate) fn source_view<'a>(snippet: &'a SourceSnippet<'_>) -> Option<SourceVi
         }
     }
 
+    // An enclosing multiline source quote may begin before any displayed window. Scan the
+    // retained document once so quote-sensitive URL masking sees that complete context.
+    let redactions = url_redaction_ranges(source.text());
     let mut windows = Vec::new();
     for mut window in merged {
         let Some(range) = lines.range(window.first, window.last) else {
@@ -626,7 +627,15 @@ pub(crate) fn source_view<'a>(snippet: &'a SourceSnippet<'_>) -> Option<SourceVi
             text,
             line_start: source.line_start + window.first,
             annotations,
-            redactions: url_redaction_ranges(text),
+            redactions: redactions
+                [redactions.partition_point(|redaction| redaction.end <= range.start)..]
+                .iter()
+                .take_while(|redaction| redaction.start < range.end)
+                .map(|redaction| {
+                    redaction.start.max(range.start) - range.start
+                        ..redaction.end.min(range.end) - range.start
+                })
+                .collect(),
         });
     }
     if windows.is_empty() {
@@ -1460,6 +1469,22 @@ mod tests {
         1 | dependencies = ["demo @ https:///user:*****@example.invalid/demo.whl ; python_version >= '3.12'"], explicit = "yes"
           |                                                                                                               ^^^^^ expected a boolean
         "#);
+        assert_eq!(source.text(), text);
+    }
+
+    #[test]
+    fn source_urls_keep_multiline_quote_context() {
+        let text = "url = \"\"\"\r\nhttps://user:pā\"ss@example.invalid/pkg?SIG=si\"gned&safe=yes\r\n\"\"\"\r\n";
+        let source = SourceFile::new("uv.toml", text).with_line_start(7);
+        let snippet = SourceSnippet::new(source.clone()).with_annotation(
+            SourceAnnotation::primary(range_of(text, "safe=yes")).with_label("invalid option"),
+        );
+        assert_snapshot!(render(&[snippet], None), @"
+         --> uv.toml:8:52
+          |
+        8 | https://user:*****@example.invalid/pkg?SIG=*******&safe=yes
+          |                                                    ^^^^^^^^ invalid option
+        ");
         assert_eq!(source.text(), text);
     }
 
