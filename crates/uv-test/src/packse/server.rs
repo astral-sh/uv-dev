@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use anyhow::Context;
 use serde_json::json;
 use wiremock::{
     Mock, MockServer, Request, ResponseTemplate,
@@ -103,13 +104,34 @@ impl PackseServer {
         Self::start(scenario, false)
     }
 
+    /// Override advertised SHA-256 digests without changing the distribution bytes.
+    pub fn from_scenario_with_hash_overrides(
+        scenario: &Scenario,
+        overrides: &[(&str, &str)],
+    ) -> anyhow::Result<Self> {
+        let mut index = build_server_index(scenario);
+        for &(filename, hash) in overrides {
+            let dist = index
+                .packages
+                .values_mut()
+                .flat_map(|package| &mut package.dists)
+                .find(|dist| dist.filename == filename)
+                .with_context(|| format!("No scenario distribution named `{filename}`"))?;
+            hash.clone_into(&mut dist.sha256);
+        }
+        Ok(Self::start_index(index, true))
+    }
+
     fn start(scenario: &Scenario, hashes: bool) -> Self {
-        let index = Arc::new(build_server_index(scenario));
+        Self::start_index(build_server_index(scenario), hashes)
+    }
+
+    fn start_index(index: ServerIndex, hashes: bool) -> Self {
+        let index = Arc::new(index);
         let server_index = Arc::clone(&index);
         let server = HttpServer::start(move |request, server_uri| {
             handle_request(request, server_uri, &server_index, hashes)
         });
-
         Self { server, index }
     }
 
@@ -121,6 +143,21 @@ impl PackseServer {
     /// Return the URL for a generated distribution file.
     pub fn file_url(&self, filename: &str) -> String {
         format!("{}/files/{filename}", self.server.url())
+    }
+
+    /// Return the advertised SHA-256 digest of a distribution.
+    pub fn file_hash(&self, filename: &str) -> Option<&str> {
+        self.files()
+            .find_map(|(candidate, hash)| (candidate == filename).then_some(hash))
+    }
+
+    /// Load the generated or pinned bytes for a distribution.
+    pub fn file_bytes(&self, filename: &str) -> anyhow::Result<Arc<[u8]>> {
+        self.index
+            .files
+            .get(filename)
+            .with_context(|| format!("No scenario distribution named `{filename}`"))?
+            .bytes()
     }
 
     /// Return the filename and advertised SHA-256 digest of each distribution.
@@ -427,6 +464,46 @@ mod tests {
         let _index = build_server_index(&Scenario::empty());
 
         assert!(vendor_artifacts().all(|artifact| !artifact.is_loaded()));
+    }
+
+    #[test]
+    fn advertised_hash_overrides_leave_artifact_bytes_unchanged() -> Result<()> {
+        let scenario: Scenario = toml::from_str(
+            r#"
+name = "hash-override"
+[root]
+requires = ["a"]
+[expected]
+satisfiable = true
+[packages.a.versions."1.0.0"]
+sdist = false
+"#,
+        )?;
+        let original = PackseServer::from_scenario(&scenario);
+        let changed = PackseServer::from_scenario_with_hash_overrides(
+            &scenario,
+            &[("a-1.0.0-py3-none-any.whl", "incorrect")],
+        )?;
+        assert_ne!(
+            original.file_hash("a-1.0.0-py3-none-any.whl"),
+            Some("incorrect")
+        );
+        assert_eq!(
+            changed.file_hash("a-1.0.0-py3-none-any.whl"),
+            Some("incorrect")
+        );
+        assert_eq!(
+            original.file_bytes("a-1.0.0-py3-none-any.whl")?,
+            changed.file_bytes("a-1.0.0-py3-none-any.whl")?
+        );
+        assert!(
+            PackseServer::from_scenario_with_hash_overrides(
+                &scenario,
+                &[("missing.whl", "incorrect")]
+            )
+            .is_err()
+        );
+        Ok(())
     }
 
     #[tokio::test]
