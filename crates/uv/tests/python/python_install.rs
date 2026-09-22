@@ -1443,17 +1443,17 @@ fn python_uninstall_build_variant() -> anyhow::Result<()> {
         .with_managed_python_dirs();
     let platform = platform_key_from_env()?;
     let custom_key = format!("cpython-3.13.7+custom-{platform}");
-    let optimized_key = format!("cpython-3.13.7+custom+pgo+lto-{platform}");
-    let reordered_key = format!("cpython-3.13.7+lto+custom+pgo-{platform}");
+    let other_key = format!("cpython-3.13.7+other-{platform}");
+    let custom_internal_key = format!("cpython-3.13.7+custom_internal-{platform}");
     let managed_dir = context.temp_dir.child("managed");
     let custom = managed_dir.child(&custom_key);
-    let optimized = managed_dir.child(&optimized_key);
-    let reordered = managed_dir.child(&reordered_key);
+    let other = managed_dir.child(&other_key);
+    let custom_internal = managed_dir.child(&custom_internal_key);
     custom.create_dir_all()?;
-    optimized.create_dir_all()?;
-    reordered.create_dir_all()?;
+    other.create_dir_all()?;
+    custom_internal.create_dir_all()?;
 
-    // A full key removes only that build, even when another build has additional tags.
+    // A full key removes only that named build.
     uv_snapshot!(context.filters(), context.python_uninstall().arg(&custom_key), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -1462,21 +1462,21 @@ fn python_uninstall_build_variant() -> anyhow::Result<()> {
      - cpython-3.13.7+custom-[PLATFORM]
     ");
     custom.assert(predicate::path::missing());
-    optimized.assert(predicate::path::exists());
-    reordered.assert(predicate::path::exists());
+    other.assert(predicate::path::exists());
+    custom_internal.assert(predicate::path::exists());
 
-    // Tag order remains part of the full installation identity.
-    uv_snapshot!(context.filters(), context.python_uninstall().arg(&optimized_key), @"
+    // Another full key selects its exact name.
+    uv_snapshot!(context.filters(), context.python_uninstall().arg(&other_key), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Searching for Python versions matching: cpython-3.13.7+custom+pgo+lto-[PLATFORM]
+    Searching for Python versions matching: cpython-3.13.7+other-[PLATFORM]
     Uninstalled Python 3.13.7 in [TIME]
-     - cpython-3.13.7+custom+pgo+lto-[PLATFORM]
+     - cpython-3.13.7+other-[PLATFORM]
     ");
-    optimized.assert(predicate::path::missing());
-    reordered.assert(predicate::path::exists());
+    other.assert(predicate::path::missing());
+    custom_internal.assert(predicate::path::exists());
 
-    // A request missing build tags must leave the composite build installed.
+    // Build names match exactly instead of by prefix.
     uv_snapshot!(context.filters(), context.python_uninstall().arg("3.13+custom"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -1484,17 +1484,17 @@ fn python_uninstall_build_variant() -> anyhow::Result<()> {
     No existing installations found for: Python 3.13+custom
     No Python installations found matching the requests
     ");
-    reordered.assert(predicate::path::exists());
+    custom_internal.assert(predicate::path::exists());
 
-    // Version requests match the same build tags in any order.
-    uv_snapshot!(context.filters(), context.python_uninstall().arg("3.13+custom+pgo+lto"), @"
+    // A version request with the complete name selects that build.
+    uv_snapshot!(context.filters(), context.python_uninstall().arg("3.13+custom_internal"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Searching for Python versions matching: Python 3.13+custom+pgo+lto
+    Searching for Python versions matching: Python 3.13+custom_internal
     Uninstalled Python 3.13.7 in [TIME]
-     - cpython-3.13.7+lto+custom+pgo-[PLATFORM]
+     - cpython-3.13.7+custom_internal-[PLATFORM]
     ");
-    reordered.assert(predicate::path::missing());
+    custom_internal.assert(predicate::path::missing());
 
     Ok(())
 }
@@ -1507,14 +1507,14 @@ fn python_uninstall_prerelease_build_variant() -> anyhow::Result<()> {
     let platform = platform_key_from_env()?;
     let stock_key = format!("cpython-3.14.0rc1-{platform}");
     let custom_key = format!("cpython-3.14.0rc1+custom-{platform}");
-    let optimized_key = format!("cpython-3.14.0rc1+custom+pgo+lto-{platform}");
+    let other_key = format!("cpython-3.14.0rc1+other-{platform}");
     let managed_dir = context.temp_dir.child("managed");
     let stock = managed_dir.child(&stock_key);
     let custom = managed_dir.child(&custom_key);
-    let optimized = managed_dir.child(&optimized_key);
+    let other = managed_dir.child(&other_key);
     stock.create_dir_all()?;
     custom.create_dir_all()?;
-    optimized.create_dir_all()?;
+    other.create_dir_all()?;
 
     // Normalizing the zero patch must not broaden a full key to include other builds.
     uv_snapshot!(context.filters(), context.python_uninstall().arg(&stock_key), @"
@@ -1526,7 +1526,7 @@ fn python_uninstall_prerelease_build_variant() -> anyhow::Result<()> {
     ");
     stock.assert(predicate::path::missing());
     custom.assert(predicate::path::exists());
-    optimized.assert(predicate::path::exists());
+    other.assert(predicate::path::exists());
 
     // The normalized spelling also names an exact build when used in a full key.
     uv_snapshot!(context.filters(), context.python_uninstall().arg(format!("cpython-3.14rc1+custom-{platform}")), @"
@@ -1537,29 +1537,29 @@ fn python_uninstall_prerelease_build_variant() -> anyhow::Result<()> {
      - cpython-3.14.0rc1+custom-[PLATFORM]
     ");
     custom.assert(predicate::path::missing());
-    optimized.assert(predicate::path::exists());
+    other.assert(predicate::path::exists());
 
-    // Prerelease version requests also match the same build tags in any order.
-    uv_snapshot!(context.filters(), context.python_uninstall().arg("3.14rc1+lto+pgo+custom"), @"
+    // Prerelease version requests also match the exact build name.
+    uv_snapshot!(context.filters(), context.python_uninstall().arg("3.14rc1+other"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Searching for Python versions matching: Python 3.14rc1+lto+pgo+custom
+    Searching for Python versions matching: Python 3.14rc1+other
     Uninstalled Python 3.14.0rc1 in [TIME]
-     - cpython-3.14.0rc1+custom+pgo+lto-[PLATFORM]
+     - cpython-3.14.0rc1+other-[PLATFORM]
     ");
-    optimized.assert(predicate::path::missing());
+    other.assert(predicate::path::missing());
 
     Ok(())
 }
 
 #[tokio::test]
 async fn python_reinstall_build_variant() -> anyhow::Result<()> {
-    for target in [Some("3.13+custom+pgo"), Some("3.13+pgo+custom"), None] {
+    for target in [Some("3.13+custom"), None] {
         let context = uv_test::test_context_with_versions!(&[])
             .with_managed_python_dirs()
             .with_http_retries("0");
         let platform = platform_key_from_env()?;
-        let installed_key = format!("cpython-3.13.7+custom+pgo-{platform}");
+        let installed_key = format!("cpython-3.13.7+custom-{platform}");
         let key = installed_key.parse::<PythonInstallationKey>()?;
         context
             .temp_dir
@@ -1589,9 +1589,9 @@ async fn python_reinstall_build_variant() -> anyhow::Result<()> {
         let metadata = serde_json::json!({
             "version": 1,
             "downloads": {
-                (installed_key): entry("custom+pgo", "custom-pgo.tar.gz"),
-                (format!("cpython-3.13.7+custom+lto+pgo-{platform}")):
-                    entry("custom+lto+pgo", "custom-lto-pgo.tar.gz")
+                (installed_key): entry("custom", "custom.tar.gz"),
+                (format!("cpython-3.13.7+other-{platform}")):
+                    entry("other", "other.tar.gz")
             }
         });
         Mock::given(method("GET"))
@@ -1619,7 +1619,7 @@ async fn python_reinstall_build_variant() -> anyhow::Result<()> {
                 requests.iter().map(|request| request.url.path()).collect::<Vec<_>>(), @r#"
             [
                 "/metadata",
-                "/custom-pgo.tar.gz",
+                "/custom.tar.gz",
             ]
             "#);
         }

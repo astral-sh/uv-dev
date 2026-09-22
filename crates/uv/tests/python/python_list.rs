@@ -774,7 +774,7 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     exit_code: 0 (success)
     ");
 
-    // An unqualified request does not expose a non-default named build.
+    // An unqualified request selects the stock catalog default, not the named build.
     uv_snapshot!(context
         .python_list()
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
@@ -784,6 +784,8 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
         .arg("--all-arches")
         .arg("--python-downloads-json-url").arg(format!("{}/named-build", server.uri())), @"
     exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.12.9-linux-x86_64-gnu    <download available>
     ");
 
     // Partial build names must not match.
@@ -908,6 +910,7 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
             ----- stdout -----
             cpython-3.14.0-macos-aarch64-none                    https://custom.com/cpython-3.14.0-darwin-aarch64-none.tar.gz
             cpython-3.13.2+freethreaded-linux-powerpc64le-gnu    https://custom.com/ccpython-3.13.2+freethreaded-linux-powerpc64le-gnu.tar.gz
+            cpython-3.12.9-linux-x86_64-gnu                      https://custom.com/cpython-3.12.9-linux-x86_64-gnu.tar.gz
             ");
         }
     }
