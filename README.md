@@ -18,12 +18,20 @@ after an earlier concurrency fix, and was explicitly closed by a maintainer as a
 astral-sh/uv#2810. The antivirus environment is also covered by the broader tracking resource
 astral-sh/uv#20792, but the current report does not establish which process owns the lock.
 
-## Current maintainer request
+## Current investigation status
 
 A maintainer referred the reporter to astral-sh/uv#20792 and asked for the AV/EDR vendor name and
-version, plus whether the reporter has contacted the vendor through its commercial representative to
-file a bug report. Those details have not yet been provided. This request makes AV/EDR interference
-the current investigation path, but does not establish it as the cause of the lock.
+version, plus whether the reporter has contacted the vendor through its commercial representative.
+The reporter identified Trellix as the vendor, but has not supplied a product or version. They plan to
+ask their internal information-systems department about filing a vendor bug report; no vendor ticket
+has been reported yet. This makes AV/EDR interference the current investigation path, but does not
+establish Trellix as the process holding the lock.
+
+The reporter is considering a wrapper that retries uv as a local workaround and asked whether uv
+could retry this failure internally. No wrapper implementation or validation was provided. Open
+astral-sh/uv#21489 explores additional retries for Windows AV/EDR cache failures, but it handles
+`PermissionDenied`/os error 5 rather than the reported os error 33, so it is not evidence that this
+specific path is covered.
 
 ## Draft response
 
