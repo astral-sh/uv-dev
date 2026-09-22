@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with uv 0.12.13 and Python 3.12.3, a temporary pylock.toml containing only `default-groups = [\"mygroup\"]` and a package marker `\"mygroup\" in dependency_groups` reproduced the issue. `uv pip install --preview-features pylock --dry-run -r pylock.toml` exited 0 with “Would make no changes”; a real install also exited 0 and left mypy-extensions absent. Adding `dependency-groups = [\"mygroup\"]` made uv plan to install mypy-extensions 1.1.0. The existing `crates/uv/tests/pip_install/pip_install.rs::pep_751_groups` test does not cover this shape because its default group appears in both fields."
+}
