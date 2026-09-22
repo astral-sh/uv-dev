@@ -21,9 +21,9 @@ use uv_configuration::{
 use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies, LoweredRequirement};
 use uv_distribution_types::{
-    CachedDist, ExtraBuildRequirement, ExtraBuildRequires, HashCollection, Index,
-    IndexCredentialsError, IndexUrlError, Requirement, RequiresPython, Resolution,
-    UnresolvedRequirement, UnresolvedRequirementSpecification,
+    ExtraBuildRequirement, ExtraBuildRequires, HashCollection, Index, IndexCredentialsError,
+    IndexUrlError, Requirement, RequiresPython, Resolution, UnresolvedRequirement,
+    UnresolvedRequirementSpecification,
 };
 use uv_fs::{CWD, LockedFile, LockedFileError, LockedFileMode, Simplified, verbatim_path};
 use uv_git::ResolvedRepositoryReference;
@@ -60,7 +60,7 @@ use uv_workspace::{ProjectEnvironmentSelection, RequiresPythonSources, Workspace
 
 use crate::commands::pip::loggers::{InstallLogger, ResolveLogger};
 use crate::commands::pip::operations::{
-    Changelog, InstallationPlan, Modifications, PreparationMode,
+    Changelog, InstallationPlan, Modifications, PreparationMode, PreparedWheels,
 };
 use crate::commands::project::install_target::InstallTarget;
 use crate::commands::reporters::{PythonDownloadReporter, ResolverReporter};
@@ -2727,13 +2727,15 @@ pub(crate) async fn resolve_environment(
     .0)
 }
 
-/// A check over the exact wheels selected for an environment update.
+/// A check over the known wheels selected for an environment update.
+///
+/// Pending shared sources must not be treated as the currently installed distribution.
 pub(crate) trait EnvironmentPreflight: Sync {
     fn check(
         &self,
         resolution: &Resolution,
         environment: &PythonEnvironment,
-        wheels: &[CachedDist],
+        wheels: PreparedWheels<'_>,
     ) -> anyhow::Result<()>;
 }
 
@@ -2791,8 +2793,7 @@ pub(crate) async fn sync_environment(
 
 /// Prepare the exact resolution for a replacement environment before removing the old one.
 ///
-/// Returns `None` when a source distribution needs the shared target environment. Such builds
-/// must retain the normal two-phase installation order.
+/// Shared sources that need the new target environment remain pending in the returned plan.
 pub(crate) async fn prepare_environment(
     existing: &PythonEnvironment,
     interpreter: &Interpreter,
@@ -2807,7 +2808,7 @@ pub(crate) async fn prepare_environment(
     cache: &Cache,
     printer: Printer,
     preview: Preview,
-) -> Result<Option<InstallationPlan>, ProjectError> {
+) -> Result<InstallationPlan, ProjectError> {
     install_environment(
         existing,
         interpreter,
@@ -2826,7 +2827,10 @@ pub(crate) async fn prepare_environment(
         printer,
         preview,
     )
-    .await
+    .await?
+    .ok_or_else(|| {
+        anyhow::anyhow!("Environment preparation did not return an installation plan").into()
+    })
 }
 
 async fn install_environment(
@@ -2979,31 +2983,26 @@ async fn install_environment(
         )?
     };
     if prepare_only || preflight.is_some() {
-        if plan
-            .prepare_before_mutation(
-                preparation_mode,
-                resolution,
-                build_options,
-                &hasher,
-                tags,
-                &client,
-                state.in_flight(),
-                concurrency,
-                &build_dispatch,
-                cache,
-                logger.as_ref(),
-                printer,
-            )
-            .await?
-        {
-            if prepare_only {
-                return Ok(Some(plan));
-            }
-            if let Some(preflight) = preflight {
-                preflight.check(resolution, venv, plan.prepared())?;
-            }
-        } else if prepare_only {
-            return Ok(None);
+        plan.prepare_before_mutation(
+            preparation_mode,
+            resolution,
+            build_options,
+            &hasher,
+            tags,
+            &client,
+            state.in_flight(),
+            concurrency,
+            &build_dispatch,
+            cache,
+            logger.as_ref(),
+            printer,
+        )
+        .await?;
+        if prepare_only {
+            return Ok(Some(plan));
+        }
+        if let Some(preflight) = preflight {
+            preflight.check(resolution, venv, plan.prepared())?;
         }
     }
 
@@ -3316,25 +3315,22 @@ pub(crate) async fn update_environment(
         &tags,
     )?;
     if let Some(preflight) = preflight {
-        if plan
-            .prepare_before_mutation(
-                PreparationMode::CurrentEnvironment,
-                &resolution,
-                build_options,
-                &hasher,
-                &tags,
-                &client,
-                state.in_flight(),
-                concurrency,
-                &build_dispatch,
-                cache,
-                install.as_ref(),
-                printer,
-            )
-            .await?
-        {
-            preflight.check(&resolution, &venv, plan.prepared())?;
-        }
+        plan.prepare_before_mutation(
+            PreparationMode::CurrentEnvironment,
+            &resolution,
+            build_options,
+            &hasher,
+            &tags,
+            &client,
+            state.in_flight(),
+            concurrency,
+            &build_dispatch,
+            cache,
+            install.as_ref(),
+            printer,
+        )
+        .await?;
+        preflight.check(&resolution, &venv, plan.prepared())?;
     }
     // Sync the environment using the resolution and artifacts selected above.
     let changelog = plan

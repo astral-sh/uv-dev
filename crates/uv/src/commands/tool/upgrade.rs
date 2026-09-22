@@ -461,7 +461,7 @@ async fn upgrade_tool(
             let environment = sync_environment(
                 environment,
                 None,
-                prepared,
+                Some(prepared),
                 &resolution,
                 hash_strategy,
                 Modifications::Exact,
@@ -596,7 +596,7 @@ async fn upgrade_tool(
         let environment = sync_environment(
             environment,
             None,
-            prepared,
+            Some(prepared),
             &resolution,
             HashStrategy::default(),
             Modifications::Exact,

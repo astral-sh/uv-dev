@@ -3666,6 +3666,26 @@ fn write_recovery_source(
     commands: &[(&str, &str)],
     build_imports: &str,
 ) -> Result<()> {
+    write_recovery_source_with_scripts(
+        directory,
+        name,
+        version,
+        requirements,
+        commands,
+        build_imports,
+        &[],
+    )
+}
+
+fn write_recovery_source_with_scripts(
+    directory: &Path,
+    name: &str,
+    version: &str,
+    requirements: &[&str],
+    commands: &[(&str, &str)],
+    build_imports: &str,
+    data_scripts: &[(&str, &str)],
+) -> Result<()> {
     fs_err::create_dir_all(directory)?;
     let wheel = write_recovery_wheel(directory, name, version, requirements, commands)?;
     let filename = wheel
@@ -3674,6 +3694,7 @@ fn write_recovery_source(
         .context("Invalid wheel filename")?;
     let dist_info = format!("{}-{version}.dist-info", name.replace('-', "_"));
     let requirements = serde_json::to_string(requirements)?;
+    let data_scripts = serde_json::to_string(data_scripts)?;
     fs_err::write(
         directory.join("pyproject.toml"),
         format!(
@@ -3681,6 +3702,8 @@ fn write_recovery_source(
         ),
     )?;
     let backend = indoc! {r#"
+        import base64
+        import hashlib
         import shutil
         import zipfile
         from pathlib import Path
@@ -3700,13 +3723,28 @@ fn write_recovery_source(
             exec(BUILD_IMPORTS)
             with (ROOT / "build-count").open("a", newline="\n") as counter:
                 counter.write("build\n")
-            shutil.copyfile(ROOT / WHEEL, Path(wheel_directory) / WHEEL)
+            scripts = [(f"{DIST_INFO.removesuffix('.dist-info')}.data/scripts/{name}", contents.encode())
+                       for name, contents in DATA_SCRIPTS]
+            if scripts:
+                records = "".join(f"{name},sha256={base64.urlsafe_b64encode(hashlib.sha256(contents).digest()).rstrip(b'=').decode()},{len(contents)}\n"
+                                  for name, contents in scripts).encode()
+                with zipfile.ZipFile(ROOT / WHEEL) as original:
+                    with zipfile.ZipFile(Path(wheel_directory) / WHEEL, "w") as wheel:
+                        for entry in original.infolist():
+                            contents = original.read(entry)
+                            if entry.filename == f"{DIST_INFO}/RECORD":
+                                contents += records
+                            wheel.writestr(entry, contents)
+                        for name, contents in scripts:
+                            wheel.writestr(name, contents)
+            else:
+                shutil.copyfile(ROOT / WHEEL, Path(wheel_directory) / WHEEL)
             return WHEEL
     "#};
     fs_err::write(
         directory.join("backend.py"),
         format!(
-            "WHEEL = {filename:?}\nDIST_INFO = {dist_info:?}\nBUILD_IMPORTS = {build_imports:?}\n{backend}"
+            "WHEEL = {filename:?}\nDIST_INFO = {dist_info:?}\nBUILD_IMPORTS = {build_imports:?}\nDATA_SCRIPTS = {data_scripts}\n{backend}"
         ),
     )?;
     Ok(())
@@ -4617,8 +4655,389 @@ fn tool_install_preflight_shared_replacement_uses_new_environment() -> Result<()
     Ok(())
 }
 
+/// Cached wheels are installed before shared builds in a replacement environment, while wheels
+/// selected for reinstall remain in their shared installation phase.
+#[test]
+fn tool_install_preflight_replacement_retains_cached_phase() -> Result<()> {
+    for preview in [None, Some("tool-install-locks")] {
+        for reinstall in [false, true] {
+            let context = uv_test::test_context_with_versions!(&["3.13", "3.12"]).with_tool_dirs();
+            let context = if let Some(preview) = preview {
+                context.with_env(EnvVars::UV_PREVIEW_FEATURES, preview)
+            } else {
+                context
+            };
+            let links = context.temp_dir.child("links");
+            links.create_dir_all()?;
+            write_recovery_wheel(
+                links.path(),
+                "recovery-dep",
+                "1.0.0",
+                &[],
+                &[("recovery-dep", "dep-1")],
+            )?;
+            write_recovery_wheel(
+                links.path(),
+                "recovery-root",
+                "1.0.0",
+                &["recovery-dep==1"],
+                &[("recovery-root", "root-1")],
+            )?;
+            context
+                .tool_install()
+                .args([
+                    "recovery-root",
+                    "--python",
+                    "3.13",
+                    "--offline",
+                    "--no-index",
+                    "--find-links",
+                ])
+                .arg(links.path())
+                .assert()
+                .success();
+            let tool = context.temp_dir.child("tools").child("recovery-root");
+            let sentinel = tool.child("old-environment");
+            sentinel.write_str("replace me")?;
+
+            // Populate the ordinary wheel cache independently of the tool being replaced.
+            write_recovery_wheel(
+                links.path(),
+                "recovery-dep",
+                "2.0.0",
+                &[],
+                &[("recovery-dep", "dep-2")],
+            )?;
+            context
+                .tool_install()
+                .args([
+                    "recovery-dep==2",
+                    "--python",
+                    "3.13",
+                    "--offline",
+                    "--no-index",
+                    "--find-links",
+                ])
+                .arg(links.path())
+                .assert()
+                .success();
+
+            let dependency_check = if reinstall {
+                "try:\n    importlib.metadata.version('recovery-dep')\nexcept importlib.metadata.PackageNotFoundError:\n    pass\nelse:\n    raise AssertionError('shared wheel installed before shared source build')"
+            } else {
+                "assert importlib.metadata.version('recovery-dep') == '2.0.0'"
+            };
+            let source = context.temp_dir.child("source");
+            write_recovery_source(
+                source.path(),
+                "recovery-root",
+                "2.0.0",
+                &["recovery-dep==2"],
+                &[("recovery-root", "root-2")],
+                &format!(
+                    "import sys\nassert sys.version_info[:2] == (3, 12)\nimport importlib.metadata\n{dependency_check}"
+                ),
+            )?;
+            let mut command = context.tool_install();
+            command
+                .arg(source.path())
+                .args([
+                    "--python",
+                    "3.12",
+                    "--no-build-isolation-package",
+                    "recovery-root",
+                    "--no-build-isolation-package",
+                    "recovery-dep",
+                    "--offline",
+                    "--no-index",
+                    "--find-links",
+                ])
+                .arg(links.path())
+                .env("PYTHONDONTWRITEBYTECODE", "1");
+            if reinstall {
+                command.args(["--reinstall-package", "recovery-dep"]);
+            }
+            command.assert().success();
+            source.child("build-count").assert("build\n");
+            sentinel.assert(predicate::path::missing());
+            let packages = site_packages_path(tool.path(), "python3.12");
+            assert!(
+                packages
+                    .join("recovery_dep-2.0.0.dist-info/METADATA")
+                    .exists()
+            );
+            assert!(
+                packages
+                    .join("recovery_root-2.0.0.dist-info/METADATA")
+                    .exists()
+            );
+            assert!(
+                !packages
+                    .join("recovery_dep-1.0.0.dist-info/METADATA")
+                    .exists()
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn tool_install_preflight_partial_wheels_preserve_environment() -> Result<()> {
+    for preview in [None, Some("tool-install-locks")] {
+        for replacement in [false, true] {
+            let context = uv_test::test_context_with_versions!(&["3.13", "3.12"]).with_tool_dirs();
+            let context = if let Some(preview) = preview {
+                context.with_env(EnvVars::UV_PREVIEW_FEATURES, preview)
+            } else {
+                context
+            };
+            let links = context.temp_dir.child("links");
+            links.create_dir_all()?;
+            write_recovery_wheel(
+                links.path(),
+                "recovery-dep",
+                "1.0.0",
+                &[],
+                &[("recovery-dep", "dep-1")],
+            )?;
+            write_recovery_wheel(
+                links.path(),
+                "recovery-root",
+                "1.0.0",
+                &["recovery-dep==1"],
+                &[("recovery-root", "root-1")],
+            )?;
+            context
+                .tool_install()
+                .args([
+                    "recovery-root",
+                    "--python",
+                    "3.13",
+                    "--with-executables-from",
+                    "recovery-dep",
+                    "--no-index",
+                    "--find-links",
+                ])
+                .arg(links.path())
+                .assert()
+                .success();
+            let tool = context.temp_dir.child("tools").child("recovery-root");
+            let before = dirhash_path(tool.path())?;
+            let conflict = context
+                .temp_dir
+                .child("bin")
+                .child(format!("new-command{}", std::env::consts::EXE_SUFFIX));
+            conflict.write_str("external command")?;
+            write_recovery_wheel(
+                links.path(),
+                "recovery-dep",
+                "2.0.0",
+                &[],
+                &[("recovery-dep", "dep-2"), ("new-command", "new")],
+            )?;
+            let source = context.temp_dir.child("source");
+            write_recovery_source(
+                source.path(),
+                "recovery-root",
+                "2.0.0",
+                &["recovery-dep==2"],
+                &[("recovery-root", "root-2")],
+                "import importlib.metadata\nassert importlib.metadata.version('recovery-dep') == '2.0.0'",
+            )?;
+            let mut command = context.tool_install();
+            command
+                .arg(source.path())
+                .args([
+                    "--with-executables-from",
+                    "recovery-dep",
+                    "--no-build-isolation-package",
+                    "recovery-root",
+                    "--no-index",
+                    "--find-links",
+                ])
+                .arg(links.path())
+                .env("PYTHONDONTWRITEBYTECODE", "1");
+            if replacement {
+                command.args(["--python", "3.12"]);
+            }
+            command
+                .assert()
+                .code(2)
+                .stderr(predicate::str::contains("Executable already exists:"));
+            assert_eq!(
+                dirhash_path(tool.path())?,
+                before,
+                "{preview:?}, {replacement}"
+            );
+            conflict.assert("external command");
+            source
+                .child("build-count")
+                .assert(predicate::path::missing());
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn tool_install_preflight_partial_sources_are_built_once() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    write_recovery_wheel(
+        links.path(),
+        "recovery-old-build",
+        "1.0.0",
+        &[],
+        &[("old-build", "old")],
+    )?;
+    write_recovery_wheel(
+        links.path(),
+        "recovery-root",
+        "1.0.0",
+        &["recovery-old-build==1"],
+        &[("recovery-root", "root-1")],
+    )?;
+    context
+        .tool_install()
+        .args(["recovery-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .success();
+    let dependency = context.temp_dir.child("dependency");
+    write_recovery_source(
+        dependency.path(),
+        "recovery-dep",
+        "2.0.0",
+        &[],
+        &[("recovery-dep", "dep-2")],
+        "",
+    )?;
+    let requirement = format!(
+        "recovery-dep @ {}",
+        Url::from_directory_path(dependency.path()).expect("Failed to convert source path to URL")
+    );
+    let source = context.temp_dir.child("source");
+    write_recovery_source(
+        source.path(),
+        "recovery-root",
+        "2.0.0",
+        &[&requirement],
+        &[("recovery-root", "root-2")],
+        "import importlib.metadata\nassert importlib.metadata.version('recovery-root') == '1.0.0'\nassert importlib.metadata.version('recovery-dep') == '2.0.0'\nimport recovery_old_build.commands",
+    )?;
+    context
+        .tool_install()
+        .arg(source.path())
+        .args([
+            "--with-executables-from",
+            "recovery-dep",
+            "--no-build-isolation-package",
+            "recovery-root",
+            "--no-index",
+        ])
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .assert()
+        .success();
+    dependency.child("build-count").assert("build\n");
+    source.child("build-count").assert("build\n");
+    let tool = context.temp_dir.child("tools").child("recovery-root");
+    let packages = site_packages_path(tool.path(), "python3.13");
+    assert!(
+        packages
+            .join("recovery_dep-2.0.0.dist-info/METADATA")
+            .exists()
+    );
+    assert!(
+        !packages
+            .join("recovery_old_build-1.0.0.dist-info/METADATA")
+            .exists()
+    );
+    Ok(())
+}
+
+/// Preparing a shared wheel must not install it before another shared source's backend runs.
+#[test]
+fn tool_install_preflight_retains_prepared_shared_wheel_phase() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    write_recovery_wheel(
+        links.path(),
+        "recovery-dep",
+        "1.0.0",
+        &[],
+        &[("recovery-dep", "dep-1")],
+    )?;
+    write_recovery_wheel(
+        links.path(),
+        "recovery-root",
+        "1.0.0",
+        &["recovery-dep==1"],
+        &[("recovery-root", "root-1")],
+    )?;
+    context
+        .tool_install()
+        .args(["recovery-root", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .success();
+    write_recovery_wheel(
+        links.path(),
+        "recovery-dep",
+        "2.0.0",
+        &[],
+        &[("recovery-dep", "dep-2")],
+    )?;
+    write_recovery_wheel(
+        links.path(),
+        "recovery-isolated",
+        "1.0.0",
+        &[],
+        &[("recovery-isolated", "isolated")],
+    )?;
+    let source = context.temp_dir.child("source");
+    write_recovery_source(
+        source.path(),
+        "recovery-root",
+        "2.0.0",
+        &["recovery-dep==2", "recovery-isolated==1"],
+        &[("recovery-root", "root-2")],
+        "import importlib.metadata\nassert importlib.metadata.version('recovery-dep') == '1.0.0'\nassert importlib.metadata.version('recovery-isolated') == '1.0.0'",
+    )?;
+    context
+        .tool_install()
+        .arg(source.path())
+        .args([
+            "--no-build-isolation-package",
+            "recovery-root",
+            "--no-build-isolation-package",
+            "recovery-dep",
+            "--no-cache",
+            "--no-index",
+            "--find-links",
+        ])
+        .arg(links.path())
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .assert()
+        .success();
+    source.child("build-count").assert("build\n");
+    let tool = context.temp_dir.child("tools").child("recovery-root");
+    let packages = site_packages_path(tool.path(), "python3.13");
+    assert!(
+        packages
+            .join("recovery_dep-2.0.0.dist-info/METADATA")
+            .exists()
+    );
+    assert!(
+        !packages
+            .join("recovery_dep-1.0.0.dist-info/METADATA")
+            .exists()
+    );
+    Ok(())
+}
+
 /// Shared source builds still see the installed isolated phase and the old extraneous packages.
-/// Their new commands cannot be admitted until that same-environment build has completed.
+/// Scripts generated by their backend cannot be admitted until that build has completed.
 #[test]
 fn tool_install_preflight_retains_shared_build_order() -> Result<()> {
     let context = uv_test::test_context!("3.13").with_tool_dirs();
@@ -4647,10 +5066,7 @@ fn tool_install_preflight_retains_shared_build_order() -> Result<()> {
     let tool = context.temp_dir.child("tools").child("recovery-root");
     let receipt = tool.child("uv-receipt.toml");
     let receipt_before = fs_err::read(receipt.path())?;
-    let conflict = context
-        .temp_dir
-        .child("bin")
-        .child(format!("new-command{}", std::env::consts::EXE_SUFFIX));
+    let conflict = context.temp_dir.child("bin").child("generated-command");
     conflict.write_str("external command")?;
     write_recovery_wheel(
         links.path(),
@@ -4667,13 +5083,14 @@ fn tool_install_preflight_retains_shared_build_order() -> Result<()> {
         .assert()
         .success();
     let source = context.temp_dir.child("source");
-    write_recovery_source(
+    write_recovery_source_with_scripts(
         source.path(),
         "recovery-root",
         "2.0.0",
         &["recovery-new-build==1"],
-        &[("recovery-root", "root-2"), ("new-command", "new")],
+        &[("recovery-root", "root-2")],
         "import recovery_old_build.commands\nimport recovery_new_build.commands",
+        &[("generated-command", "#!python\nprint('generated')\n")],
     )?;
     context
         .tool_install()

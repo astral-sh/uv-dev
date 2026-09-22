@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{Concurrency, Constraints};
-use uv_distribution_types::{CachedDist, Name, Resolution};
+use uv_distribution_types::{Name, Resolution};
 use uv_errors::{ErrorWithHints, Hinted};
 use uv_fs::Simplified;
 use uv_install_wheel::{Layout, installed_entrypoint_paths};
@@ -31,7 +31,7 @@ use uv_tool::{InstalledTools, Tool, ToolEntrypoint, entrypoint_paths};
 use uv_types::HashStrategy;
 
 use crate::commands::pip::loggers::InstallLogger;
-use crate::commands::pip::operations::InstallationPlan;
+use crate::commands::pip::operations::{InstallationPlan, PreparedWheels};
 use crate::commands::project::{
     EnvironmentPreflight, PlatformState, ProjectError, prepare_environment,
 };
@@ -193,7 +193,7 @@ impl EnvironmentPreflight for ToolEntrypointPreflight<'_> {
         &self,
         resolution: &Resolution,
         environment: &PythonEnvironment,
-        wheels: &[CachedDist],
+        wheels: PreparedWheels<'_>,
     ) -> anyhow::Result<()> {
         self.snapshot.preflight_selected(
             &environment.interpreter().layout(),
@@ -224,7 +224,7 @@ impl ToolEntrypointPreflight<'_> {
         cache: &Cache,
         printer: Printer,
         preview: Preview,
-    ) -> Result<Option<InstallationPlan>, ProjectError> {
+    ) -> Result<InstallationPlan, ProjectError> {
         let prepared = prepare_environment(
             existing,
             interpreter,
@@ -241,17 +241,15 @@ impl ToolEntrypointPreflight<'_> {
             preview,
         )
         .await?;
-        if let Some(prepared) = &prepared {
-            self.snapshot.preflight_selected(
-                &replacement_layout(existing.root(), interpreter),
-                None,
-                resolution,
-                prepared.prepared(),
-                self.name,
-                self.providers,
-                self.force,
-            )?;
-        }
+        self.snapshot.preflight_selected(
+            &replacement_layout(existing.root(), interpreter),
+            None,
+            resolution,
+            prepared.prepared(),
+            self.name,
+            self.providers,
+            self.force,
+        )?;
         Ok(prepared)
     }
 }
@@ -272,15 +270,14 @@ fn replacement_layout(root: &Path, interpreter: &Interpreter) -> Layout {
 }
 
 impl ToolEntrypointSnapshot {
-    /// Admit a complete selected wheel inventory before any package changes. The caller must only
-    /// use this with a fully prepared plan; shared builds that require earlier environment changes
-    /// still require the final preflight.
+    /// Admit the known selected wheel inventories before any package changes. Pending shared
+    /// sources remain subject to the complete final preflight after their real build finishes.
     fn preflight_selected(
         &self,
         layout: &Layout,
         site_packages: Option<&SitePackages>,
         resolution: &Resolution,
-        wheels: &[CachedDist],
+        wheels: PreparedWheels<'_>,
         name: &PackageName,
         providers: &[PackageName],
         force: bool,
@@ -292,7 +289,10 @@ impl ToolEntrypointSnapshot {
             .into_iter()
             .chain(std::iter::once(name));
         for package in ordered_packages {
-            let entries = if let Some(wheel) = wheels.iter().find(|wheel| wheel.name() == package) {
+            if wheels.is_pending(package) {
+                continue;
+            }
+            let entries = if let Some(wheel) = wheels.get(package) {
                 installed_entrypoint_paths(layout, wheel.path())?
             } else {
                 let Some(site_packages) = site_packages else {
