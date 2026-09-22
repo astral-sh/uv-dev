@@ -280,6 +280,7 @@ pub(crate) async fn sync(
 
             match update_environment(
                 environment.clone(),
+                None,
                 spec,
                 modifications,
                 python_platform.as_ref(),

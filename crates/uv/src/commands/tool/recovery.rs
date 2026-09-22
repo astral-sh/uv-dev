@@ -15,17 +15,30 @@ use itertools::Itertools;
 use owo_colors::OwoColorize;
 #[cfg(windows)]
 use sha2::{Digest, Sha256};
-use uv_distribution_types::Name;
+use uv_cache::Cache;
+use uv_client::BaseClientBuilder;
+use uv_configuration::{Concurrency, Constraints};
+use uv_distribution_types::{CachedDist, Name, Resolution};
 use uv_errors::{ErrorWithHints, Hinted};
 use uv_fs::Simplified;
+use uv_install_wheel::{Layout, installed_entrypoint_paths};
 use uv_installer::SitePackages;
 use uv_normalize::PackageName;
-use uv_python::PythonEnvironment;
+use uv_preview::Preview;
+use uv_pypi_types::Scheme;
+use uv_python::{Interpreter, PythonEnvironment};
 use uv_tool::{InstalledTools, Tool, ToolEntrypoint, entrypoint_paths};
+use uv_types::HashStrategy;
 
+use crate::commands::pip::loggers::InstallLogger;
+use crate::commands::pip::operations::InstallationPlan;
+use crate::commands::project::{
+    EnvironmentPreflight, PlatformState, ProjectError, prepare_environment,
+};
 use crate::commands::tool::common::{NoExecutablesError, matching_packages};
 use crate::commands::tool::uninstall::owned_entrypoints_by;
 use crate::printer::Printer;
+use crate::settings::InstallerSettingsRef;
 
 /// An existing tool's export authority, captured before its environment is changed.
 ///
@@ -168,7 +181,195 @@ impl ToolEntrypointClaims {
     }
 }
 
+pub(super) struct ToolEntrypointPreflight<'a> {
+    pub(super) snapshot: &'a ToolEntrypointSnapshot,
+    pub(super) name: &'a PackageName,
+    pub(super) providers: &'a [PackageName],
+    pub(super) force: bool,
+}
+
+impl EnvironmentPreflight for ToolEntrypointPreflight<'_> {
+    fn check(
+        &self,
+        resolution: &Resolution,
+        environment: &PythonEnvironment,
+        wheels: &[CachedDist],
+    ) -> anyhow::Result<()> {
+        self.snapshot.preflight_selected(
+            &environment.interpreter().layout(),
+            Some(&SitePackages::from_environment(environment)?),
+            resolution,
+            wheels,
+            self.name,
+            self.providers,
+            self.force,
+        )
+    }
+}
+
+impl ToolEntrypointPreflight<'_> {
+    /// Prepare and admit a replacement using its selected interpreter and final environment path.
+    pub(super) async fn prepare_replacement(
+        &self,
+        existing: &PythonEnvironment,
+        interpreter: &Interpreter,
+        resolution: &Resolution,
+        hasher: HashStrategy,
+        build_constraints: Constraints,
+        settings: InstallerSettingsRef<'_>,
+        client_builder: &BaseClientBuilder<'_>,
+        state: &PlatformState,
+        logger: Box<dyn InstallLogger>,
+        concurrency: &Concurrency,
+        cache: &Cache,
+        printer: Printer,
+        preview: Preview,
+    ) -> Result<Option<InstallationPlan>, ProjectError> {
+        let prepared = prepare_environment(
+            existing,
+            interpreter,
+            resolution,
+            hasher,
+            build_constraints,
+            settings,
+            client_builder,
+            state,
+            logger,
+            concurrency,
+            cache,
+            printer,
+            preview,
+        )
+        .await?;
+        if let Some(prepared) = &prepared {
+            self.snapshot.preflight_selected(
+                &replacement_layout(existing.root(), interpreter),
+                None,
+                resolution,
+                prepared.prepared(),
+                self.name,
+                self.providers,
+                self.force,
+            )?;
+        }
+        Ok(prepared)
+    }
+}
+
+/// The installation layout that `uv venv` will create at a tool's final path.
+fn replacement_layout(root: &Path, interpreter: &Interpreter) -> Layout {
+    let scheme = interpreter.virtualenv();
+    Layout {
+        scheme: Scheme {
+            purelib: root.join(&scheme.purelib),
+            platlib: root.join(&scheme.platlib),
+            scripts: root.join(&scheme.scripts),
+            data: root.join(&scheme.data),
+            include: root.join(&scheme.include),
+        },
+        ..interpreter.layout()
+    }
+}
+
 impl ToolEntrypointSnapshot {
+    /// Admit a complete selected wheel inventory before any package changes. The caller must only
+    /// use this with a fully prepared plan; unresolved shared builds require the final preflight.
+    fn preflight_selected(
+        &self,
+        layout: &Layout,
+        site_packages: Option<&SitePackages>,
+        resolution: &Resolution,
+        wheels: &[CachedDist],
+        name: &PackageName,
+        providers: &[PackageName],
+        force: bool,
+    ) -> anyhow::Result<()> {
+        let ordered_packages = providers
+            .iter()
+            .filter(|package| *package != name)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .chain(std::iter::once(name));
+        for package in ordered_packages {
+            let entries = if let Some(wheel) = wheels.iter().find(|wheel| wheel.name() == package) {
+                installed_entrypoint_paths(layout, wheel.path())?
+            } else {
+                let Some(site_packages) = site_packages else {
+                    bail!("Expected package `{package}` in the prepared tool resolution");
+                };
+                let version = resolution
+                    .distributions()
+                    .find(|dist| dist.name() == package)
+                    .and_then(|dist| dist.version())
+                    .with_context(|| {
+                        format!("Expected package `{package}` in the tool resolution")
+                    })?;
+                entrypoint_paths(site_packages, package, version)?
+            };
+            for (entry_name, source) in entries {
+                let filename = source
+                    .file_name()
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| OsString::from(&entry_name));
+                if !self.should_export(name, package, &filename)? {
+                    continue;
+                }
+                let target = self.executable_directory.join(filename);
+                if same_entrypoint_location(&source, &target)? {
+                    bail!(
+                        "Cannot export executable `{}` into its tool environment",
+                        target.user_display()
+                    );
+                }
+                self.admit_target(name, &target, force)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg_attr(
+        not(windows),
+        expect(
+            clippy::unnecessary_wraps,
+            reason = "Windows executable name comparison is fallible"
+        )
+    )]
+    fn should_export(
+        &self,
+        name: &PackageName,
+        package: &PackageName,
+        filename: &std::ffi::OsStr,
+    ) -> anyhow::Result<bool> {
+        let was_recorded = self
+            .recorded_inventory
+            .contains(&(package.clone(), filename.to_owned()));
+        #[cfg(windows)]
+        if self.inventory.is_none() && !was_recorded {
+            for (previous_package, previous_name) in &self.recorded_inventory {
+                if previous_package == package
+                    && uv_windows::names_equal_ordinal(previous_name, filename)?
+                {
+                    bail!(
+                        "Cannot compare executable names in the missing previous environment for `{name}`"
+                    );
+                }
+            }
+        }
+        // A pruned command is not implicitly reacquired. A newly selected explicit provider may
+        // add its commands, subject to the same competing-claim preflight.
+        let newly_selected =
+            package != name
+                && !self.receipt.entrypoints().iter().any(|entry| {
+                    entry.from.as_deref().unwrap_or(name.as_ref()) == package.as_ref()
+                });
+        Ok(!(self
+            .inventory
+            .as_ref()
+            .is_none_or(|inventory| inventory.contains(&(package.clone(), filename.to_owned())))
+            && !was_recorded
+            && !newly_selected))
+    }
+
     pub(super) fn capture(
         environment: Option<&PythonEnvironment>,
         name: &PackageName,
@@ -326,12 +527,6 @@ impl ToolEntrypointSnapshot {
     ) -> anyhow::Result<Vec<ToolEntrypoint>> {
         let site_packages = SitePackages::from_environment(environment)?;
         let environment_root = fs_err::canonicalize(environment.root())?;
-        let previous_providers = self
-            .receipt
-            .entrypoints()
-            .iter()
-            .map(|entry| entry.from.as_deref().unwrap_or(name.as_ref()))
-            .collect::<BTreeSet<_>>();
         let mut planned = BTreeMap::<PathBuf, (String, PathBuf, PackageName, bool)>::new();
         let ordered_packages = providers
             .iter()
@@ -378,30 +573,7 @@ impl ToolEntrypointSnapshot {
                     .file_name()
                     .map(ToOwned::to_owned)
                     .unwrap_or_else(|| OsString::from(&entry_name));
-                let was_recorded = self
-                    .recorded_inventory
-                    .contains(&(package.clone(), filename.clone()));
-                #[cfg(windows)]
-                if self.inventory.is_none() && !was_recorded {
-                    for (previous_package, previous_name) in &self.recorded_inventory {
-                        if previous_package == package
-                            && uv_windows::names_equal_ordinal(previous_name, &filename)?
-                        {
-                            bail!(
-                                "Cannot compare executable names in the missing previous environment for `{name}`"
-                            );
-                        }
-                    }
-                }
-                // A pruned command is not implicitly reacquired. A newly selected explicit
-                // provider may add its commands, subject to the same competing-claim preflight.
-                let newly_selected =
-                    package != name && !previous_providers.contains(package.as_ref());
-                if self.inventory.as_ref().is_none_or(|inventory| {
-                    inventory.contains(&(package.clone(), filename.clone()))
-                }) && !was_recorded
-                    && !newly_selected
-                {
+                if !self.should_export(name, package, &filename)? {
                     continue;
                 }
                 let canonical_source = fs_err::canonicalize(&source)?;

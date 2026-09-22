@@ -418,6 +418,7 @@ pub(crate) async fn run(
 
                 match update_environment(
                     environment,
+                    None,
                     spec,
                     modifications,
                     python_platform.as_ref(),

@@ -37,7 +37,7 @@ use crate::commands::project::{
 };
 use crate::commands::reporters::PythonDownloadReporter;
 use crate::commands::tool::common::{ToolLock, repair_tool_entrypoints, tool_environment_spec};
-use crate::commands::tool::recovery::ToolEntrypointSnapshot;
+use crate::commands::tool::recovery::{ToolEntrypointPreflight, ToolEntrypointSnapshot};
 use crate::commands::{ExitStatus, conjunction, tool::common::finalize_tool_install};
 use crate::printer::Printer;
 use crate::settings::ResolverInstallerSettings;
@@ -328,6 +328,17 @@ async fn upgrade_tool(
         &existing_tool_receipt,
         installed_tools,
     )?;
+    let entrypoints: Vec<_> = existing_tool_receipt
+        .entrypoints()
+        .iter()
+        .filter_map(|entry| PackageName::from_str(entry.from.as_ref()?).ok())
+        .collect();
+    let preflight = ToolEntrypointPreflight {
+        snapshot: &entrypoint_snapshot,
+        name,
+        providers: &entrypoints,
+        force: false,
+    };
 
     // Restore credentials from user configuration when the receipt refers to the same index.
     // Receipts intentionally omit credentials, including usernames needed for keyring lookups.
@@ -428,10 +439,29 @@ async fn upgrade_tool(
         let hash_strategy = HashStrategy::from_resolution(&resolution, HashCheckingMode::Verify)?;
 
         if requested_interpreter.is_some() {
+            let prepared = preflight
+                .prepare_replacement(
+                    environment.environment(),
+                    target_interpreter,
+                    &resolution,
+                    hash_strategy.clone(),
+                    build_constraints.clone(),
+                    (&settings).into(),
+                    client_builder,
+                    &state,
+                    Box::new(DefaultInstallLogger),
+                    concurrency,
+                    cache,
+                    printer,
+                    preview,
+                )
+                .await?;
             let environment =
                 installed_tools.create_environment(name, target_interpreter.clone())?;
             let environment = sync_environment(
                 environment,
+                None,
+                prepared,
                 &resolution,
                 hash_strategy,
                 Modifications::Exact,
@@ -505,6 +535,8 @@ async fn upgrade_tool(
             } else {
                 sync_environment(
                     environment.into_environment(),
+                    Some(&preflight),
+                    None,
                     &resolution,
                     hash_strategy,
                     Modifications::Exact,
@@ -542,10 +574,30 @@ async fn upgrade_tool(
             preview,
         )
         .await?;
+        let resolution = resolution.into();
+        let prepared = preflight
+            .prepare_replacement(
+                environment.environment(),
+                interpreter,
+                &resolution,
+                HashStrategy::default(),
+                build_constraints.clone(),
+                (&settings).into(),
+                client_builder,
+                &state,
+                Box::new(DefaultInstallLogger),
+                concurrency,
+                cache,
+                printer,
+                preview,
+            )
+            .await?;
         let environment = installed_tools.create_environment(name, interpreter.clone())?;
         let environment = sync_environment(
             environment,
-            &resolution.into(),
+            None,
+            prepared,
+            &resolution,
             HashStrategy::default(),
             Modifications::Exact,
             build_constraints,
@@ -568,6 +620,7 @@ async fn upgrade_tool(
             changelog,
         } = update_environment(
             environment.into_environment(),
+            Some(&preflight),
             spec,
             Modifications::Exact,
             python_platform,
@@ -601,12 +654,6 @@ async fn upgrade_tool(
     };
 
     if !matches!(outcome, UpgradeOutcome::NoOp) {
-        let entrypoints: Vec<_> = existing_tool_receipt
-            .entrypoints()
-            .iter()
-            .filter_map(|entry| PackageName::from_str(entry.from.as_ref()?).ok())
-            .collect();
-
         // If we modified the target tool, reinstall the entrypoints.
         finalize_tool_install(
             &environment,

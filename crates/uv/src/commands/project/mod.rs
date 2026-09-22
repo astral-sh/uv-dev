@@ -21,9 +21,9 @@ use uv_configuration::{
 use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies, LoweredRequirement};
 use uv_distribution_types::{
-    ExtraBuildRequirement, ExtraBuildRequires, HashCollection, Index, IndexCredentialsError,
-    IndexUrlError, Requirement, RequiresPython, Resolution, UnresolvedRequirement,
-    UnresolvedRequirementSpecification,
+    CachedDist, ExtraBuildRequirement, ExtraBuildRequires, HashCollection, Index,
+    IndexCredentialsError, IndexUrlError, Requirement, RequiresPython, Resolution,
+    UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
 use uv_fs::{CWD, LockedFile, LockedFileError, LockedFileMode, Simplified, verbatim_path};
 use uv_git::ResolvedRepositoryReference;
@@ -59,7 +59,7 @@ use uv_workspace::pyproject::{ExtraBuildDependency, PyProjectToml};
 use uv_workspace::{ProjectEnvironmentSelection, RequiresPythonSources, Workspace, WorkspaceCache};
 
 use crate::commands::pip::loggers::{InstallLogger, ResolveLogger};
-use crate::commands::pip::operations::{Changelog, Modifications};
+use crate::commands::pip::operations::{Changelog, InstallationPlan, Modifications};
 use crate::commands::project::install_target::InstallTarget;
 use crate::commands::reporters::{PythonDownloadReporter, ResolverReporter};
 use crate::commands::{capitalize, conjunction, pip};
@@ -2725,9 +2725,29 @@ pub(crate) async fn resolve_environment(
     .0)
 }
 
+/// A check over the exact wheels selected for an environment update.
+pub(crate) trait EnvironmentPreflight: Sync {
+    fn check(
+        &self,
+        resolution: &Resolution,
+        environment: &PythonEnvironment,
+        wheels: &[CachedDist],
+    ) -> anyhow::Result<()>;
+}
+
+enum EnvironmentInstallMode<'a> {
+    Sync {
+        preflight: Option<&'a dyn EnvironmentPreflight>,
+        prepared: Option<InstallationPlan>,
+    },
+    Prepare,
+}
+
 /// Sync a [`PythonEnvironment`] with a set of resolved requirements.
 pub(crate) async fn sync_environment(
     venv: PythonEnvironment,
+    preflight: Option<&dyn EnvironmentPreflight>,
+    prepared: Option<InstallationPlan>,
     resolution: &Resolution,
     hasher: HashStrategy,
     modifications: Modifications,
@@ -2742,6 +2762,89 @@ pub(crate) async fn sync_environment(
     printer: Printer,
     preview: Preview,
 ) -> Result<PythonEnvironment, ProjectError> {
+    install_environment(
+        &venv,
+        venv.interpreter(),
+        EnvironmentInstallMode::Sync {
+            preflight,
+            prepared,
+        },
+        resolution,
+        hasher,
+        modifications,
+        build_constraints,
+        settings,
+        client_builder,
+        state,
+        logger,
+        installer_metadata,
+        concurrency,
+        cache,
+        printer,
+        preview,
+    )
+    .await?;
+    Ok(venv)
+}
+
+/// Prepare the exact resolution for a replacement environment before removing the old one.
+///
+/// Returns `None` when a source distribution needs the shared target environment. Such builds
+/// must retain the normal two-phase installation order.
+pub(crate) async fn prepare_environment(
+    existing: &PythonEnvironment,
+    interpreter: &Interpreter,
+    resolution: &Resolution,
+    hasher: HashStrategy,
+    build_constraints: Constraints,
+    settings: InstallerSettingsRef<'_>,
+    client_builder: &BaseClientBuilder<'_>,
+    state: &PlatformState,
+    logger: Box<dyn InstallLogger>,
+    concurrency: &Concurrency,
+    cache: &Cache,
+    printer: Printer,
+    preview: Preview,
+) -> Result<Option<InstallationPlan>, ProjectError> {
+    install_environment(
+        existing,
+        interpreter,
+        EnvironmentInstallMode::Prepare,
+        resolution,
+        hasher,
+        Modifications::Exact,
+        build_constraints,
+        settings,
+        client_builder,
+        state,
+        logger,
+        false,
+        concurrency,
+        cache,
+        printer,
+        preview,
+    )
+    .await
+}
+
+async fn install_environment(
+    venv: &PythonEnvironment,
+    interpreter: &Interpreter,
+    mode: EnvironmentInstallMode<'_>,
+    resolution: &Resolution,
+    hasher: HashStrategy,
+    modifications: Modifications,
+    build_constraints: Constraints,
+    settings: InstallerSettingsRef<'_>,
+    client_builder: &BaseClientBuilder<'_>,
+    state: &PlatformState,
+    logger: Box<dyn InstallLogger>,
+    installer_metadata: bool,
+    concurrency: &Concurrency,
+    cache: &Cache,
+    printer: Printer,
+    preview: Preview,
+) -> Result<Option<InstallationPlan>, ProjectError> {
     let InstallerSettingsRef {
         index_locations,
         index_strategy,
@@ -2762,11 +2865,8 @@ pub(crate) async fn sync_environment(
 
     let client_builder = client_builder.clone().keyring(keyring_provider);
 
-    let site_packages = SitePackages::from_environment(&venv)?;
-
     // Determine the markers tags to use for resolution.
-    let interpreter = venv.interpreter();
-    let tags = venv.interpreter().tags()?;
+    let tags = interpreter.tags()?;
 
     // Initialize the registry client.
     let client = RegistryClientBuilder::new(client_builder, cache.clone())
@@ -2779,9 +2879,9 @@ pub(crate) async fn sync_environment(
     // Determine whether to enable build isolation.
     let build_isolation = match build_isolation {
         uv_configuration::BuildIsolation::Isolate => BuildIsolation::Isolated,
-        uv_configuration::BuildIsolation::Shared => BuildIsolation::Shared(&venv),
+        uv_configuration::BuildIsolation::Shared => BuildIsolation::Shared(venv),
         uv_configuration::BuildIsolation::SharedPackage(packages) => {
-            BuildIsolation::SharedPackage(&venv, packages)
+            BuildIsolation::SharedPackage(venv, packages)
         }
     };
 
@@ -2832,13 +2932,81 @@ pub(crate) async fn sync_environment(
         preview,
     );
 
-    // Sync the environment.
-    pip::operations::install(
+    let (preflight, prepared, prepare_only) = match mode {
+        EnvironmentInstallMode::Sync {
+            preflight,
+            prepared,
+        } => (preflight, prepared, false),
+        EnvironmentInstallMode::Prepare => (None, None, true),
+    };
+    let mut plan = if let Some(prepared) = prepared {
+        prepared
+    } else {
+        let site_packages = if prepare_only {
+            if resolution
+                .distributions()
+                .any(|dist| matches!(dist, uv_distribution_types::ResolvedDist::Installed { .. }))
+            {
+                return Err(anyhow::anyhow!(
+                    "A new environment requires installable distributions"
+                )
+                .into());
+            }
+            // The replacement starts empty, but cached wheels still belong to the isolated
+            // installation phase. Classify them before preparation changes the cache.
+            SitePackages::empty(interpreter.clone())
+        } else {
+            SitePackages::from_environment(venv)?
+        };
+        InstallationPlan::build(
+            resolution,
+            site_packages,
+            InstallationStrategy::Permissive,
+            reinstall,
+            build_options,
+            &hasher,
+            index_locations,
+            config_setting,
+            config_settings_package,
+            &extra_build_requires,
+            extra_build_variables,
+            cache,
+            venv,
+            tags,
+        )?
+    };
+    if prepare_only || preflight.is_some() {
+        if plan
+            .prepare_if_isolated(
+                resolution,
+                build_options,
+                &hasher,
+                tags,
+                &client,
+                state.in_flight(),
+                concurrency,
+                &build_dispatch,
+                cache,
+                logger.as_ref(),
+                printer,
+            )
+            .await?
+        {
+            if prepare_only {
+                return Ok(Some(plan));
+            }
+            if let Some(preflight) = preflight {
+                preflight.check(resolution, venv, plan.prepared())?;
+            }
+        } else if prepare_only {
+            return Ok(None);
+        }
+    }
+
+    // Sync the environment with the same prepared artifacts.
+    plan.execute(
         resolution,
-        site_packages,
-        InstallationStrategy::Permissive,
         modifications,
-        reinstall,
         build_options,
         link_mode,
         compile_bytecode.then_some(pip::operations::BytecodeCompilation::All),
@@ -2849,7 +3017,7 @@ pub(crate) async fn sync_environment(
         concurrency,
         &build_dispatch,
         cache,
-        &venv,
+        venv,
         logger,
         installer_metadata,
         dry_run,
@@ -2861,7 +3029,7 @@ pub(crate) async fn sync_environment(
     // Notify the user of any resolution diagnostics.
     pip::operations::diagnose_resolution(resolution.diagnostics(), printer)?;
 
-    Ok(venv)
+    Ok(None)
 }
 
 /// The result of updating a [`PythonEnvironment`] to satisfy a set of [`RequirementsSource`]s.
@@ -2883,6 +3051,7 @@ impl EnvironmentUpdate {
 /// Update a [`PythonEnvironment`] to satisfy a set of [`RequirementsSource`]s.
 pub(crate) async fn update_environment(
     venv: PythonEnvironment,
+    preflight: Option<&dyn EnvironmentPreflight>,
     spec: RequirementsSpecification,
     modifications: Modifications,
     python_platform: Option<&TargetTriple>,
@@ -3126,31 +3295,65 @@ pub(crate) async fn update_environment(
         Ok((resolution, hasher)) => (Resolution::from(resolution), hasher),
         Err(err) => return Err(err.into()),
     };
-    // Sync the environment.
-    let changelog = pip::operations::install(
+    let mut plan = InstallationPlan::build(
         &resolution,
         site_packages,
         InstallationStrategy::Permissive,
-        modifications,
         reinstall,
         build_options,
-        *link_mode,
-        (*compile_bytecode).then_some(pip::operations::BytecodeCompilation::All),
         &hasher,
-        &tags,
-        &client,
-        state.in_flight(),
-        concurrency,
-        &build_dispatch,
+        index_locations,
+        config_setting,
+        config_settings_package,
+        &extra_build_requires,
+        extra_build_variables,
         cache,
         &venv,
-        install,
-        installer_metadata,
-        dry_run,
-        printer,
-        preview,
-    )
-    .await?;
+        &tags,
+    )?;
+    if let Some(preflight) = preflight {
+        if plan
+            .prepare_if_isolated(
+                &resolution,
+                build_options,
+                &hasher,
+                &tags,
+                &client,
+                state.in_flight(),
+                concurrency,
+                &build_dispatch,
+                cache,
+                install.as_ref(),
+                printer,
+            )
+            .await?
+        {
+            preflight.check(&resolution, &venv, plan.prepared())?;
+        }
+    }
+    // Sync the environment using the resolution and artifacts selected above.
+    let changelog = plan
+        .execute(
+            &resolution,
+            modifications,
+            build_options,
+            *link_mode,
+            (*compile_bytecode).then_some(pip::operations::BytecodeCompilation::All),
+            &hasher,
+            &tags,
+            &client,
+            state.in_flight(),
+            concurrency,
+            &build_dispatch,
+            cache,
+            &venv,
+            install,
+            installer_metadata,
+            dry_run,
+            printer,
+            preview,
+        )
+        .await?;
 
     // Notify the user of any resolution diagnostics.
     pip::operations::diagnose_resolution(resolution.diagnostics(), printer)?;

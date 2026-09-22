@@ -581,6 +581,57 @@ pub(crate) struct InstallationPlan {
 }
 
 impl InstallationPlan {
+    /// Prepare a complete plan without modifying its environment, if all remaining builds are
+    /// isolated. Shared builds may depend on the isolated phase being installed first, so they
+    /// must continue through the normal two-phase execution path.
+    pub(crate) async fn prepare_if_isolated(
+        &mut self,
+        resolution: &Resolution,
+        build_options: &BuildOptions,
+        hasher: &HashStrategy,
+        tags: &Tags,
+        client: &RegistryClient,
+        in_flight: &InFlight,
+        concurrency: &Concurrency,
+        build_dispatch: &BuildDispatch<'_>,
+        cache: &Cache,
+        logger: &dyn InstallLogger,
+        printer: Printer,
+    ) -> Result<bool, Error> {
+        if self.plan.remote.iter().any(|dist| {
+            matches!(dist.as_ref(), Dist::Source(_))
+                && !build_dispatch
+                    .build_isolation()
+                    .is_isolated(Some(dist.name()))
+        }) {
+            return Ok(false);
+        }
+        let wheels = prepare_wheels(
+            std::mem::take(&mut self.plan.remote),
+            None,
+            resolution,
+            build_options,
+            hasher,
+            tags,
+            client,
+            in_flight,
+            concurrency,
+            build_dispatch,
+            cache,
+            logger,
+            printer,
+        )
+        .await?;
+        self.plan.cached.splice(0..0, wheels);
+        Ok(true)
+    }
+
+    /// The wheels that will be installed, after `prepare_if_isolated` returns `true`.
+    pub(crate) fn prepared(&self) -> &[CachedDist] {
+        debug_assert!(self.plan.remote.is_empty());
+        &self.plan.cached
+    }
+
     /// Determine the changes required to make an environment satisfy a resolution.
     pub(crate) fn build(
         resolution: &Resolution,
@@ -1029,6 +1080,52 @@ impl InstallPhase {
     }
 }
 
+/// Download, build, and unzip a set of distributions without changing the target environment.
+async fn prepare_wheels(
+    remote: Vec<Arc<Dist>>,
+    phase: Option<InstallPhase>,
+    resolution: &Resolution,
+    build_options: &BuildOptions,
+    hasher: &HashStrategy,
+    tags: &Tags,
+    client: &RegistryClient,
+    in_flight: &InFlight,
+    concurrency: &Concurrency,
+    build_dispatch: &BuildDispatch<'_>,
+    cache: &Cache,
+    logger: &dyn InstallLogger,
+    printer: Printer,
+) -> Result<Vec<CachedDist>, Error> {
+    if remote.is_empty() {
+        return Ok(Vec::new());
+    }
+    let start = Instant::now();
+    let preparer = Preparer::new(
+        cache,
+        tags,
+        hasher,
+        build_options,
+        DistributionDatabase::new(
+            client,
+            build_dispatch,
+            concurrency.downloads_semaphore.clone(),
+            concurrency.source_preparation.clone(),
+        ),
+    )
+    .with_reporter(Arc::new(
+        PrepareReporter::from(printer).with_length(remote.len() as u64),
+    ));
+    let wheels = preparer.prepare(remote, in_flight, resolution).await?;
+    logger.on_prepare(
+        wheels.len(),
+        phase.map(InstallPhase::label),
+        start,
+        printer,
+        DryRun::Disabled,
+    )?;
+    Ok(wheels)
+}
+
 /// Execute a [`Plan`] to install distributions into a Python environment.
 async fn execute_plan(
     plan: Plan,
@@ -1056,40 +1153,22 @@ async fn execute_plan(
         extraneous,
     } = plan;
 
-    // Download, build, and unzip any missing distributions.
-    let wheels = if remote.is_empty() {
-        vec![]
-    } else {
-        let start = std::time::Instant::now();
-
-        let preparer = Preparer::new(
-            cache,
-            tags,
-            hasher,
-            build_options,
-            DistributionDatabase::new(
-                client,
-                build_dispatch,
-                concurrency.downloads_semaphore.clone(),
-                concurrency.source_preparation.clone(),
-            ),
-        )
-        .with_reporter(Arc::new(
-            PrepareReporter::from(printer).with_length(remote.len() as u64),
-        ));
-
-        let wheels = preparer.prepare(remote, in_flight, resolution).await?;
-
-        logger.on_prepare(
-            wheels.len(),
-            phase.map(InstallPhase::label),
-            start,
-            printer,
-            DryRun::Disabled,
-        )?;
-
-        wheels
-    };
+    let wheels = prepare_wheels(
+        remote,
+        phase,
+        resolution,
+        build_options,
+        hasher,
+        tags,
+        client,
+        in_flight,
+        concurrency,
+        build_dispatch,
+        cache,
+        logger,
+        printer,
+    )
+    .await?;
 
     // Remove any upgraded or extraneous installations.
     let uninstalls = extraneous.into_iter().chain(reinstalls).collect::<Vec<_>>();
