@@ -633,7 +633,7 @@ async fn python_build_variant_catalog_cached() -> anyhow::Result<()> {
         .arg("python").arg("-c").arg(base_prefix), @"
     exit_code: 0 (success)
     ----- stdout -----
-    [TEMP_DIR]/managed/cpython-3.13-[PLATFORM]
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]-[PLATFORM]
     ");
     context.temp_dir.child("requirements.in").write_str("")?;
     uv_snapshot!(context.filters(), context.pip_compile().arg("requirements.in")
@@ -915,7 +915,7 @@ async fn python_project_build_variant_catalog() -> anyhow::Result<()> {
         .arg("python").arg("-c").arg(base_prefix), @"
     exit_code: 0 (success)
     ----- stdout -----
-    [TEMP_DIR]/managed/cpython-3.13-[PLATFORM]
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]-[PLATFORM]
 
     ----- stderr -----
     Using CPython 3.13.[LATEST]
@@ -981,7 +981,7 @@ async fn python_project_build_variant_catalog_refresh() -> anyhow::Result<()> {
         .arg("python").arg("-c").arg(base_prefix), @"
     exit_code: 0 (success)
     ----- stdout -----
-    [TEMP_DIR]/managed/cpython-3.13-[PLATFORM]
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]-[PLATFORM]
 
     ----- stderr -----
     Resolved 1 package in [TIME]
