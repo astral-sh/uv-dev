@@ -33,6 +33,13 @@ astral-sh/uv#21489 explores additional retries for Windows AV/EDR cache failures
 `PermissionDenied`/os error 5 rather than the reported os error 33, so it is not evidence that this
 specific path is covered.
 
+A maintainer clarified that uv already retries some operations where it has a useful success signal,
+but does not intend to retry arbitrary filesystem failures blindly. The stated concerns are
+reliability, performance, and potentially provoking invasive security software, with no indication
+that another attempt will succeed. The requested next step is therefore escalation through the
+reporter's commercial relationship with Trellix; maintainers do not consider it feasible for uv to
+work around every form of Windows filesystem interference introduced by security products.
+
 ## Draft response
 
 Thanks for the report. This matches the intermittent Windows file-locking failures tracked in
