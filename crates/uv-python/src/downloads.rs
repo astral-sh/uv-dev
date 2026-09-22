@@ -40,16 +40,15 @@ use uv_static::{
     EnvVars, astral_mirror_base_url, astral_mirror_url_from_env, custom_astral_mirror_url,
 };
 
-#[cfg(test)]
-use crate::PythonBuildVariant;
 use crate::implementation::{
     Error as ImplementationError, ImplementationName, LenientImplementationName,
 };
 use crate::installation::PythonInstallationKey;
 use crate::managed::ManagedPythonInstallation;
 use crate::python_version::{BuildVersionError, python_build_version_from_env};
-use crate::{Interpreter, PythonRequest, PythonVersion, VersionRequest};
-use crate::{LenientPythonBuildVariant, PythonVariant};
+use crate::{
+    Interpreter, PythonBuildVariant, PythonRequest, PythonVariant, PythonVersion, VersionRequest,
+};
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -1697,7 +1696,7 @@ fn parse_json_downloads(
             let Ok(build_variant) = entry
                 .build_variant
                 .as_deref()
-                .map(LenientPythonBuildVariant::from_str)
+                .map(PythonBuildVariant::from_str)
                 .transpose()
             else {
                 debug!(
@@ -2008,7 +2007,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_build_variants() {
+    fn parse_build_variants() -> Result<()> {
         let entry = |build_variant: &str, default| JsonPythonDownload {
             name: "cpython".to_string(),
             arch: JsonArch {
@@ -2029,33 +2028,33 @@ mod tests {
             build: Some("20250825".to_string()),
         };
         let downloads = parse_json_downloads(HashMap::from([
-            ("pgo".to_string(), entry("pgo+lto", true)),
+            (
+                "custom_internal".to_string(),
+                entry("custom_internal", true),
+            ),
             ("custom".to_string(), entry("custom", false)),
         ]));
 
+        let default_key =
+            PythonInstallationKey::from_str("cpython-3.13.0+custom_internal-linux-x86_64-gnu")?;
+        let custom_key = PythonInstallationKey::from_str("cpython-3.13.0+custom-linux-x86_64-gnu")?;
         assert_eq!(downloads.len(), 2);
-        assert!(downloads.iter().any(|download| {
-            download.key().build_variant()
-                == Some(&LenientPythonBuildVariant::Known(
-                    PythonBuildVariant::PgoLto,
-                ))
-                && download.is_default()
-        }));
-        assert!(downloads.iter().any(|download| {
-            download.key().build_variant()
-                == Some(&LenientPythonBuildVariant::Unknown("custom".to_string()))
-                && !download.is_default()
-        }));
-
-        let request = PythonDownloadRequest::default()
-            .with_version(VersionRequest::from_str("3.13").unwrap());
-        let downloads = ManagedPythonDownloadList { downloads };
-        assert_eq!(
-            downloads.find(&request).unwrap().key().build_variant(),
-            Some(&LenientPythonBuildVariant::Known(
-                PythonBuildVariant::PgoLto
-            ))
+        assert!(
+            downloads
+                .iter()
+                .any(|download| download.key() == &default_key && download.is_default())
         );
+        assert!(
+            downloads
+                .iter()
+                .any(|download| download.key() == &custom_key && !download.is_default())
+        );
+
+        let request =
+            PythonDownloadRequest::default().with_version(VersionRequest::from_str("3.13")?);
+        let downloads = ManagedPythonDownloadList { downloads };
+        assert_eq!(downloads.find(&request)?.key(), &default_key);
+        Ok(())
     }
 
     /// Parse a request with all of its fields.

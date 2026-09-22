@@ -5,6 +5,7 @@ use uv_platform::{Arch, Os};
 use uv_static::EnvVars;
 
 use anyhow::Result;
+use insta::allow_duplicates;
 use uv_test::uv_snapshot;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -773,6 +774,46 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     ----- stderr -----
     error: This version of uv is too old to support the JSON Python download list at http://[LOCALHOST]/unsupported-version
     ");
+
+    // Invalid build names are skipped without losing the valid records in the catalog.
+    for (index, build_variant) in [
+        "custom+internal",
+        "pgo+lto",
+        "freethreaded+custom",
+        "custom.public",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let endpoint = format!("/invalid-build-name-{index}");
+        Mock::given(method("GET"))
+            .and(path(&endpoint))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                versioned_json.replace(
+                    r#""build_variant": "custom""#,
+                    &format!(r#""build_variant": "{build_variant}""#),
+                ),
+                "application/json",
+            ))
+            .mount(&server)
+            .await;
+
+        allow_duplicates! {
+            uv_snapshot!(context
+                .python_list()
+                .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+                .arg("--all-versions")
+                .arg("--all-platforms")
+                .arg("--all-arches")
+                .arg("--show-urls")
+                .arg("--python-downloads-json-url").arg(format!("{}{endpoint}", server.uri())), @"
+            exit_code: 0 (success)
+            ----- stdout -----
+            cpython-3.14.0-macos-aarch64-none                    https://custom.com/cpython-3.14.0-darwin-aarch64-none.tar.gz
+            cpython-3.13.2+freethreaded-linux-powerpc64le-gnu    https://custom.com/ccpython-3.13.2+freethreaded-linux-powerpc64le-gnu.tar.gz
+            ");
+        }
+    }
 
     Ok(())
 }
