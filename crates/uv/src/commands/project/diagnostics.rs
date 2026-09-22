@@ -41,7 +41,7 @@ pub(crate) fn diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Opti
         | ProjectError::MissingExtraProject(..)
         | ProjectError::MissingExtraProjects(_)
         | ProjectError::MissingExtraScript(_)
-        | ProjectError::OverlappingMarkers(..)
+        | ProjectError::OverlappingMarkers { .. }
         | ProjectError::DisjointEnvironment(..)
         | ProjectError::EmptyEnvironment
         | ProjectError::InvalidProjectEnvironmentDir(..)
