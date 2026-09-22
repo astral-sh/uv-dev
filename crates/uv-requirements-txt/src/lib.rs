@@ -43,6 +43,7 @@ use std::str::FromStr;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
 use unscanny::{Pattern, Scanner};
+#[cfg(feature = "http")]
 use url::Url;
 
 #[cfg(feature = "http")]
@@ -54,15 +55,18 @@ use uv_configuration::{
 use uv_distribution_types::{
     Requirement, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
+use uv_errors::SourceFile;
 use uv_fs::normalize_path;
 use uv_pep508::{Pep508Error, RequirementOrigin, VerbatimUrl, expand_env_vars};
 use uv_pypi_types::VerbatimParsedUrl;
 #[cfg(feature = "http")]
 use uv_redacted::DisplaySafeUrl;
 
+pub use crate::diagnostics::diagnostic_for_error;
 pub use crate::requirement::{MakeEditableError, RequirementsTxtRequirement};
 use crate::shquote::unquote;
 
+mod diagnostics;
 mod requirement;
 mod shquote;
 
@@ -234,8 +238,9 @@ impl RequirementsTxt {
         )
         .await
         .map_err(|err| RequirementsTxtFileError {
+            source_file: Some(diagnostics::source_file(&requirements_txt, content)),
             file: Box::new(requirements_txt),
-            error: err,
+            error: Box::new(err),
         })
     }
 
@@ -258,26 +263,30 @@ impl RequirementsTxt {
                 RequirementsInput::Stdin => {
                     uv_fs::read_stdin_to_string_transcode().map_err(|err| {
                         RequirementsTxtFileError {
+                            source_file: None,
                             file: Box::new(requirements_txt.clone()),
-                            error: RequirementsTxtParserError::Io(err),
+                            error: Box::new(RequirementsTxtParserError::Io(err)),
                         }
                     })?
                 }
                 RequirementsInput::Local(path) => uv_fs::read_to_string_transcode(path)
                     .await
                     .map_err(|err| RequirementsTxtFileError {
+                        source_file: None,
                         file: Box::new(requirements_txt.clone()),
-                        error: RequirementsTxtParserError::Io(err),
+                        error: Box::new(RequirementsTxtParserError::Io(err)),
                     })?,
                 RequirementsInput::Remote(url) => {
                     #[cfg(not(feature = "http"))]
                     {
+                        let _ = url;
                         return Err(RequirementsTxtFileError {
+                            source_file: None,
                             file: Box::new(requirements_txt.clone()),
-                            error: RequirementsTxtParserError::Io(io::Error::new(
+                            error: Box::new(RequirementsTxtParserError::Io(io::Error::new(
                                 io::ErrorKind::InvalidInput,
                                 "Remote file not supported without `http` feature",
-                            )),
+                            ))),
                         });
                     }
 
@@ -286,29 +295,32 @@ impl RequirementsTxt {
                         // Avoid constructing a client if network is disabled already.
                         if client_builder.is_offline() {
                             return Err(RequirementsTxtFileError {
+                                source_file: None,
                                 file: Box::new(requirements_txt.clone()),
-                                error: RequirementsTxtParserError::Io(io::Error::new(
+                                error: Box::new(RequirementsTxtParserError::Io(io::Error::new(
                                     io::ErrorKind::InvalidInput,
                                     format!(
                                         "Network connectivity is disabled, but a remote requirements file was requested: {url}"
                                     ),
-                                )),
+                                ))),
                             });
                         }
                         let client =
                             client_builder
                                 .build()
                                 .map_err(|err| RequirementsTxtFileError {
+                                    source_file: None,
                                     file: Box::new(requirements_txt.clone()),
-                                    error: RequirementsTxtParserError::ClientBuild(
+                                    error: Box::new(RequirementsTxtParserError::ClientBuild(
                                         url.clone(),
                                         Box::new(err),
-                                    ),
+                                    )),
                                 })?;
                         read_url_to_string(url, client).await.map_err(|err| {
                             RequirementsTxtFileError {
+                                source_file: None,
                                 file: Box::new(requirements_txt.clone()),
-                                error: err,
+                                error: Box::new(err),
                             }
                         })?
                     }
@@ -329,7 +341,8 @@ impl RequirementsTxt {
         .await
         .map_err(|err| RequirementsTxtFileError {
             file: Box::new(requirements_txt.clone()),
-            error: err,
+            error: Box::new(err),
+            source_file: Some(diagnostics::source_file(requirements_txt, content)),
         })?;
 
         Ok(data)
@@ -1111,7 +1124,9 @@ async fn read_url_to_string(
 #[derive(Debug)]
 pub struct RequirementsTxtFileError {
     file: Box<RequirementsInput>,
-    error: RequirementsTxtParserError,
+    error: Box<RequirementsTxtParserError>,
+    /// The decoded input used by the parser, retained only when parsing fails.
+    source_file: Option<SourceFile>,
 }
 
 /// Error parsing requirements.txt, error disambiguation
@@ -1307,7 +1322,7 @@ impl std::error::Error for RequirementsTxtParserError {
 impl Display for RequirementsTxtFileError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let file = self.file.user_display();
-        match &self.error {
+        match self.error.as_ref() {
             RequirementsTxtParserError::Io(err) => err.fmt(f),
             RequirementsTxtParserError::Url { url, start, .. } => {
                 write!(f, "Invalid URL in `{file}` at position {start}: `{url}`")
@@ -1407,7 +1422,7 @@ impl Display for RequirementsTxtFileError {
 
 impl std::error::Error for RequirementsTxtFileError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.error.source()
+        self.error.as_ref().source()
     }
 }
 
