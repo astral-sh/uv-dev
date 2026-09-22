@@ -278,8 +278,12 @@ mod tests {
     use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache, WorkspaceErrorKind};
     use version_ranges::Ranges;
 
+    #[cfg(not(feature = "self-update"))]
+    use crate::ExternallyInstalledError;
     use crate::commands::pip::{self, operations};
     use crate::commands::project::ProjectError;
+    #[cfg(not(feature = "self-update"))]
+    use crate::install_source::InstallSource;
 
     use super::diagnostic_for_error;
 
@@ -302,6 +306,31 @@ mod tests {
             error = source;
         }
         error
+    }
+
+    #[cfg(not(feature = "self-update"))]
+    #[test]
+    fn formats_external_install_source_and_update_action() {
+        let error = ExternallyInstalledError {
+            install_source: Some(InstallSource::Homebrew),
+        };
+        assert_snapshot!(format_error(&error), @"
+        error: uv was installed through an external package manager and cannot update
+               itself.
+          info: You installed uv using Homebrew
+
+        hint: Run `brew update && brew upgrade uv` to update uv
+        ");
+
+        let error = ExternallyInstalledError {
+            install_source: None,
+        };
+        assert_snapshot!(format_error(&error), @"
+        error: uv was installed through an external package manager and cannot update
+               itself.
+
+        hint: Use your package manager to update uv
+        ");
     }
 
     #[test]
@@ -610,7 +639,7 @@ mod tests {
                 | ^^^^^^^^^^^^ not editable
               cause: Registry requirements cannot be editable
 
-            hint: Editable requirements must refer to a local directory
+            hint: Use a local directory for an editable requirement
             ");
         });
     }
@@ -676,7 +705,7 @@ mod tests {
           cause: Unsupported glob expression in: tool.uv.build-backend.source-include
           cause: Invalid character `[` at position 0 in glob: `[`
 
-        hint: Characters can be escaped with a backslash
+        hint: Escape the character with a backslash
         ");
     }
 

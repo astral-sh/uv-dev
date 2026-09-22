@@ -19,7 +19,7 @@ pub enum MakeEditableError {
 
 impl Hinted for MakeEditableError {
     fn hints(&self) -> Hints<'_> {
-        Hints::from("Editable requirements must refer to a local directory")
+        Hints::from("Use a local directory for an editable requirement")
     }
 }
 
@@ -108,5 +108,24 @@ impl Display for RequirementsTxtRequirement {
             Self::Named(requirement) => Display::fmt(&requirement, f),
             Self::Unnamed(requirement) => Display::fmt(&requirement, f),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use uv_errors::Hinted;
+
+    use super::MakeEditableError;
+
+    #[test]
+    fn editable_requirement_hint_is_actionable() {
+        insta::assert_debug_snapshot!(
+            MakeEditableError::Registry.hints().iter().collect::<Vec<_>>(),
+            @r#"
+        [
+            "Use a local directory for an editable requirement",
+        ]
+        "#
+        );
     }
 }
