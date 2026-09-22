@@ -69,7 +69,7 @@ use crate::commands::project::diagnostics::{
     EnvironmentMarkersDiagnostic, PythonRequirementsDiagnostic,
 };
 use crate::commands::project::install_target::InstallTarget;
-use crate::commands::project::lock_target::{LockfileRecovery, LockfileRecoveryAction};
+use crate::commands::project::lock_target::LockfileRecovery;
 use crate::commands::reporters::{PythonDownloadReporter, ResolverReporter};
 use crate::commands::{capitalize, conjunction, pip};
 use crate::printer::Printer;
@@ -443,23 +443,22 @@ impl uv_errors::Hinted for ProjectError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
             Self::LockMismatch(_, _, _, recovery) | Self::LockWorkspaceMismatch(_, _, recovery) => {
-                match recovery.action() {
-                    LockfileRecoveryAction::UpdateLockfile => uv_errors::Hints::from(format!(
+                match recovery.action().retry_instruction() {
+                    None => uv_errors::Hints::from(format!(
                         "To update the lockfile, run `uv lock --no-locked --no-frozen` with {}, using the original command's working directory and applicable index, constraint, and other resolution options.",
                         recovery.selectors(),
                     )),
-                    LockfileRecoveryAction::RetryAdd => uv_errors::Hints::from(
-                        "To apply the dependency changes and update the lockfile, repeat the original `uv add` command from the same working directory, adding `--no-locked --no-frozen` and keeping the same requirements, constraints, and other options.",
-                    ),
+                    Some(retry) => uv_errors::Hints::from(format!(
+                        "To apply the {} and update the lockfile, {retry}.",
+                        recovery.action().change_description(),
+                    )),
                 }
             }
             Self::LockFormat(_, _, _, recovery) => {
-                let retry = match recovery.action() {
-                    LockfileRecoveryAction::UpdateLockfile => "",
-                    LockfileRecoveryAction::RetryAdd => {
-                        " Then repeat the original `uv add` command from the same working directory, adding `--no-locked --no-frozen` and keeping the same requirements, constraints, and other options."
-                    }
-                };
+                let retry = recovery
+                    .action()
+                    .retry_instruction()
+                    .map_or_else(String::new, |retry| format!(" Then {retry}."));
                 uv_errors::Hints::from(format!(
                     "To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check --no-locked --no-frozen --no-offline` with {}, using the original command's working directory and applicable index, constraint, and other resolution options.{retry}",
                     recovery.selectors(),

@@ -714,10 +714,10 @@ fn lock_recovery_retries_rolled_back_add() -> Result<()> {
     Ok(())
 }
 
-/// Remove and version changes persist on a lock mismatch, so their recovery must not repeat them.
+/// Recovery must repeat dependency removals and version changes after their edits are rolled back.
 #[cfg(feature = "test-universal")]
 #[test]
-fn lock_recovery_keeps_persisted_edits() -> Result<()> {
+fn lock_recovery_retries_rolled_back_remove_and_version() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let selected = context.temp_dir.child("selected's project");
     let pyproject_toml = selected.child("pyproject.toml");
@@ -735,6 +735,7 @@ fn lock_recovery_keeps_persisted_edits() -> Result<()> {
         .arg("--offline")
         .assert()
         .success();
+    let original_pyproject = fs_err::read_to_string(&pyproject_toml)?;
     let lockfile = selected.child("uv.lock");
     let original_lock = fs_err::read_to_string(&lockfile)?;
 
@@ -751,8 +752,24 @@ fn lock_recovery_keeps_persisted_edits() -> Result<()> {
     Resolved 1 package in [TIME]
     error: The lockfile at `selected's project/uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/selected's project`, using the original command's working directory and applicable index, constraint, and other resolution options.
+    hint: To apply the dependency changes and update the lockfile, repeat the original `uv remove` command from the same working directory, adding `--no-locked --no-frozen` and keeping the same packages, dependency selection, and other options.
     ");
+    assert_eq!(fs_err::read_to_string(&pyproject_toml)?, original_pyproject);
+    assert_eq!(fs_err::read_to_string(&lockfile)?, original_lock);
+
+    context
+        .remove()
+        .arg("--project")
+        .arg(selected.path())
+        .arg("--no-sync")
+        .arg("--no-locked")
+        .arg("--no-frozen")
+        .arg("--offline")
+        .arg("removed")
+        .env(EnvVars::UV_LOCKED, "1")
+        .env(EnvVars::UV_FROZEN, "1")
+        .assert()
+        .success();
     let removed_pyproject = fs_err::read_to_string(&pyproject_toml)?;
     insta::with_settings!({filters => context.filters()}, {
         assert_snapshot!(removed_pyproject, @r#"
@@ -763,17 +780,6 @@ fn lock_recovery_keeps_persisted_edits() -> Result<()> {
         dependencies = []
         "#);
     });
-    assert_eq!(fs_err::read_to_string(&lockfile)?, original_lock);
-
-    context
-        .lock()
-        .arg("--project")
-        .arg(selected.path())
-        .arg("--no-locked")
-        .arg("--no-frozen")
-        .arg("--offline")
-        .assert()
-        .success();
     let removed_lock = fs_err::read_to_string(&lockfile)?;
     assert_ne!(removed_lock, original_lock);
 
@@ -790,14 +796,41 @@ fn lock_recovery_keeps_persisted_edits() -> Result<()> {
     Resolved 1 package in [TIME]
     error: The lockfile at `selected's project/uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/selected's project`, using the original command's working directory and applicable index, constraint, and other resolution options.
+    hint: To apply the version change and update the lockfile, repeat the original `uv version` command from the same working directory, adding `--no-locked --no-frozen` and keeping the same version or `--bump` arguments and other options.
     ");
+    assert_eq!(fs_err::read_to_string(&pyproject_toml)?, removed_pyproject);
     assert_eq!(fs_err::read_to_string(&lockfile)?, removed_lock);
 
-    context
-        .lock()
+    // A canonical rewrite must still be followed by the original version change.
+    lockfile.write_str(removed_lock.trim_end_matches('\n'))?;
+    let output = context
+        .version()
         .arg("--project")
         .arg(selected.path())
+        .arg("--bump")
+        .arg("patch")
+        .arg("--no-sync")
+        .arg("--locked")
+        .arg("--offline")
+        .arg("--preview-features")
+        .arg("lockfile-format-check")
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("To regenerate the lockfile, run `uv lock --refresh"));
+    assert!(stderr.contains("Then repeat the original `uv version` command"));
+    assert_eq!(fs_err::read_to_string(&pyproject_toml)?, removed_pyproject);
+    lockfile.write_str(&removed_lock)?;
+
+    context
+        .version()
+        .arg("--project")
+        .arg(selected.path())
+        .arg("--bump")
+        .arg("patch")
+        .arg("--no-sync")
         .arg("--no-locked")
         .arg("--no-frozen")
         .arg("--offline")
