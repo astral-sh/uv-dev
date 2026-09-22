@@ -988,8 +988,7 @@ dependencies = ["flask==1.0.x"]
                  raise ValueError(f"{error}/n{summary}") from None
              ValueError: invalid pyproject.toml config: `project.dependencies[0]`.
              configuration error: `project.dependencies[0]` must be pep508
-
-    hint: Build failures usually indicate a problem with the package or the build environment
+      hint: Build failures usually indicate a problem with the package or the build environment
     "##
     );
 
@@ -2014,8 +2013,7 @@ fn install_extras() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Requesting extras requires a `pylock.toml`, `pyproject.toml`, `setup.cfg`, or `setup.py` file
-
-    hint: Use `<dir>[extra]` syntax or `-r <file>` instead
+      hint: Use `<dir>[extra]` syntax or `-r <file>` instead
     "
     );
 
@@ -2026,8 +2024,7 @@ fn install_extras() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Requesting extras requires a `pylock.toml`, `pyproject.toml`, `setup.cfg`, or `setup.py` file
-
-    hint: Use `package[extra]` syntax instead
+      hint: Use `package[extra]` syntax instead
     "
     );
 
@@ -2041,8 +2038,7 @@ fn install_extras() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Requesting extras requires a `pylock.toml`, `pyproject.toml`, `setup.cfg`, or `setup.py` file
-
-    hint: Use `package[extra]` syntax instead
+      hint: Use `package[extra]` syntax instead
     "
     );
 
@@ -2576,8 +2572,7 @@ fn invalid_editable_no_url() -> Result<()> {
       1 | -e black==0.1.0
         | ^^^^^^^^^^^^^^^ not editable
       cause: Registry requirements cannot be editable
-
-    hint: Editable requirements must refer to a local directory
+      hint: Editable requirements must refer to a local directory
     "
     );
 
@@ -2599,8 +2594,7 @@ fn invalid_editable_unnamed_remote_url_requirements_txt() -> Result<()> {
     ----- stderr -----
     error: Unsupported editable requirement in `requirements.txt` at line 1: `http://user:****@example.com/black-1.0.0-py3-none-any.whl`
       cause: Remote archives cannot be editable
-
-    hint: Editable requirements must refer to a local directory
+      hint: Editable requirements must refer to a local directory
     "
     );
 
@@ -2618,8 +2612,7 @@ fn invalid_editable_unnamed_remote_url_cli() {
     ----- stderr -----
     error: Unsupported editable requirement: `http://user:****@example.com/black-1.0.0-py3-none-any.whl`
       cause: Remote archives cannot be editable
-
-    hint: Editable requirements must refer to a local directory
+      hint: Editable requirements must refer to a local directory
     "
     );
 }
@@ -2642,8 +2635,7 @@ fn invalid_editable_named_https_url() -> Result<()> {
     ----- stderr -----
     error: Unsupported editable requirement in `requirements.txt` at line 3: `black @ https://files.pythonhosted.org/packages/0f/89/294c9a6b6c75a08da55e9d05321d0707e9418735e3062b12ef0f54c33474/black-24.4.2-py3-none-any.whl`
       cause: Remote archives cannot be editable
-
-    hint: Editable requirements must refer to a local directory
+      hint: Editable requirements must refer to a local directory
     "
     );
 
@@ -2700,8 +2692,7 @@ fn install_no_index() {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because flask was not found in the provided package locations and you require flask, we can conclude that your requirements are unsatisfiable.
-
-    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+      hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
     "
     );
 
@@ -2721,8 +2712,7 @@ fn install_no_index_version() {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because flask was not found in the provided package locations and you require flask==3.0.0, we can conclude that your requirements are unsatisfiable.
-
-    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+      hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
     "
     );
 
@@ -4046,8 +4036,7 @@ fn install_only_binary_all_and_no_binary_all() {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because all versions of anyio have no usable wheels and you require anyio, we can conclude that your requirements are unsatisfiable.
-
-    hint: Wheels are required for `anyio` because building from source is disabled for all packages (i.e., with `--no-build`)
+      hint: Wheels are required for `anyio` because building from source is disabled for all packages (i.e., with `--no-build`)
     "
     );
 
@@ -4168,8 +4157,7 @@ fn only_binary_requirements_txt() {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because django-allauth==0.51.0 has no usable wheels and you require django-allauth==0.51.0, we can conclude that your requirements are unsatisfiable.
-
-    hint: Wheels are required for `django-allauth` because building from source is disabled for `django-allauth` (i.e., with `--no-build-package django-allauth`)
+      hint: Wheels are required for `django-allauth` because building from source is disabled for `django-allauth` (i.e., with `--no-build-package django-allauth`)
     "
     );
 }
@@ -4278,8 +4266,7 @@ fn no_prerelease_hint_source_builds() -> Result<()> {
       cause: Failed to resolve requirements from `setup.py` build
       cause: No solution found when resolving: `setuptools>=40.8.0`
       cause: Because only setuptools<=40.4.3 is available and you require setuptools>=40.8.0, we can conclude that your requirements are unsatisfiable.
-
-    hint: `setuptools` was filtered by `exclude-newer` to only include packages uploaded before 2018-10-09T00:00:00Z. The latest version satisfying the requirement is v69.2.0, published at 2024-03-13T11:20:54.103Z. Consider using `exclude-newer-package` to override the cutoff for this package.
+      hint: `setuptools` was filtered by `exclude-newer` to only include packages uploaded before 2018-10-09T00:00:00Z. The latest version satisfying the requirement is v69.2.0, published at 2024-03-13T11:20:54.103Z. Consider using `exclude-newer-package` to override the cutoff for this package.
     "
     );
 
@@ -4645,8 +4632,7 @@ fn no_deps_installed() -> Result<()> {
     error: No solution found when resolving dependencies
       cause: Because child was not found in the provided package locations and parent==1.0.0 depends on child>=2, we can conclude that parent==1.0.0 cannot be used.
              And because parent was not found in the provided package locations and you require parent, we can conclude that your requirements are unsatisfiable.
-
-    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+      hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
     ");
 
     let child = context.site_packages().join("child-1.0.0.dist-info");
@@ -5218,8 +5204,7 @@ fn explicit_prerelease_does_not_fall_back_if_necessary() {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because only a<=0.1.0 is available and you require a>0.1.0, we can conclude that your requirements are unsatisfiable.
-
-    hint: Pre-releases are available for `a` in the requested range (e.g., 1.0.0a1), but pre-releases weren't enabled (try: `--prerelease=allow`)
+      hint: Pre-releases are available for `a` in the requested range (e.g., 1.0.0a1), but pre-releases weren't enabled (try: `--prerelease=allow`)
     ");
 }
 
@@ -5331,8 +5316,7 @@ fn explicit_prerelease_disallows_transitive_marker() {
     error: No solution found when resolving dependencies
       cause: Because there is no version of c==2.0.0b1 and all versions of a depend on c==2.0.0b1, we can conclude that all versions of a cannot be used.
              And because you require a, we can conclude that your requirements are unsatisfiable.
-
-    hint: `c` was requested with a pre-release marker (e.g., c==2.0.0b1), but pre-releases weren't enabled (try: `--prerelease=allow`)
+      hint: `c` was requested with a pre-release marker (e.g., c==2.0.0b1), but pre-releases weren't enabled (try: `--prerelease=allow`)
     ");
 }
 
@@ -5383,8 +5367,7 @@ fn prerelease_package_disallows_transitive_prerelease() {
     error: No solution found when resolving dependencies
       cause: Because there is no version of c==2.0.0b1 and all versions of a depend on c==2.0.0b1, we can conclude that all versions of a cannot be used.
              And because you require a, we can conclude that your requirements are unsatisfiable.
-
-    hint: `c` was requested with a pre-release marker (e.g., c==2.0.0b1), but pre-releases weren't enabled (try: `--prerelease-package c=allow`)
+      hint: `c` was requested with a pre-release marker (e.g., c==2.0.0b1), but pre-releases weren't enabled (try: `--prerelease-package c=allow`)
     ");
 
     context.assert_not_installed("c");
@@ -5489,8 +5472,7 @@ fn prerelease_package_rejected_in_pip_configuration() -> Result<()> {
         | ^^^^^^^^^^^^^^^^^^
     error: No solution found when resolving dependencies
       cause: Because only a<=0.1.0 is available and you require a>0.1.0, we can conclude that your requirements are unsatisfiable.
-
-    hint: Pre-releases are available for `a` in the requested range (e.g., 1.0.0a1), but pre-releases weren't enabled (try: `--prerelease=allow`)
+      hint: Pre-releases are available for `a` in the requested range (e.g., 1.0.0a1), but pre-releases weren't enabled (try: `--prerelease=allow`)
     "#);
 
     Ok(())
@@ -5579,8 +5561,7 @@ fn disallow_transitive_prerelease() {
     error: No solution found when resolving dependencies
       cause: Because there is no version of c==2.0.0b1 and all versions of a depend on c==2.0.0b1, we can conclude that all versions of a cannot be used.
              And because you require a, we can conclude that your requirements are unsatisfiable.
-
-    hint: `c` was requested with a pre-release marker (e.g., c==2.0.0b1), but pre-releases weren't enabled (try: `--prerelease=allow`)
+      hint: `c` was requested with a pre-release marker (e.g., c==2.0.0b1), but pre-releases weren't enabled (try: `--prerelease=allow`)
     ");
 
     context.assert_not_installed("a");
@@ -6844,13 +6825,12 @@ fn no_build_isolation() -> Result<()> {
              Traceback (most recent call last):
                File "<string>", line 8, in <module>
              ModuleNotFoundError: No module named 'setuptools'
+      hint: This error likely indicates that `anyio` depends on `setuptools`, but doesn't declare it as a build dependency. If `anyio` is a first-party package, consider adding `setuptools` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
 
-    hint: This error likely indicates that `anyio` depends on `setuptools`, but doesn't declare it as a build dependency. If `anyio` is a first-party package, consider adding `setuptools` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
+            [tool.uv.extra-build-dependencies]
+            anyio = ["setuptools"]
 
-    [tool.uv.extra-build-dependencies]
-    anyio = ["setuptools"]
-
-    or `uv pip install setuptools` into the environment and re-run with `--no-build-isolation`.
+            or `uv pip install setuptools` into the environment and re-run with `--no-build-isolation`.
     "#
     );
 
@@ -6908,13 +6888,12 @@ fn respect_no_build_isolation_env_var() -> Result<()> {
              Traceback (most recent call last):
                File "<string>", line 8, in <module>
              ModuleNotFoundError: No module named 'setuptools'
+      hint: This error likely indicates that `anyio` depends on `setuptools`, but doesn't declare it as a build dependency. If `anyio` is a first-party package, consider adding `setuptools` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
 
-    hint: This error likely indicates that `anyio` depends on `setuptools`, but doesn't declare it as a build dependency. If `anyio` is a first-party package, consider adding `setuptools` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
+            [tool.uv.extra-build-dependencies]
+            anyio = ["setuptools"]
 
-    [tool.uv.extra-build-dependencies]
-    anyio = ["setuptools"]
-
-    or `uv pip install setuptools` into the environment and re-run with `--no-build-isolation`.
+            or `uv pip install setuptools` into the environment and re-run with `--no-build-isolation`.
     "#
     );
 
@@ -7615,8 +7594,7 @@ async fn install_package_basic_auth_from_keyring_wrong_password() {
     Keyring request for public@[LOCALHOST]
     error: No solution found when resolving dependencies
       cause: Because anyio was not found in the package registry and you require anyio, we can conclude that your requirements are unsatisfiable.
-
-    hint: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
+      hint: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
     "
     );
 }
@@ -7657,8 +7635,7 @@ async fn install_package_basic_auth_from_keyring_wrong_username() {
     Keyring request for public@http://[LOCALHOST]
     error: No solution found when resolving dependencies
       cause: Because anyio was not found in the package registry and you require anyio, we can conclude that your requirements are unsatisfiable.
-
-    hint: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
+      hint: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
     "
     );
 }
@@ -7806,8 +7783,7 @@ fn reinstall_no_index() {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because anyio was not found in the provided package locations and you require anyio, we can conclude that your requirements are unsatisfiable.
-
-    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+      hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
     "
     );
 }
@@ -8121,8 +8097,7 @@ fn already_installed_local_version_of_remote_package() {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because anyio was not found in the provided package locations and you require anyio==4.2.0, we can conclude that your requirements are unsatisfiable.
-
-    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+      hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
     "
     );
 
@@ -8342,8 +8317,7 @@ fn already_installed_remote_url() {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because uv-public-pypackage was not found in the provided package locations and you require uv-public-pypackage, we can conclude that your requirements are unsatisfiable.
-
-    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+      hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
     ");
 
     // Request installation again with just the full URL
@@ -8379,8 +8353,7 @@ fn already_installed_remote_url() {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because uv-public-pypackage was not found in the provided package locations and you require uv-public-pypackage==0.2.0, we can conclude that your requirements are unsatisfiable.
-
-    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+      hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
     ");
 }
 
@@ -10949,13 +10922,12 @@ fn install_build_isolation_package() -> Result<()> {
              Traceback (most recent call last):
                File "<string>", line 8, in <module>
              ModuleNotFoundError: No module named 'hatchling'
+      hint: This error likely indicates that `iniconfig` depends on `hatchling`, but doesn't declare it as a build dependency. If `iniconfig` is a first-party package, consider adding `hatchling` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
 
-    hint: This error likely indicates that `iniconfig` depends on `hatchling`, but doesn't declare it as a build dependency. If `iniconfig` is a first-party package, consider adding `hatchling` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
+            [tool.uv.extra-build-dependencies]
+            iniconfig = ["hatchling"]
 
-    [tool.uv.extra-build-dependencies]
-    iniconfig = ["hatchling"]
-
-    or `uv pip install hatchling` into the environment and re-run with `--no-build-isolation`.
+            or `uv pip install hatchling` into the environment and re-run with `--no-build-isolation`.
     "#
     );
 
@@ -11234,6 +11206,7 @@ fn sklearn() {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to build `sklearn==0.0.post12`
+      hint: `sklearn` is often confused for `scikit-learn`. Did you mean to install `scikit-learn` instead?
       cause: The build backend returned an error
       cause: Call to `setuptools.build_meta:__legacy__.get_requires_for_build_wheel` failed (exit status: 1)
 
@@ -11253,10 +11226,7 @@ fn sklearn() {
 
              More information is available at
              https://github.com/scikit-learn/sklearn-pypi-package
-
-    hint: `sklearn` is often confused for `scikit-learn`. Did you mean to install `scikit-learn` instead?
-
-    hint: Build failures usually indicate a problem with the package or the build environment
+      hint: Build failures usually indicate a problem with the package or the build environment
     "
     );
 }
@@ -11281,6 +11251,7 @@ fn resolve_derivation_chain() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to build `wsgiref==0.1.2`
+      hint: `wsgiref` (v0.1.2) was included because `project` (v0.1.0) depends on `wsgiref`
       cause: The build backend returned an error
       cause: Call to `setuptools.build_meta:__legacy__.get_requires_for_build_wheel` failed (exit status: 1)
 
@@ -11301,10 +11272,7 @@ fn resolve_derivation_chain() -> Result<()> {
                  print "Setuptools version",version,"or greater has been installed."
                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
              SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?
-
-    hint: `wsgiref` (v0.1.2) was included because `project` (v0.1.0) depends on `wsgiref`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
+      hint: Build failures usually indicate a problem with the package or the build environment
     "#
     );
 
@@ -11673,6 +11641,7 @@ fn direct_url_hash_source_tree_dependency() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: Failed to download `protobug @ https://files.pythonhosted.org/packages/f2/cc/db26b91cddffbcf0c6df7834fd642578f737fe34197635ae8ea64643a35f/protobug-0.3.0-py3-none-any.whl#sha256=ee81583f376bb38e5e7af425d2453e5e8d4b57bfbf45e5dba1a75329c2026520`
+      hint: `protobug` (v0.3.0) was included because `pylock` (v0.1.0) depends on `protobug`
       cause: Hash mismatch for `protobug @ https://files.pythonhosted.org/packages/f2/cc/db26b91cddffbcf0c6df7834fd642578f737fe34197635ae8ea64643a35f/protobug-0.3.0-py3-none-any.whl#sha256=ee81583f376bb38e5e7af425d2453e5e8d4b57bfbf45e5dba1a75329c2026520`
 
              Expected:
@@ -11680,8 +11649,6 @@ fn direct_url_hash_source_tree_dependency() -> Result<()> {
 
              Computed:
                sha256:ee81583f376bb38e5e7af425d2453e5e8d4b57bfbf45e5dba1a75329c202652e
-
-    hint: `protobug` (v0.3.0) was included because `pylock` (v0.1.0) depends on `protobug`
     "
     );
 
@@ -16101,15 +16068,13 @@ fn pip_install_build_dependencies_respect_locked_versions() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
+      hint: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
       cause: Call to `build_backend.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
              Expected `a` version 0.1 but got 0.3.0
-
-    hint: `child` was included because `parent` (v0.1.0) depends on `child`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
+      hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     // Now constrain the `a` build dependency to match the runtime
@@ -16161,15 +16126,13 @@ fn pip_install_build_dependencies_respect_locked_versions() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
+      hint: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
       cause: Call to `build_backend.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
              Expected `a` version 0.2 but got 0.1.0
-
-    hint: `child` was included because `parent` (v0.1.0) depends on `child`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
+      hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     uv_snapshot!(context.filters(), context.pip_install().arg("--index-url").arg(server.index_url()).arg(".")
@@ -16756,8 +16719,7 @@ fn install_with_system_interpreter() {
     error: The interpreter at managed/cpython-3.12.[LATEST]-[PLATFORM] is externally managed, and indicates the following:
 
       This Python installation is managed by uv and should not be modified.
-
-    hint: Virtual environments were not considered due to the `--system` flag
+      hint: Virtual environments were not considered due to the `--system` flag
     "
     );
 }
@@ -17215,8 +17177,7 @@ fn abi_compatibility_on_freethreaded_python() {
     Resolved 1 package in [TIME]
     error: Failed to determine installation plan
       cause: A path ([WORKSPACE]/test/links/abi3_package-1.0.0-cp37-abi3-manylinux_2_17_x86_64.whl) dependency is incompatible with the current platform
-
-    hint: You're using free-threaded CPython 3.14 (`cp314t`), but the wheel was built for the stable ABI (`abi3`), which requires a GIL-enabled interpreter
+      hint: You're using free-threaded CPython 3.14 (`cp314t`), but the wheel was built for the stable ABI (`abi3`), which requires a GIL-enabled interpreter
     ");
 
     // A GIL-enabled wheel for the same Python version should also fail
@@ -17232,8 +17193,7 @@ fn abi_compatibility_on_freethreaded_python() {
     Resolved 1 package in [TIME]
     error: Failed to determine installation plan
       cause: A path ([WORKSPACE]/test/links/cpython_package-1.0.0-cp314-cp314-manylinux_2_17_x86_64.whl) dependency is incompatible with the current platform
-
-    hint: You're using free-threaded CPython 3.14 (`cp314t`), but the wheel was built for the CPython 3.14 ABI (`cp314`), which requires a GIL-enabled interpreter
+      hint: You're using free-threaded CPython 3.14 (`cp314t`), but the wheel was built for the CPython 3.14 ABI (`cp314`), which requires a GIL-enabled interpreter
     ");
 
     // A wheel with both cp314t (compatible) and abi3 (incompatible) should succeed
@@ -17370,8 +17330,7 @@ fn abi_compatibility_on_nondebug_python_with_debug_wheel() {
     Resolved 1 package in [TIME]
     error: Failed to determine installation plan
       cause: A path (cpython_debug_package/dist/cpython_debug_package-1.0.0-cp314-cp314d-manylinux_2_17_x86_64.whl) dependency is incompatible with the current platform
-
-    hint: The wheel is compatible with CPython 3.14 (`cp314d`), but you're using CPython 3.14 (`cp314`)
+      hint: The wheel is compatible with CPython 3.14 (`cp314d`), but you're using CPython 3.14 (`cp314`)
     ");
 }
 

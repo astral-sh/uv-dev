@@ -510,8 +510,7 @@ fn minimum_libc_backtracks_and_invalidates_lock() -> Result<()> {
     warning: Setting `minimum-libc-version` is experimental and may change without warning. Pass `--preview-features minimum-libc-version` to disable this warning.
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-
-    hint: To update the lockfile, run `uv lock`.
+      hint: To update the lockfile, run `uv lock`.
     ");
     assert_eq!(context.read("uv.lock"), original);
     uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
@@ -597,8 +596,7 @@ fn minimum_libc_backtracks_and_invalidates_lock() -> Result<()> {
     warning: Setting `minimum-libc-version` is experimental and may change without warning. Pass `--preview-features minimum-libc-version` to disable this warning.
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-
-    hint: To update the lockfile, run `uv lock`.
+      hint: To update the lockfile, run `uv lock`.
     ");
     assert_eq!(context.read("uv.lock"), original);
 
@@ -619,8 +617,7 @@ fn minimum_libc_backtracks_and_invalidates_lock() -> Result<()> {
         ----- stderr -----
         Resolved 2 packages in [TIME]
         error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-
-        hint: To update the lockfile, run `uv lock`.
+          hint: To update the lockfile, run `uv lock`.
     ");
     assert_eq!(context.read("uv.lock"), original);
     uv_snapshot!(context.filters(), context.pip_compile().args(["pyproject.toml", "--universal", "--offline", "--no-header", "--no-annotate"]), @r"

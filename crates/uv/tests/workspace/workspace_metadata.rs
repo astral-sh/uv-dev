@@ -287,8 +287,7 @@ fn workspace_metadata_lockfile() -> Result<()> {
     warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-
-    hint: To update the lockfile, run `uv lock`.
+      hint: To update the lockfile, run `uv lock`.
     ");
     assert_eq!(lockfile, context.read("uv.lock"));
 
