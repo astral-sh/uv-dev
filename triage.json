@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 2810,
+        "title": "Random errors on accessing cache with simultaneous installs on Windows",
+        "url": "https://github.com/astral-sh/uv/issues/2810",
+        "state": "open",
+        "reason": "Canonical open tracker for intermittent Windows failures during environment creation and installation, including Jenkins, the identical os error 33 text, retry success, shared-cache access, and antivirus discussion."
+      },
+      {
+        "kind": "issue",
+        "number": 11002,
+        "title": "Concurrent cache access causes errors on Windows",
+        "url": "https://github.com/astral-sh/uv/issues/11002",
+        "state": "closed",
+        "reason": "Contains the exact `RECORD file is invalid` Windows failure and was explicitly closed by a maintainer as a duplicate of astral-sh/uv#2810."
+      },
+      {
+        "kind": "pull_request",
+        "number": 11007,
+        "title": "Guard against concurrent cache writes on Windows",
+        "url": "https://github.com/astral-sh/uv/pull/11007",
+        "state": "merged",
+        "reason": "Historical fix adding locks around wheel extraction and cache writes for astral-sh/uv#11002. The exact failure was reproduced afterward, leaving the broader problem open."
+      },
+      {
+        "kind": "issue",
+        "number": 20792,
+        "title": "Windows antivirus/EDR issues",
+        "url": "https://github.com/astral-sh/uv/issues/20792",
+        "state": "open",
+        "reason": "Current tracking resource for Windows AV/EDR interference and similar file-access errors. It matches the environment, although antivirus is not confirmed as the locking process."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21489,
+        "title": "Retry `PermissionDenied` errors on Windows in the request retry layer",
+        "url": "https://github.com/astral-sh/uv/pull/21489",
+        "state": "open",
+        "reason": "Proposes additional retries for AV/EDR-related Windows cache failures and cites astral-sh/uv#2810, but targets PermissionDenied/os error 5 rather than this RECORD-related os error 33 path."
+      }
+    ],
+    "search_scope": "Literal searches covered `RECORD file is invalid`, `locked a portion of the file`, `os error 33`, Windows, venv, and wheel-install failures. Conceptual searches covered intermittent retry success, concurrent/shared cache writes, antivirus/EDR locking, access denied, sharing violations, cache persistence, and atomic replacement. Fix-oriented inspection covered merged astral-sh/uv#11007 and open astral-sh/uv#21489 and their linked discussions. astral-sh/uv#14345 was ruled out because it concerns deterministic malformed RECORD CSV on Linux. astral-sh/uv#2767 and astral-sh/uv#2800 were ruled out because they concern acquiring the virtual-environment `.lock`, not reading or installing RECORD/cache contents."
+  },
+  "type": "duplicate",
+  "type_reason": "The same intermittent Windows installation failure is already centralized in open astral-sh/uv#2810. Most decisively, astral-sh/uv#11002 records the exact `RECORD file is invalid` failure caused by another process using the file and was explicitly deduplicated into astral-sh/uv#2810. Although astral-sh/uv#11007 attempted a fix, the failure remained reproducible and the canonical tracker remains open. Antivirus is plausible given astral-sh/uv#20792 but is not confirmed here.",
+  "summary": "Open astral-sh/uv#2810 is the canonical tracker. Closed astral-sh/uv#11002 supplies the exact RECORD-error precedent, while astral-sh/uv#11007 is the incomplete historical fix. astral-sh/uv#20792 and astral-sh/uv#21489 are relevant to the AV/EDR context but do not clearly cover this os error 33 path.",
+  "draft_response": "Thanks for the report. This matches the intermittent Windows file-locking failures tracked in astral-sh/uv#2810. In particular, the same `RECORD file is invalid` installation failure was reported in astral-sh/uv#11002, which was consolidated into that issue after it remained reproducible following astral-sh/uv#11007.\n\nThe antivirus/EDR context may be relevant and is tracked in astral-sh/uv#20792, but this error alone does not identify which process holds the lock. Please add any reliable reproduction details to astral-sh/uv#2810, especially whether the Jenkins jobs run concurrently or share a uv cache, and whether the failure still occurs with the current uv release. If your AV/EDR vendor is implicated, please also share the vendor and its support ticket ID as requested in astral-sh/uv#20792."
+}
