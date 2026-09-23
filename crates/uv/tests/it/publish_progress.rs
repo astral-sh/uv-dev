@@ -140,7 +140,7 @@ async fn large_publish_progress_rejected() -> Result<()> {
     Hashing publish_progress-1.0.0-py3-none-any.whl ([SIZE]MiB)
      Hashed publish_progress-1.0.0-py3-none-any.whl
     Uploading publish_progress-1.0.0-py3-none-any.whl ([SIZE]MiB)
-    error: Failed to publish `publish_progress-1.0.0-py3-none-any.whl` to http://[LOCALHOST]/upload
+    error: Failed to publish `publish_progress-1.0.0-py3-none-any.whl` to `http://[LOCALHOST]/upload`
       cause: Server returned status code 400 Bad Request. Server says: rejected
     ");
     Ok(())
