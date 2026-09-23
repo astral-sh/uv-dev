@@ -453,11 +453,14 @@ impl ManagedPythonInstallation {
     }
 
     fn python_dir(&self) -> PathBuf {
-        let install = self.path.join("install");
-        if install.is_dir() {
-            install
+        self.python_dir_at(&self.path)
+    }
+
+    fn python_dir_at(&self, root: &Path) -> PathBuf {
+        if self.path.join("install").is_dir() {
+            root.join("install")
         } else {
-            self.path.clone()
+            root.to_path_buf()
         }
     }
 
@@ -496,8 +499,29 @@ impl ManagedPythonInstallation {
         PythonInstallationMinorVersionKey::ref_cast(&self.key)
     }
 
+    /// Finalize the files inside the installation directory.
+    ///
+    /// Executable links, minor-version links, and registry entries outside this directory are
+    /// managed by the caller.
+    pub fn finalize(&self) -> Result<(), Error> {
+        self.finalize_at(self.path())
+    }
+
+    /// Finalize a staged installation with paths that refer to its eventual destination.
+    pub(crate) fn finalize_at(&self, install_root: &Path) -> Result<(), Error> {
+        self.ensure_externally_managed()?;
+        self.ensure_sysconfig_patched_at(install_root)?;
+        self.ensure_canonical_executables()?;
+        self.ensure_build_file()?;
+        // macOS developer tools are optional, so a failed dylib patch must not prevent installation.
+        if let Err(err) = self.ensure_dylib_patched_at(install_root) {
+            err.warn_user(self);
+        }
+        Ok(())
+    }
+
     /// Ensure the environment contains the canonical Python executable names.
-    pub fn ensure_canonical_executables(&self) -> Result<(), Error> {
+    fn ensure_canonical_executables(&self) -> Result<(), Error> {
         let python = self.executable(false);
 
         let canonical_names = &["python"];
@@ -512,7 +536,19 @@ impl ManagedPythonInstallation {
                 continue;
             }
 
-            match symlink_or_copy_file(&python, &executable) {
+            // The aliases share a directory with the interpreter. Relative Unix links remain
+            // valid when a staged installation is moved into its final directory.
+            let source = if cfg!(unix) {
+                Path::new(
+                    python
+                        .file_name()
+                        .ok_or_else(|| Error::MissingExecutable(python.clone()))?,
+                )
+            } else {
+                &python
+            };
+
+            match symlink_or_copy_file(source, &executable) {
                 Ok(()) => {
                     debug!(
                         "Created link {} -> {}",
@@ -544,7 +580,7 @@ impl ManagedPythonInstallation {
 
     /// Ensure the environment is marked as externally managed with the
     /// standard `EXTERNALLY-MANAGED` file.
-    pub fn ensure_externally_managed(&self) -> Result<(), Error> {
+    fn ensure_externally_managed(&self) -> Result<(), Error> {
         if self.key.os().is_emscripten() {
             // Emscripten's stdlib is a zip file so we can't put an
             // EXTERNALLY-MANAGED inside.
@@ -572,8 +608,8 @@ impl ManagedPythonInstallation {
         Ok(())
     }
 
-    /// Ensure that the `sysconfig` data is patched to match the installation path.
-    pub fn ensure_sysconfig_patched(&self) -> Result<(), Error> {
+    /// Ensure that the `sysconfig` data is patched to match the final installation path.
+    fn ensure_sysconfig_patched_at(&self, install_root: &Path) -> Result<(), Error> {
         if cfg!(unix) && !self.key.os().is_windows() {
             if self.key.os().is_emscripten() {
                 // Emscripten's stdlib is a zip file so we can't update the
@@ -581,8 +617,9 @@ impl ManagedPythonInstallation {
                 return Ok(());
             }
             if self.implementation() == ImplementationName::CPython {
-                sysconfig::update_sysconfig(
+                sysconfig::update_sysconfig_at(
                     self.path(),
+                    install_root,
                     self.key.major,
                     self.key.minor,
                     self.key.variant.lib_suffix(),
@@ -598,18 +635,24 @@ impl ManagedPythonInstallation {
     /// link to the correct location for the Python library.
     ///
     /// See <https://github.com/astral-sh/uv/issues/10598> for more information.
-    pub fn ensure_dylib_patched(&self) -> Result<(), macos_dylib::Error> {
+    fn ensure_dylib_patched_at(&self, install_root: &Path) -> Result<(), macos_dylib::Error> {
         if cfg!(target_os = "macos") {
             if self.key().os().is_like_darwin() {
                 if self.implementation() == ImplementationName::CPython {
-                    let dylib_path = self.python_dir().join("lib").join(format!(
+                    let dylib_name = format!(
                         "{}python{}{}{}",
                         std::env::consts::DLL_PREFIX,
                         self.key.version().python_version(),
                         self.key.variant().executable_suffix(),
                         std::env::consts::DLL_SUFFIX
-                    ));
-                    macos_dylib::patch_dylib_install_name(dylib_path)?;
+                    );
+                    let dylib_path = self.python_dir().join("lib").join(&dylib_name);
+                    let install_root = std::path::absolute(install_root)?;
+                    let install_name = self
+                        .python_dir_at(&install_root)
+                        .join("lib")
+                        .join(dylib_name);
+                    macos_dylib::patch_dylib_install_name(dylib_path, &install_name)?;
                 }
             }
         }
@@ -617,7 +660,7 @@ impl ManagedPythonInstallation {
     }
 
     /// Ensure the build version is written to a BUILD file in the installation directory.
-    pub fn ensure_build_file(&self) -> Result<(), Error> {
+    fn ensure_build_file(&self) -> Result<(), Error> {
         if let Some(ref build) = self.build {
             let build_file = self.path.join("BUILD");
             fs::write(&build_file, build.as_ref())?;
@@ -1032,6 +1075,61 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn canonical_executable_survives_installation_move() -> Result<(), Error> {
+        let root = tempfile::tempdir()?;
+        let staging = root.path().join("staging");
+        let installed = root.path().join("installed");
+        fs::create_dir_all(staging.join("bin"))?;
+        fs::write(staging.join("bin/python3.12"), b"interpreter")?;
+
+        let mut installation = create_test_installation(
+            ImplementationName::CPython,
+            3,
+            12,
+            0,
+            None,
+            PythonVariant::Default,
+            None,
+        );
+        installation.path = staging.clone();
+        installation.ensure_canonical_executables()?;
+
+        assert_eq!(
+            fs::read_link(staging.join("bin/python"))?,
+            Path::new("python3.12")
+        );
+        fs::rename(&staging, &installed)?;
+        assert_eq!(fs::read(installed.join("bin/python"))?, b"interpreter");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn replace_link_to_executable_preserves_destination_on_failure() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let link = temp_dir.path().join("python");
+        fs_err::write(&link, b"original executable")?;
+
+        let invalid_executable = temp_dir.path().join("invalid\0executable");
+        let error =
+            replace_link_to_executable(&link, PythonExecutable::console(&invalid_executable))
+                .expect_err("an embedded NUL cannot form a symlink target");
+        let Error::LinkExecutable(error) = error else {
+            anyhow::bail!("unexpected error: {error:?}");
+        };
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(fs_err::read(&link)?, b"original executable");
+
+        let executable = temp_dir.path().join("replacement");
+        fs_err::write(&executable, b"replacement executable")?;
+        replace_link_to_executable(&link, PythonExecutable::console(&executable))?;
+        assert_eq!(fs_err::read_link(&link)?, executable);
+        assert_eq!(fs_err::read(&link)?, b"replacement executable");
+        Ok(())
+    }
+
     #[test]
     fn test_is_upgrade_of_same_version() {
         let installation = create_test_installation(
@@ -1384,5 +1482,54 @@ mod tests {
                 );
             },
         );
+    }
+
+    #[test]
+    fn test_replace_dangling_minor_version_link() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let platform = Platform::from_env()?;
+        let old_path = temp_dir.path().join(format!("cpython-3.13.1-{platform}"));
+        let new_path = temp_dir.path().join(format!("cpython-3.13.2-{platform}"));
+        fs::create_dir(&old_path)?;
+        fs::create_dir(&new_path)?;
+
+        let old_installation = ManagedPythonInstallation::from_path(&old_path)?;
+        let new_installation = ManagedPythonInstallation::from_path(&new_path)?;
+        let old_link = PythonMinorVersionLink::from_installation(&old_installation)
+            .ok_or_else(|| anyhow::anyhow!("old installation has no minor-version link"))?;
+        let new_link = PythonMinorVersionLink::from_installation(&new_installation)
+            .ok_or_else(|| anyhow::anyhow!("new installation has no minor-version link"))?;
+        assert_eq!(old_link.symlink_directory, new_link.symlink_directory);
+
+        if cfg!(unix) {
+            fs::create_dir(new_path.join("bin"))?;
+        }
+        let payload = b"inert Python installation";
+        fs::write(new_installation.executable(false), payload)?;
+
+        old_installation.ensure_minor_version_link()?;
+        assert!(old_link.exists());
+        fs::remove_dir_all(&old_path)?;
+
+        // The directory entry still exists, but its target has been removed.
+        assert!(fs::symlink_metadata(&new_link.symlink_directory).is_ok());
+        assert_eq!(
+            fs::metadata(&new_link.symlink_directory)
+                .expect_err("minor-version link should be dangling")
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+        assert!(old_link.exists());
+        assert!(!new_link.exists());
+
+        for _ in 0..2 {
+            new_installation.ensure_minor_version_link()?;
+            assert!(new_link.exists());
+            assert!(!old_link.exists());
+            assert_eq!(fs::read(&new_link.symlink_executable)?, payload);
+            assert_eq!(fs::read(new_installation.executable(false))?, payload);
+        }
+
+        Ok(())
     }
 }

@@ -20,6 +20,9 @@ mod installed_metadata;
 
 mod network;
 
+#[cfg(feature = "test-python-managed")]
+mod python_archive_cache;
+
 #[cfg(feature = "test-pypi")]
 mod publish;
 
