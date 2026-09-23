@@ -212,6 +212,77 @@ fn show_full_metadata_errors_are_best_effort() -> Result<()> {
     Ok(())
 }
 
+fn assert_metadata_read_error(
+    context: &TestContext,
+    target: &Path,
+    package: &str,
+    metadata: &Path,
+) -> Result<()> {
+    let expected = fs_err::read(metadata).expect_err("the metadata path is a directory");
+    assert_ne!(expected.kind(), std::io::ErrorKind::NotFound);
+
+    let output = show(context, target).arg(package).output()?;
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        uv_test::apply_filters(String::from_utf8(output.stderr)?, context.filters()),
+        uv_test::apply_filters(format!("error: {expected}\n"), context.filters()),
+    );
+    assert!(metadata.is_dir());
+    Ok(())
+}
+
+#[test]
+fn show_metadata_read_errors_are_not_optional() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    for (layout, metadata_path) in [
+        ("wheel", "fixture-1.0.0.dist-info/METADATA"),
+        ("legacy", "fixture-1.0.0.egg-info/PKG-INFO"),
+    ] {
+        let target = context.temp_dir.child(layout);
+        let metadata = target.child(metadata_path);
+        // Reading a directory fails even for a privileged user. The versioned metadata
+        // directory is still discoverable without reading its metadata contents.
+        metadata.create_dir_all()?;
+        assert_metadata_read_error(&context, target.path(), "fixture", metadata.path())?;
+    }
+    Ok(())
+}
+
+#[test]
+fn show_required_by_metadata_read_errors_are_not_optional() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let target = context.temp_dir.child("target");
+    write_dist_info(
+        &target,
+        "fixture",
+        "Metadata-Version: 2.1\nName: fixture\nVersion: 1.0.0\n",
+    )?;
+    write_dist_info(
+        &target,
+        "consumer",
+        "Metadata-Version: 2.1\nName: consumer\nVersion: 1.0.0\nRequires-Dist: fixture\n",
+    )?;
+    let metadata = target.child("consumer-1.0.0.dist-info/METADATA");
+    let output = show(&context, target.path()).arg("fixture").output()?;
+    assert!(output.status.success());
+    assert!(String::from_utf8(output.stdout)?.contains("Required-by: consumer\n"));
+
+    metadata.write_str("Metadata-Version: 2.1\nVersion: 1.0.0\n")?;
+    let output = show(&context, target.path()).arg("fixture").output()?;
+    assert!(output.status.success());
+    assert!(String::from_utf8(output.stdout)?.contains("Required-by:\n"));
+
+    fs_err::remove_file(metadata.path())?;
+    let output = show(&context, target.path()).arg("fixture").output()?;
+    assert!(output.status.success());
+    assert!(String::from_utf8(output.stdout)?.contains("Required-by:\n"));
+
+    metadata.create_dir_all()?;
+    assert_metadata_read_error(&context, target.path(), "fixture", metadata.path())?;
+    Ok(())
+}
+
 #[test]
 fn show_legacy_metadata() -> Result<()> {
     let context = uv_test::test_context!("3.12");

@@ -9,7 +9,9 @@ use rustc_hash::FxHashMap;
 use tracing::debug;
 
 use uv_cache::Cache;
-use uv_distribution_types::{DependencyMetadata, Diagnostic, InstalledDistKind, Name};
+use uv_distribution_types::{
+    DependencyMetadata, Diagnostic, InstalledDistError, InstalledDistKind, Name,
+};
 use uv_fs::{PortablePath, Simplified};
 use uv_install_wheel::{InstalledFiles, read_record};
 use uv_installer::SitePackages;
@@ -124,7 +126,7 @@ pub(crate) fn pip_show(
     let mut requires_map = FxHashMap::default();
     // For Requires field
     for dist in &distributions {
-        if let Ok(metadata) = dist.read_metadata() {
+        if let Some(metadata) = optional_metadata(dist.read_metadata())? {
             requires_map.insert(
                 dist.name(),
                 metadata
@@ -144,7 +146,7 @@ pub(crate) fn pip_show(
             if requires_map.contains_key(installed.name()) {
                 continue;
             }
-            if let Ok(metadata) = installed.read_metadata() {
+            if let Some(metadata) = optional_metadata(installed.read_metadata())? {
                 let requires = metadata
                     .requires_dist
                     .iter()
@@ -208,7 +210,7 @@ pub(crate) fn pip_show(
 
         // Additional core metadata is best-effort: some installed metadata can be used for
         // resolution even when it does not satisfy the complete metadata specification.
-        if let Ok(metadata) = distribution.read_core_metadata() {
+        if let Some(metadata) = optional_metadata(distribution.read_core_metadata())? {
             let mut stdout = printer.stdout();
             for (name, value) in [
                 ("Summary", metadata.summary.as_deref()),
@@ -329,6 +331,21 @@ pub(crate) fn pip_show(
     }
 
     Ok(ExitStatus::Success)
+}
+
+/// Missing or malformed metadata cannot provide optional fields. Other read failures must not
+/// be reported as missing descriptions or dependencies.
+fn optional_metadata<T>(
+    metadata: Result<T, InstalledDistError>,
+) -> Result<Option<T>, InstalledDistError> {
+    match metadata {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(InstalledDistError::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(InstalledDistError::MetadataParse { .. } | InstalledDistError::PkgInfoParse { .. }) => {
+            Ok(None)
+        }
+        Err(err) => Err(err),
+    }
 }
 
 /// Express a legacy metadata-relative path relative to the displayed package location.
