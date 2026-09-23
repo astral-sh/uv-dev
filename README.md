@@ -11,7 +11,7 @@ The reporter asks for clearer CLI documentation about how `uv run --no-sync` int
 Two established behaviors explain the result:
 
 1. `--no-sync` skips updating the project environment, so selection flags cannot change the packages already installed there.
-2. Without `--no-sync`, `uv run` uses an inexact sync by default. `--no-dev` excludes the `dev` group from the desired sync set, but an inexact sync does not remove an already-installed development package. `--exact` is the option that requests removal of packages outside the selected set.
+2. Without `--no-sync`, `uv run` uses an inexact sync by default. `--no-dev` excludes the `dev` group from the desired sync set, but an inexact sync does not remove an already-installed development package. A maintainer confirmed that `uv run --exact --no-dev <command>` removes those packages.
 
 The issue requests that `--no-dev` and other selection options describe this relationship more explicitly. No existing issue or pull request was found that tracks that broader CLI-help clarification.
 
@@ -24,7 +24,7 @@ A maintainer questioned whether documenting the interaction on every sync-affect
 The reporter clarified that they do not expect different runtime behavior. Their concern is the interpretation of the generated `uv run --help` text, rather than either of these execution paths:
 
 1. `uv run --no-sync --no-dev`, where no base-environment synchronization occurs; or
-2. the provided `uv run --no-dev` example, where an inexact sync excludes the group from the desired set but retains its already-installed packages.
+2. the provided `uv run --no-dev` example, where an inexact sync excludes the group from the desired set but retains its already-installed packages. The maintainer explicitly reframed this as general inexact-sync behavior and identified `uv run --exact --no-dev` as the command that removes the excluded group's installed packages.
 
 No maintainer decision to implement or close the enhancement has been made. The broad proposal to annotate every sync-affecting option remains subject to the maintainer's verbosity concern. A narrower documentation change, such as explaining the relationship once on `--no-sync` or in shared command documentation, has not been proposed or accepted in the discussion.
 
@@ -47,6 +47,7 @@ The report is not a bug because no incorrect behavior is established, and the re
 - `crates/uv-cli/src/lib.rs` describes `uv run --no-sync` as avoiding synchronization and implying `--frozen` because the project dependencies are ignored when the environment will not be synced.
 - `crates/uv/src/commands/project/run.rs` branches on `no_sync` and skips project-environment synchronization. The implementation separately notes that `--with` requirements may still be layered over the base environment.
 - `docs/concepts/projects/sync.md` states that `uv run` uses inexact syncing by default, ensuring required packages are installed without removing extraneous packages, and documents `uv run --exact` for exact syncing.
+- A maintainer confirmed on astral-sh/uv#21938 that `uv run --exact --no-dev` removes development packages installed by an earlier sync, establishing a concrete workaround for the example.
 - astral-sh/uv#12558 and astral-sh/uv#16071 cover the adjacent inverse case: after `uv sync --no-dev`, a later plain `uv run` can install the default `dev` group because commands do not remember the flags passed to an earlier sync.
 
 ## Search scope
