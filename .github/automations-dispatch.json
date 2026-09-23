@@ -87,6 +87,15 @@
     {
       "repository": "uv-dev",
       "on": {
+        "issue_comment": ["created", "edited"],
+        "pull_request_review_comment": ["created", "edited"],
+        "pull_request_review": ["submitted", "edited"]
+      },
+      "workflow": "pull-request-comments.yml"
+    },
+    {
+      "repository": "uv-dev",
+      "on": {
         "pull_request": ["labeled"]
       },
       "conditions": {
