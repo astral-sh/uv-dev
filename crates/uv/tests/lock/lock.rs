@@ -6095,7 +6095,7 @@ fn lock_conflicting_project_basic2() -> Result<()> {
     Ok(())
 }
 
-/// Empty conflicting extras fork the resolution of a shared registry dependency.
+/// Empty conflicting extras do not fork the resolution of a shared registry dependency.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_conflicting_empty_extras_fork_shared_dependency() -> Result<()> {
@@ -6142,8 +6142,8 @@ fn lock_conflicting_empty_extras_fork_shared_dependency() -> Result<()> {
             ]]
         "#})?;
 
-    // Resolving every empty extra as a separate full fork repeats work for `shared`; the cost
-    // grows severely with more extras and package releases. See astral-sh/uv#21954.
+    // Empty extras do not change the dependency graph, so the shared dependency only needs one
+    // resolution regardless of how many empty extras conflict.
     let assert = context
         .lock()
         .arg("--index-url")
@@ -6162,13 +6162,7 @@ fn lock_conflicting_empty_extras_fork_shared_dependency() -> Result<()> {
         .collect::<Vec<_>>()
         .join("\n");
     assert_snapshot!(repeated_work, @r"
-    DEBUG Splitting resolution on root==0a0.dev0 over project into 5 resolutions with separate markers
     DEBUG Searching for a compatible version of shared (>=1, <7)
-    DEBUG Searching for a compatible version of shared (>=1, <7)
-    DEBUG Searching for a compatible version of shared (>=1, <7)
-    DEBUG Searching for a compatible version of shared (>=1, <7)
-    DEBUG Searching for a compatible version of shared (>=1, <7)
-    INFO Solved your requirements for 5 environments
     ");
 
     Ok(())
