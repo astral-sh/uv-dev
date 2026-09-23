@@ -11,6 +11,7 @@ from uv_automations.github_promotion import (
 )
 from uv_automations.models import CommitSha, PullRequestState, RepositoryIdentity
 from uv_automations.promotion_models import (
+    PROMOTION_LABEL,
     UV_REPOSITORY,
     BranchRevision,
     ClosedPromotedParent,
@@ -210,9 +211,9 @@ def plan_retargets(
             or child.details.head.ref == "main"
         ):
             continue
-        if not child.draft:
-            # Readiness is publication authority. Retargeting it would change
-            # the base under the promotion/replay worker's approved snapshot.
+        if not child.draft or PROMOTION_LABEL in child.details.labels:
+            # Readiness and bot:promote are publication authority. Retargeting
+            # would change the promotion/replay worker's approved base.
             ready_children += 1
             continue
         base = BranchRevision(
@@ -307,13 +308,14 @@ def retarget(
         return SkippedRetarget(plan.source, RetargetSkipReason.ALREADY_TARGETED)
     if current.details.base.sha != plan.base.sha:
         return SkippedRetarget(plan.source, RetargetSkipReason.SOURCE_CHANGED)
-    if not current.draft:
+    if not current.draft or PROMOTION_LABEL in current.details.labels:
         return SkippedRetarget(plan.source, RetargetSkipReason.READY_FOR_PROMOTION)
 
     updated = writer.retarget_to_main(plan.source)
     if (
         not updated.is_open
         or not updated.draft
+        or PROMOTION_LABEL in updated.details.labels
         or not _same_head(updated, plan)
         or updated.details.base.ref != "main"
         or updated.details.base.sha != plan.main.sha

@@ -14,6 +14,7 @@ from uv_automations.models import (
 from uv_automations.promotion_models import (
     AUTOMATIONS_APP,
     AUTOMATIONS_BOT_ID,
+    PROMOTION_LABEL,
     UV_DEV_REPOSITORY,
     UV_REPOSITORY,
     UV_SECURITY_REPOSITORY,
@@ -274,6 +275,28 @@ class RetargetFixture:
 
 
 class PromotionRetargetTests(unittest.TestCase):
+    def test_promotion_label_prevents_retargeting_in_both_repositories(self) -> None:
+        for repository in (UV_DEV_REPOSITORY, UV_SECURITY_REPOSITORY):
+            with self.subTest(repository=repository):
+                fixture = RetargetFixture(repository)
+                child = fixture.child
+                labeled = replace(
+                    child, details=replace(child.details, labels=(PROMOTION_LABEL,))
+                )
+                plan = fixture.plan().plans[0]
+                fixture.source.pull_requests[child.scope] = labeled
+                batch = fixture.plan()
+                self.assertEqual(batch.plans, ())
+                self.assertEqual(batch.ready_children, 1)
+                writer = FakeWriter(fixture.source)
+                self.assertEqual(
+                    retarget(fixture.source, fixture.upstream, writer, plan),
+                    SkippedRetarget(
+                        child.scope, RetargetSkipReason.READY_FOR_PROMOTION
+                    ),
+                )
+                self.assertEqual(writer.writes, [])
+
     def test_plans_only_same_repository_draft_children(self) -> None:
         fixture = RetargetFixture()
         for child in (
@@ -602,7 +625,7 @@ class PromotionRetargetTests(unittest.TestCase):
                 self.assertEqual(writer.writes, [])
 
     def test_response_checks_detect_changes_during_the_base_update(self) -> None:
-        for change in ("head", "draft", "main", "closed"):
+        for change in ("head", "draft", "label", "main", "closed"):
             with self.subTest(change=change):
                 fixture = RetargetFixture()
                 plan = fixture.plan().plans[0]
@@ -624,6 +647,11 @@ class PromotionRetargetTests(unittest.TestCase):
                         )
                     case "draft":
                         updated = replace(updated, draft=False)
+                    case "label":
+                        updated = replace(
+                            updated,
+                            details=replace(updated.details, labels=(PROMOTION_LABEL,)),
+                        )
                     case "main":
                         updated = replace(
                             updated,
