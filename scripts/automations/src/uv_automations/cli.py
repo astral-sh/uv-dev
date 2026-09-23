@@ -12,7 +12,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import assert_never
 
-from uv_automations import commits_cli, promotions_cli
+from uv_automations import commits_cli, promotion_approval_cli, promotions_cli
 from uv_automations.actions import append_summary, write_json_output, write_output
 from uv_automations.github import GitHub
 from uv_automations.github_promotion import PromotionReadError
@@ -359,6 +359,8 @@ def run(command: Command) -> None:
             | promotions_cli.ReplayPromotedChildren()
             | promotions_cli.SyncPromotionSource()
             | promotions_cli.EnsurePromotionBase()
+            | promotion_approval_cli.InspectPrivatePromotion()
+            | promotion_approval_cli.VerifyPrivateApproval()
         ):
             promotions_cli.run(command)
             return

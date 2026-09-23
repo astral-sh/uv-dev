@@ -57,6 +57,8 @@ from uv_automations.promotion_models import (
     UneditedPromotionComment,
     UnrecordedMergedParent,
     UnsynchronizedParent,
+    current_ready_approval,
+    current_ready_event,
     latest_label_event,
     latest_ready_event,
     promotion_record,
@@ -451,6 +453,36 @@ class PromotionModelTests(unittest.TestCase):
             PromotionApproval(SOURCE, HEAD, bot_ready, bot_ready.identifier)
         with self.assertRaisesRegex(ValueError, "follow"):
             PromotionApproval(SOURCE, HEAD, added, added.identifier)
+
+    def test_current_readiness_requires_the_latest_transition(self) -> None:
+        draft = ConvertedToDraftEvent(READY.identifier + 1, HUMAN, LATER)
+        events = (draft, READY)
+        self.assertIsNone(current_ready_event(events))
+        self.assertIsNone(current_ready_approval(SOURCE, HEAD, events))
+        self.assertEqual(
+            ready_approval(SOURCE, HEAD, events),
+            PromotionApproval(SOURCE, HEAD, READY, READY.identifier),
+        )
+
+        for actor in (BOT, None):
+            with self.subTest(actor=actor):
+                ready = ReadyForReviewEvent(READY.identifier + 2, actor, LATER)
+                history = (ready, READY, draft)
+                self.assertEqual(current_ready_event(history), ready)
+                self.assertIsNone(current_ready_event(history, human_only=True))
+                self.assertIsNone(current_ready_approval(SOURCE, HEAD, history))
+                self.assertEqual(
+                    ready_approval(SOURCE, HEAD, history),
+                    PromotionApproval(SOURCE, HEAD, READY, READY.identifier),
+                )
+
+        ready = ReadyForReviewEvent(READY.identifier + 3, HUMAN, LATER)
+        history = (ready, draft, READY)
+        self.assertEqual(current_ready_event(history, human_only=True), ready)
+        self.assertEqual(
+            current_ready_approval(SOURCE, HEAD, history),
+            PromotionApproval(SOURCE, HEAD, ready, ready.identifier),
+        )
 
     def test_legacy_record_requires_exact_bot_app_and_body(self) -> None:
         expected = promotion_record(comment())
