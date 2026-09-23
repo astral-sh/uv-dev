@@ -12,26 +12,66 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - name: "Select uv checksum"
-      id: uv
+    - name: "Check uv runner support"
       shell: bash
       run: |
         case "$RUNNER_OS-$RUNNER_ARCH" in
-          Linux-X64) checksum=745765a3b6e360ad76743599ae5c42e9278c7edf8bbff9fc76d05bf2623a04dd ;;
-          Linux-ARM64) checksum=2eaa5d94f5db7b3a1a092156b9420459e42ab0217d917fe74a876309cef9b5e9 ;;
-          macOS-X64) checksum=5e287ef61cb6a9b61b3a83fef124fd143e400468a7dac794230147a810e17119 ;;
-          macOS-ARM64) checksum=7e6ddb9316acc00f2296c82ff4d99977870ee34b2f0ddcae9444d714db9364ed ;;
-          Windows-X64) checksum=a86c9dc7bad9b03f388583b7187c05fe9951c2e0d392217e8fd43d97787f6ec2 ;;
-          Windows-ARM64) checksum=1efb2654b06e7063d4ac1fc9d49a9bda9a6704d82f035b589a2751a592f14151 ;;
+          Linux-X64|Linux-ARM64|macOS-X64|macOS-ARM64|Windows-X64|Windows-ARM64) ;;
           *) echo "Unsupported automation runner: $RUNNER_OS-$RUNNER_ARCH" >&2; exit 1 ;;
         esac
-        printf 'checksum=%s\n' "$checksum" >> "$GITHUB_OUTPUT"
 
-    - name: "Install uv"
+    - name: "Install uv on Linux X64"
+      if: ${{ runner.os == 'Linux' && runner.arch == 'X64' }}
       uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
       with:
+        # renovate: datasource=github-release-attachments depName=astral-sh/uv
         version: "0.12.13"
-        checksum: ${{ steps.uv.outputs.checksum }}
+        checksum: "745765a3b6e360ad76743599ae5c42e9278c7edf8bbff9fc76d05bf2623a04dd"
+        enable-cache: false
+
+    - name: "Install uv on Linux ARM64"
+      if: ${{ runner.os == 'Linux' && runner.arch == 'ARM64' }}
+      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      with:
+        # renovate: datasource=github-release-attachments depName=astral-sh/uv
+        version: "0.12.13"
+        checksum: "2eaa5d94f5db7b3a1a092156b9420459e42ab0217d917fe74a876309cef9b5e9"
+        enable-cache: false
+
+    - name: "Install uv on macOS X64"
+      if: ${{ runner.os == 'macOS' && runner.arch == 'X64' }}
+      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      with:
+        # renovate: datasource=github-release-attachments depName=astral-sh/uv
+        version: "0.12.13"
+        checksum: "5e287ef61cb6a9b61b3a83fef124fd143e400468a7dac794230147a810e17119"
+        enable-cache: false
+
+    - name: "Install uv on macOS ARM64"
+      if: ${{ runner.os == 'macOS' && runner.arch == 'ARM64' }}
+      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      with:
+        # renovate: datasource=github-release-attachments depName=astral-sh/uv
+        version: "0.12.13"
+        checksum: "7e6ddb9316acc00f2296c82ff4d99977870ee34b2f0ddcae9444d714db9364ed"
+        enable-cache: false
+
+    - name: "Install uv on Windows X64"
+      if: ${{ runner.os == 'Windows' && runner.arch == 'X64' }}
+      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      with:
+        # renovate: datasource=github-release-attachments depName=astral-sh/uv
+        version: "0.12.13"
+        checksum: "a86c9dc7bad9b03f388583b7187c05fe9951c2e0d392217e8fd43d97787f6ec2"
+        enable-cache: false
+
+    - name: "Install uv on Windows ARM64"
+      if: ${{ runner.os == 'Windows' && runner.arch == 'ARM64' }}
+      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      with:
+        # renovate: datasource=github-release-attachments depName=astral-sh/uv
+        version: "0.12.13"
+        checksum: "1efb2654b06e7063d4ac1fc9d49a9bda9a6704d82f035b589a2751a592f14151"
         enable-cache: false
 
     - name: "Install trusted automation runtime"
