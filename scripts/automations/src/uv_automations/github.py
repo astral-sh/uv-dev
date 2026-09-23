@@ -10,6 +10,7 @@ from urllib.parse import quote
 
 from uv_automations.json import (
     as_array,
+    as_boolean,
     as_object,
     as_positive_integer,
     as_string,
@@ -17,6 +18,9 @@ from uv_automations.json import (
 )
 from uv_automations.models import (
     CommitSha,
+    Issue,
+    IssueAuthor,
+    IssueRef,
     Label,
     Mergeability,
     PullRequest,
@@ -35,6 +39,7 @@ LABEL_CONTEXT_FIELDS = (
     "number,title,body,author,baseRefName,headRefName,headRefOid,isDraft,"
     "labels,files,additions,deletions,changedFiles"
 )
+ISSUE_FIELDS = "number,title,body,author,url"
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +63,38 @@ class PullRequestReader(Protocol):
     def list_open_pull_requests(
         self, query: OpenPullRequestQuery
     ) -> tuple[PullRequest, ...]: ...
+
+
+class IssueReader(Protocol):
+    def get_issue(self, reference: IssueRef) -> Issue: ...
+
+
+def _decode_issue_author(value: object) -> IssueAuthor | None:
+    if value is None:
+        return None
+    data = as_object(value)
+    name = data["name"]
+    return IssueAuthor(
+        node_id=as_string(data["id"]),
+        is_bot=as_boolean(data["is_bot"]),
+        login=as_string(data["login"]),
+        name=as_string(name) if name is not None else None,
+    )
+
+
+def decode_issue(value: object, reference: IssueRef) -> Issue:
+    data = as_object(value)
+    if (
+        as_positive_integer(data["number"]) != reference.number
+        or as_string(data["url"]) != reference.url
+    ):
+        raise ValueError("GitHub returned an unexpected issue")
+    return Issue(
+        reference=reference,
+        title=as_string(data["title"]),
+        body=as_string(data["body"]),
+        author=_decode_issue_author(data["author"]),
+    )
 
 
 def decode_pull_request(value: object, repository: RepositoryName) -> PullRequest:
@@ -187,6 +224,22 @@ class GitHub:
         return tuple(
             decode_pull_request(value, query.repository)
             for value in as_array(self._command(arguments))
+        )
+
+    def get_issue(self, reference: IssueRef) -> Issue:
+        return decode_issue(
+            self._command(
+                [
+                    "issue",
+                    "view",
+                    str(reference.number),
+                    "--repo",
+                    str(reference.repository),
+                    "--json",
+                    ISSUE_FIELDS,
+                ]
+            ),
+            reference,
         )
 
     def get_pull_request(self, reference: PullRequestRef) -> PullRequestDetails:

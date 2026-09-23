@@ -4,8 +4,8 @@ This internal Python 3.14+ package moves workflow logic out of shell and `jq` wi
 GitHub Actions as the scheduler. Actions still owns triggers, permissions, concurrency, runners, job
 dependencies, and credential acquisition.
 
-The first consumers are pull-request labeling, conflicted-pull-request discovery, and commit
-transport for the regression-test and bug-fix workflows:
+The first consumers are pull-request labeling, conflicted-pull-request discovery, verified issue
+collection, and commit transport for the regression-test and bug-fix workflows:
 
 ```console
 uv run --project scripts/automations --locked --no-dev uv-automations labels validate --allowed .github/allowed-pull-request-labels.json
@@ -70,6 +70,37 @@ query = OpenPullRequestQuery(
 pull_requests = GitHub().list_open_pull_requests(query)
 ```
 
+## Verified issue context
+
+`issue-triage.yml` and `reproduce-bug.yml` call `issues prepare` to collect the existing
+`number,title,body,author,url` prompt payload. `IssueRef.from_input` accepts a positive issue number
+or a canonical issue URL in the expected repository. `GitHub.get_issue` verifies the returned number
+and URL before constructing the typed `Issue`.
+
+```python
+from pathlib import Path
+
+from uv_automations.github import GitHub
+from uv_automations.models import IssueRef, RepositoryName
+from uv_automations.workflows.issues import prepare_issue
+
+reference = IssueRef.from_input(RepositoryName("astral-sh/uv"), "123")
+prepared = prepare_issue(
+    GitHub(),
+    reference,
+    Path(".issue-triage-event.json"),
+    workspace=workspace,
+    runner_temp=runner_temp,
+)
+```
+
+The destination must be inside the workspace or runner temporary directory. Preparation opens each
+parent relative to a trusted directory descriptor and creates the file exclusively, without
+following parent or leaf symlinks or overwriting another file. This stage requires native
+descriptor-relative opens and no-follow directory flags; unsupported platforms fail closed. The CLI
+exposes `issue-number`, `issue-json`, and `path` Actions outputs; persisted investigation loading
+and publication remain separate workflow stages.
+
 ## Trusted runtime and commit artifacts
 
 Workflows that switch to candidate code first check out `github.workflow_sha` and call
@@ -115,7 +146,7 @@ Keep the existing wire formats and job-level credential boundaries during each m
 
 | Existing workflows                                                                     | Python responsibility                                                                                                |
 | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `issue-triage`, `update-issue-context`, `reproduce-bug`, `fix-bug`                     | Issue context, thread selection, typed agent results, candidate commits, and context/PR publication                  |
+| `issue-triage`, `update-issue-context`, `reproduce-bug`, `fix-bug`                     | Persisted issue context, thread selection, typed agent results, candidate commits, and context/PR publication        |
 | `diagnose-workflow-failure`                                                            | Run snapshots, retry budget and backoff, stale-run checks, duplicate detection, and issue reporting                  |
 | `promote-pull-request`, `update-pull-request-parent`, `rebase-conflicted-pull-request` | Approval and repository identity, parent state, ancestry, bundles, leased pushes, and recovery                       |
 | `pull-request-security-review`                                                         | Finding conversion, review anchors, current-head checks, and publication                                             |
@@ -126,7 +157,6 @@ The intended API for the next consumers is approximately:
 
 ```python
 # github.py
-def get_issue(reference: IssueRef) -> Issue: ...
 def get_workflow_run(reference: WorkflowRunRef) -> WorkflowRun: ...
 
 

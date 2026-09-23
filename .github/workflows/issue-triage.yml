@@ -27,31 +27,29 @@ jobs:
       id-token: write # for the cross-repository issue-context credential broker
       issues: read
     outputs:
-      issue-context: ${{ steps.issue.outputs.context }}
+      issue-context: ${{ steps.issue.outputs.issue-json }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
+
+      - name: "Set up trusted Python automations"
+        id: automations
+        uses: ./.github/actions/setup-automations
 
       - name: "Collect issue context"
         id: issue
         run: |
-          gh issue view "$ISSUE" \
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations issues prepare \
             --repo "$GITHUB_REPOSITORY" \
-            --json number,title,body,author,url \
-            > "$RUNNER_TEMP/issue.json"
-
-          if ! jq --exit-status \
-            --arg repository "$GITHUB_REPOSITORY" \
-            '.url | startswith("https://github.com/\($repository)/issues/")' \
-            "$RUNNER_TEMP/issue.json" > /dev/null; then
-            echo "The issue must belong to $GITHUB_REPOSITORY." >&2
-            exit 1
-          fi
-
-          jq --raw-output '"context=\(tojson)"' \
-            "$RUNNER_TEMP/issue.json" >> "$GITHUB_OUTPUT"
+            --issue "$ISSUE" \
+            --path "$RUNNER_TEMP/issue.json" \
+            --workspace "$GITHUB_WORKSPACE" \
+            --runner-temp "$RUNNER_TEMP" \
+            --github-output "$GITHUB_OUTPUT"
         env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE: ${{ inputs.issue || github.event.issue.number }}
 
@@ -71,15 +69,14 @@ jobs:
 
       - name: "Initialize issue context"
         run: |
-          issue_number="$(jq --raw-output '.number' "$RUNNER_TEMP/issue.json")"
-          branch="issue/$issue_number"
+          branch="issue/$ISSUE_NUMBER"
 
           git init --quiet "$RUNNER_TEMP/issue-context"
           cd "$RUNNER_TEMP/issue-context"
           git remote add origin \
             "https://x-access-token:${GH_TOKEN}@github.com/astral-sh/uv-dev.git"
 
-          gh issue develop "$issue_number" \
+          gh issue develop "$ISSUE_NUMBER" \
             --repo "$GITHUB_REPOSITORY" \
             --branch-repo astral-sh/uv-dev \
             --base issue/base \
@@ -102,6 +99,7 @@ jobs:
           git push origin "HEAD:refs/heads/$branch"
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
+          ISSUE_NUMBER: ${{ steps.issue.outputs.issue-number }}
 
   triage:
     needs: initialize-context
