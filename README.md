@@ -12,6 +12,8 @@ The checked-in Unix child runner confirms the central signal-forwarding behavior
 
 No existing issue or pull request tracks this exact failure. The closest history is astral-sh/uv#13017, which added broad signal forwarding to fix the opposite failure reported in astral-sh/uv#12830, where externally delivered signals terminated uv without reaching its child. astral-sh/uv#11886 is adjacent because it explains the observed status 141: uv currently converts a signal-terminated child into a normal-looking 128+signal exit code, but that issue does not cover why the child received SIGPIPE.
 
+A repository member identified two possible implementation directions: stop forwarding SIGPIPE, or replace uv with the Python process via `exec` in cases that do not require uv to retain a child process. These are proposals rather than a settled maintainer decision.
+
 ## Draft response
 
 Thanks for the report and reproducer. The current Unix child runner does register a SIGPIPE handler and unconditionally forwards any received SIGPIPE to the spawned command; that behavior was added in astral-sh/uv#13017 while fixing a different signal-forwarding problem. That supports treating the child termination as a uv bug.
@@ -24,17 +26,24 @@ This is a bug, not a duplicate. The current source unconditionally forwards SIGP
 
 astral-sh/uv#12830 and astral-sh/uv#13017 are historical context rather than canonical trackers for this report. They address signals that should reach the child but did not. No open issue or pull request already tracks the newly reported failure mode, and no merged fix for this specific behavior was found.
 
+## Maintainer direction
+
+A repository member proposed that uv could stop forwarding SIGPIPE. The stated compatibility cost is that an explicitly targeted `kill -PIPE <uv PID>` would no longer reach the child. Ordinary shell pipelines such as `uv run ... | consumer` would still deliver SIGPIPE directly to the writing child when the reader closes the pipe. The same comment cautions that correlating an asynchronously received SIGPIPE with a particular `EPIPE` is not reliable, so selectively suppressing only signals attributed to uv's own failed write is not considered a practical approach.
+
+The alternative proposal is to use `exec` for eligible Python invocations so uv is no longer a signal-forwarding parent. The member noted that uv must retain the forked-process model for cases such as `--isolated`; the scope and implementation cost of using `exec` elsewhere are still unknown. A separate cleanup-holder process was mentioned but considered difficult to implement correctly. No fix has been selected.
+
 ## Related
 
 - astral-sh/uv#13017 — Merged pull request, “Forward additional signals to the child process in `uv run`.” Its diff added the SIGPIPE listener and unconditional child forwarding that match the source-backed portion of this report. It fixed the opposite problem of signals not reaching children.
 - astral-sh/uv#12830 — Closed bug, “Unexpected behavior when handling signals.” This was closed by astral-sh/uv#13017 and establishes the reason broad forwarding was added. Its symptom was orphaned children after externally delivered signals terminated uv, not uv-generated SIGPIPE terminating a child.
 - astral-sh/uv#11886 — Open bug, “Handling of signal exit from subprocess is incorrect.” It tracks uv mapping signal termination to 128+signal without the shell's signal diagnostic, which accounts for status 141 after a SIGPIPE death. It does not track unintended SIGPIPE forwarding.
+- astral-sh/uv#3095 — Open enhancement, “Consider `execv` for `uv run` on Unix.” It is broader than this bug, but provides the existing design discussion for the member's proposal to avoid the parent/child signal proxy by using `exec` where cleanup and invocation mode permit it.
 
 ## Search evidence
 
 Literal searches across open and closed issues and open, closed, and merged pull requests covered `SIGPIPE`, `EPIPE`, `writev`, “broken pipe,” “exit code 141,” “status 141,” “signal 13,” HTTP/2 timeouts, and network-triggered `uv run` termination. Conceptual searches covered signal forwarding and propagation, child processes, process groups, Unix/Tokio signal handling, and `uv run`. Fix-oriented searches inspected closed issues, merged pull requests, referenced discussions, and the history around astral-sh/uv#13017 and astral-sh/uv#12830.
 
-astral-sh/uv#12244 was a plausible literal match because it discusses SIGPIPE and broken pipes, but it concerns shell-completion output writing to a closed stdout pipe and uv panicking; it does not involve network I/O or forwarding a signal to an `uv run` child. astral-sh/uv#3095 discusses replacing uv with the executed process on Unix, which would alter the general parent/child signal model, but it is a broad design enhancement rather than a tracker for this failure.
+astral-sh/uv#12244 was a plausible literal match because it discusses SIGPIPE and broken pipes, but it concerns shell-completion output writing to a closed stdout pipe and uv panicking; it does not involve network I/O or forwarding a signal to an `uv run` child. astral-sh/uv#3095 is not a tracker for this failure, but the new maintainer proposal makes its broader Unix `exec` design discussion relevant implementation background.
 
 ## Supporting source evidence
 
