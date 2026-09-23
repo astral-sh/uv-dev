@@ -1055,7 +1055,9 @@ fork_strategy = "fewest"
         for command in [ScenarioCommand::Install, ScenarioCommand::Compile] {
             let error = render_resolver_args(&mut String::new(), &scenario, command)
                 .expect_err("environment markers require the lock template");
-            insta::assert_snapshot!(error, @"scenario `fork-options` configures `environments`, which requires the lock template");
+            insta::allow_duplicates! {
+                insta::assert_snapshot!(error, @"scenario `fork-options` configures `environments`, which requires the lock template");
+            }
         }
     }
 
