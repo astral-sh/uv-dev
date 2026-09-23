@@ -376,7 +376,9 @@ class IssueLabelTests(unittest.TestCase):
             self.assertEqual(output.read_text(), 'labels=["bug","area:resolver"]\n')
 
     def test_sts_policy_binds_caller_and_callee(self) -> None:
-        policy = json.loads((REPOSITORY / ".github/secure-token-service.json").read_text())
+        policy = json.loads(
+            (REPOSITORY / ".github/secure-token-service.json").read_text()
+        )
         rules = [
             rule
             for rule in policy["rules"]
