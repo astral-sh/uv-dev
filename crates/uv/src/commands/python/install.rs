@@ -574,10 +574,11 @@ async fn perform_install(
         // In the reinstall case, we want to iterate over all matching installations instead of
         // stopping at the first match.
 
-        let mut unsatisfied: Vec<Cow<InstallRequest>> =
+        // Keep each resolved operation paired with its originating request for reporting.
+        let mut unsatisfied: Vec<(usize, Cow<InstallRequest>)> =
             Vec::with_capacity(existing_installations.len() + requests.len());
 
-        for request in &requests {
+        for (request_index, request) in requests.iter().enumerate() {
             let mut matching_installations = existing_installations
                 .iter()
                 .filter(|installation| request.matches_installation(installation))
@@ -585,7 +586,7 @@ async fn perform_install(
 
             if matching_installations.peek().is_none() {
                 debug!("No installation found for request `{}`", request);
-                unsatisfied.push(Cow::Borrowed(request));
+                unsatisfied.push((request_index, Cow::Borrowed(request)));
             }
 
             for installation in matching_installations {
@@ -596,7 +597,7 @@ async fn perform_install(
                 {
                     // An upgrade must reinstall the latest patch, not every matching patch.
                     debug!("Will reinstall the latest patch for `{}`", request);
-                    unsatisfied.push(Cow::Borrowed(request));
+                    unsatisfied.push((request_index, Cow::Borrowed(request)));
                     break;
                 }
 
@@ -604,7 +605,7 @@ async fn perform_install(
                 match InstallRequest::new(PythonRequest::Key(installation.into()), &download_list) {
                     Ok(request) => {
                         debug!("Will reinstall `{}`", installation.key());
-                        unsatisfied.push(Cow::Owned(request));
+                        unsatisfied.push((request_index, Cow::Owned(request)));
                     }
                     Err(err) => {
                         // This shouldn't really happen, but maybe a new version of uv dropped
@@ -623,7 +624,7 @@ async fn perform_install(
         let mut satisfied = Vec::new();
         let mut unsatisfied = Vec::new();
 
-        for request in &requests {
+        for (request_index, request) in requests.iter().enumerate() {
             if matches!(upgrade, PythonUpgrade::Enabled(_)) {
                 // If this is an upgrade, the requested version is a minor version but the
                 // requested download is the highest patch for that minor version. We need to
@@ -642,11 +643,11 @@ async fn perform_install(
                             installation.key()
                         );
                         changelog.existing.insert(installation.key().clone());
-                        unsatisfied.push(Cow::Borrowed(request));
+                        unsatisfied.push((request_index, Cow::Borrowed(request)));
                     }
                 } else {
                     debug!("No installation found for request `{}`", request);
-                    unsatisfied.push(Cow::Borrowed(request));
+                    unsatisfied.push((request_index, Cow::Borrowed(request)));
                 }
             } else if let Some(installation) = existing_installations
                 .iter()
@@ -656,7 +657,7 @@ async fn perform_install(
                 satisfied.push(installation);
             } else {
                 debug!("No installation found for request `{}`", request);
-                unsatisfied.push(Cow::Borrowed(request));
+                unsatisfied.push((request_index, Cow::Borrowed(request)));
             }
         }
 
@@ -717,6 +718,7 @@ async fn perform_install(
     // Find downloads for the requests
     let downloads = unsatisfied
         .iter()
+        .map(|(_, request)| request)
         .inspect(|request| {
             debug!(
                 "Found download `{}` for request `{}`",
@@ -1174,20 +1176,18 @@ async fn perform_install(
 /// Expand `--reinstall any` into the exact-key operations selected by the installer.
 fn resolved_report_requests<'a>(
     requests: &[InstallRequest<'a>],
-    unsatisfied: &[Cow<'_, InstallRequest<'a>>],
+    unsatisfied: &[(usize, Cow<'_, InstallRequest<'a>>)],
     reinstall: bool,
 ) -> Vec<InstallRequest<'a>> {
     requests
         .iter()
-        .flat_map(|request| {
+        .enumerate()
+        .flat_map(|(request_index, request)| {
             if reinstall && matches!(request.request, PythonRequest::Any) {
                 unsatisfied
                     .iter()
-                    .filter(|resolved| {
-                        request
-                            .download_request
-                            .satisfied_by_key(resolved.download.key())
-                    })
+                    .filter(|(origin, _)| *origin == request_index)
+                    .map(|(_, resolved)| resolved)
                     .unique_by(|resolved| resolved.download.key())
                     .map(|resolved| InstallRequest {
                         request: request.request.clone(),

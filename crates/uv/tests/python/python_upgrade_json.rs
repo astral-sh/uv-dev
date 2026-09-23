@@ -499,6 +499,55 @@ fn python_upgrade_json_reinstall_any_reports_executed_keys() -> Result<()> {
 }
 
 #[test]
+fn python_upgrade_json_reinstall_overlapping_requests() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    let old = python_fixture(&context, "cpython-3.12.8")?;
+    let new = python_fixture(&context, "cpython-3.12.9")?;
+    let old_key = old.key.clone();
+    let new_key = new.key.clone();
+    let catalog = write_catalog(&context, &[old, new])?;
+    install(&context, catalog.path(), &["3.12.8"]);
+
+    // Any selects the installed exact key, while the explicit minor-version request selects
+    // the newest patch. Sharing a matching version range does not give either request ownership
+    // of the other request's operation.
+    let reinstalled = report(
+        &upgrade(&context, catalog.path())
+            .args(["--reinstall", "any", "3.12"])
+            .output()?,
+        0,
+    )?;
+    assert_eq!(reinstalled["errors"], json!([]));
+    let entries = reinstalled["upgrades"]
+        .as_array()
+        .context("missing upgrade entries")?;
+    assert_eq!(entries.len(), 2);
+    for (entry, request, outcome, key) in [
+        (&entries[0], "3.12", "upgraded", &new_key),
+        (&entries[1], "any", "reinstalled", &old_key),
+    ] {
+        assert_eq!(entry["request"], request);
+        assert_eq!(entry["outcome"], outcome);
+        assert_eq!(entry["to"]["key"], *key);
+        assert_eq!(entry["errors"], json!([]));
+        let from = entry["from"]
+            .as_array()
+            .context("missing previous installations")?;
+        assert_eq!(from.len(), 1);
+        assert_eq!(from[0]["key"], old_key);
+        for change in entry["executables"]
+            .as_array()
+            .context("missing executable changes")?
+        {
+            assert_eq!(change["to"]["key"], *key);
+        }
+    }
+    assert!(context.temp_dir.child("managed").child(old_key).is_dir());
+    assert!(context.temp_dir.child("managed").child(new_key).is_dir());
+    Ok(())
+}
+
+#[test]
 fn python_upgrade_json_finalization_failure() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
     let fixture = python_fixture(&context, "cpython-3.12.9")?;
