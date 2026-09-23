@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 7914,
+        "title": "uv run ignores --no-dev",
+        "url": "https://github.com/astral-sh/uv/issues/7914",
+        "state": "closed",
+        "reason": "Same observed outcome: an already-installed development executable remains runnable under `uv run --no-dev`. Maintainers explained that `uv run` uses an inexact sync and does not uninstall it."
+      },
+      {
+        "kind": "issue",
+        "number": 14230,
+        "title": "uv run does not remove extraneous packages",
+        "url": "https://github.com/astral-sh/uv/issues/14230",
+        "state": "closed",
+        "reason": "Canonical broader discussion confirming that `uv run` intentionally retains packages outside the selected dependency set; `--exact` or `--isolated` provides stricter behavior."
+      },
+      {
+        "kind": "pull_request",
+        "number": 17366,
+        "title": "Clarify that `uv run` uses inexact syncing by default",
+        "url": "https://github.com/astral-sh/uv/pull/17366",
+        "state": "merged",
+        "reason": "Documented the inexact-sync behavior underlying the reported `--no-dev` result."
+      },
+      {
+        "kind": "issue",
+        "number": 7165,
+        "title": "Opt-into / opt-out of automatic re-sync with `uv run`?",
+        "url": "https://github.com/astral-sh/uv/issues/7165",
+        "state": "closed",
+        "reason": "Design discussion establishing `uv run --no-sync` as the option for using the project environment without modifying it."
+      },
+      {
+        "kind": "pull_request",
+        "number": 7192,
+        "title": "Add `uv run --no-sync`",
+        "url": "https://github.com/astral-sh/uv/pull/7192",
+        "state": "merged",
+        "reason": "Implemented `--no-sync` with the stated semantics of running in the project environment without locking or syncing."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for exact combinations of `--no-sync`, `--no-dev`, `--extra`, and `--group`, the quoted help text, ignored options, and `uv run`. Conceptual searches covered automatic synchronization, dependency selection, retained or extraneous packages, exact versus inexact sync, stateless commands, and documentation. Inspected candidate comments, timelines, linked fixes, CLI definitions, implementation, and current documentation. astral-sh/uv#12558 and astral-sh/uv#16071 cover the adjacent inverse case of a later plain `uv run` restoring development dependencies. astral-sh/uv#17023 was ruled out because its reporter identified a stale container image as the cause."
+  },
+  "type": "enhancement",
+  "type_reason": "The behavior is intentional: `--no-sync` skips project-environment updates, while dependency-selection flags define what a sync should include; ordinary `uv run` also syncs inexactly and therefore does not remove an already-installed development package. The request is to clarify those interactions in CLI help. Prior discussions explain or document the behavior but do not track this broader clarification, so it is not a duplicate.",
+  "summary": "astral-sh/uv#7914 is the closest reproduction, while astral-sh/uv#14230 and astral-sh/uv#17366 establish and document the underlying inexact-sync behavior. astral-sh/uv#7165 and astral-sh/uv#7192 establish the separate `--no-sync` contract. No existing item tracks the requested cross-option CLI-help clarification.",
+  "draft_response": "`--no-dev` selects a sync target that excludes the `dev` group; it does not independently remove or hide installed packages. `uv run` uses an inexact sync by default, so a development executable already installed by `uv sync` can remain runnable, as discussed in astral-sh/uv#7914 and documented by astral-sh/uv#17366. With `--no-sync`, the project environment is not updated at all, so dependency-selection flags do not change what is already installed. The current option text does not make those interactions clear. It would be reasonable to clarify the dependency-selection options and cross-reference `--no-sync` and `--exact`, while accounting for options such as `--with` that can still create an overlay."
+}
