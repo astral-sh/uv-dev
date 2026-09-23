@@ -44,7 +44,8 @@ reusable workflow until its artifact and Git operations are migrated.
   environment; the library does not acquire or persist tokens. A publisher can use
   `GitHub(token_variable="GH_READ_TOKEN")` for provenance and freshness reads while `GH_TOKEN`
   remains a separate, narrowly scoped writer credential.
-- `git` provides the Git operations used by those workflows.
+- `git` provides operations on repositories with trusted Git metadata.
+- `checkouts` creates an isolated view of a candidate whose Git metadata was writable by an agent.
 - `artifacts` persists and imports exact commit ranges without checking out received code.
 - `actions` adapts typed results to Actions' file-based interfaces.
 - `workflows` contains workflow-specific decisions. Functions accept explicit inputs and narrow
@@ -80,10 +81,41 @@ Python selection alone; only this runtime is pinned to Python 3.14. The bootstra
 pinned `uv` on `PATH`. Workflows that use `uv` as the product under test or as their project tool
 install their intended version separately afterward. Agent steps receive a separate writable
 temporary directory, with their caches and editable context inside it; the installed runtime stays
-outside that directory.
+outside that directory. These profiles do not grant writes to all of `/tmp`, which can also contain
+the runner's trusted temporary state.
 
-The shared Git adapter disables hooks, grafts, replacement objects, and inherited
-repository-selection state. Commit transport has a small, concrete API:
+The shared Git adapter disables filesystem monitors, traditional hooks, grafts, replacement objects,
+and inherited repository-selection state. These settings do not make arbitrary repository-local
+configuration safe. If an agent can write `.git`, inspect it through a private transport clone of a
+protected object snapshot before running Git operations outside the agent's sandbox:
+
+```python
+from uv_automations.artifacts import CommitRange, persist_commit
+from uv_automations.checkouts import inspect_candidate
+
+with inspect_candidate(source, base=base_sha, scratch=trusted_scratch) as candidate:
+    candidate.require_clean()
+    commits = CommitRange(base_sha, candidate.head)
+    bundle = persist_commit(candidate.repository, commits, destination)
+```
+
+Only the captured `HEAD` and independently copied loose objects and pack/index pairs enter the
+snapshot's fresh SHA-1/files-ref metadata. Git never reads the source configuration, hooks,
+alternates, grafts, or replacement refs. The source index is checked separately from a fresh
+worktree-check index, so staged leftovers and index flags cannot hide changes. Attribute lookup uses
+the trusted base. `require_clean` is a consistency check of the live working tree, not an atomic
+worktree capture; transported commits come only from the protected object snapshot.
+
+The first implementation requires Git 2.50.1 or newer, native no-follow directory descriptors, and a
+full SHA-1 Actions checkout with ordinary files-based refs. It rejects submodules, linked worktrees,
+reftable, shallow repositories, promisor packs, alternate object stores, and symlinked or hardlinked
+source metadata. Copies are limited to 100,000 source files and 2 GiB, and incomplete or corrupt
+object stores fail closed. The scratch directory must be outside the agent-writable checkout and
+temporary directories. Git reads can select a separate credential with
+`repository.with_token("GH_READ_TOKEN")`; the original repository object retains the writer's
+environment.
+
+Commit transport has a small, concrete API:
 
 ```python
 from pathlib import Path
@@ -112,6 +144,25 @@ acquiring write credentials.
 
 Migrate complete deterministic workflow stages rather than extracting isolated `jq` expressions.
 Keep the existing wire formats and job-level credential boundaries during each migration.
+
+The outstanding automation drafts provide useful tests of that boundary:
+
+| Proposal                                                   | Shared mechanism                                                                | Policy that remains with the consumer                                                            |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| [uv-dev#766](https://github.com/astral-sh/uv-dev/pull/766) | Exact commit ranges, bundle verification, and immutable artifact IDs            | Allowed paths, authorship, parent selection, and permission to publish                           |
+| [uv-dev#546](https://github.com/astral-sh/uv-dev/pull/546) | Typed issue reads and safe context-file creation                                | Which issue to collect and how a workflow uses its context                                       |
+| [uv-dev#942](https://github.com/astral-sh/uv-dev/pull/942) | Candidate inspection, explicit empty/nonempty outcomes, and leased pushes       | Independently proving that the original changes are already in the base before closing a PR      |
+| [uv-dev#305](https://github.com/astral-sh/uv-dev/pull/305) | Bounded feedback collection, typed results, and verified run/session provenance | Eligible feedback, checkpoint advancement, commit accounting, and reply/resolve decisions        |
+| [uv-dev#894](https://github.com/astral-sh/uv-dev/pull/894) | Bounded event histories, typed promotion records, and exact workflow dispatch   | The queued head and human approval are still current, and the parent merge reached source `main` |
+| [uv-dev#922](https://github.com/astral-sh/uv-dev/pull/922) | Repository identities, parent history, ancestry, and narrow base updates        | Unique promoted-parent evidence, synchronized-`main` checks, and child freshness                 |
+| [uv-dev#986](https://github.com/astral-sh/uv-dev/pull/986) | Typed human approval events and publication preconditions                       | Private-to-public approval, label ordering, and recovery policy                                  |
+
+The promotion consumers should use a `PromotionApproval` that retains the source repository
+identity, pull request, approved head, human event ID, and approval kind. A `PromotionRecord` should
+identify the upstream pull request only after verifying the issuing bot's database ID and GitHub App
+identity. A `RetargetPlan` retains the synchronized `main` SHA, exact child base/head, and verified
+parent merge; publication rechecks those preconditions before each narrow mutation. These are
+publication authority, not properties of a valid Git bundle.
 
 | Existing workflows                                                                     | Python responsibility                                                                                                |
 | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
@@ -147,7 +198,7 @@ def retry(github_writer: GitHubWriter, plan: RetryPlan) -> RetryResult: ...
 # workflows/promotion.py
 def plan(
     source: PullRequest,
-    approval: Approval,
+    approval: PromotionApproval,
     upstream: RepositoryState,
     parent: ParentState,
 ) -> PromotionPlan: ...
@@ -157,6 +208,20 @@ def publish(
     plan: PromotionPlan,
     head: CommitSha,
 ) -> PromotionResult: ...
+def plan_replay(
+    queued: QueuedPromotion,
+    approval: PromotionApproval,
+    parent: PromotedParent,
+    source_main: CommitSha,
+) -> ReplayPlan | StalePromotion: ...
+def plan_retarget(
+    parent: PromotedParent,
+    children: tuple[PullRequestDetails, ...],
+    source_main: CommitSha,
+) -> tuple[RetargetPlan, ...]: ...
+def retarget(
+    reader: PromotionReader, writer: PullRequestBaseWriter, plan: RetargetPlan
+) -> RetargetOutcome: ...
 ```
 
 `RebaseResult`, for example, should be a union of `CleanRebase`, `ConflictedRebase`, `EmptyRebase`,
