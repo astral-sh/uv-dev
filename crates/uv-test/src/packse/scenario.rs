@@ -110,6 +110,18 @@ pub struct PackageMetadata {
     #[serde(default)]
     pub entry_points: Vec<String>,
 
+    /// Console script names and their Python entry points.
+    #[serde(default)]
+    pub scripts: BTreeMap<String, String>,
+
+    /// Import package name, when different from the normalized distribution name.
+    #[serde(default)]
+    pub module_name: Option<String>,
+
+    /// Contents of the generated package's `__init__.py`.
+    #[serde(default)]
+    pub init_py: Option<String>,
+
     /// Whether to produce a source distribution, and optionally its metadata.
     #[serde(
         default = "default_artifact",
@@ -343,6 +355,22 @@ fn default_python() -> PythonVersion {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_package_contents() -> Result<()> {
+        let metadata: PackageMetadata = toml::from_str(
+            r#"
+module_name = "import_name"
+init_py = "answer = 42\n"
+[scripts]
+example = "import_name:main"
+"#,
+        )?;
+        assert_eq!(metadata.module_name.as_deref(), Some("import_name"));
+        assert_eq!(metadata.init_py.as_deref(), Some("answer = 42\n"));
+        assert_eq!(metadata.scripts["example"], "import_name:main");
+        Ok(())
+    }
 
     #[test]
     fn parse_basic_scenario() {
