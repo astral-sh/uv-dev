@@ -54,7 +54,7 @@ const fn default_modify_path() -> bool {
 
 pub(super) const RECEIPT_NAME: &str = ".uv-receipt.json";
 
-fn legacy_receipt_path() -> Result<PathBuf> {
+pub(super) fn legacy_receipt_path() -> Result<PathBuf> {
     if std::env::var_os("AXOUPDATER_CONFIG_WORKING_DIR").is_some() {
         return Ok(std::env::current_dir()?.join("uv-receipt.json"));
     }
@@ -87,7 +87,7 @@ pub(super) fn executable_names() -> &'static [&'static str] {
 }
 
 impl InstallReceipt {
-    fn owned_binaries(&self) -> Result<Vec<String>> {
+    pub(super) fn owned_binaries(&self) -> Result<Vec<String>> {
         let mut binaries = Vec::new();
         for name in &self.binaries {
             let normalized = if cfg!(windows)
@@ -112,6 +112,16 @@ impl InstallReceipt {
             "Install receipt does not own the uv executable"
         );
         Ok(binaries)
+    }
+
+    fn owns_executable(&self, executable: &Path) -> bool {
+        let name = executable_names()[0];
+        uv_fs::is_same_file_allow_missing(&self.install_prefix.join(name), executable) == Some(true)
+            || (self.provider.source == "cargo-dist"
+                && uv_fs::is_same_file_allow_missing(
+                    &self.install_prefix.join("bin").join(name),
+                    executable,
+                ) == Some(true))
     }
 
     pub(super) fn new(install_prefix: PathBuf, modify_path: bool) -> Self {
@@ -203,6 +213,44 @@ impl InstallReceipt {
     fn write(&self, path: &Path) -> Result<()> {
         fs_err::create_dir_all(path.parent().context("Receipt has no parent directory")?)?;
         uv_fs::write_atomic_sync(path, serde_json::to_vec_pretty(self)?)?;
+        Ok(())
+    }
+}
+
+/// Serialize changes to the receipt shared by legacy standalone installations.
+pub(super) struct LockedLegacyReceipt {
+    path: PathBuf,
+    _lock: LockedFile,
+}
+
+impl LockedLegacyReceipt {
+    async fn acquire(path: &Path) -> Result<Self> {
+        fs_err::create_dir_all(path.parent().context("Receipt has no parent directory")?)?;
+        let lock = LockedFile::acquire(
+            path.with_extension("lock"),
+            LockedFileMode::Exclusive,
+            "legacy uv installation receipt",
+        )
+        .await?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            _lock: lock,
+        })
+    }
+
+    pub(super) async fn acquire_if_exists(path: &Path) -> Result<Option<Self>> {
+        if path.try_exists()? {
+            Ok(Some(Self::acquire(path).await?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub(super) fn remove_if_owned(&self, executable: &Path) -> Result<()> {
+        if InstallReceipt::read(&self.path).is_ok_and(|receipt| receipt.owns_executable(executable))
+        {
+            fs_err::remove_file(&self.path)?;
+        }
         Ok(())
     }
 }
