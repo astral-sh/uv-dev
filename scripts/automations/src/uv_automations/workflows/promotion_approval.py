@@ -173,6 +173,7 @@ class PrivateApprovalReceiptClaim:
         _require_private_source(self.approval.source)
         if (
             self.approval.kind != PromotionApprovalKind.LABELED
+            or self.approval.ready_event_id is None
             or not self.actor.is_human
             or self.actor.database_id != self.approval.actor_id
         ):
@@ -231,6 +232,8 @@ class PrivateApprovalReceipt:
     @property
     def reference(self) -> PrivateApprovalReference:
         approval = self.claim.approval
+        if approval.ready_event_id is None:
+            raise ValueError("Private approval receipt requires its readiness event")
         return PrivateApprovalReference(
             approval.source,
             approval.head,
@@ -505,6 +508,10 @@ def inspect_private_promotion(
                 )
             case PromotionApprovalKind.LABELED:
                 approval = select_private_approval(reader, source, head)
+                if approval.ready_event_id is None:
+                    raise PrivateApprovalUnavailable(
+                        ApprovalUnavailableReason.NO_READINESS
+                    )
                 return InspectedPrivatePromotion(
                     kind, approval.event_id, approval.ready_event_id
                 )
