@@ -15,6 +15,7 @@ use std::iter::Iterator;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::str::FromStr;
+use std::sync::LazyLock;
 use std::{env, io};
 use uv_python::downloads::ManagedPythonDownloadList;
 
@@ -44,6 +45,12 @@ use uv_static::EnvVars;
 static TEST_TIMESTAMP: &str = "2024-03-25T00:00:00Z";
 
 pub const DEFAULT_PYTHON_VERSION: &str = "3.12";
+
+fn default_packse_index_url() -> String {
+    static INDEX: LazyLock<packse::PackseServer> =
+        LazyLock::new(|| packse::PackseServer::new("packages/pip-install.toml"));
+    INDEX.index_url()
+}
 
 // The expected latest patch version for each Python minor version.
 const LATEST_PYTHON_3_15: &str = "3.15.0rc2";
@@ -224,6 +231,12 @@ impl TestContext {
     #[must_use]
     pub fn with_default_index(self, index: &str) -> Self {
         self.with_env(EnvVars::UV_INTERNAL__TEST_DEFAULT_INDEX, index)
+    }
+
+    /// Use the representative local package index.
+    #[must_use]
+    pub fn with_local_index(self) -> Self {
+        self.with_default_index(&default_packse_index_url())
     }
 
     /// Opt into the public PyPI service for tests of its real behavior.
