@@ -100,7 +100,7 @@ jobs:
     name: "Queue promotion of pull request #${{ inputs.pull_request }}"
     needs: prepare
     if: needs.prepare.outputs.queue != ''
-    runs-on: ubuntu-slim
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
     environment: automations
     timeout-minutes: 5
     permissions:
@@ -149,7 +149,7 @@ jobs:
     name: Check newly queued promotion
     needs: [prepare, queue]
     if: github.repository == 'astral-sh/uv-dev' && github.ref == 'refs/heads/main' && needs.queue.outputs.recorded == 'true'
-    runs-on: ubuntu-slim
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
     environment: automations
     timeout-minutes: 5
     permissions:
@@ -603,7 +603,7 @@ jobs:
     name: Check children of promoted pull request
     needs: promote
     if: github.repository == 'astral-sh/uv-dev' && github.ref == 'refs/heads/main' && needs.promote.outputs.closed == 'true'
-    runs-on: ubuntu-slim
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
     environment: automations
     timeout-minutes: 10
     permissions:
