@@ -37,7 +37,7 @@ env:
 jobs:
   labels:
     if: github.repository == 'astral-sh/uv'
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
     environment: automations
     timeout-minutes: 15
     permissions:
@@ -115,7 +115,7 @@ jobs:
   validate:
     needs: labels
     if: needs.labels.outputs.result != ''
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
     permissions:
       contents: read
     outputs:
@@ -158,7 +158,7 @@ jobs:
     if: >-
       needs.validate.outputs.labels != '' &&
       fromJSON(needs.validate.outputs.labels)[0] != null
-    runs-on: ubuntu-slim
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
     environment: automations
     timeout-minutes: 5
     permissions:
