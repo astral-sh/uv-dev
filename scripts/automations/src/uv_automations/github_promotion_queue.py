@@ -13,7 +13,6 @@ from uv_automations.promotion_models import (
     UV_REPOSITORY,
     BranchRevision,
     PromotionApprovalClaim,
-    PromotionApprovalKind,
 )
 from uv_automations.workflows.promotion_queue import (
     QueuedPromotion,
@@ -42,11 +41,7 @@ class PromotionQueueGitHub(PromotionGitHub):
             raise ValueError("The new promotion queue record was edited")
 
     def dispatch_promotion(self, approval: PromotionApprovalClaim) -> WorkflowDispatch:
-        if (
-            approval.source.repository != UV_DEV_REPOSITORY
-            or approval.kind != PromotionApprovalKind.READY_FOR_REVIEW
-            or approval.ready_event_id != approval.event_id
-        ):
+        if approval.source.repository != UV_DEV_REPOSITORY:
             raise ValueError("Unexpected automatic promotion approval")
         return self.dispatch_main_workflow(
             approval.source.repository,

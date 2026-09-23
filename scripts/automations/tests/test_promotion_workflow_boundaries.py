@@ -59,7 +59,7 @@ class PromotionWorkflowBoundaryTests(unittest.TestCase):
         self.assertNotIn("contents: write", worker)
 
     def test_cross_repository_dispatch_has_a_distinct_reusable_rule(self) -> None:
-        policy = json.loads((ROOT / ".github/ost-simple-sts.json").read_text())
+        policy = json.loads((ROOT / ".github/secure-token-service.json").read_text())
         rules = [
             rule
             for rule in policy["rules"]

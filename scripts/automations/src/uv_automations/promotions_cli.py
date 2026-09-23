@@ -20,8 +20,7 @@ from uv_automations.promotion_models import (
     MergedPromotedParent,
     PromotionScope,
     UnrecordedMergedParent,
-    current_ready_approval,
-    ready_approval,
+    current_promotion_approval,
 )
 from uv_automations.workflows.promotion import (
     AlreadyPublished,
@@ -286,6 +285,7 @@ def _write_plan(plan: PromotionPlan, output: Path, summary: Path) -> None:
         write_output(output, name, value)
     if plan.approval is not None:
         write_output(output, "approval_id", str(plan.approval.event_id))
+        write_output(output, "approval_event", plan.approval.kind.value)
         write_output(output, "promoter", plan.approval.actor.login)
 
     match plan:
@@ -407,12 +407,13 @@ def run(command: PromotionCommand) -> None:
             )
             return
         case ReadPromotionApproval(request=request):
-            events = PromotionGitHub().list_promotion_events(request.source)
-            approval = (
-                current_ready_approval(request.source, request.head, events)
-                if request.source.repository == UV_DEV_REPOSITORY
-                and request.approval_id is not None
-                else ready_approval(request.source, request.head, events)
+            reader = PromotionGitHub()
+            source = reader.get_promotion_pull_request(request.source)
+            approval = current_promotion_approval(
+                source,
+                request.head,
+                reader.list_promotion_events(request.source),
+                exact_readiness=request.approval_id is not None,
             )
             if approval is not None and (
                 request.approval_id is None or request.approval_id == approval.event_id

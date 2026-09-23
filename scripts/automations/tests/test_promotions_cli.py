@@ -6,12 +6,20 @@ from unittest.mock import patch
 
 from uv_automations import cli, promotions_cli
 from uv_automations.github_promotion import PromotionGitHub
-from uv_automations.models import ActorKind, CommitSha, Timestamp
+from uv_automations.models import (
+    ActorKind,
+    CommitSha,
+    PullRequestDetails,
+    PullRequestRevision,
+    PullRequestState,
+    Timestamp,
+)
 from uv_automations.promotion_models import (
     AUTOMATIONS_BOT_ID,
     UV_DEV_REPOSITORY,
     ConvertedToDraftEvent,
     PromotionActor,
+    PromotionPullRequest,
     PromotionScope,
     ReadyForReviewEvent,
 )
@@ -23,6 +31,22 @@ TIME = Timestamp.parse("2026-09-09T12:00:00Z")
 HUMAN = PromotionActor("zanieb", 101, ActorKind.USER)
 BOT = PromotionActor("astral-automations-bot[bot]", AUTOMATIONS_BOT_ID, ActorKind.BOT)
 READY = ReadyForReviewEvent(1000, HUMAN, TIME)
+SOURCE_PR = PromotionPullRequest(
+    SOURCE,
+    PullRequestDetails(
+        SOURCE.reference,
+        PullRequestState.OPEN,
+        f"https://github.com/{SOURCE.repository.name}/pull/{SOURCE.number}",
+        PullRequestRevision(SOURCE.repository, "main", HEAD),
+        PullRequestRevision(SOURCE.repository, "feature", HEAD),
+        (),
+    ),
+    False,
+    HUMAN,
+    "Title",
+    "",
+    None,
+)
 REVOKED = (
     READY,
     ConvertedToDraftEvent(1001, HUMAN, TIME),
@@ -61,6 +85,11 @@ class PromotionCliTests(unittest.TestCase):
                     request=PromotionRequest(SOURCE, HEAD, approval_id)
                 )
                 with (
+                    patch.object(
+                        PromotionGitHub,
+                        "get_promotion_pull_request",
+                        return_value=SOURCE_PR,
+                    ),
                     patch.object(
                         PromotionGitHub, "list_promotion_events", return_value=REVOKED
                     ),

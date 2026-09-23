@@ -15,20 +15,16 @@ from uv_automations.promotion_models import (
     UV_REPOSITORY,
     UV_SECURITY_REPOSITORY,
     BranchRevision,
-    LabelAddedEvent,
     MergedPromotedParent,
     PromotionApproval,
     PromotionApprovalClaim,
     PromotionApprovalKind,
-    PromotionEvent,
     PromotionPullRequest,
     PromotionScope,
     PullRequestSelection,
     UnrecordedMergedParent,
-    current_ready_approval,
-    latest_label_event,
-    latest_ready_event,
-    ready_approval,
+    current_promotion_approval,
+    promotion_is_eligible,
     require_promotion_source,
 )
 
@@ -59,13 +55,11 @@ class PromotionRequest:
                     raise ValueError("Readiness request has a different event ID")
                 return
             case PromotionApprovalKind.LABELED:
-                if (
-                    self.source.repository != UV_SECURITY_REPOSITORY
-                    or self.approval_id is None
-                    or self.ready_event_id is None
-                    or self.ready_event_id >= self.approval_id
+                if self.approval_id is None or (
+                    self.ready_event_id is not None
+                    and self.ready_event_id >= self.approval_id
                 ):
-                    raise ValueError("Incomplete private publication approval")
+                    raise ValueError("Incomplete label approval")
                 return
         assert_never(self.kind)
 
@@ -84,8 +78,7 @@ def _branch(pull_request: PromotionPullRequest, *, head: bool) -> BranchRevision
 def _require_ready(source: PromotionPullRequest, approval: PromotionApproval) -> None:
     if (
         source.scope != approval.source
-        or not source.is_open
-        or source.draft
+        or not promotion_is_eligible(source, approval.kind)
         or not source.same_repository
         or source.details.head.sha != approval.head
     ):
@@ -330,36 +323,6 @@ type PromotionPlan = (
 )
 
 
-def _current_approval(
-    source: PromotionPullRequest,
-    head: CommitSha,
-    events: tuple[PromotionEvent, ...],
-    kind: PromotionApprovalKind,
-    *,
-    exact_readiness: bool = False,
-) -> PromotionApproval | None:
-    match kind:
-        case PromotionApprovalKind.READY_FOR_REVIEW:
-            if exact_readiness:
-                return current_ready_approval(source.scope, head, events)
-            return ready_approval(source.scope, head, events)
-        case PromotionApprovalKind.LABELED:
-            readiness = latest_ready_event(events)
-            label = latest_label_event(events, PRIVATE_PUBLISH_LABEL)
-            if (
-                source.scope.repository != UV_SECURITY_REPOSITORY
-                or PRIVATE_PUBLISH_LABEL not in source.details.labels
-                or readiness is None
-                or not isinstance(label, LabelAddedEvent)
-                or label.actor is None
-                or not label.actor.is_human
-                or label.identifier <= readiness.identifier
-            ):
-                return None
-            return PromotionApproval(source.scope, head, label, readiness.identifier)
-    assert_never(kind)
-
-
 def _publish_plan(
     upstream_reader: PromotionReader,
     source: PromotionPullRequest,
@@ -453,15 +416,17 @@ def plan_promotion(
     source = reader.get_promotion_pull_request(request.source)
     if source.scope != request.source:
         raise ValueError("Promotion reader returned a different source pull request")
-    if not source.is_open or source.draft:
+    if not source.is_open or (
+        source.draft and PRIVATE_PUBLISH_LABEL not in source.details.labels
+    ):
         return Stale(source, request.head, "The source is no longer ready")
     if not source.same_repository:
         return Rejected(source, "The source uses a different head repository")
-    current_approval = _current_approval(
+    current_approval = current_promotion_approval(
         source,
         request.head,
         reader.list_promotion_events(request.source),
-        request.kind,
+        ready_event_id=request.ready_event_id,
         exact_readiness=(
             request.source.repository == UV_DEV_REPOSITORY
             and (request.approval_id is not None or approval is not None)
@@ -473,6 +438,10 @@ def plan_promotion(
         return Rejected(source, "The pull request has no current human approval")
     if (
         (approval is not None and not approval.claim.matches(current_approval))
+        or (
+            request.approval_kind is not None
+            and request.approval_kind != current_approval.kind
+        )
         or (
             request.approval_id is not None
             and request.approval_id != current_approval.event_id

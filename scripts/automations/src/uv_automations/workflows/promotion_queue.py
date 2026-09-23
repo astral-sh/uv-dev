@@ -15,6 +15,7 @@ from uv_automations.github_promotion import (
 from uv_automations.json import as_object, as_string, loads, require_keys
 from uv_automations.models import CommitSha, RepositoryIdentity
 from uv_automations.promotion_models import (
+    PROMOTION_LABEL,
     UV_DEV_REPOSITORY,
     UV_REPOSITORY,
     BranchRevision,
@@ -23,14 +24,14 @@ from uv_automations.promotion_models import (
     OpenPromotedParent,
     PromotionApproval,
     PromotionApprovalClaim,
-    PromotionApprovalKind,
     PromotionComment,
     PromotionEvent,
     PromotionPullRequest,
     PromotionScope,
     PullRequestSelection,
     UneditedPromotionComment,
-    current_ready_approval,
+    current_promotion_approval,
+    promotion_is_eligible,
 )
 
 QUEUE_MARKER = "<!-- uv-automations:promotion-queue:v1 "
@@ -100,8 +101,6 @@ class QueuedPromotion:
         source = self.approval.source
         if (
             source.repository != UV_DEV_REPOSITORY
-            or self.approval.kind != PromotionApprovalKind.READY_FOR_REVIEW
-            or self.approval.ready_event_id != self.approval.event_id
             or self.base.repository != source.repository
             or self.head.repository != source.repository
             or self.head.sha != self.approval.head
@@ -316,8 +315,7 @@ type ReplayOutcome = DispatchedReplay | SkippedReplay
 def _source_matches(source: PromotionPullRequest, queued: QueuedPromotion) -> bool:
     return (
         source.scope == queued.source
-        and source.is_open
-        and not source.draft
+        and promotion_is_eligible(source, queued.approval.kind)
         and source.same_repository
         and source.details.base.repository == queued.base.repository
         and source.details.base.ref == queued.base.ref
@@ -329,13 +327,17 @@ def _source_matches(source: PromotionPullRequest, queued: QueuedPromotion) -> bo
 
 
 def _current_queue_approval(
-    reader: QueueRecordReader, source: PromotionScope, head: CommitSha
+    reader: QueueRecordReader, source: PromotionPullRequest, head: CommitSha
 ) -> PromotionApproval | None:
-    return current_ready_approval(source, head, reader.list_promotion_events(source))
+    return current_promotion_approval(
+        source, head, reader.list_promotion_events(source.scope), exact_readiness=True
+    )
 
 
 def _approval_matches(reader: QueueRecordReader, queued: QueuedPromotion) -> bool:
-    approval = _current_queue_approval(reader, queued.source, queued.approval.head)
+    approval = _current_queue_approval(
+        reader, reader.get_promotion_pull_request(queued.source), queued.approval.head
+    )
     return approval is not None and queued.approval.matches(approval)
 
 
@@ -404,7 +406,7 @@ def _queue_record_for_approval(
 def current_queued_promotion(
     reader: QueueRecordReader, source: PromotionPullRequest
 ) -> QueuedPromotion | SkippedReplay:
-    approval = _current_queue_approval(reader, source.scope, source.details.head.sha)
+    approval = _current_queue_approval(reader, source, source.details.head.sha)
     current = _queue_record_for_approval(reader, source.scope, approval)
     if isinstance(current, SkippedReplay):
         return current
@@ -419,7 +421,7 @@ def record_queue(
     reader: QueueRecordReader, writer: QueueWriter, queued: QueuedPromotion
 ) -> QueueRecordOutcome:
     source = reader.get_promotion_pull_request(queued.source)
-    approval = _current_queue_approval(reader, queued.source, queued.approval.head)
+    approval = _current_queue_approval(reader, source, queued.approval.head)
     if (
         not _source_matches(source, queued)
         or approval is None
@@ -589,7 +591,7 @@ def replay_queued_promotions(
     outcomes: list[ReplayOutcome] = []
     for source in reader.list_pull_requests(UV_DEV_REPOSITORY, base=base):
         if (
-            source.draft
+            (source.draft and PROMOTION_LABEL not in source.details.labels)
             or not source.same_repository
             or source.details.base.ref == "main"
         ):
