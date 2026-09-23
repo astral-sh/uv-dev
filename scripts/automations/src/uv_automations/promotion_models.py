@@ -448,6 +448,30 @@ def current_ready_approval(
     assert_never(latest)
 
 
+def recovered_ready_approval(
+    scope: PromotionScope, head: CommitSha, events: tuple[PromotionEvent, ...]
+) -> PromotionApproval | None:
+    """Recognize the readiness immediately before the automation returned a PR to draft."""
+    transitions = tuple(
+        event
+        for event in events
+        if isinstance(event, (ReadyForReviewEvent, ConvertedToDraftEvent))
+    )
+    if not transitions:
+        return None
+    latest = max(transitions, key=lambda event: event.identifier)
+    if (
+        isinstance(latest, ConvertedToDraftEvent)
+        and latest.actor is not None
+        and latest.actor.kind == ActorKind.BOT
+        and latest.actor.database_id == AUTOMATIONS_BOT_ID
+    ):
+        return current_ready_approval(
+            scope, head, tuple(event for event in events if event != latest)
+        )
+    return None
+
+
 def promotion_is_eligible(
     source: PromotionPullRequest, kind: PromotionApprovalKind
 ) -> bool:
@@ -467,6 +491,7 @@ def current_promotion_approval(
     events: tuple[PromotionEvent, ...],
     *,
     exact_readiness: bool = False,
+    recovered_draft: bool = False,
     ready_event_id: int | None = None,
 ) -> PromotionApproval | None:
     """Select the latest current human promotion event for either source repository."""
@@ -477,6 +502,8 @@ def current_promotion_approval(
             if exact_readiness
             else ready_approval(source.scope, head, events)
         )
+    elif source.scope.repository == UV_DEV_REPOSITORY and recovered_draft:
+        approval = recovered_ready_approval(source.scope, head, events)
     label = latest_label_event(events, PROMOTION_LABEL)
     if (
         PROMOTION_LABEL in source.details.labels

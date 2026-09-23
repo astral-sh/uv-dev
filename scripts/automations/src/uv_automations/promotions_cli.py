@@ -76,6 +76,7 @@ class PreparePromotion:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ReadPromotionApproval:
     request: PromotionRequest
+    recovered_draft: bool = False
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -169,6 +170,7 @@ def add_commands(parser: argparse.ArgumentParser) -> None:
     _add_source(approval)
     approval.add_argument("--expected-head", type=CommitSha, required=True)
     approval.add_argument("--approval-id", type=_optional_number)
+    approval.add_argument("--recovered-draft", action="store_true")
 
     record = commands.add_parser("record-queue")
     record.set_defaults(command=PromotionCommandKind.RECORD_QUEUE)
@@ -221,6 +223,7 @@ def parse_command(parsed: argparse.Namespace) -> PromotionCommand:
                 request=PromotionRequest(
                     _scope(parsed), parsed.expected_head, parsed.approval_id
                 ),
+                recovered_draft=parsed.recovered_draft,
             )
         case PromotionCommandKind.RECORD_QUEUE:
             return RecordPromotionQueue(
@@ -406,7 +409,7 @@ def run(command: PromotionCommand) -> None:
                 command.summary,
             )
             return
-        case ReadPromotionApproval(request=request):
+        case ReadPromotionApproval(request=request, recovered_draft=recovered_draft):
             reader = PromotionGitHub()
             source = reader.get_promotion_pull_request(request.source)
             approval = current_promotion_approval(
@@ -414,6 +417,7 @@ def run(command: PromotionCommand) -> None:
                 request.head,
                 reader.list_promotion_events(request.source),
                 exact_readiness=request.approval_id is not None,
+                recovered_draft=recovered_draft,
             )
             if approval is not None and (
                 request.approval_id is None or request.approval_id == approval.event_id
