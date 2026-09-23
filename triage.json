@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 16779,
+        "title": "`uv add` hangs forever for complex pyproject",
+        "url": "https://github.com/astral-sh/uv/issues/16779",
+        "state": "closed",
+        "reason": "Closest historical match: `uv lock` on a single project with 26 mutually exclusive extras completed resolution quickly but then effectively hung while processing conflict-generated markers. Maintainers traced it to marker algebra."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19538,
+        "title": "Avoid conflict set combinatorial explosion",
+        "url": "https://github.com/astral-sh/uv/pull/19538",
+        "state": "merged",
+        "reason": "Fixed astral-sh/uv#16779 by memoizing `without_extras` and added a timeout regression test with 29 conflicts. The new report shows the same user-visible scaling family on uv 0.12.17, but its empty conflict extras plus shared base dependency are a different trigger, so the same internal mechanism is not yet established."
+      },
+      {
+        "kind": "issue",
+        "number": 18317,
+        "title": "Lock file size scales linearly with conflict declarations in workspace members",
+        "url": "https://github.com/astral-sh/uv/issues/18317",
+        "state": "open",
+        "reason": "Related open conflicts-scaling report whose comments also measure worsening lock time and note exponential scenario growth. It concerns repeated declarations across workspace members and lockfile bloat, unlike this single-project, distinct-extra runtime reproduction."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21399,
+        "title": "Avoid tracking unrelated extras in conflict simplification",
+        "url": "https://github.com/astral-sh/uv/pull/21399",
+        "state": "merged",
+        "reason": "Recent performance fix for conflict-marker simplification in large workspaces. It intentionally continues tracking extras that participate in conflicts, which are precisely the extras in the new reproduction, so it is adjacent rather than a fix for this case."
+      }
+    ],
+    "search_scope": "Compared literal searches for conflicts, lock time, hangs, large conflict sets, many extras, and exponential behavior with conceptual searches for universal-resolution forks, conflict-marker simplification, marker algebra, and resolver performance. Searched open and closed issues and open, closed, and merged pull requests, then inspected candidate comments and linked fixes. astral-sh/uv#17990 was ruled out because it requests independent resolution targets and environment switching rather than tracking current lock-time scaling; astral-sh/uv#15101 was ruled out because it targets marker-edge simplification and impossible lockfile markers, not large-conflict-set runtime. General slow-resolution reports such as astral-sh/uv#10438 and astral-sh/uv#13698 had different causes."
+  },
+  "type": "bug",
+  "type_reason": "The supplied minimal reproduction and timings establish incorrect, effectively unusable `uv lock` performance as the number of conflicted extras grows. astral-sh/uv#16779 and astral-sh/uv#19538 show that a combinatorial large-conflict-set hang was previously treated and fixed as a bug; the recurrence on uv 0.12.17 should therefore remain a bug, not a duplicate of the closed report. The different trigger means the evidence does not yet prove that the earlier `without_extras` mechanism itself regressed, and no open issue tracks this exact single-project case.",
+  "summary": "The closest precedent is astral-sh/uv#16779, fixed by astral-sh/uv#19538, where a large single conflict set caused post-resolution marker processing to hang. The new report reproduces the same performance family on uv 0.12.17 with a distinct dependency shape. astral-sh/uv#18317 and astral-sh/uv#21399 cover related workspace/conflict scaling but not this exact case.",
+  "draft_response": "This is a bug, and the reproduction is sufficient to investigate it. astral-sh/uv#16779 previously exposed a combinatorial hang from a large conflict set, and astral-sh/uv#19538 fixed one marker-algebra path. Your reproduction shows that unusable scaling remains on uv 0.12.17 with a different shape: conflicted extras in a single project plus a shared base dependency with many candidate releases. astral-sh/uv#21399 does not cover this case because it removes unrelated extras from conflict simplification while continuing to track extras that participate in conflicts. The next step is to profile this minimal case to identify the remaining hotspot and add a targeted performance regression test."
+}
