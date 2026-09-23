@@ -21,6 +21,22 @@ from uv_automations.models import (
 )
 
 MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
+DISPATCH_API_VERSION = "2026-03-10"
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowDispatch:
+    repository: RepositoryIdentity
+    identifier: int
+
+    def __post_init__(self) -> None:
+        as_positive_integer(self.identifier)
+
+    @property
+    def url(self) -> str:
+        return (
+            f"https://github.com/{self.repository.name}/actions/runs/{self.identifier}"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +223,48 @@ def decode_artifact(value: object, source: ActionsRun, name: str) -> ArtifactIde
 
 
 class ActionsGitHub(GitHub):
+    def dispatch_main_workflow(
+        self,
+        repository: RepositoryIdentity,
+        workflow: str,
+        inputs: dict[str, str],
+    ) -> WorkflowDispatch:
+        """Dispatch a named trusted workflow and retain its returned run identity."""
+        if re.fullmatch(r"[A-Za-z0-9_-]+\.ya?ml", workflow) is None:
+            raise ValueError("Expected a workflow file name")
+        if len(inputs) > 25 or any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in inputs.items()
+        ):
+            raise ValueError("Invalid workflow dispatch inputs")
+        if _repository(self._api("GET", f"repos/{repository.name}")) != repository:
+            raise ValueError("The workflow dispatch repository identity changed")
+        data = as_object(
+            self._command(
+                [
+                    "api",
+                    "--method",
+                    "POST",
+                    "--header",
+                    f"X-GitHub-Api-Version: {DISPATCH_API_VERSION}",
+                    f"repos/{repository.name}/actions/workflows/{quote(workflow, safe='')}/dispatches",
+                    "--input",
+                    "-",
+                ],
+                payload={"ref": "main", "inputs": inputs},
+            )
+        )
+        result = WorkflowDispatch(
+            repository, as_positive_integer(data["workflow_run_id"])
+        )
+        if (
+            as_string(data["html_url"]) != result.url
+            or as_string(data["run_url"])
+            != f"https://api.github.com/repos/{repository.name}/actions/runs/{result.identifier}"
+        ):
+            raise ValueError("GitHub returned a different workflow dispatch")
+        return result
+
     def list_successful_workflow_runs(
         self, repository: RepositoryName, workflow: str, *, limit: int
     ) -> tuple[WorkflowRun, ...]:
