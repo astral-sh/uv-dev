@@ -68,12 +68,17 @@ jobs:
 
       - name: "Install secret service"
         run: |
-          # Bound package download attempts.
+          # Try the next configured mirror after the first failed download, rather
+          # than exhausting the job's time limit retrying a failing mirror.
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then
+            cat /etc/apt/apt-mirrors.txt
+          fi
           printf '%s\n' \
             'Acquire::Retries "0";' \
             'Acquire::http::Timeout "10";' \
             'Acquire::https::Timeout "10";' \
             | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
+          # Refresh the image's package lists to avoid requesting obsolete versions.
           sudo apt update
           sudo apt install -y --no-install-recommends dbus-daemon gnome-keyring
 
@@ -82,6 +87,8 @@ jobs:
         # this will create a new login keyring and unlock it
         # the login password doesn't matter, but the keyring must be unlocked for the tests to work
         run: |
+          # Namespace's containerized runners have no login session bus. Start one
+          # for gnome-keyring and share its address with the secret-service tests.
           DBUS_SESSION_BUS_ADDRESS="$(dbus-daemon --session --fork --print-address=1)"
           export DBUS_SESSION_BUS_ADDRESS
           echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
@@ -102,16 +109,28 @@ jobs:
           sudo mount -t tmpfs -o size=256m tmpfs /tmpfs
           sudo chown "$(id -u):$(id -g)" /tmpfs
 
-      - name: "Create ext4 filesystem (low hardlink limit)"
+      - name: "Create filesystem with a low hardlink limit"
         run: |
-          truncate -s 128M /tmp/ext4.img
-          mkfs.ext4 -F /tmp/ext4.img
-          sudo mkdir /ext4
-          sudo mount -o loop /tmp/ext4.img /ext4
-          sudo chown "$(id -u):$(id -g)" /ext4
+          # Prefer minix for its lower hardlink limit. Namespace kernels may lack
+          # minix support, so fall back to ext4 when it cannot be loaded.
+          if grep -qw minix /proc/filesystems || sudo modprobe minix; then
+            filesystem=minix
+            truncate -s 16M /tmp/minix.img
+            mkfs.minix /tmp/minix.img
+          else
+            filesystem=ext4
+            truncate -s 128M /tmp/ext4.img
+            mkfs.ext4 -F /tmp/ext4.img
+          fi
+          sudo mkdir "/$filesystem"
+          sudo mount -o loop "/tmp/$filesystem.img" "/$filesystem"
+          sudo chown "$(id -u):$(id -g)" "/$filesystem"
+          echo "UV_INTERNAL__TEST_LOWLINKS_FS=/$filesystem" >> "$GITHUB_ENV"
 
       - name: "Create temporary test directory"
         run: |
+          # Keep test scratch I/O in memory with a bounded tmpfs. TMPDIR uses this
+          # mount independently of the filesystems used by specific tests.
           mkdir -p /tmp/uv-tests
           sudo mount -t tmpfs -o size=16G,mode=1777 tmpfs /tmp/uv-tests
 
@@ -125,7 +144,6 @@ jobs:
           UV_INTERNAL__TEST_COW_FS: /btrfs
           UV_INTERNAL__TEST_NOCOW_FS: /tmpfs
           UV_INTERNAL__TEST_ALT_FS: /tmpfs
-          UV_INTERNAL__TEST_LOWLINKS_FS: /ext4
           # Write pending snapshots to a separate directory for artifact upload
           INSTA_UPDATE: new
           INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
