@@ -6957,6 +6957,7 @@ dependencies = [
  "arcstr",
  "astral-version-ranges",
  "boxcar",
+ "bumpalo",
  "hashbrown 0.17.1",
  "indexmap",
  "insta",
