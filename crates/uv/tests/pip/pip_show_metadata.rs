@@ -31,6 +31,215 @@ fn write_dist_info(target: &ChildPath, name: &str, metadata: impl AsRef<[u8]>) -
 }
 
 #[test]
+fn show_duplicate_distributions_keep_requirements() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let target = context.temp_dir.child("target");
+    for (directory, metadata) in [
+        (
+            "alpha_pkg-1.0.dist-info",
+            "Metadata-Version: 2.1\nName: Alpha.Pkg\nVersion: 1.0\nRequires-Dist: bravo\nRequires-Dist: alpha-pkg\n",
+        ),
+        (
+            "alpha_pkg-2.0.dist-info",
+            "Metadata-Version: 2.1\nName: alpha-pkg\nVersion: 2.0\nRequires-Dist: charlie\nRequires-Dist: bravo; python_version < '2'\n",
+        ),
+        (
+            "bravo-1.0.dist-info",
+            "Metadata-Version: 2.1\nName: bravo\nVersion: 1.0\n",
+        ),
+        (
+            "charlie-1.0.dist-info",
+            "Metadata-Version: 2.1\nName: charlie\nVersion: 1.0\n",
+        ),
+        (
+            "consumer-1.0.dist-info",
+            "Metadata-Version: 2.1\nName: consumer\nVersion: 1.0\nRequires-Dist: alpha-pkg\n",
+        ),
+        (
+            "consumer-2.0.dist-info",
+            "Metadata-Version: 2.1\nName: consumer\nVersion: 2.0\nRequires-Dist: Alpha.Pkg\n",
+        ),
+    ] {
+        let distribution = target.child(directory);
+        distribution.create_dir_all()?;
+        distribution.child("METADATA").write_str(metadata)?;
+    }
+
+    uv_snapshot!(context.filters(), show(&context, target.path()).arg("Alpha.Pkg"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Name: alpha-pkg
+    Version: 1.0
+    Location: [TEMP_DIR]/target
+    Requires: alpha-pkg, bravo
+    Required-by: consumer
+    ---
+    Name: alpha-pkg
+    Version: 2.0
+    Location: [TEMP_DIR]/target
+    Requires: charlie
+    Required-by: consumer
+    ");
+
+    uv_snapshot!(context.filters(), show(&context, target.path())
+        .arg("alpha-pkg")
+        .arg("bravo")
+        .arg("charlie"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Name: alpha-pkg
+    Version: 1.0
+    Location: [TEMP_DIR]/target
+    Requires: alpha-pkg, bravo
+    Required-by: consumer
+    ---
+    Name: alpha-pkg
+    Version: 2.0
+    Location: [TEMP_DIR]/target
+    Requires: charlie
+    Required-by: consumer
+    ---
+    Name: bravo
+    Version: 1.0
+    Location: [TEMP_DIR]/target
+    Requires:
+    Required-by: alpha-pkg
+    ---
+    Name: charlie
+    Version: 1.0
+    Location: [TEMP_DIR]/target
+    Requires:
+    Required-by: alpha-pkg
+    ");
+    Ok(())
+}
+
+#[test]
+fn show_required_by_includes_duplicate_distributions() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let target = context.temp_dir.child("target");
+    for (directory, metadata) in [
+        (
+            "consumer-1.0.dist-info",
+            "Metadata-Version: 2.1\nName: consumer\nVersion: 1.0\nRequires-Dist: bravo\n",
+        ),
+        (
+            "consumer-2.0.dist-info",
+            "Metadata-Version: 2.1\nName: consumer\nVersion: 2.0\nRequires-Dist: charlie\n",
+        ),
+        (
+            "zeta-1.0.dist-info",
+            "Metadata-Version: 2.1\nName: zeta\nVersion: 1.0\nRequires-Dist: bravo\n",
+        ),
+        (
+            "zeta-2.0.dist-info",
+            "Metadata-Version: 2.1\nName: zeta\nVersion: 2.0\nRequires-Dist: bravo\n",
+        ),
+        (
+            "bravo-1.0.dist-info",
+            "Metadata-Version: 2.1\nName: bravo\nVersion: 1.0\n",
+        ),
+        (
+            "charlie-1.0.dist-info",
+            "Metadata-Version: 2.1\nName: charlie\nVersion: 1.0\n",
+        ),
+    ] {
+        let distribution = target.child(directory);
+        distribution.create_dir_all()?;
+        distribution.child("METADATA").write_str(metadata)?;
+    }
+
+    uv_snapshot!(context.filters(), show(&context, target.path()).arg("bravo"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Name: bravo
+    Version: 1.0
+    Location: [TEMP_DIR]/target
+    Requires:
+    Required-by: consumer, zeta
+    ");
+
+    uv_snapshot!(context.filters(), show(&context, target.path())
+        .arg("bravo")
+        .arg("charlie"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Name: bravo
+    Version: 1.0
+    Location: [TEMP_DIR]/target
+    Requires:
+    Required-by: consumer, zeta
+    ---
+    Name: charlie
+    Version: 1.0
+    Location: [TEMP_DIR]/target
+    Requires:
+    Required-by: consumer
+    ");
+    Ok(())
+}
+
+#[test]
+fn show_duplicate_metadata_is_best_effort_per_distribution() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let target = context.temp_dir.child("target");
+    for (directory, metadata) in [
+        (
+            "alpha-1.0.dist-info",
+            "Metadata-Version: 2.1\nName: alpha\nVersion: 1.0\nRequires-Dist: !\n",
+        ),
+        (
+            "alpha-3.0.dist-info",
+            "Metadata-Version: 2.1\nName: alpha\nVersion: 3.0\nRequires-Dist: bravo\n",
+        ),
+    ] {
+        let distribution = target.child(directory);
+        distribution.create_dir_all()?;
+        distribution.child("METADATA").write_str(metadata)?;
+    }
+    target.child("alpha-2.0.dist-info").create_dir_all()?;
+
+    uv_snapshot!(context.filters(), show(&context, target.path()).arg("alpha"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Name: alpha
+    Version: 1.0
+    Location: [TEMP_DIR]/target
+    ---
+    Name: alpha
+    Version: 2.0
+    Location: [TEMP_DIR]/target
+    ---
+    Name: alpha
+    Version: 3.0
+    Location: [TEMP_DIR]/target
+    Requires: bravo
+    Required-by:
+    ");
+    Ok(())
+}
+
+#[test]
+fn show_duplicate_reverse_dependency_preserves_read_errors() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let target = context.temp_dir.child("target");
+    write_dist_info(
+        &target,
+        "bravo",
+        "Metadata-Version: 2.1\nName: bravo\nVersion: 1.0.0\n",
+    )?;
+    write_dist_info(
+        &target,
+        "consumer",
+        "Metadata-Version: 2.1\nName: consumer\nVersion: 1.0.0\nRequires-Dist: bravo\n",
+    )?;
+    let metadata = target.child("consumer-2.0.0.dist-info/METADATA");
+    metadata.create_dir_all()?;
+    assert_metadata_read_error(&context, target.path(), "bravo", metadata.path())?;
+    Ok(())
+}
+
+#[test]
 fn show_descriptive_metadata() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let target = context.temp_dir.child("target");
