@@ -18,6 +18,7 @@ from uv_automations.artifacts import CommitRange
 from uv_automations.comment_models import (
     MAX_ACTIONS,
     MAX_COLLECTION_PAGES,
+    MAX_CONTINUATIONS,
     ActorKind,
     AuthorAssociation,
     CollectionCheckpoint,
@@ -203,6 +204,9 @@ def feedback_checkpoint(
         result=artifact(FeedbackArtifactKind.RESULT, source, 303),
         session=artifact(FeedbackArtifactKind.SESSION, source, 301),
         session_id=SESSION_ID,
+        processed_targets=1,
+        continuations_remaining=MAX_CONTINUATIONS,
+        continuation_key=None,
     )
 
 
@@ -410,12 +414,14 @@ class CommentCollectionTests(unittest.TestCase):
         github = FakeGitHub(conversation=(edited,))
         first = collect_comments(github, SCOPE, previous=previous, through=LATER)
         self.assertEqual(first.targets, ())
+        self.assertEqual(first.processed_targets, 0)
         self.assertEqual(first.conversation, ())
         self.assertEqual(first.checkpoint.pending, (edited.revision,))
         second = collect_comments(
             github, SCOPE, previous=first.checkpoint, through=FUTURE
         )
         self.assertEqual(second.targets, (edited.revision,))
+        self.assertEqual(second.processed_targets, 1)
         self.assertEqual(second.checkpoint.pending, ())
         third = collect_comments(
             github,
@@ -439,12 +445,14 @@ class CommentCollectionTests(unittest.TestCase):
         )
         first = collect_comments(github, SCOPE, previous=None, through=LATER)
         self.assertEqual(first.targets, ())
+        self.assertEqual(first.processed_targets, 0)
         self.assertEqual(first.threads, ())
         self.assertEqual(first.checkpoint.pending, (newer.revision,))
         second = collect_comments(
             github, SCOPE, previous=first.checkpoint, through=FUTURE
         )
         self.assertEqual(second.targets, (newer.revision,))
+        self.assertEqual(second.processed_targets, 1)
         self.assertEqual(second.checkpoint.pending, ())
 
     def test_automation_replies_remain_typed_but_are_not_agent_context(self) -> None:
@@ -474,11 +482,13 @@ class CommentCollectionTests(unittest.TestCase):
         )
         first = collect_comments(github, SCOPE, previous=None, through=LATER)
         self.assertEqual(len(first.targets), MAX_ACTIONS)
+        self.assertEqual(first.processed_targets, MAX_ACTIONS)
         self.assertEqual(len(first.checkpoint.pending), 1)
         second = collect_comments(
             github, SCOPE, previous=first.checkpoint, through=FUTURE
         )
         self.assertEqual(len(second.targets), 1)
+        self.assertEqual(second.processed_targets, 1)
         self.assertEqual(second.checkpoint.pending, ())
         self.assertEqual(
             {revision.target for revision in (*first.targets, *second.targets)},
@@ -781,6 +791,9 @@ class CommentPublicationTests(unittest.TestCase):
             targets=(conversation().revision, thread().revision),
             session_id=None,
             continuation=None,
+            processed_targets=2,
+            continuations_remaining=MAX_CONTINUATIONS,
+            continuation_key=None,
         )
         write_json_file(self.context / "prepared.json", self.prepared.to_json())
         self.session = self.root / "sessions"
@@ -839,6 +852,8 @@ class CommentPublicationTests(unittest.TestCase):
             preparation_artifact_id=499,
             result_artifact_id=500,
             session_artifact_id=501,
+            continuations_remaining=MAX_CONTINUATIONS,
+            continuation_key=None,
         )
 
     def test_result_transport_ignores_agent_owned_git_filters(self) -> None:
@@ -921,6 +936,8 @@ class CommentPublicationTests(unittest.TestCase):
                 preparation_artifact_id=499,
                 result_artifact_id=500,
                 session_artifact_id=501,
+                continuations_remaining=MAX_CONTINUATIONS,
+                continuation_key=None,
             )
         self.assertEqual(self.remote.resolve_commit("refs/heads/feature"), self.base)
 
@@ -1021,6 +1038,8 @@ class CommentPublicationTests(unittest.TestCase):
                 preparation_artifact_id=499,
                 result_artifact_id=500,
                 session_artifact_id=501,
+                continuations_remaining=MAX_CONTINUATIONS,
+                continuation_key=None,
             )
 
         publication = prepare(publisher_source)
@@ -1090,6 +1109,8 @@ class CommentPublicationTests(unittest.TestCase):
             trusted_files=Path(__file__).resolve().parents[3],
             previous=previous,
             sessions=sessions,
+            continuations_remaining=MAX_CONTINUATIONS,
+            continuation_key=None,
         )
         self.assertEqual(prepared.dispatch_head, self.base)
         self.assertEqual(prepared.head, self.head)
@@ -1136,6 +1157,8 @@ class CommentPublicationTests(unittest.TestCase):
             preparation_artifact_id=499,
             result_artifact_id=500,
             session_artifact_id=501,
+            continuations_remaining=MAX_CONTINUATIONS,
+            continuation_key=None,
         )
         state = apply_publication(self.github, self.writer, self.consumer, publication)
         self.assertEqual(state.head, addressed)
@@ -1165,6 +1188,8 @@ class CommentPublicationTests(unittest.TestCase):
                     trusted_files=Path(__file__).resolve().parents[3],
                     previous=retained,
                     sessions=sessions,
+                    continuations_remaining=MAX_CONTINUATIONS,
+                    continuation_key=None,
                 )
 
     def test_no_action_result_advances_checkpoint_without_writes(self) -> None:
@@ -1197,6 +1222,8 @@ class CommentPublicationTests(unittest.TestCase):
             preparation_artifact_id=499,
             result_artifact_id=500,
             session_artifact_id=501,
+            continuations_remaining=MAX_CONTINUATIONS,
+            continuation_key=None,
         )
         self.assertFalse(publication.needs_writes)
         state = apply_publication(self.github, self.writer, self.consumer, publication)
@@ -1231,6 +1258,7 @@ class CommentWorkflowBoundaryTests(unittest.TestCase):
         self.assertLess(workflow.index("concurrency:"), workflow.index("jobs:"))
         handle = workflow.split("  handle:\n", 1)[1].split("  publish:\n", 1)[0]
         self.assertNotIn("id-token: write", handle)
+        self.assertNotIn("actions: write", handle)
         self.assertNotIn("contents: write", handle)
         self.assertIn("TMPDIR: ${{ runner.temp }}/comments-agent", handle)
         self.assertIn(
@@ -1257,6 +1285,31 @@ class CommentWorkflowBoundaryTests(unittest.TestCase):
             publish.index("uv_automations comments validate"),
             publish.index("Get the narrowly scoped uv-dev token"),
         )
+        self.assertIn("actions: write", publish)
+        self.assertEqual(publish.count("overwrite: true"), 2)
+        self.assertEqual(publish.count("archive: true"), 3)
+        immutable_index = publish.split(
+            'name: "Retain the immutable feedback index"', 1
+        )[1].split('name: "Build the per-pull-request discovery aliases"', 1)[0]
+        self.assertIn("archive: true", immutable_index)
+        self.assertNotIn("overwrite:", immutable_index)
+        self.assertIn(
+            "INDEX_ARTIFACT: ${{ steps.index-artifact.outputs.artifact-id }}", publish
+        )
+        self.assertLess(
+            publish.index("Retain the completed checkpoint"),
+            publish.index("uv_automations comments index"),
+        )
+        self.assertLess(
+            publish.index("uv_automations comments index"),
+            publish.index("uv_automations comments index-aliases"),
+        )
+        self.assertLess(
+            publish.index("uv_automations comments index-aliases"),
+            publish.index("uv_automations comments continue"),
+        )
+        self.assertIn("CHECKPOINT_INDEX: ${{ inputs.checkpoint_index }}", workflow)
+        self.assertIn("CONTINUATION_KEY: ${{ inputs.continuation_key }}", workflow)
 
     def test_dispatcher_and_sts_policy_match_the_feature(self) -> None:
         root = Path(__file__).resolve().parents[3]
@@ -1292,6 +1345,7 @@ class CommentWorkflowBoundaryTests(unittest.TestCase):
         self.assertEqual(
             rule["permissions"],
             {
+                "actions": "write",
                 "contents": "write",
                 "workflows": "write",
                 "issues": "write",

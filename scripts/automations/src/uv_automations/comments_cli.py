@@ -14,9 +14,15 @@ from pathlib import Path
 from typing import assert_never
 
 from uv_automations.actions import append_summary, write_json_output, write_output
-from uv_automations.comment_models import CommentRecommendation, CommentScope
+from uv_automations.comment_models import (
+    MAX_CONTINUATIONS,
+    CommentRecommendation,
+    CommentScope,
+    ContinuationKey,
+    as_continuation_budget,
+)
 from uv_automations.git import Git
-from uv_automations.github_actions import ActionsRun, ArtifactIdentity
+from uv_automations.github_actions import MANIFEST_FILENAME, ActionsRun
 from uv_automations.github_comments import CommentGitHub
 from uv_automations.json import loads
 from uv_automations.models import CommitSha, RepositoryIdentity, RepositoryName
@@ -28,20 +34,34 @@ from uv_automations.sessions import (
 from uv_automations.workflows.comments import (
     CheckpointLocator,
     FeedbackArtifactKind,
+    FeedbackCheckpoint,
     FeedbackPublication,
     IneligiblePullRequest,
     PreparedFeedback,
     RetainedFeedback,
     apply_publication,
     artifact_name,
-    find_checkpoint,
     persist_feedback_result,
     prepare_agent,
     prepare_feedback,
     prepare_publication,
     read_json_file,
-    validate_checkpoint,
     write_json_file,
+)
+from uv_automations.workflows.comments_index import (
+    BootstrapFeedback,
+    CheckpointRequest,
+    CheckpointSelection,
+    SupersededFeedback,
+    continue_feedback,
+    discover_checkpoint,
+    discovery_name,
+    index_name,
+    marker_name,
+    prepare_index,
+    prepare_index_aliases,
+    validate_continuation,
+    validate_selection,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,6 +75,9 @@ class CommentsCommandKind(StrEnum):
     VERIFY = "comments.verify"
     VALIDATE = "comments.validate"
     APPLY = "comments.apply"
+    INDEX = "comments.index"
+    INDEX_ALIASES = "comments.index-aliases"
+    CONTINUE = "comments.continue"
     SCHEMA = "comments.schema"
 
 
@@ -63,12 +86,14 @@ class RunContext:
     scope: CommentScope
     source: ActionsRun
     expected_head: CommitSha
+    continuations_remaining: int
+    continuation_key: ContinuationKey | None
+    checkpoint: CheckpointRequest | None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class FindSource:
     context: RunContext
-    explicit: CheckpointLocator | None
     destination: Path
     github_output: Path
 
@@ -146,6 +171,35 @@ class ApplyComments:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class WriteIndex:
+    context: RunContext
+    state: Path
+    state_artifact: int
+    destination: Path
+    github_output: Path
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class WriteIndexAliases:
+    context: RunContext
+    state: Path
+    state_artifact: int
+    index_artifact: int
+    destination: Path
+    github_output: Path
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ContinueComments:
+    context: RunContext
+    state: Path
+    state_artifact: int
+    index_artifact: int
+    github_output: Path
+    summary: Path
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class WriteSchema:
     destination: Path | None
 
@@ -158,6 +212,9 @@ type CommentsCommand = (
     | VerifyComments
     | ValidateComments
     | ApplyComments
+    | WriteIndex
+    | WriteIndexAliases
+    | ContinueComments
     | WriteSchema
 )
 
@@ -170,6 +227,16 @@ def _positive_integer(value: str) -> int:
 
 def _optional_integer(value: str) -> int | None:
     return _positive_integer(value) if value else None
+
+
+def _continuation_budget(value: str) -> int:
+    if re.fullmatch(r"0|[1-9][0-9]*", value) is None:
+        raise ValueError("Expected a nonnegative continuation budget")
+    return as_continuation_budget(int(value))
+
+
+def _optional_continuation_key(value: str) -> ContinuationKey | None:
+    return ContinuationKey(value) if value else None
 
 
 def _add_run_context(parser: argparse.ArgumentParser) -> None:
@@ -185,6 +252,25 @@ def _add_run_context(parser: argparse.ArgumentParser) -> None:
         default = os.environ.get(variable)
         parser.add_argument(
             argument, type=value_type, default=default, required=default is None
+        )
+    parser.add_argument(
+        "--continuations-remaining",
+        type=_continuation_budget,
+        default=os.environ.get("CONTINUATIONS_REMAINING", str(MAX_CONTINUATIONS)),
+    )
+    parser.add_argument(
+        "--continuation-key",
+        type=_optional_continuation_key,
+        default=os.environ.get("CONTINUATION_KEY", ""),
+    )
+    for argument, variable in (
+        ("--checkpoint-run", "CHECKPOINT_RUN"),
+        ("--checkpoint-attempt", "CHECKPOINT_ATTEMPT"),
+        ("--checkpoint-artifact", "CHECKPOINT_ARTIFACT"),
+        ("--checkpoint-index", "CHECKPOINT_INDEX"),
+    ):
+        parser.add_argument(
+            argument, type=_optional_integer, default=os.environ.get(variable, "")
         )
 
 
@@ -206,9 +292,6 @@ def add_commands(parser: argparse.ArgumentParser) -> None:
     source = commands.add_parser("source")
     source.set_defaults(command=CommentsCommandKind.SOURCE)
     _add_run_context(source)
-    source.add_argument("--checkpoint-run", type=_optional_integer)
-    source.add_argument("--checkpoint-attempt", type=_optional_integer)
-    source.add_argument("--checkpoint-artifact", type=_optional_integer)
     source.add_argument("--destination", type=Path, required=True)
     source.add_argument("--github-output", type=Path, required=True)
 
@@ -265,9 +348,53 @@ def add_commands(parser: argparse.ArgumentParser) -> None:
     apply.add_argument("--github-output", type=Path, required=True)
     apply.add_argument("--summary", type=Path, required=True)
 
+    index = commands.add_parser("index")
+    index.set_defaults(command=CommentsCommandKind.INDEX)
+    _add_run_context(index)
+    index.add_argument("--state", type=Path, required=True)
+    index.add_argument("--state-artifact", type=_positive_integer, required=True)
+    index.add_argument("--destination", type=Path, required=True)
+    index.add_argument("--github-output", type=Path, required=True)
+
+    aliases = commands.add_parser("index-aliases")
+    aliases.set_defaults(command=CommentsCommandKind.INDEX_ALIASES)
+    _add_run_context(aliases)
+    aliases.add_argument("--state", type=Path, required=True)
+    aliases.add_argument("--state-artifact", type=_positive_integer, required=True)
+    aliases.add_argument("--index-artifact", type=_positive_integer, required=True)
+    aliases.add_argument("--destination", type=Path, required=True)
+    aliases.add_argument("--github-output", type=Path, required=True)
+
+    continuation = commands.add_parser("continue")
+    continuation.set_defaults(command=CommentsCommandKind.CONTINUE)
+    _add_run_context(continuation)
+    continuation.add_argument("--state", type=Path, required=True)
+    continuation.add_argument("--state-artifact", type=_positive_integer, required=True)
+    continuation.add_argument("--index-artifact", type=_positive_integer, required=True)
+    continuation.add_argument("--github-output", type=Path, required=True)
+    continuation.add_argument("--summary", type=Path, required=True)
+
     schema = commands.add_parser("schema")
     schema.set_defaults(command=CommentsCommandKind.SCHEMA)
     schema.add_argument("--destination", type=Path)
+
+
+def _checkpoint_request(parsed: argparse.Namespace) -> CheckpointRequest | None:
+    values = (
+        parsed.checkpoint_run,
+        parsed.checkpoint_attempt,
+        parsed.checkpoint_artifact,
+    )
+    if parsed.checkpoint_index is None and all(value is None for value in values):
+        return None
+    if any(value is None for value in values):
+        raise ValueError(
+            "An explicit checkpoint requires run, attempt, and artifact IDs"
+        )
+    return CheckpointRequest(
+        checkpoint=CheckpointLocator(int(values[0]), int(values[1]), int(values[2])),
+        index_id=parsed.checkpoint_index,
+    )
 
 
 def _run_context(parsed: argparse.Namespace) -> RunContext:
@@ -276,6 +403,9 @@ def _run_context(parsed: argparse.Namespace) -> RunContext:
         CommentScope(repository, parsed.pull_request),
         ActionsRun(repository, parsed.run_id, parsed.run_attempt, parsed.workflow_sha),
         parsed.expected_head,
+        parsed.continuations_remaining,
+        parsed.continuation_key,
+        _checkpoint_request(parsed),
     )
 
 
@@ -297,23 +427,8 @@ def parse_command(parsed: argparse.Namespace) -> CommentsCommand:
     kind = CommentsCommandKind(parsed.command)
     match kind:
         case CommentsCommandKind.SOURCE:
-            explicit: CheckpointLocator | None = None
-            values = (
-                parsed.checkpoint_run,
-                parsed.checkpoint_attempt,
-                parsed.checkpoint_artifact,
-            )
-            if any(value is not None for value in values):
-                if any(value is None for value in values):
-                    raise ValueError(
-                        "An explicit checkpoint requires run, attempt, and artifact IDs"
-                    )
-                explicit = CheckpointLocator(
-                    int(values[0]), int(values[1]), int(values[2])
-                )
             return FindSource(
                 context=_run_context(parsed),
-                explicit=explicit,
                 destination=parsed.destination,
                 github_output=parsed.github_output,
             )
@@ -369,22 +484,65 @@ def parse_command(parsed: argparse.Namespace) -> CommentsCommand:
                 github_output=parsed.github_output,
                 summary=parsed.summary,
             )
+        case CommentsCommandKind.INDEX:
+            return WriteIndex(
+                context=_run_context(parsed),
+                state=parsed.state,
+                state_artifact=parsed.state_artifact,
+                destination=parsed.destination,
+                github_output=parsed.github_output,
+            )
+        case CommentsCommandKind.INDEX_ALIASES:
+            return WriteIndexAliases(
+                context=_run_context(parsed),
+                state=parsed.state,
+                state_artifact=parsed.state_artifact,
+                index_artifact=parsed.index_artifact,
+                destination=parsed.destination,
+                github_output=parsed.github_output,
+            )
+        case CommentsCommandKind.CONTINUE:
+            return ContinueComments(
+                context=_run_context(parsed),
+                state=parsed.state,
+                state_artifact=parsed.state_artifact,
+                index_artifact=parsed.index_artifact,
+                github_output=parsed.github_output,
+                summary=parsed.summary,
+            )
         case CommentsCommandKind.SCHEMA:
             return WriteSchema(destination=parsed.destination)
     assert_never(kind)
 
 
 def _checkpoint(
-    github: CommentGitHub, scope: CommentScope, source_file: Path, checkpoint: Path
+    github: CommentGitHub, context: RunContext, source_file: Path, checkpoint: Path
 ) -> RetainedFeedback | None:
     try:
         value = read_json_file(source_file)
         if value is None:
+            if context.continuation_key is not None:
+                raise ValueError("An automatic continuation is missing its checkpoint")
             return None
-        return validate_checkpoint(
+        selection = CheckpointSelection.from_json(value)
+        if (
+            context.continuation_key is not None
+            and selection.index
+            != validate_continuation(
+                github,
+                context.scope,
+                context.source,
+                context.expected_head,
+                explicit=context.checkpoint,
+                continuations_remaining=context.continuations_remaining,
+                continuation_key=context.continuation_key,
+            ).artifact
+        ):
+            raise ValueError("The source file does not contain the exact continuation")
+        return validate_selection(
             github,
-            scope,
-            ArtifactIdentity.from_json(value),
+            context.scope,
+            selection,
             read_json_file(checkpoint / "state.json"),
         )
     except (
@@ -393,7 +551,12 @@ def _checkpoint(
         ValueError,
         OSError,
         subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
     ) as error:
+        if context.continuation_key is not None:
+            raise ValueError(
+                "Cannot verify the automatic continuation checkpoint"
+            ) from error
         logger.info(
             "Cannot reuse the feedback checkpoint; starting a bounded bootstrap: %s",
             error,
@@ -404,6 +567,16 @@ def _checkpoint(
 def _publication(
     github: CommentGitHub, inputs: PublicationInputs
 ) -> FeedbackPublication:
+    if inputs.context.continuation_key is not None:
+        validate_continuation(
+            github,
+            inputs.context.scope,
+            inputs.context.source,
+            inputs.context.expected_head,
+            explicit=inputs.context.checkpoint,
+            continuations_remaining=inputs.context.continuations_remaining,
+            continuation_key=inputs.context.continuation_key,
+        )
     return prepare_publication(
         github,
         Git(inputs.repository).with_token(github.token_variable),
@@ -417,6 +590,8 @@ def _publication(
         preparation_artifact_id=inputs.preparation_artifact,
         result_artifact_id=inputs.result_artifact,
         session_artifact_id=inputs.session_artifact,
+        continuations_remaining=inputs.context.continuations_remaining,
+        continuation_key=inputs.context.continuation_key,
     )
 
 
@@ -427,9 +602,23 @@ def _load_prepared(path: Path, context: RunContext) -> PreparedFeedback:
         or prepared.dispatch_head != context.expected_head
         or not context.source.same_run(prepared.source)
         or context.source.attempt < prepared.source.attempt
+        or prepared.continuations_remaining != context.continuations_remaining
+        or prepared.continuation_key != context.continuation_key
     ):
         raise ValueError("The preparation does not match the trusted dispatch")
     return prepared
+
+
+def _load_checkpoint(path: Path, context: RunContext) -> FeedbackCheckpoint:
+    state = FeedbackCheckpoint.from_json(read_json_file(path / "state.json"))
+    if (
+        state.scope != context.scope
+        or state.source != context.source
+        or state.continuations_remaining != context.continuations_remaining
+        or state.continuation_key != context.continuation_key
+    ):
+        raise ValueError("The checkpoint does not match the current publisher")
+    return state
 
 
 def run(command: CommentsCommand) -> None:
@@ -437,34 +626,57 @@ def run(command: CommentsCommand) -> None:
     match command:
         case FindSource():
             try:
-                source = find_checkpoint(
+                discovery = discover_checkpoint(
                     github,
                     command.context.scope,
                     command.context.source,
-                    explicit=command.explicit,
+                    command.context.expected_head,
+                    explicit=command.context.checkpoint,
+                    continuations_remaining=command.context.continuations_remaining,
+                    continuation_key=command.context.continuation_key,
                 )
             except subprocess.CalledProcessError:
-                if command.explicit is not None:
+                if (
+                    command.context.checkpoint is not None
+                    or command.context.continuation_key is not None
+                ):
                     raise
                 logger.info(
                     "No usable workflow history is available; starting a bounded bootstrap"
                 )
-                source = None
+                discovery = BootstrapFeedback()
+            source: CheckpointSelection | None
+            proceed = True
+            match discovery:
+                case CheckpointSelection():
+                    source = discovery
+                case BootstrapFeedback():
+                    source = None
+                case SupersededFeedback(checkpoint=checkpoint):
+                    source = None
+                    proceed = False
+                    logger.info(
+                        "This continuation was superseded by checkpoint artifact %s",
+                        checkpoint.identifier,
+                    )
+                case _:
+                    assert_never(discovery)
             write_json_file(
                 command.destination, source.to_json() if source is not None else None
             )
+            write_json_output(command.github_output, "proceed", proceed)
             write_json_output(command.github_output, "found", source is not None)
             if source is not None:
                 write_output(
-                    command.github_output, "run-id", str(source.source.identifier)
+                    command.github_output, "run-id", str(source.state.source.identifier)
                 )
                 write_output(
-                    command.github_output, "artifact-id", str(source.identifier)
+                    command.github_output, "artifact-id", str(source.state.identifier)
                 )
             return
         case InspectSource():
             previous = _checkpoint(
-                github, command.context.scope, command.source_file, command.checkpoint
+                github, command.context, command.source_file, command.checkpoint
             )
             write_json_output(command.github_output, "usable", previous is not None)
             if previous is not None:
@@ -481,7 +693,7 @@ def run(command: CommentsCommand) -> None:
             return
         case PrepareComments():
             previous = _checkpoint(
-                github, command.context.scope, command.source_file, command.checkpoint
+                github, command.context, command.source_file, command.checkpoint
             )
             sessions: CodexSessionSnapshot | None = None
             if previous is not None:
@@ -492,6 +704,10 @@ def run(command: CommentsCommand) -> None:
                         trusted_root=command.trusted_root,
                     )
                 except (KeyError, TypeError, ValueError, OSError) as error:
+                    if command.context.continuation_key is not None:
+                        raise ValueError(
+                            "Cannot restore the automatic continuation session"
+                        ) from error
                     logger.info(
                         "Cannot reuse the Codex session; collecting a fresh history: %s",
                         error,
@@ -507,6 +723,8 @@ def run(command: CommentsCommand) -> None:
                     trusted_files=command.trusted_files,
                     previous=previous,
                     sessions=sessions,
+                    continuations_remaining=command.context.continuations_remaining,
+                    continuation_key=command.context.continuation_key,
                 )
             except IneligiblePullRequest as error:
                 logger.info("%s", error)
@@ -582,6 +800,11 @@ def run(command: CommentsCommand) -> None:
             write_json_output(
                 command.github_output, "needs-writes", publication.needs_writes
             )
+            write_json_output(
+                command.github_output,
+                "needs-continuation",
+                publication.needs_continuation,
+            )
             return
         case ApplyComments():
             reader = CommentGitHub(token_variable="GH_READ_TOKEN")
@@ -608,6 +831,71 @@ def run(command: CommentsCommand) -> None:
                 f"Published feedback for pull request #{checkpoint.scope.number} "
                 f"at `{checkpoint.head}` and retained its complete checkpoint.\n",
             )
+            return
+        case WriteIndex():
+            state = _load_checkpoint(command.state, command.context)
+            index = prepare_index(
+                github, command.context.source, state, command.state_artifact
+            )
+            command.destination.mkdir(parents=True, exist_ok=False)
+            write_json_file(command.destination / MANIFEST_FILENAME, index.to_json())
+            write_output(
+                command.github_output,
+                "artifact-name",
+                index_name(state.scope, state.source),
+            )
+            return
+        case WriteIndexAliases():
+            state = _load_checkpoint(command.state, command.context)
+            aliases = prepare_index_aliases(
+                github,
+                command.context.source,
+                state,
+                command.state_artifact,
+                command.index_artifact,
+            )
+            command.destination.mkdir(parents=True, exist_ok=False)
+            discovery = command.destination / "discovery"
+            discovery.mkdir()
+            write_json_file(discovery / MANIFEST_FILENAME, aliases.discovery.to_json())
+            write_output(
+                command.github_output, "discovery-name", discovery_name(state.scope)
+            )
+            if aliases.consumption is not None:
+                if state.continuation_key is None:
+                    raise ValueError("A consumption alias is missing its key")
+                marker = command.destination / "consumption"
+                marker.mkdir()
+                write_json_file(
+                    marker / MANIFEST_FILENAME, aliases.consumption.to_json()
+                )
+                write_output(
+                    command.github_output,
+                    "marker-name",
+                    marker_name(state.scope, state.continuation_key),
+                )
+            return
+        case ContinueComments():
+            reader = CommentGitHub(token_variable="GH_READ_TOKEN")
+            continuation = continue_feedback(
+                reader,
+                github,
+                command.context.source,
+                _load_checkpoint(command.state, command.context),
+                command.state_artifact,
+                command.index_artifact,
+                expected_head=command.context.expected_head,
+                checkpoint=command.context.checkpoint,
+            )
+            write_json_output(
+                command.github_output, "dispatched", continuation is not None
+            )
+            if continuation is not None:
+                append_summary(
+                    command.summary,
+                    f"Queued the next bounded feedback batch for pull request "
+                    f"#{continuation.scope.number} at `{continuation.head}`.\n",
+                )
             return
         case WriteSchema():
             if command.destination is None:

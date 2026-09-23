@@ -15,6 +15,7 @@ from uv_automations.comment_models import (
     CommentAuthor,
     CommentScope,
     ConversationComment,
+    FeedbackContinuation,
     InlineComment,
     ReviewState,
     ReviewThread,
@@ -173,6 +174,13 @@ def _review_thread(scope: CommentScope, value: object) -> ReviewThread:
 
 
 class CommentGitHub(ActionsGitHub):
+    def dispatch_feedback(self, continuation: FeedbackContinuation) -> None:
+        self._api(
+            "POST",
+            f"repos/{continuation.scope.repository.name}/actions/workflows/pull-request-comments.yml/dispatches",
+            payload={"ref": "main", "inputs": continuation.inputs()},
+        )
+
     def _graphql(self, query: str, **variables: object) -> dict[str, object]:
         result = as_object(
             self._api(
