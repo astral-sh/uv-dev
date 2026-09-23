@@ -103,6 +103,23 @@
     {
       "caller": "uv",
       "environment": "automations",
+      "caller_workflow": "issue-triage.yml",
+      "reusable_workflow": "issue-labels.yml",
+      "on": ["issues", "workflow_dispatch"],
+      "permissions": { "issues": "write" },
+      "target": "uv"
+    },
+    {
+      "caller": "uv",
+      "environment": "automations",
+      "caller_workflow": "issue-labels.yml",
+      "on": ["workflow_dispatch"],
+      "permissions": { "issues": "write" },
+      "target": "uv"
+    },
+    {
+      "caller": "uv",
+      "environment": "automations",
       "caller_workflow": "reproduce-bug.yml",
       "on": ["workflow_dispatch"],
       "permissions": { "contents": "write", "pull_requests": "write" },

@@ -14,6 +14,17 @@ enabled = true
 "api.github.com" = "allow"
 "github.com" = "allow"
 
+[permissions.issue-labels]
+description = "Read-only issue label analysis with GitHub API access."
+extends = ":read-only"
+
+[permissions.issue-labels.network]
+enabled = true
+
+[permissions.issue-labels.network.domains]
+"api.github.com" = "allow"
+"github.com" = "allow"
+
 [permissions.reproduce-bug]
 description = "Bug reproduction with temporary filesystem and GitHub API access."
 extends = ":read-only"

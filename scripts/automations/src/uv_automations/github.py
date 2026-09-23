@@ -20,7 +20,9 @@ from uv_automations.models import (
     CommitSha,
     Issue,
     IssueAuthor,
+    IssueDetails,
     IssueRef,
+    IssueState,
     Label,
     Mergeability,
     PullRequest,
@@ -40,6 +42,7 @@ LABEL_CONTEXT_FIELDS = (
     "labels,files,additions,deletions,changedFiles"
 )
 ISSUE_FIELDS = "number,title,body,author,url"
+ISSUE_LABEL_FIELDS = f"{ISSUE_FIELDS},state,labels"
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +97,15 @@ def decode_issue(value: object, reference: IssueRef) -> Issue:
         title=as_string(data["title"]),
         body=as_string(data["body"]),
         author=_decode_issue_author(data["author"]),
+    )
+
+
+def decode_issue_details(value: object, reference: IssueRef) -> IssueDetails:
+    data = as_object(value)
+    return IssueDetails(
+        issue=decode_issue(data, reference),
+        state=IssueState(as_string(data["state"])),
+        labels=_decode_label_names(data["labels"]),
     )
 
 
@@ -248,6 +260,22 @@ class GitHub:
             reference,
         )
 
+    def get_issue_details(self, reference: IssueRef) -> IssueDetails:
+        return decode_issue_details(
+            self._command(
+                [
+                    "issue",
+                    "view",
+                    str(reference.number),
+                    "--repo",
+                    str(reference.repository),
+                    "--json",
+                    ISSUE_LABEL_FIELDS,
+                ]
+            ),
+            reference,
+        )
+
     def get_label_context(self, reference: PullRequestRef) -> PullRequestLabelContext:
         event = as_object(
             self._command(
@@ -296,7 +324,9 @@ class GitHub:
             )
         return tuple(result)
 
-    def add_labels(self, reference: PullRequestRef, labels: tuple[str, ...]) -> None:
+    def add_labels(
+        self, reference: PullRequestRef | IssueRef, labels: tuple[str, ...]
+    ) -> None:
         self._api(
             "POST",
             f"repos/{reference.repository}/issues/{reference.number}/labels",
