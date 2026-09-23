@@ -140,6 +140,30 @@ bundle using the upload action's immutable `artifact-id`; pass that ID and the p
 still check its own allowed paths, authorship, current target, and other preconditions before
 acquiring write credentials.
 
+## Pull request feedback
+
+The feedback adapters add immutable contracts without coupling them to one workflow:
+
+- `comment_models` decodes conversation comments, review summaries, complete review threads, and
+  bounded agent recommendations. Target revisions are content fingerprints, and the Codex output
+  schema is generated from the same enums and limits as the Python decoder.
+- `github_comments.CommentGitHub` provides bounded comment pages, review-thread cursors, direct
+  selected-thread ownership checks, and narrow reply/resolve operations. It preserves GitHub's
+  64-bit comment and review identities.
+- `github_actions.ActionsRun` separates immutable workflow-run identity from its retry attempt.
+  `ArtifactIdentity` records the repository ID, run, attempt, artifact ID, name, and digest.
+  `ActionsGitHub` checks the available REST metadata. The
+  [artifact response](https://docs.github.com/en/rest/actions/artifacts#get-an-artifact) does not
+  identify the retry attempt: consumers bind it through a trusted producer name or manifest and
+  verify that exact workflow attempt before trusting downloaded contents. `ActionsRun.workflow_sha`
+  is deliberately limited to the verified root `workflow_dispatch` on `main`; REST `head_sha` is not
+  generic workflow-file provenance for other event types.
+- `sessions.snapshot_sessions(path, workspace, trusted_root=runner_temp)` validates one root Codex
+  Action session and its parent-linked subagents. The root must be outside all agent-writable
+  ancestors; the reader walks below it through no-follow directory descriptors.
+  `write_sessions(snapshot, destination)` creates a fresh sessions tree, normalizing compressed
+  rollouts without merging another Codex home.
+
 ## Subsequent migrations
 
 Migrate complete deterministic workflow stages rather than extracting isolated `jq` expressions.
