@@ -825,6 +825,7 @@ jobs:
 
           # Docker can fail to start during runner boot.
           # https://github.com/actions/runner-images/issues/13729#issuecomment-4183956802
+          Write-Host "Docker is unavailable; restarting the service."
           Restart-Service -Name docker -ErrorAction Stop
 
           for ($attempt = 0; $attempt -lt 30; $attempt++) {
