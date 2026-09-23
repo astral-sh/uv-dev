@@ -3283,6 +3283,11 @@ pub struct VenvArgs {
     /// Other scripts may be adjusted if they ship with a generic `#!python[w]` shebang, and
     /// binaries are left as-is.
     ///
+    /// When installing editable packages, plain `.pth` paths inside their source trees are made
+    /// relative where possible. Moving an editable project with the environment requires keeping
+    /// their relative directory layout. Editable import hooks and link trees created by build
+    /// backends may still contain absolute paths.
+    ///
     /// As a result of making the environment relocatable (by way of writing relative, rather than
     /// absolute paths), the entrypoints and scripts themselves will _not_ be relocatable. In other
     /// words, copying those entrypoints and scripts to a location outside the environment will not

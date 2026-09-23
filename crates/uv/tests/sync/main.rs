@@ -4,6 +4,9 @@
 mod centralized_project_envs;
 
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
+mod relocatable;
+
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod show_settings;
 
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]

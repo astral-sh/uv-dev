@@ -243,6 +243,7 @@ fn install_wheel_many_files(c: &mut Criterion<WallTime>) {
                     extracted_wheel.path(),
                     &filename,
                     None,
+                    None,
                     None::<&()>,
                     None::<&()>,
                     Some("uv"),

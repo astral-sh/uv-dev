@@ -10,6 +10,7 @@ use uv_cache::Cache;
 use uv_distribution_types::CachedDist;
 use uv_install_wheel::{Layout, LinkMode};
 use uv_preview::Preview;
+use uv_pypi_types::ParsedUrl;
 use uv_python::PythonEnvironment;
 use uv_threads::initialize_rayon_once;
 
@@ -170,6 +171,13 @@ fn install(
     initialize_rayon_once();
     let state = uv_install_wheel::InstallState::new(preview);
     wheels.par_iter().try_for_each(|wheel| {
+        let editable_source = if let Some(ParsedUrl::Directory(directory)) = wheel.parsed_url()
+            && directory.editable == Some(true)
+        {
+            Some(directory.install_path.as_ref())
+        } else {
+            None
+        };
         uv_install_wheel::install_wheel(
             layout,
             relocatable,
@@ -179,6 +187,7 @@ fn install(
                 .parsed_url()
                 .map(uv_pypi_types::DirectUrl::from)
                 .as_ref(),
+            editable_source,
             if wheel.cache_info().is_empty() {
                 None
             } else {
