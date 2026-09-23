@@ -71,3 +71,18 @@ jobs:
     secrets: inherit
     with:
       main-sha: ${{ needs.sync.outputs.main-sha }}
+
+  retarget-promoted-pull-request-children:
+    name: Retarget children of promoted pull requests
+    needs: sync
+    if: github.repository == 'astral-sh/uv' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: read
+    uses: $/.github/workflows/retarget-promoted-pull-request-children.yml
+    with:
+      repository: astral-sh/uv-dev
+      repository-id: "1302176231"
+      main-sha: ${{ needs.sync.outputs.main-sha }}
+    secrets: inherit
