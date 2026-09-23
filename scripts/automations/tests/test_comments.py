@@ -1280,7 +1280,7 @@ class CommentWorkflowBoundaryTests(unittest.TestCase):
                 }
             ],
         )
-        policy = json.loads((root / ".github/ost-simple-sts.json").read_text())
+        policy = json.loads((root / ".github/secure-token-service.json").read_text())
         rule = next(
             rule
             for rule in policy["rules"]

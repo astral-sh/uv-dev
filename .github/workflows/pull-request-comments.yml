@@ -41,7 +41,7 @@ env:
 jobs:
   prepare:
     if: github.repository == 'astral-sh/uv-dev'
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       actions: read
@@ -143,7 +143,7 @@ jobs:
   handle:
     needs: prepare
     if: needs.prepare.outputs.eligible == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
     environment: automations
     timeout-minutes: 30
     permissions:
@@ -166,8 +166,11 @@ jobs:
       # The isolated automation runtime has its own pinned uv. Keep the project
       # tool selection independent so feedback is tested with the normal uv.
       - name: "Install project uv"
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
+          # renovate: datasource=github-release-attachments depName=astral-sh/uv
+          version: "0.12.13"
+          checksum: "745765a3b6e360ad76743599ae5c42e9278c7edf8bbff9fc76d05bf2623a04dd"
           enable-cache: false
 
       - name: "Download the prepared context"
@@ -255,7 +258,7 @@ jobs:
   publish:
     needs: [prepare, handle]
     if: needs.prepare.outputs.eligible == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
     environment: automations
     timeout-minutes: 15
     permissions:
