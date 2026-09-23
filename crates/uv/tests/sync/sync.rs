@@ -312,7 +312,7 @@ fn sync_relocatable_envs_default() -> Result<()> {
     Ok(())
 }
 
-/// Moving a relocatable environment with its editable project leaves a stale source path.
+/// A relocatable environment can move with a project installed through a plain `.pth` file.
 #[test]
 fn sync_relocatable_editable() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -365,11 +365,9 @@ fn sync_relocatable_editable() -> Result<()> {
         .current_dir(relocated_dir.path())
         .env_remove(EnvVars::VIRTUAL_ENV)
         .args(["--no-sync", "python", "-I", "-c", "import project; print(project.VALUE)"]), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    Traceback (most recent call last):
-      File \"<string>\", line 1, in <module>
-    ModuleNotFoundError: No module named 'project'
+    exit_code: 0 (success)
+    ----- stdout -----
+    hello
     ");
 
     Ok(())

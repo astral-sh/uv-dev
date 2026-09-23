@@ -11,6 +11,7 @@ use uv_distribution_filename::WheelFilename;
 use uv_pep440::Version;
 use uv_pypi_types::{DirectUrl, Metadata10};
 
+use crate::editable::relocate_editable;
 use crate::linker::{InstallState, LinkMode, link_wheel_files};
 use crate::wheel::{
     LibKind, ValidatedWheel, WheelFile, dist_info_metadata, find_dist_info, install_data,
@@ -56,6 +57,7 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
     wheel: impl AsRef<Path>,
     filename: &WheelFilename,
     direct_url: Option<&DirectUrl>,
+    editable_source: Option<&Path>,
     cache_info: Option<&Cache>,
     build_info: Option<&Build>,
     installer: Option<&str>,
@@ -144,6 +146,10 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
         fs_err::remove_dir_all(data_dir)?;
     } else {
         trace!(?name, "No data");
+    }
+
+    if relocatable && let Some(source) = editable_source {
+        relocate_editable(layout, site_packages, source, &mut record)?;
     }
 
     if installer_metadata {
