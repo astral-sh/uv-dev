@@ -27,7 +27,7 @@ jobs:
   inspect:
     name: Inspect current private approval
     if: github.repository == 'astral-sh/uv-security' && github.repository_id == '1333576902' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-slim
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
     timeout-minutes: 10
     permissions:
       contents: read
