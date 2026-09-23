@@ -1,0 +1,12 @@
+{
+  "outcome": "fixed",
+  "summary": "Universal lock resolution now activates only extras that contribute conditional requirements, preventing dependency-free conflicting extras from creating redundant resolver environments while retaining their metadata and conflict validation. The regression test now asserts a single shared-dependency search.",
+  "validation": [
+    "10 focused conflict-lock integration tests passed",
+    "Empty-extra metadata-free frozen round trip passed",
+    "Empty-extra lock freshness test passed",
+    "uv-requirements clippy passed with warnings denied",
+    "Rust formatting and diff checks passed"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/2065"
+}
