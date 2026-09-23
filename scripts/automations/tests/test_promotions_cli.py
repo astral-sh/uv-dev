@@ -182,12 +182,23 @@ class PromotionCliTests(unittest.TestCase):
         with (
             patch.object(
                 PromotionGitHub,
+                "_command",
+                side_effect=AssertionError("Unexpected GitHub request"),
+            ),
+            patch.object(
+                PromotionGitHub,
+                "get_promotion_pull_request",
+                return_value=SOURCE_PR,
+            ) as get_pull_request,
+            patch.object(
+                PromotionGitHub,
                 "list_promotion_events",
                 return_value=(*REVOKED, ReadyForReviewEvent(1003, HUMAN, TIME)),
             ),
             redirect_stdout(output),
         ):
             cli.run(command)
+        get_pull_request.assert_called_once_with(SOURCE)
         self.assertEqual(output.getvalue(), "")
 
 
