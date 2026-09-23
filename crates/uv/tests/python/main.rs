@@ -28,5 +28,8 @@ mod python_pin;
 #[cfg(feature = "test-python-managed")]
 mod python_upgrade;
 
+#[cfg(feature = "test-python-managed")]
+mod python_upgrade_json;
+
 #[cfg(feature = "test-python")]
 mod venv;

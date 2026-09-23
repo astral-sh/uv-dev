@@ -65,6 +65,15 @@ pub enum PythonListFormat {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum PythonUpgradeFormat {
+    /// Plain text (for humans).
+    #[default]
+    Text,
+    /// JSON (for computers).
+    Json,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum ToolListFormat {
     /// Plain text (for humans).
     #[default]
@@ -6588,6 +6597,12 @@ pub struct PythonUpgradeArgs {
     /// If no target version is provided, then uv will upgrade all managed CPython versions.
     #[arg(env = EnvVars::UV_PYTHON)]
     pub targets: Vec<String>,
+
+    /// The format of the completed upgrade report.
+    ///
+    /// The JSON schema is experimental and may change without warning.
+    #[arg(long, value_enum, default_value_t = PythonUpgradeFormat::default())]
+    pub output_format: PythonUpgradeFormat,
 
     /// Set the URL to use as the source for downloading Python installations.
     ///

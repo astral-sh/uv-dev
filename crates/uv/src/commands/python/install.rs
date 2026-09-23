@@ -15,6 +15,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
 
 use uv_cache::Cache;
+use uv_cli::PythonUpgradeFormat;
 use uv_client::BaseClientBuilder;
 use uv_configuration::Concurrency;
 use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
@@ -39,6 +40,10 @@ use uv_shell::Shell;
 use uv_trampoline_builder::{Launcher, LauncherKind};
 use uv_warnings::warn_user;
 
+use crate::commands::python::upgrade_report::{
+    ExecutableChange, InstallationReport, UpgradeEntry, UpgradeError, UpgradeErrorKind,
+    UpgradeReport, installation_outcome,
+};
 use crate::commands::python::{ChangeEvent, ChangeEventKind};
 use crate::commands::reporters::PythonDownloadReporter;
 use crate::commands::{ExitStatus, UvError, conjunction, elapsed};
@@ -116,9 +121,46 @@ struct Changelog {
     installed: FxHashSet<PythonInstallationKey>,
     uninstalled: FxHashSet<PythonInstallationKey>,
     installed_executables: FxHashMap<PythonInstallationKey, FxHashSet<PathBuf>>,
+    report: Option<UpgradeChanges>,
+}
+
+#[derive(Debug, Default)]
+struct UpgradeChanges {
+    before: FxHashMap<PythonInstallationKey, InstallationReport>,
+    executables: BTreeMap<PathBuf, ExecutableChange>,
 }
 
 impl Changelog {
+    fn record_executable_change(
+        &mut self,
+        path: &Path,
+        from: Option<&ManagedPythonInstallation>,
+        to: &ManagedPythonInstallation,
+    ) {
+        let Some(report) = self.report.as_mut() else {
+            return;
+        };
+        // Downloads can replace a build without changing its installation key or executable
+        // path. Use the identity captured under the install lock before downloading.
+        let from = from.map(|installation| {
+            report
+                .before
+                .get(installation.key())
+                .cloned()
+                .unwrap_or_else(|| installation.into())
+        });
+        let to = InstallationReport::from(to);
+        report
+            .executables
+            .entry(path.to_path_buf())
+            .and_modify(|change| change.to = to.clone())
+            .or_insert_with(|| ExecutableChange {
+                path: path.into(),
+                from,
+                to,
+            });
+    }
+
     fn events(&self) -> impl Iterator<Item = ChangeEvent> {
         let reinstalled = self
             .uninstalled
@@ -206,6 +248,7 @@ pub(crate) async fn install(
     targets: Vec<String>,
     reinstall: bool,
     upgrade: PythonUpgrade,
+    output_format: PythonUpgradeFormat,
     bin: Option<bool>,
     registry: Option<bool>,
     force: bool,
@@ -223,21 +266,30 @@ pub(crate) async fn install(
     printer: Printer,
 ) -> Result<ExitStatus> {
     let (sender, mut receiver) = mpsc::unbounded_channel();
+    let mut report =
+        matches!(output_format, PythonUpgradeFormat::Json).then(UpgradeReport::default);
+    let mut compiler_failed_key = None;
     let compiler = async {
         let mut total_files = 0;
         let mut total_elapsed = std::time::Duration::default();
         let mut total_skipped = 0;
         while let Some(installation) = receiver.recv().await {
-            if let Some((files, elapsed)) =
-                compile_stdlib_bytecode(&installation, concurrency, cache)
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "Failed to bytecode-compile Python standard library for: {}",
-                            installation.key()
-                        )
-                    })?
-            {
+            let result = compile_stdlib_bytecode(&installation, concurrency, cache)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to bytecode-compile Python standard library for: {}",
+                        installation.key()
+                    )
+                });
+            let result = match result {
+                Ok(result) => result,
+                Err(err) => {
+                    compiler_failed_key = Some(installation.key().clone());
+                    return Err(err);
+                }
+            };
+            if let Some((files, elapsed)) = result {
                 total_files += files;
                 total_elapsed += elapsed;
             } else {
@@ -253,6 +305,8 @@ pub(crate) async fn install(
         targets,
         reinstall,
         upgrade,
+        output_format,
+        &mut report,
         bin,
         registry,
         force,
@@ -271,6 +325,25 @@ pub(crate) async fn install(
     );
 
     let (installer_result, compiler_result) = join!(installer, compiler);
+
+    if let Some(report) = report.as_mut() {
+        if let Err(err) = &installer_result {
+            report.errors.push(UpgradeError {
+                kind: UpgradeErrorKind::Operation,
+                message: format!("{err:#}"),
+            });
+        }
+        if let Err(err) = &compiler_result {
+            if let Some(key) = compiler_failed_key.as_ref() {
+                report.fail_installation(key, UpgradeErrorKind::Bytecode, format!("{err:#}"));
+            }
+            report.errors.push(UpgradeError {
+                kind: UpgradeErrorKind::Bytecode,
+                message: format!("{err:#}"),
+            });
+        }
+        write_upgrade_report(output_format, report, printer)?;
+    }
 
     let (total_files, total_elapsed, total_skipped) = compiler_result?;
     if total_files > 0 {
@@ -312,6 +385,8 @@ async fn perform_install(
     targets: Vec<String>,
     reinstall: bool,
     upgrade: PythonUpgrade,
+    output_format: PythonUpgradeFormat,
+    report: &mut Option<UpgradeReport>,
     bin: Option<bool>,
     registry: Option<bool>,
     force: bool,
@@ -329,6 +404,15 @@ async fn perform_install(
     printer: Printer,
 ) -> Result<ExitStatus> {
     let start = std::time::Instant::now();
+
+    if matches!(output_format, PythonUpgradeFormat::Json)
+        && !preview.is_enabled(PreviewFeature::JsonOutput)
+    {
+        warn_user!(
+            "The `--output-format json` option is experimental and the schema may change without warning. Pass `--preview-features {}` to disable this warning.",
+            PreviewFeature::JsonOutput
+        );
+    }
 
     // TODO(zanieb): We should consider marking the Python installation as the default when
     // `--default` is used. It's not clear how this overlaps with a global Python pin, but I'd be
@@ -476,7 +560,16 @@ async fn perform_install(
     }
 
     // Find requests that are already satisfied
-    let mut changelog = Changelog::default();
+    let mut changelog = Changelog {
+        report: matches!(output_format, PythonUpgradeFormat::Json).then(|| UpgradeChanges {
+            before: existing_installations
+                .iter()
+                .map(|installation| (installation.key().clone(), installation.into()))
+                .collect(),
+            executables: BTreeMap::new(),
+        }),
+        ..Changelog::default()
+    };
     let (satisfied, unsatisfied): (Vec<_>, Vec<_>) = if reinstall {
         // In the reinstall case, we want to iterate over all matching installations instead of
         // stopping at the first match.
@@ -570,6 +663,23 @@ async fn perform_install(
         (satisfied, unsatisfied)
     };
 
+    let report_requests = if report.is_some() {
+        resolved_report_requests(&requests, &unsatisfied, reinstall)
+    } else {
+        Vec::new()
+    };
+    if let Some(report) = report.as_mut() {
+        *report = upgrade_report(
+            &report_requests,
+            &existing_installations,
+            &satisfied,
+            &[],
+            &changelog,
+            &[],
+            false,
+        );
+    }
+
     // For all satisfied installs, bytecode compile them now before any future
     // early return.
     if let Some(ref sender) = bytecode_compilation_sender {
@@ -590,6 +700,17 @@ async fn perform_install(
             printer.stderr(),
             "Python downloads are not allowed (`python-downloads = \"never\"`). Change to `python-downloads = \"manual\"` to allow explicit installs.",
         )?;
+        if let Some(report) = report.as_mut() {
+            *report = upgrade_report(
+                &report_requests,
+                &existing_installations,
+                &satisfied,
+                &[],
+                &changelog,
+                &[],
+                true,
+            );
+        }
         return Ok(ExitStatus::Failure);
     }
 
@@ -646,6 +767,9 @@ async fn perform_install(
                 };
 
                 let installation = ManagedPythonInstallation::new(path, download);
+                if let Some(report) = report.as_mut() {
+                    report.record_installation(&installation);
+                }
                 if let Some(ref sender) = bytecode_compilation_sender {
                     sender
                         .send(installation.clone())
@@ -670,6 +794,13 @@ async fn perform_install(
                 downloaded.push(installation.clone());
             }
             Err(err) => {
+                if let Some(report) = report.as_mut() {
+                    report.fail_installation(
+                        download.key(),
+                        UpgradeErrorKind::Download,
+                        format!("{err:#}"),
+                    );
+                }
                 errors.push((
                     InstallErrorKind::DownloadUnpack,
                     download.key().clone(),
@@ -679,17 +810,37 @@ async fn perform_install(
         }
     }
 
+    let installations: Vec<_> = downloaded.iter().chain(satisfied.iter().copied()).collect();
+    if let Some(report) = report.as_mut() {
+        *report = upgrade_report(
+            &report_requests,
+            &existing_installations,
+            &installations,
+            &downloaded,
+            &changelog,
+            &errors,
+            false,
+        );
+    }
+
     let bin_dir = if matches!(bin, Some(false)) {
         None
     } else {
         Some(python_executable_dir()?)
     };
 
-    let installations: Vec<_> = downloaded.iter().chain(satisfied.iter().copied()).collect();
-
     // Repair installations that did not pass through the staged download path.
     for installation in not_finalized.iter().chain(satisfied.iter().copied()) {
-        installation.finalize()?;
+        if let Err(err) = installation.finalize() {
+            if let Some(report) = report.as_mut() {
+                report.fail_installation(
+                    installation.key(),
+                    UpgradeErrorKind::Finalize,
+                    format!("{err:#}"),
+                );
+            }
+            return Err(err.into());
+        }
     }
 
     let minor_versions =
@@ -722,7 +873,16 @@ async fn perform_install(
     // Executable links may point through these directories. Prepare those targets before writing
     // entry points so a failed minor-version link cannot publish a new unresolved executable.
     for installation in minor_versions.values() {
-        installation.ensure_minor_version_link()?;
+        if let Err(err) = installation.ensure_minor_version_link() {
+            if let Some(report) = report.as_mut() {
+                report.fail_installation(
+                    installation.key(),
+                    UpgradeErrorKind::MinorVersionLink,
+                    format!("{err:#}"),
+                );
+            }
+            return Err(err.into());
+        }
     }
 
     for installation in &installations {
@@ -766,6 +926,18 @@ async fn perform_install(
                 }
             }
         }
+    }
+
+    if let Some(report) = report.as_mut() {
+        *report = upgrade_report(
+            &report_requests,
+            &existing_installations,
+            &installations,
+            &downloaded,
+            &changelog,
+            &errors,
+            false,
+        );
     }
 
     if changelog.installed.is_empty() && errors.is_empty() {
@@ -999,6 +1171,129 @@ async fn perform_install(
     Ok(ExitStatus::Success)
 }
 
+/// Expand `--reinstall any` into the exact-key operations selected by the installer.
+fn resolved_report_requests<'a>(
+    requests: &[InstallRequest<'a>],
+    unsatisfied: &[Cow<'_, InstallRequest<'a>>],
+    reinstall: bool,
+) -> Vec<InstallRequest<'a>> {
+    requests
+        .iter()
+        .flat_map(|request| {
+            if reinstall && matches!(request.request, PythonRequest::Any) {
+                unsatisfied
+                    .iter()
+                    .filter(|resolved| {
+                        request
+                            .download_request
+                            .satisfied_by_key(resolved.download.key())
+                    })
+                    .unique_by(|resolved| resolved.download.key())
+                    .map(|resolved| InstallRequest {
+                        request: request.request.clone(),
+                        download_request: resolved.download_request.clone(),
+                        download: resolved.download,
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                vec![request.clone()]
+            }
+        })
+        .collect()
+}
+
+/// Describe completed installation and executable changes while the install lock is held.
+fn upgrade_report(
+    requests: &[InstallRequest<'_>],
+    before: &[ManagedPythonInstallation],
+    completed: &[&ManagedPythonInstallation],
+    downloaded: &[ManagedPythonInstallation],
+    changelog: &Changelog,
+    errors: &[(InstallErrorKind, PythonInstallationKey, Error)],
+    downloads_disabled: bool,
+) -> UpgradeReport {
+    let mut upgrades = Vec::with_capacity(requests.len());
+    for request in requests {
+        let key = request.download.key();
+        let mut from = before
+            .iter()
+            .filter(|installation| request.matches_installation(installation))
+            .map(InstallationReport::from)
+            .collect::<Vec<_>>();
+        from.sort_by(|a, b| a.key.cmp(&b.key).then_with(|| a.build.cmp(&b.build)));
+        let to = completed
+            .iter()
+            .find(|installation| installation.key() == key)
+            .map(|installation| InstallationReport::from(*installation));
+        let executables = changelog
+            .report
+            .iter()
+            .flat_map(|report| report.executables.values())
+            .filter(|change| change.to.key == key.to_string())
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut errors = errors
+            .iter()
+            .filter(|(_, failed_key, _)| failed_key == key)
+            .map(|(kind, _, error)| UpgradeError {
+                kind: match kind {
+                    InstallErrorKind::DownloadUnpack => UpgradeErrorKind::Download,
+                    InstallErrorKind::Bin => UpgradeErrorKind::Executable,
+                    InstallErrorKind::Registry => UpgradeErrorKind::Registry,
+                },
+                message: format!("{error:#}"),
+            })
+            .collect::<Vec<_>>();
+        if downloads_disabled && to.is_none() {
+            errors.push(UpgradeError {
+                kind: UpgradeErrorKind::DownloadsDisabled,
+                message: "Python downloads are not allowed".to_owned(),
+            });
+        }
+        errors.sort_by(|a, b| a.kind.cmp(&b.kind).then_with(|| a.message.cmp(&b.message)));
+        let outcome = installation_outcome(
+            &from,
+            to.as_ref(),
+            downloaded
+                .iter()
+                .any(|installation| installation.key() == key),
+            !executables.is_empty(),
+            !errors.is_empty(),
+        );
+        upgrades.push(UpgradeEntry {
+            selected_key: key.to_string(),
+            request: request.python_request().to_canonical_string().into_owned(),
+            outcome,
+            from,
+            to,
+            executables,
+            errors,
+        });
+    }
+    upgrades.sort_by(|a, b| {
+        a.request
+            .cmp(&b.request)
+            .then_with(|| a.selected_key.cmp(&b.selected_key))
+    });
+    UpgradeReport {
+        upgrades,
+        ..UpgradeReport::default()
+    }
+}
+
+fn write_upgrade_report(
+    format: PythonUpgradeFormat,
+    report: &UpgradeReport,
+    printer: Printer,
+) -> Result<()> {
+    if matches!(format, PythonUpgradeFormat::Json) {
+        let mut stdout = printer.stdout_important_raw();
+        serde_json::to_writer_pretty(&mut stdout, report)?;
+        std::io::Write::write_all(&mut stdout, b"\n")?;
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 struct BinLinkState {
     encoded_target: PathBuf,
@@ -1146,6 +1441,7 @@ fn create_bin_links(
 
         match create_link_to_executable(&target, PythonExecutable::console(&executable)) {
             Ok(()) => {
+                changelog.record_executable_change(&target, None, installation);
                 bin_links.record(&target, &executable, installation);
                 debug!(
                     "Installed executable at `{}` for {}",
@@ -1299,6 +1595,7 @@ fn create_bin_links(
                         .remove(&target);
                 }
 
+                changelog.record_executable_change(&target, existing.as_ref(), installation);
                 bin_links.record(&target, &executable, installation);
                 debug!(
                     "Updated executable at `{}` to {}",
