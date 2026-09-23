@@ -4,7 +4,8 @@ This internal Python 3.14+ package moves workflow logic out of shell and `jq` wi
 GitHub Actions as the scheduler. Actions still owns triggers, permissions, concurrency, runners, job
 dependencies, and credential acquisition.
 
-The first consumers are pull-request labeling and conflicted-pull-request discovery:
+The first consumers are pull-request labeling, conflicted-pull-request discovery, and commit
+transport for the regression-test and bug-fix workflows:
 
 ```console
 uv run --project scripts/automations --locked --no-dev uv-automations labels validate --allowed .github/allowed-pull-request-labels.json
@@ -40,8 +41,11 @@ reusable workflow until its artifact and Git operations are migrated.
 
 - `models` contains validated identities, immutable dataclasses, and closed enums.
 - `github` provides typed reads and narrow writes through `gh`. Credentials come from the caller's
-  environment; the library does not acquire or persist tokens.
+  environment; the library does not acquire or persist tokens. A publisher can use
+  `GitHub(token_variable="GH_READ_TOKEN")` for provenance and freshness reads while `GH_TOKEN`
+  remains a separate, narrowly scoped writer credential.
 - `git` provides the Git operations used by those workflows.
+- `artifacts` persists and imports exact commit ranges without checking out received code.
 - `actions` adapts typed results to Actions' file-based interfaces.
 - `workflows` contains workflow-specific decisions. Functions accept explicit inputs and narrow
   interfaces, so tests do not need GitHub access.
@@ -66,6 +70,44 @@ query = OpenPullRequestQuery(
 pull_requests = GitHub().list_open_pull_requests(query)
 ```
 
+## Trusted runtime and commit artifacts
+
+Workflows that switch to candidate code first check out `github.workflow_sha` and call
+`.github/actions/setup-automations`. The action installs a non-editable copy of this package in a
+separate Python 3.14 environment. Invoke its `python` output with `-I -m uv_automations` so later
+checkouts, `PYTHONPATH`, and local modules cannot replace the implementation. It leaves the job's
+Python selection alone; only this runtime is pinned to Python 3.14. The bootstrap also installs a
+pinned `uv` on `PATH`. Workflows that use `uv` as the product under test or as their project tool
+install their intended version separately afterward. Agent steps receive a separate writable
+temporary directory, with their caches and editable context inside it; the installed runtime stays
+outside that directory.
+
+The shared Git adapter disables hooks, grafts, replacement objects, and inherited
+repository-selection state. Commit transport has a small, concrete API:
+
+```python
+from pathlib import Path
+
+from uv_automations.artifacts import CommitRange, load_commit, persist_commit
+from uv_automations.git import Git
+from uv_automations.models import CommitSha
+
+commits = CommitRange(base=CommitSha(base_sha), head=CommitSha(head_sha))
+bundle = persist_commit(Git(Path("producer")), commits, Path("commit.bundle"))
+verified_head = load_commit(Git(Path("publisher")), bundle.path, commits)
+```
+
+The base must be a strict ancestor of the head. The bundle advertises exactly
+`refs/uv-automations/commits/<head-sha>`; import verifies that ref and the expected commit before
+checking ancestry. It preserves the publisher's checkout, refs, and `FETCH_HEAD`. Empty results
+belong to the caller's outcome type, not to an ambiguous empty bundle.
+
+Use `commits persist` and `commits load` for the corresponding CLI stages. Actions transfers the
+bundle using the upload action's immutable `artifact-id`; pass that ID and the producer's exact
+`head-sha` to the publisher. A valid bundle is not authorization to publish it: the caller must
+still check its own allowed paths, authorship, current target, and other preconditions before
+acquiring write credentials.
+
 ## Subsequent migrations
 
 Migrate complete deterministic workflow stages rather than extracting isolated `jq` expressions.
@@ -86,10 +128,6 @@ The intended API for the next consumers is approximately:
 # github.py
 def get_issue(reference: IssueRef) -> Issue: ...
 def get_workflow_run(reference: WorkflowRunRef) -> WorkflowRun: ...
-
-
-# artifacts.py
-def verify_bundle(path: Path, policy: BundlePolicy) -> VerifiedBundle: ...
 
 
 # context.py
@@ -117,7 +155,7 @@ def publish(
     github_writer: GitHubWriter,
     git: Git,
     plan: PromotionPlan,
-    bundle: VerifiedBundle,
+    head: CommitSha,
 ) -> PromotionResult: ...
 ```
 

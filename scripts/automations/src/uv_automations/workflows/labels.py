@@ -9,7 +9,7 @@ from typing import Protocol
 
 from uv_automations import git
 from uv_automations.github import PullRequestLabelContext
-from uv_automations.json import as_array, as_object, as_string, loads
+from uv_automations.json import as_array, as_object, as_string, loads, require_keys
 from uv_automations.models import (
     CommitSha,
     Label,
@@ -34,8 +34,7 @@ class LabelRecommendation:
     @classmethod
     def from_json(cls, value: object) -> LabelRecommendation:
         data = as_object(value)
-        if data.keys() != {"labels", "summary"}:
-            raise ValueError("Expected exactly 'labels' and 'summary'")
+        require_keys(data, {"labels", "summary"})
         labels = tuple(as_string(label) for label in as_array(data["labels"]))
         return cls(labels, as_string(data["summary"]))
 
