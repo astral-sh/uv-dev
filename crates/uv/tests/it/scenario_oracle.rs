@@ -15,6 +15,7 @@ use uv_test::packse::generate::{
     SmallGraphOptions, WitnessedProjectGraph, generate_marker_graph, generate_project_graph,
     generate_satisfiable_project_graph, generate_small_graph,
 };
+use uv_test::packse::lock_score::score_lock_versions;
 use uv_test::packse::minimize::minimize_witnessed_project_lock_scenario;
 use uv_test::packse::oracle::Selection;
 use uv_test::packse::project::{ProjectSelection, ScenarioProject};
@@ -147,6 +148,41 @@ fn universal_locks_match_their_concrete_projections() -> Result<()> {
         ),
     ]
     "#);
+    Ok(())
+}
+
+#[test]
+fn lock_version_scores_use_the_actual_universal_lock() -> Result<()> {
+    let targets = ScenarioTarget::matrix(
+        &[PythonVersion::from_str("3.12").expect("valid Python version")],
+        &[
+            ScenarioPlatform::Linux,
+            ScenarioPlatform::Macos,
+            ScenarioPlatform::Windows,
+        ],
+    );
+    for lockfile in [LockfileMode::Standard, LockfileMode::WithoutMetadata] {
+        let context = uv_test::test_context!("3.12");
+        let scenario = Scenario::from_path(
+            &context
+                .workspace_root
+                .join("test/scenarios/fork/basic.toml"),
+        )?;
+        let result = check_lock_scenario(
+            &context,
+            &scenario,
+            &targets,
+            LockCheckOptions {
+                lockfile,
+                ..LockCheckOptions::new(100_000)
+            },
+        )?;
+        assert!(matches!(result, LockCheckResult::Satisfiable { .. }));
+
+        let lock = context.read("uv.lock");
+        assert_eq!(score_lock_versions(&lock)?.excess_versions(), 1);
+        assert_eq!(context.read("uv.lock"), lock);
+    }
     Ok(())
 }
 
