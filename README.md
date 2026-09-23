@@ -17,9 +17,10 @@ astral-sh/uv#5737 is the canonical open match. It already requests that `uv sync
 virtual-environment option. The new report's environment-variable spelling and its explicit
 existing-environment case add useful detail, but do not require a separate discussion.
 
-There is also an experimental alternative. Merged astral-sh/uv#19965 makes project environments
-relocatable under `--preview-features relocatable-envs-default`. This is a default-behavior preview,
-not the direct `uv sync --relocatable` or `UV_VENV_RELOCATABLE` interface requested here.
+The maintainer direction is to make project environments always relocatable in the future. Merged
+astral-sh/uv#19965 provides that behavior today under
+`--preview-features relocatable-envs-default`. This is a default-behavior preview, not the direct
+`uv sync --relocatable` or `UV_VENV_RELOCATABLE` interface requested here.
 
 The follow-up comment identifies an additional limitation: after `uv venv --relocatable && uv sync`,
 the default editable installation of the current workspace can retain an absolute project path, so
@@ -77,9 +78,11 @@ an enhancement, but the direct open match makes `duplicate` take precedence.
 Current source passes the `relocatable-envs-default` preview state into project-environment creation,
 and the sync integration test verifies that the resulting `pyvenv.cfg` contains
 `relocatable = true` and that a console script still runs after the project is moved. The preview was
-expanded from `uv venv` to project environments by astral-sh/uv#19965. By contrast, the direct
-`--relocatable` argument and `UV_VENV_RELOCATABLE` setting are defined for `uv venv`, consistent with
-the remaining interface request in astral-sh/uv#5737.
+expanded from `uv venv` to project environments by astral-sh/uv#19965. A maintainer has now confirmed
+on astral-sh/uv#21945 that the intended end state is for project environments to always be
+relocatable; no stabilization timeline was given. By contrast, the direct `--relocatable` argument
+and `UV_VENV_RELOCATABLE` setting are defined for `uv venv`, consistent with the remaining interface
+request in astral-sh/uv#5737.
 
 The existing sync preview test installs `black`, moves the project directory, and verifies that the
 `black` console script still runs. It does not install the current workspace as an editable package
