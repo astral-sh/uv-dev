@@ -172,10 +172,7 @@ fn uninstall_preserves_shared_pycache() -> Result<()> {
     )?;
 
     uv_snapshot!(context.filters(), context.pip_uninstall().arg("remove"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Uninstalled 1 package in [TIME]
      - remove==1.0.0
@@ -187,6 +184,98 @@ fn uninstall_preserves_shared_pycache() -> Result<()> {
     assert!(!pycache.child("remove.cpython-312.opt-1.pyc").exists());
     assert!(pycache.child("keep.cpython-312.pyc").exists());
     assert!(pycache.child("keep.cpython-312.opt-1.pyc").exists());
+
+    Ok(())
+}
+
+/// Real bytecode for retained modules survives uninstall, while all optimization levels for
+/// removed sources and empty package directories are cleaned up.
+#[test]
+fn uninstall_preserves_compiled_shared_modules() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let site_packages = ChildPath::new(context.site_packages());
+
+    let shared = site_packages.child("shared");
+    shared.child("remove.py").write_str("VALUE = 'removed'\n")?;
+    shared.child("keep.py").write_str("VALUE = 'retained'\n")?;
+    let exclusive = site_packages.child("exclusive");
+    exclusive
+        .child("module.py")
+        .write_str("VALUE = 'exclusive'\n")?;
+
+    let remove = site_packages.child("remove-1.0.0.dist-info");
+    remove
+        .child("METADATA")
+        .write_str("Metadata-Version: 2.1\nName: remove\nVersion: 1.0.0\n")?;
+    remove.child("RECORD").write_str(
+        "shared/remove.py,,\nexclusive/module.py,,\nremove-1.0.0.dist-info/METADATA,,\nremove-1.0.0.dist-info/RECORD,,\n",
+    )?;
+    let keep = site_packages.child("keep-1.0.0.dist-info");
+    keep.child("METADATA")
+        .write_str("Metadata-Version: 2.1\nName: keep\nVersion: 1.0.0\n")?;
+    keep.child("RECORD").write_str(
+        "shared/keep.py,,\nkeep-1.0.0.dist-info/METADATA,,\nkeep-1.0.0.dist-info/RECORD,,\n",
+    )?;
+
+    context
+        .assert_command(
+            "import py_compile, shared.remove, shared.keep, exclusive.module; \
+             [py_compile.compile(module.__file__, doraise=True, optimize=optimization) \
+             for module in (shared.remove, shared.keep, exclusive.module) \
+             for optimization in (0, 1, 2)]",
+        )
+        .success();
+
+    let pycache = shared.child("__pycache__");
+    let retained = ["", ".opt-1", ".opt-2"]
+        .map(|optimization| pycache.child(format!("keep.cpython-312{optimization}.pyc")));
+    let retained_contents = retained
+        .iter()
+        .map(fs_err::read)
+        .collect::<std::io::Result<Vec<_>>>()?;
+    for optimization in ["", ".opt-1", ".opt-2"] {
+        assert!(
+            pycache
+                .child(format!("remove.cpython-312{optimization}.pyc"))
+                .exists()
+        );
+        assert!(
+            exclusive
+                .child(format!("__pycache__/module.cpython-312{optimization}.pyc"))
+                .exists()
+        );
+    }
+
+    uv_snapshot!(context.pip_uninstall().arg("remove"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+     - remove==1.0.0
+    ");
+
+    assert!(!remove.exists());
+    assert!(!shared.child("remove.py").exists());
+    assert!(!exclusive.exists());
+    assert!(keep.child("METADATA").exists());
+    assert!(keep.child("RECORD").exists());
+    for optimization in ["", ".opt-1", ".opt-2"] {
+        assert!(
+            !pycache
+                .child(format!("remove.cpython-312{optimization}.pyc"))
+                .exists()
+        );
+    }
+    for (path, contents) in retained.iter().zip(retained_contents) {
+        assert_eq!(fs_err::read(path)?, contents);
+    }
+    context
+        .assert_command(
+            "import importlib.util, shared.keep; \
+             assert shared.keep.VALUE == 'retained'; \
+             assert importlib.util.find_spec('shared.remove') is None; \
+             assert importlib.util.find_spec('exclusive') is None",
+        )
+        .success();
 
     Ok(())
 }
