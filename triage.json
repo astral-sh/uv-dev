@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 5737,
+        "title": "Allow setting virtual environment options in `pyproject.toml`",
+        "url": "https://github.com/astral-sh/uv/issues/5737",
+        "state": "open",
+        "reason": "Exact canonical match: it requests that `uv sync` accept `--relocatable` when implicitly creating `.venv`, plus persistent configuration for that option."
+      },
+      {
+        "kind": "issue",
+        "number": 13994,
+        "title": "Use relocatable virtual environments by default",
+        "url": "https://github.com/astral-sh/uv/issues/13994",
+        "state": "open",
+        "reason": "Broader alternative: it proposes relocatable project environments by default instead of an explicit `uv sync` opt-in, and links to astral-sh/uv#5737."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19965,
+        "title": "Make project environments relocatable under preview",
+        "url": "https://github.com/astral-sh/uv/pull/19965",
+        "state": "merged",
+        "reason": "Implements the broader alternative behind `--preview-features relocatable-envs-default`; it does not add `uv sync --relocatable` or apply `UV_VENV_RELOCATABLE` to sync."
+      },
+      {
+        "kind": "issue",
+        "number": 10325,
+        "title": "Add flag to `uv sync` to disallow virtualenv recreation",
+        "url": "https://github.com/astral-sh/uv/issues/10325",
+        "state": "open",
+        "reason": "Adjacent existing-environment design: it notes that `uv sync` recreation may lose flags such as `--relocatable`, but requests fail-instead-of-recreate behavior."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18331,
+        "title": "Add an environment variable for `UV_VENV_RELOCATABLE`",
+        "url": "https://github.com/astral-sh/uv/pull/18331",
+        "state": "merged",
+        "reason": "Implemented the exact environment variable for `uv venv`, establishing its current command scope without providing the requested `uv sync` interface."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using exact identifiers (`--relocatable`, `UV_VENV_RELOCATABLE`, `uv sync --relocatable`), command pairings, and conceptual terms for implicit environment creation, venv configuration, recreation, moved environments, script rewriting, and relocatable defaults. Inspected candidate bodies, comments, linked discussions, closing pull requests, and current source/tests. astral-sh/uv#5737 is the exact open request. astral-sh/uv#10895 and astral-sh/uv#13989 were ruled out because they concern detecting moved or broken environments rather than selecting relocatable creation semantics."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#5737 already tracks the same core request: allow `uv sync` to pass `--relocatable` to an implicitly created virtual environment. The new issue adds the existing `UV_VENV_RELOCATABLE` spelling and raises existing-environment behavior, but those details can be centralized there. No regression or correctness failure is established.",
+  "summary": "astral-sh/uv#5737 is the direct open duplicate. astral-sh/uv#13994 and astral-sh/uv#19965 cover the broader default/preview approach; astral-sh/uv#10325 and astral-sh/uv#18331 provide adjacent recreation and environment-variable context.",
+  "draft_response": "Thanks for the request. This is already tracked in astral-sh/uv#5737, which explicitly asks for `uv sync` to accept relocatable virtual-environment creation options when it creates `.venv`; behavior for an existing environment can be resolved there as well.\n\nAs an experimental alternative, `--preview-features relocatable-envs-default` makes project environments created by `uv sync` relocatable, via astral-sh/uv#19965. That does not add the requested `uv sync --relocatable` or `UV_VENV_RELOCATABLE` interface. Let’s centralize the opt-in interface request in astral-sh/uv#5737."
+}
