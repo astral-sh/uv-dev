@@ -466,7 +466,7 @@ class PromotionRetargetWorkflowTests(unittest.TestCase):
 
     def test_sts_allows_only_matching_main_sync_callers_and_pr_writes(self) -> None:
         root = Path(__file__).resolve().parents[3]
-        policy = json.loads((root / ".github/ost-simple-sts.json").read_text())
+        policy = json.loads((root / ".github/secure-token-service.json").read_text())
         rules = [
             rule
             for rule in policy["rules"]
