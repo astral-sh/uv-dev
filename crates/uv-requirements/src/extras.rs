@@ -1,3 +1,4 @@
+use std::slice;
 use std::sync::Arc;
 
 use futures::{TryStreamExt, stream::FuturesOrdered};
@@ -116,9 +117,26 @@ impl<'a, Context: BuildContext> ExtrasResolver<'a, Context> {
             }
         };
 
-        // Sort extras for consistency.
+        // Only activate extras that contribute requirements. Empty extras are still preserved in
+        // the distribution metadata, but resolving them creates redundant universal-resolution
+        // forks when they participate in conflicts.
         let extras = {
-            let mut extras = metadata.provides_extra.to_vec();
+            let mut extras = metadata
+                .provides_extra
+                .iter()
+                .filter(|extra| {
+                    metadata.requires_dist.iter().any(|requirement| {
+                        let production = requirement.marker.simplify_not_extras_with(|_| true);
+                        let optional = requirement
+                            .marker
+                            .simplify_extras(slice::from_ref(extra))
+                            .simplify_not_extras_with(|candidate| candidate != *extra)
+                            .and(production.negate());
+                        !optional.is_false()
+                    })
+                })
+                .cloned()
+                .collect::<Vec<_>>();
             extras.sort_unstable();
             extras
         };
