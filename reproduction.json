@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Using installed uv 0.12.13 on Linux x86_64 with CPython 3.12.3, an isolated warmed-cache project containing `transformers>=4.40.0,<6.0.0` and one conflict group of empty extras showed wall times of 24 ms (5 extras), 194 ms (20), 1.523 s (30), 7.476 s (40), and 28.901 s (50). All `uv lock --project <temp-dir>` runs succeeded, while a 50-extra control without `transformers` took 50 ms. This reproduces the reported severe nonlinear scaling; the issue-context README was updated with commands, configuration, timings, and existing test coverage."
+}
