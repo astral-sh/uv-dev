@@ -1367,9 +1367,11 @@ fn write_upgrade_report(
     printer: Printer,
 ) -> Result<()> {
     if matches!(format, PythonUpgradeFormat::Json) {
-        let mut stdout = printer.stdout_important_raw();
-        serde_json::to_writer_pretty(&mut stdout, report)?;
-        std::io::Write::write_all(&mut stdout, b"\n")?;
+        writeln!(
+            printer.stdout_important_raw(),
+            "{}",
+            serde_json::to_string_pretty(report)?
+        )?;
     }
     Ok(())
 }
