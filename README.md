@@ -15,17 +15,24 @@ Two established behaviors explain the result:
 
 The issue requests that `--no-dev` and other selection options describe this relationship more explicitly. No existing issue or pull request was found that tracks that broader CLI-help clarification.
 
-## Draft response
+The issue's example does not actually pass `--no-sync`: it runs `uv sync` followed by `uv run --no-dev`. It therefore demonstrates the separate inexact-sync behavior, not the effect of combining `--no-dev` with `--no-sync`. The reporter's expectation for the combined flags remains unclear.
 
-`--no-dev` selects a sync target that excludes the `dev` group; it does not remove or hide packages independently of synchronization. `uv run` uses an inexact sync by default, so a development executable already installed by `uv sync` can remain runnable, as discussed in astral-sh/uv#7914 and documented by astral-sh/uv#17366. With `--no-sync`, the project environment is not updated at all, so dependency-selection flags do not change what is already installed.
+## Maintainer follow-up
 
-The current option text does not make those interactions clear. It would be reasonable to clarify the dependency-selection options and cross-reference `--no-sync` and `--exact`, while accounting for options such as `--with` that can still create an overlay.
+A maintainer questioned whether documenting the interaction on every sync-affecting option is feasible, noting that many such options necessarily have no effect on the base environment when `--no-sync` is used and that repeating this could make the CLI documentation excessively verbose. They asked what the reporter expected `--no-dev` to do when combined with `--no-sync`.
+
+The next useful clarification is whether the request concerns:
+
+1. `uv run --no-sync --no-dev`, where no base-environment synchronization occurs; or
+2. the provided `uv run --no-dev` example, where an inexact sync excludes the group from the desired set but retains its already-installed packages.
+
+No maintainer decision to implement or close the enhancement has been made. A narrower documentation change, such as explaining the relationship once on `--no-sync` or in shared command documentation, has not been proposed or accepted in the discussion.
 
 ## Classification
 
 This is an enhancement. The source and maintainer comments establish that the observed behavior is intentional: `--no-sync` bypasses the base project-environment update, and ordinary `uv run` synchronization is inexact. The request is to improve the existing CLI descriptions so users understand that dependency-selection flags govern the desired sync set rather than independently removing or disabling installed packages.
 
-The report is not a bug because no incorrect behavior is established. It is not primarily a support question because it proposes a concrete documentation improvement. It is not a duplicate: the closest prior discussions explain the behavior and one merged pull request documents inexact syncing, but none tracks clarification across the affected CLI flags.
+The report is not a bug because no incorrect behavior is established. It is not primarily a support question because it proposes a concrete documentation improvement. It is not a duplicate: the closest prior discussions explain the behavior and one merged pull request documents inexact syncing, but none tracks clarification across the affected CLI flags. The maintainer follow-up lowers confidence that the requested across-the-board documentation expansion will be accepted and makes the reporter's expected behavior a prerequisite for evaluating a narrower change.
 
 ## Related
 
