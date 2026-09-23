@@ -166,6 +166,105 @@ fn installed_egg_info_metadata_error_preserves_source() -> Result<()> {
 }
 
 #[test]
+fn installed_legacy_discovery_ignores_missing_or_malformed_metadata() -> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    let file = temp_dir.path().join("file/fixture.egg-info");
+    let directory = temp_dir.path().join("directory/fixture.egg-info");
+    let egg_link = temp_dir.path().join("legacy/fixture.egg-link");
+    let legacy_metadata = temp_dir
+        .path()
+        .join("legacy/source/fixture.egg-info/PKG-INFO");
+    fs_err::create_dir_all(egg_link.parent().context("missing egg-link parent")?)?;
+    fs_err::write(&egg_link, "source\n")?;
+
+    for (expected_kind, distribution, metadata) in [
+        ("egg-info file", file.clone(), file),
+        (
+            "egg-info directory",
+            directory.clone(),
+            directory.join("PKG-INFO"),
+        ),
+        ("legacy editable", egg_link, legacy_metadata),
+    ] {
+        fs_err::create_dir_all(metadata.parent().context("missing metadata parent")?)?;
+        assert!(InstalledDist::try_from_path(&distribution)?.is_none());
+
+        fs_err::write(&metadata, MISSING_NAME_METADATA)?;
+        assert!(InstalledDist::try_from_path(&distribution)?.is_none());
+
+        fs_err::write(&metadata, VALID_METADATA)?;
+        let installed = InstalledDist::try_from_path(&distribution)?
+            .context("missing installed legacy distribution")?;
+        assert_eq!(
+            match &installed.kind {
+                InstalledDistKind::Registry(_) => "registry",
+                InstalledDistKind::Url(_) => "url",
+                InstalledDistKind::EggInfoFile(_) => "egg-info file",
+                InstalledDistKind::EggInfoDirectory(_) => "egg-info directory",
+                InstalledDistKind::LegacyEditable(_) => "legacy editable",
+            },
+            expected_kind
+        );
+        assert_eq!(installed.version().to_string(), "1.0.0");
+    }
+    Ok(())
+}
+
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn installed_legacy_discovery_read_error_preserves_source() -> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    let directory = temp_dir.path().join("directory/fixture.egg-info");
+    let egg_link = temp_dir.path().join("legacy/fixture.egg-link");
+    let legacy_metadata = temp_dir
+        .path()
+        .join("legacy/source/fixture.egg-info/PKG-INFO");
+    fs_err::create_dir_all(egg_link.parent().context("missing egg-link parent")?)?;
+    fs_err::write(&egg_link, "source\n")?;
+
+    for (distribution, metadata) in [
+        (directory.clone(), directory.join("PKG-INFO")),
+        (egg_link, legacy_metadata),
+    ] {
+        // A directory at the metadata path fails to read even for a privileged user.
+        fs_err::create_dir_all(&metadata)?;
+        let expected = fs_err::read(&metadata).expect_err("the legacy metadata is a directory");
+        assert_eq!(expected.kind(), std::io::ErrorKind::IsADirectory);
+        let error = InstalledDist::try_from_path(&distribution)
+            .expect_err("the legacy metadata could not be read");
+        let InstalledDistError::Io(io_error) = &error else {
+            anyhow::bail!("unexpected installed-distribution error: {error:?}");
+        };
+        assert_eq!(io_error.kind(), expected.kind());
+        assert_eq!(io_error.raw_os_error(), expected.raw_os_error());
+        assert_eq!(error.to_string(), expected.to_string());
+    }
+    Ok(())
+}
+
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn installed_egg_info_discovery_metadata_error_preserves_source() -> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    let parent = temp_dir.path().join("not-a-directory");
+    fs_err::write(&parent, "")?;
+    let distribution = parent.join("fixture.egg-info");
+
+    let expected =
+        fs_err::metadata(&distribution).expect_err("the metadata parent is not a directory");
+    assert_eq!(expected.kind(), std::io::ErrorKind::NotADirectory);
+    let error = InstalledDist::try_from_path(&distribution)
+        .expect_err("the distribution could not be inspected");
+    let InstalledDistError::Io(io_error) = &error else {
+        anyhow::bail!("unexpected installed-distribution error: {error:?}");
+    };
+    assert_eq!(io_error.kind(), expected.kind());
+    assert_eq!(io_error.raw_os_error(), expected.raw_os_error());
+    assert_eq!(error.to_string(), expected.to_string());
+    Ok(())
+}
+
+#[test]
 fn installed_metadata_caches_only_successful_reads() -> Result<()> {
     let temp_dir = tempfile::tempdir()?;
     let registry = temp_dir.path().join("registry/fixture-1.0.0.dist-info");

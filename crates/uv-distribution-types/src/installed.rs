@@ -242,10 +242,11 @@ impl InstalledDist {
         if path.extension().is_some_and(|ext| ext == "egg-info") {
             let metadata = match fs_err::metadata(path) {
                 Ok(metadata) => metadata,
-                Err(err) => {
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                     warn!("Invalid `.egg-info` path: {err}");
                     return Ok(None);
                 }
+                Err(err) => return Err(err.into()),
             };
 
             let Some(file_stem) = path.file_stem() else {
@@ -280,7 +281,7 @@ impl InstalledDist {
 
             if metadata.is_dir() {
                 let metadata_path = path.join("PKG-INFO");
-                let Some(egg_metadata) = read_metadata(&metadata_path) else {
+                let Some(egg_metadata) = read_metadata(&metadata_path)? else {
                     return Ok(None);
                 };
                 return Ok(Some(Self::from(InstalledDistKind::EggInfoDirectory(
@@ -296,7 +297,7 @@ impl InstalledDist {
             }
 
             if metadata.is_file() {
-                let Some(egg_metadata) = read_metadata(path) else {
+                let Some(egg_metadata) = read_metadata(path)? else {
                     return Ok(None);
                 };
                 return Ok(Some(Self::from(InstalledDistKind::EggInfoFile(
@@ -346,7 +347,7 @@ impl InstalledDist {
 
             // Mildly unfortunate that we must read metadata to get the version.
             let metadata_path = egg_info.join("PKG-INFO");
-            let Some(egg_metadata) = read_metadata(&metadata_path) else {
+            let Some(egg_metadata) = read_metadata(&metadata_path)? else {
                 return Ok(None);
             };
 
@@ -646,13 +647,14 @@ impl InstalledMetadata for InstalledDist {
     }
 }
 
-fn read_metadata(path: &Path) -> Option<uv_pypi_types::Metadata10> {
+fn read_metadata(path: &Path) -> std::io::Result<Option<uv_pypi_types::Metadata10>> {
     let content = match fs::read(path) {
         Ok(content) => content,
-        Err(err) => {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             warn!("Failed to read metadata for {path:?}: {err}");
-            return None;
+            return Ok(None);
         }
+        Err(err) => return Err(err),
     };
     let metadata = match uv_pypi_types::Metadata10::parse_pkg_info(&content) {
         Ok(metadata) => metadata,
@@ -665,11 +667,11 @@ fn read_metadata(path: &Path) -> Option<uv_pypi_types::Metadata10> {
                 _ => "invalid core metadata",
             };
             warn!("Failed to parse metadata for {path:?}: {reason}");
-            return None;
+            return Ok(None);
         }
     };
 
-    Some(metadata)
+    Ok(Some(metadata))
 }
 
 /// Parse the legacy `Version` field without including its raw value in errors.
