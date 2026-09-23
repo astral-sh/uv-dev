@@ -12,7 +12,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import assert_never
 
-from uv_automations import commits_cli
+from uv_automations import commits_cli, rebase_cli
 from uv_automations.actions import append_summary, write_json_output, write_output
 from uv_automations.github import GitHub
 from uv_automations.json import loads
@@ -50,6 +50,7 @@ class CommandGroup(StrEnum):
     LABELS = "labels"
     PULL_REQUESTS = "pull-requests"
     COMMITS = "commits"
+    REBASE = "rebase"
 
 
 class CommandKind(StrEnum):
@@ -119,7 +120,7 @@ type CoreCommand = (
     | RemoveRebaseLabel
 )
 
-type Command = CoreCommand | commits_cli.CommitCommand
+type Command = CoreCommand | commits_cli.CommitCommand | rebase_cli.Command
 
 
 def _positive_integer(value: str) -> int:
@@ -199,6 +200,7 @@ def create_parser() -> argparse.ArgumentParser:
     remove.set_defaults(command=CommandKind.REMOVE_REBASE_LABEL)
     _add_pull_request(remove)
     commits_cli.add_commands(commands.add_parser("commits"))
+    rebase_cli.add_commands(commands.add_parser("rebase"))
     return parser
 
 
@@ -212,6 +214,8 @@ def parse_command(
             return _parse_core_command(parsed)
         case CommandGroup.COMMITS:
             return commits_cli.parse_command(parsed)
+        case CommandGroup.REBASE:
+            return rebase_cli.parse_command(parsed)
     assert_never(group)
 
 
@@ -344,6 +348,17 @@ def run(command: Command) -> None:
             return
         case commits_cli.PersistCommit() | commits_cli.LoadCommit():
             commits_cli.run(command)
+            return
+        case (
+            rebase_cli.Prepare()
+            | rebase_cli.Persist()
+            | rebase_cli.Load()
+            | rebase_cli.VerifySource()
+            | rebase_cli.Push()
+            | rebase_cli.VerifyEmpty()
+            | rebase_cli.CloseEmpty()
+        ):
+            rebase_cli.run(command)
             return
     assert_never(command)
 
