@@ -15,24 +15,24 @@ Two established behaviors explain the result:
 
 The issue requests that `--no-dev` and other selection options describe this relationship more explicitly. No existing issue or pull request was found that tracks that broader CLI-help clarification.
 
-The issue's example does not actually pass `--no-sync`: it runs `uv sync` followed by `uv run --no-dev`. It therefore demonstrates the separate inexact-sync behavior, not the effect of combining `--no-dev` with `--no-sync`. The reporter's expectation for the combined flags remains unclear.
+The issue's example does not actually pass `--no-sync`: it runs `uv sync` followed by `uv run --no-dev`. It therefore demonstrates the separate inexact-sync behavior, not the effect of combining `--no-dev` with `--no-sync`. The reporter has since confirmed that the behavior is correct and expected; the requested change is limited to help-text clarity. Specifically, they read “Disable the development dependency group” as potentially implying that `uv run` would not use tools from that group even when they were installed by an earlier sync.
 
 ## Maintainer follow-up
 
 A maintainer questioned whether documenting the interaction on every sync-affecting option is feasible, noting that many such options necessarily have no effect on the base environment when `--no-sync` is used and that repeating this could make the CLI documentation excessively verbose. They asked what the reporter expected `--no-dev` to do when combined with `--no-sync`.
 
-The next useful clarification is whether the request concerns:
+The reporter clarified that they do not expect different runtime behavior. Their concern is the interpretation of the generated `uv run --help` text, rather than either of these execution paths:
 
 1. `uv run --no-sync --no-dev`, where no base-environment synchronization occurs; or
 2. the provided `uv run --no-dev` example, where an inexact sync excludes the group from the desired set but retains its already-installed packages.
 
-No maintainer decision to implement or close the enhancement has been made. A narrower documentation change, such as explaining the relationship once on `--no-sync` or in shared command documentation, has not been proposed or accepted in the discussion.
+No maintainer decision to implement or close the enhancement has been made. The broad proposal to annotate every sync-affecting option remains subject to the maintainer's verbosity concern. A narrower documentation change, such as explaining the relationship once on `--no-sync` or in shared command documentation, has not been proposed or accepted in the discussion.
 
 ## Classification
 
 This is an enhancement. The source and maintainer comments establish that the observed behavior is intentional: `--no-sync` bypasses the base project-environment update, and ordinary `uv run` synchronization is inexact. The request is to improve the existing CLI descriptions so users understand that dependency-selection flags govern the desired sync set rather than independently removing or disabling installed packages.
 
-The report is not a bug because no incorrect behavior is established. It is not primarily a support question because it proposes a concrete documentation improvement. It is not a duplicate: the closest prior discussions explain the behavior and one merged pull request documents inexact syncing, but none tracks clarification across the affected CLI flags. The maintainer follow-up lowers confidence that the requested across-the-board documentation expansion will be accepted and makes the reporter's expected behavior a prerequisite for evaluating a narrower change.
+The report is not a bug because no incorrect behavior is established, and the reporter explicitly confirms that the flags work as expected. It is not primarily a support question because it proposes a concrete documentation improvement. It is not a duplicate: the closest prior discussions explain the behavior and one merged pull request documents inexact syncing, but none tracks clarification across the affected CLI flags. The maintainer follow-up lowers confidence that the requested across-the-board documentation expansion will be accepted, but the scope is now clearly help text rather than a behavior change.
 
 ## Related
 
