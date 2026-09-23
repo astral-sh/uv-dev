@@ -738,7 +738,7 @@ async fn perform_install(
     let reporter = PythonDownloadReporter::new(printer, Some(downloads.len() as u64));
     let replacements = changelog.existing.clone();
 
-    let mut tasks = buffered_downloads(
+    let tasks = buffered_downloads(
         &downloads,
         async |download| {
             (
@@ -769,8 +769,8 @@ async fn perform_install(
     let mut downloaded = Vec::with_capacity(downloads.len());
     let mut not_finalized = Vec::new();
     let mut requests_by_new_installation = BTreeMap::new();
-    let mut bytecode_send_error = None;
-    while let Some((download, result)) = tasks.next().await {
+    let settle_on_error = report.is_some();
+    settle_downloads(tasks, settle_on_error, |(download, result)| {
         match result {
             Ok(download_result) => {
                 // Downloads finalize installation contents before publishing the directory.
@@ -781,21 +781,11 @@ async fn perform_install(
                 };
 
                 let installation = ManagedPythonInstallation::new(path, download);
-                if let Some(report) = report.as_mut() {
-                    report.record_installation(&installation);
-                }
-                if bytecode_send_error.is_none()
-                    && let Some(ref sender) = bytecode_compilation_sender
-                    && let Err(err) = sender.send(installation.clone())
-                {
-                    let err = anyhow::anyhow!(err);
-                    if report.is_none() {
-                        return Err(err);
-                    }
-                    // The JSON report must observe publications from every admitted download.
-                    // The closed receiver stops the lazy input; only the buffered work remains.
-                    bytecode_send_error = Some(err);
-                }
+                record_downloaded_installation(
+                    report,
+                    bytecode_compilation_sender.as_ref(),
+                    &installation,
+                )?;
                 changelog.installed.insert(installation.key().clone());
                 for request in &requests {
                     // Take note of which installations satisfied which requests
@@ -829,11 +819,9 @@ async fn perform_install(
                 ));
             }
         }
-    }
-
-    if let Some(err) = bytecode_send_error {
-        return Err(err);
-    }
+        Ok(())
+    })
+    .await?;
     if report.is_some()
         && bytecode_compilation_sender
             .as_ref()
@@ -1223,6 +1211,46 @@ where
         .take_while(move |_| ready(!bytecode_sender.is_some_and(mpsc::UnboundedSender::is_closed)))
         .map(fetch)
         .buffer_unordered(concurrency)
+}
+
+/// Drain admitted downloads before returning the first observation error in JSON mode.
+async fn settle_downloads<S, F>(mut tasks: S, settle_on_error: bool, mut observe: F) -> Result<()>
+where
+    S: Stream + Unpin,
+    F: FnMut(S::Item) -> Result<()>,
+{
+    let mut first_error = None;
+    while let Some(result) = tasks.next().await {
+        if let Err(err) = observe(result) {
+            if !settle_on_error {
+                return Err(err);
+            }
+            if first_error.is_none() {
+                first_error = Some(err);
+            }
+        }
+    }
+    if let Some(err) = first_error {
+        return Err(err);
+    }
+    Ok(())
+}
+
+/// Record the published directory before a failed bytecode send can stop its observation.
+fn record_downloaded_installation(
+    report: &mut Option<UpgradeReport>,
+    bytecode_sender: Option<&mpsc::UnboundedSender<ManagedPythonInstallation>>,
+    installation: &ManagedPythonInstallation,
+) -> Result<()> {
+    if let Some(report) = report.as_mut() {
+        report.record_installation(installation);
+    }
+    if let Some(sender) = bytecode_sender {
+        sender
+            .send(installation.clone())
+            .map_err(|err| anyhow::anyhow!(err))?;
+    }
+    Ok(())
 }
 
 /// Expand `--reinstall any` into the exact-key operations selected by the installer.
@@ -1873,6 +1901,9 @@ mod tests {
     use std::io::ErrorKind;
     use std::path::Path;
 
+    use crate::commands::python::upgrade_report::{
+        UpgradeEntry, UpgradeErrorKind, UpgradeOutcome, UpgradeReport,
+    };
     use anyhow::{Context, Result};
     use futures::{StreamExt, join};
     use tokio::sync::{mpsc, oneshot};
@@ -1885,7 +1916,8 @@ mod tests {
 
     use super::{
         BinLinkStates, Changelog, InstallErrorKind, buffered_downloads, create_bin_links,
-        find_matching_bin_link, read_bin_link_target,
+        find_matching_bin_link, read_bin_link_target, record_downloaded_installation,
+        settle_downloads,
     };
 
     #[tokio::test]
@@ -1894,47 +1926,78 @@ mod tests {
         let root = dunce::canonicalize(temp_dir.path())?;
         let published = root.join("published");
         fs_err::create_dir(&published)?;
-        for name in ["first", "second", "unstarted"] {
-            let staged = root.join(name);
-            fs_err::create_dir(&staged)?;
-            fs_err::write(staged.join("contents"), name)?;
-        }
+        let staged = root.join("staged");
+        let first = create_installation(&staged, "3.12.8")?;
+        let second = create_installation(&staged, "3.12.9")?;
+        let missing = create_installation(&staged, "3.12.10")?;
+        let unstarted = create_installation(&staged, "3.12.11")?;
+        let keys = [first.key(), second.key(), missing.key(), unstarted.key()];
+        let names = keys.iter().map(ToString::to_string).collect::<Vec<_>>();
+        let mut report = Some(UpgradeReport {
+            upgrades: names
+                .iter()
+                .map(|key| UpgradeEntry {
+                    selected_key: key.clone(),
+                    request: key.clone(),
+                    outcome: UpgradeOutcome::NotCompleted,
+                    from: Vec::new(),
+                    to: None,
+                    executables: Vec::new(),
+                    errors: Vec::new(),
+                })
+                .collect(),
+            ..UpgradeReport::default()
+        });
+        let published_installations =
+            ManagedPythonInstallations::from_settings(Some(published.clone()))?;
 
         let (release_first, first_ready) = oneshot::channel();
         let (release_second, second_ready) = oneshot::channel();
         let (release_missing, missing_ready) = oneshot::channel();
         let (release_unstarted, unstarted_ready) = oneshot::channel();
         let downloads = [
-            (0, root.join("first"), published.join("first"), first_ready),
+            (
+                0,
+                first.path().to_path_buf(),
+                published.join(&names[0]),
+                first_ready,
+            ),
             (
                 1,
-                root.join("second"),
-                published.join("second"),
+                second.path().to_path_buf(),
+                published.join(&names[1]),
                 second_ready,
             ),
             (
                 2,
-                root.join("missing"),
-                published.join("missing"),
+                missing.path().join("absent"),
+                published.join(&names[2]),
                 missing_ready,
             ),
             (
                 3,
-                root.join("unstarted"),
-                published.join("unstarted"),
+                unstarted.path().to_path_buf(),
+                published.join(&names[3]),
                 unstarted_ready,
             ),
         ];
         let (started_sender, mut started_receiver) = mpsc::unbounded_channel();
         let (bytecode_sender, mut bytecode_receiver) = mpsc::unbounded_channel();
-        let mut tasks = buffered_downloads(
+        let tasks = buffered_downloads(
             downloads,
             |(index, staged, published, release)| {
                 let started_sender = started_sender.clone();
+                let published_installations = published_installations.clone();
                 async move {
                     started_sender.send(index)?;
                     release.await.context("publication was not released")?;
-                    let result = uv_fs::rename_with_retry(staged, published).await;
+                    let result = match uv_fs::rename_with_retry(staged, &published).await {
+                        Ok(()) => Ok(published_installations
+                            .find_all()?
+                            .find(|installation| installation.path() == published)
+                            .context("missing published installation")?),
+                        Err(err) => Err(err),
+                    };
                     Ok::<_, anyhow::Error>((index, result))
                 }
             },
@@ -1942,23 +2005,40 @@ mod tests {
             Some(&bytecode_sender),
         );
         let (failed_send_sender, failed_send_receiver) = oneshot::channel();
-        let installer = async {
-            let mut failed_send_sender = Some(failed_send_sender);
-            let mut observed = Vec::new();
-            while let Some(result) = tasks.next().await {
-                let (index, result) = result?;
-                if result.is_ok()
-                    && bytecode_sender.send(index).is_err()
-                    && let Some(sender) = failed_send_sender.take()
-                {
-                    sender
-                        .send(())
-                        .map_err(|()| anyhow::anyhow!("failed-send observer was dropped"))?;
+        let mut failed_send_sender = Some(failed_send_sender);
+        let mut observed_errors = Vec::new();
+        let installer = settle_downloads(tasks, true, |result| {
+            let (index, result) = result?;
+            match result {
+                Ok(installation) => {
+                    let result = record_downloaded_installation(
+                        &mut report,
+                        Some(&bytecode_sender),
+                        &installation,
+                    );
+                    if result.is_err()
+                        && let Some(sender) = failed_send_sender.take()
+                    {
+                        sender
+                            .send(())
+                            .map_err(|()| anyhow::anyhow!("failed-send observer was dropped"))?;
+                    }
+                    result
                 }
-                observed.push((index, result));
+                Err(err) => {
+                    report
+                        .as_mut()
+                        .context("missing upgrade report")?
+                        .fail_installation(
+                            keys[index],
+                            UpgradeErrorKind::Download,
+                            err.to_string(),
+                        );
+                    observed_errors.push((index, err.kind()));
+                    Ok(())
+                }
             }
-            Ok::<_, anyhow::Error>(observed)
-        };
+        });
         let controller = async {
             let mut started = Vec::new();
             for _ in 0..3 {
@@ -1980,8 +2060,8 @@ mod tests {
             failed_send_receiver
                 .await
                 .context("closed bytecode channel was not observed")?;
-            assert_eq!(fs_err::read(published.join("first/contents"))?, b"first");
-            assert!(!published.join("second").exists());
+            assert!(published.join(&names[0]).is_dir());
+            assert!(!published.join(&names[1]).exists());
 
             release_second
                 .send(())
@@ -1991,30 +2071,32 @@ mod tests {
                 .map_err(|()| anyhow::anyhow!("missing publication was dropped"))?;
             Ok::<_, anyhow::Error>(())
         };
-        let (observed, controlled) = join!(installer, controller);
+        let (installed, controlled) = join!(installer, controller);
         controlled?;
-        let mut observed = observed?;
-        observed.sort_unstable_by_key(|(index, _)| *index);
-        assert_eq!(
-            observed.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
-            [0, 1, 2]
-        );
-        assert!(observed[0].1.is_ok());
-        assert!(observed[1].1.is_ok());
-        let Err(err) = &observed[2].1 else {
-            anyhow::bail!("missing staged directory unexpectedly published");
+        let Err(err) = installed else {
+            anyhow::bail!("closed bytecode channel unexpectedly accepted a publication");
         };
-        assert_eq!(err.kind(), ErrorKind::NotFound);
+        assert_eq!(err.to_string(), "channel closed");
+        assert_eq!(observed_errors, [(2, ErrorKind::NotFound)]);
         assert_eq!(
             started_receiver.try_recv(),
             Err(mpsc::error::TryRecvError::Empty)
         );
-        assert_eq!(fs_err::read(published.join("second/contents"))?, b"second");
-        assert!(!root.join("first").exists());
-        assert!(!root.join("second").exists());
-        assert!(!published.join("missing").exists());
-        assert_eq!(fs_err::read(root.join("unstarted/contents"))?, b"unstarted");
-        assert!(!published.join("unstarted").exists());
+        assert_eq!(published_installations.find_all()?.count(), 2);
+        assert!(!first.path().exists());
+        assert!(!second.path().exists());
+        assert!(!published.join(&names[2]).exists());
+        assert!(unstarted.executable(false).is_file());
+        assert!(!published.join(&names[3]).exists());
+        let report = serde_json::to_value(report.context("missing upgrade report")?)?;
+        assert_eq!(report["upgrades"][0]["outcome"], "installed");
+        assert_eq!(report["upgrades"][0]["to"]["key"], names[0]);
+        assert_eq!(report["upgrades"][1]["outcome"], "installed");
+        assert_eq!(report["upgrades"][1]["to"]["key"], names[1]);
+        assert_eq!(report["upgrades"][2]["outcome"], "failed");
+        assert_eq!(report["upgrades"][2]["errors"][0]["kind"], "download");
+        assert_eq!(report["upgrades"][3]["outcome"], "not_completed");
+        assert!(report["upgrades"][3]["to"].is_null());
         Ok(())
     }
 
@@ -2025,6 +2107,23 @@ mod tests {
             .await;
         observed.sort_unstable();
         assert_eq!(observed, [0, 1, 2, 3]);
+    }
+
+    #[tokio::test]
+    async fn settle_downloads_without_reporting_returns_first_error() -> Result<()> {
+        let tasks = buffered_downloads(0..4, ready, 3, None::<&mpsc::UnboundedSender<()>>);
+        let mut observed = Vec::new();
+        let result = settle_downloads(tasks, false, |index| {
+            observed.push(index);
+            anyhow::bail!("first observation failed");
+        })
+        .await;
+        let Err(err) = result else {
+            anyhow::bail!("observation failure was not returned");
+        };
+        assert_eq!(err.to_string(), "first observation failed");
+        assert_eq!(observed.len(), 1);
+        Ok(())
     }
 
     fn create_installation(root: &Path, version: &str) -> Result<ManagedPythonInstallation> {
