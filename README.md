@@ -1,4 +1,4 @@
-# uv pip install -r pylock.toml ignores PEP 751 `default-groups`
+# uv pip install -r pylock.toml ignores `default-groups` entries not also listed in `dependency-groups`
 
 Issue: astral-sh/uv#21917
 
@@ -6,10 +6,11 @@ Classification: bug
 
 ## Summary
 
-The reported behavior is reproducible. When a PEP 751 lock lists a group only in top-level
-`default-groups`, uv does not include that group in the `dependency_groups` marker environment.
-A package guarded by that group's marker is consequently omitted, while the command exits
-successfully.
+The reported behavior is reproducible. When a PEP 751 lock lists a name in top-level
+`default-groups` but not in `dependency-groups`, uv does not include that name in the
+`dependency_groups` marker environment. This occurs whether `dependency-groups` is absent or lists
+other names. A package guarded by the default group's marker is consequently omitted, while the
+command exits successfully.
 
 The behavior is specific to the default-only shape. With the same group also listed in
 `dependency-groups`, uv selects the package. The current implementation is consistent with the
@@ -85,13 +86,23 @@ Would install 1 package
 
 On the installed uv 0.12.13, explicitly passing `--group mygroup` to the original default-only file
 also produced `Would make no changes`. The reporter subsequently corrected the original workaround
-claim and independently confirmed the same result on uv 0.12.17. Their targeted matrix was:
+claim and independently confirmed the same result on uv 0.12.17.
 
-| Lock fields | No `--group` | `--group mygroup` |
-| --- | --- | --- |
-| `default-groups = ["mygroup"]` only | No changes | No changes |
-| `dependency-groups = ["mygroup"]` only | No changes | Installs `mypy-extensions` |
-| Both fields | No changes | Installs `mypy-extensions` |
+The reporter later expanded and corrected the no-flag controls, varying only the two top-level group
+fields. The results below are reporter-supplied for pip 26.2.1 and uv 0.9.17, 0.12.17, and 0.12.18;
+the first and third uv cases are also consistent with the independent uv 0.12.13 reproduction and
+control above.
+
+| `dependency-groups` | `default-groups` | pip 26.2.1 | uv 0.9.17 / 0.12.17 / 0.12.18 |
+| --- | --- | --- | --- |
+| Absent | `["mygroup"]` | Installs | No changes |
+| `["othergroup"]` | `["mygroup"]` | Installs | No changes |
+| `["mygroup"]` | `["mygroup"]` | Installs | Installs |
+| `["mygroup"]` | Absent | No changes | No changes |
+
+The second row isolates the defect to membership of the default name in `dependency-groups`, rather
+than merely the presence or absence of that key. The corrected third row also confirms that uv does
+honor `default-groups` when the same name is declared in `dependency-groups`.
 
 The reporter also observed on uv 0.12.17 that `--group totallybogus` is accepted without a warning
 and exits successfully without changes. This diagnostic behavior was not independently reproduced
@@ -111,6 +122,10 @@ evaluation, extras, and explicit groups, but declares `default` in both `depende
 - astral-sh/uv#14755 (merged) — Added parsing and evaluation for `extras` and `dependency_groups`
   markers in `uv pip install` and `uv pip sync`; its integration fixture lists the default group in
   both top-level group fields.
+- pypa/pipx#2052 (merged) — Fixed pipx manifest lock/sync by emitting the selected name in both
+  `dependency-groups` and `default-groups`. Its compatibility checks found that this dual-listed
+  shape installs under pip 26.2.1 and uv 0.9.17/0.12.17. It is a practical downstream workaround,
+  not evidence that uv handles a default name absent from `dependency-groups`.
 
 ## Implementation evidence
 
