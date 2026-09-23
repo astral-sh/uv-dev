@@ -13,6 +13,14 @@
   },
   packageRules: [
     {
+      description: "Update automation uv versions together with their checksums",
+      matchManagers: ["github-actions"],
+      matchDepTypes: ["uses-with"],
+      matchPackageNames: ["astral-sh/uv"],
+      matchFileNames: [".github/actions/setup-automations/action.yml"],
+      enabled: false,
+    },
+    {
       // Codex Action publishes two-component tags instead of full SemVer tags.
       matchManagers: ["github-actions"],
       matchPackageNames: ["openai/codex-action"],
@@ -115,6 +123,16 @@
     },
   ],
   customManagers: [
+    {
+      customType: "regex",
+      managerFilePatterns: [
+        "/^\\.github/actions/setup-automations/action\\.yml$/",
+      ],
+      matchStrings: [
+        '# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+version: "(?<currentValue>[^"\\r\\n]+)"\\s+checksum: "(?<currentDigest>[a-f0-9]{64})"',
+      ],
+      versioningTemplate: "semver",
+    },
     // Update major GitHub actions references in documentation.
     {
       customType: "regex",
