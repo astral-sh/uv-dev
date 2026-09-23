@@ -5,6 +5,7 @@ use std::str::FromStr;
 use std::sync::OnceLock;
 
 use fs_err as fs;
+use serde_json::error::Category as JsonErrorCategory;
 use thiserror::Error;
 use tracing::warn;
 use url::Url;
@@ -406,7 +407,15 @@ impl InstalledDist {
             Err(err) => return Err(err.into()),
         };
         let direct_url =
-            serde_json::from_reader::<BufReader<fs_err::File>, DirectUrl>(BufReader::new(file))?;
+            serde_json::from_reader::<BufReader<fs_err::File>, DirectUrl>(BufReader::new(file))
+                .map_err(|err| match err.classify() {
+                    // Invalid optional provenance is recoverable, but a failed read must retain
+                    // its I/O error and path instead of being classified as malformed JSON.
+                    JsonErrorCategory::Io => InstalledDistError::Io(err.into()),
+                    JsonErrorCategory::Syntax
+                    | JsonErrorCategory::Data
+                    | JsonErrorCategory::Eof => InstalledDistError::Json(err),
+                })?;
         Ok(Some(direct_url))
     }
 

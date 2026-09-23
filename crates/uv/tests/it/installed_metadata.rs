@@ -4,10 +4,86 @@ use anyhow::{Context, Result};
 
 use uv_distribution_types::{InstalledDist, InstalledDistError, InstalledDistKind};
 use uv_fs::Simplified;
-use uv_pypi_types::MetadataError;
+use uv_pypi_types::{DirectUrl, MetadataError};
 
 const MISSING_NAME_METADATA: &str = "Metadata-Version: 2.3\nVersion: 1.0.0\n\n";
 const VALID_METADATA: &str = "Name: fixture\nVersion: 1.0.0\n\n";
+
+#[test]
+fn installed_direct_url_malformed_json_is_optional() -> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    let distribution = temp_dir.path().join("fixture-1.0.0.dist-info");
+    fs_err::create_dir_all(&distribution)?;
+    fs_err::write(distribution.join("METADATA"), VALID_METADATA)?;
+    let direct_url = distribution.join("direct_url.json");
+
+    for (contents, category) in [
+        ("invalid", serde_json::error::Category::Syntax),
+        ("{", serde_json::error::Category::Eof),
+        (
+            r#"{"url":1,"archive_info":{}}"#,
+            serde_json::error::Category::Data,
+        ),
+    ] {
+        let error = serde_json::from_str::<DirectUrl>(contents)
+            .expect_err("the direct URL JSON is malformed");
+        assert_eq!(error.classify(), category);
+        fs_err::write(&direct_url, contents)?;
+        let installed = InstalledDist::try_from_path(&distribution)?
+            .context("missing installed distribution")?;
+        let InstalledDistKind::Registry(_) = installed.kind else {
+            anyhow::bail!("malformed direct URL was not treated as unavailable");
+        };
+    }
+
+    fs_err::remove_file(&direct_url)?;
+    let installed =
+        InstalledDist::try_from_path(&distribution)?.context("missing installed distribution")?;
+    let InstalledDistKind::Registry(_) = installed.kind else {
+        anyhow::bail!("missing direct URL was not treated as unavailable");
+    };
+
+    fs_err::write(
+        &direct_url,
+        r#"{"url":"https://example.invalid/fixture-1.0.0.whl","archive_info":{}}"#,
+    )?;
+    let installed =
+        InstalledDist::try_from_path(&distribution)?.context("missing installed distribution")?;
+    let InstalledDistKind::Url(installed) = installed.kind else {
+        anyhow::bail!("valid direct URL was not retained");
+    };
+    assert_eq!(
+        installed.url.as_str(),
+        "https://example.invalid/fixture-1.0.0.whl"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn installed_direct_url_read_error_preserves_source() -> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    let distribution = temp_dir.path().join("fixture-1.0.0.dist-info");
+    fs_err::create_dir_all(&distribution)?;
+    fs_err::write(distribution.join("METADATA"), VALID_METADATA)?;
+    let direct_url = distribution.join("direct_url.json");
+    fs_err::create_dir(&direct_url)?;
+
+    // Opening a directory succeeds on these platforms, but reading it fails even for a
+    // privileged user.
+    assert!(fs_err::File::open(&direct_url)?.metadata()?.is_dir());
+    let expected = fs_err::read(&direct_url).expect_err("the direct URL is a directory");
+    assert_eq!(expected.kind(), std::io::ErrorKind::IsADirectory);
+    let error =
+        InstalledDist::try_from_path(&distribution).expect_err("the direct URL could not be read");
+    let InstalledDistError::Io(io_error) = &error else {
+        anyhow::bail!("unexpected installed-distribution error: {error:?}");
+    };
+    assert_eq!(io_error.kind(), expected.kind());
+    assert_eq!(io_error.raw_os_error(), expected.raw_os_error());
+    assert_eq!(error.to_string(), expected.to_string());
+    Ok(())
+}
 
 fn assert_missing_name_source(
     error: &InstalledDistError,
