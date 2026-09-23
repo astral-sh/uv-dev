@@ -815,13 +815,28 @@ jobs:
         with:
           name: uv-windows-x86_64-${{ inputs.sha }}
 
-      - name: "Start Docker"
-        # Docker can fail to start during runner boot.
-        # https://github.com/actions/runner-images/issues/13729#issuecomment-4183956802
+      - name: "Ensure Docker is running"
+        timeout-minutes: 2
         run: |
-          if ((Get-Service -Name docker).Status -ne 'Running') {
-            Start-Service -Name docker
+          docker info *> $null
+          if ($LASTEXITCODE -eq 0) {
+            exit 0
           }
+
+          # Docker can fail to start during runner boot.
+          # https://github.com/actions/runner-images/issues/13729#issuecomment-4183956802
+          Restart-Service -Name docker -ErrorAction Stop
+
+          for ($attempt = 0; $attempt -lt 30; $attempt++) {
+            docker info *> $null
+            if ($LASTEXITCODE -eq 0) {
+              exit 0
+            }
+            Start-Sleep -Seconds 2
+          }
+
+          docker info
+          throw "Docker did not become ready after restarting the service."
 
       - name: "Run uv on Windows NanoServer"
         run: |
