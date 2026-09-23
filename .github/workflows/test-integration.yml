@@ -823,6 +823,7 @@ jobs:
 
           # Hosted Windows runners can fail to start Docker during boot.
           # https://github.com/actions/runner-images/issues/13729
+          Write-Host "Docker is unavailable; restarting the service."
           Restart-Service -Name docker -ErrorAction Stop
 
           for ($attempt = 0; $attempt -lt 30; $attempt++) {
