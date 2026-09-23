@@ -1266,10 +1266,15 @@ class PromotionPlanTests(unittest.TestCase):
                 self.assertIsNone(result.approval)
                 self.assertNotIn("events", reader.calls)
 
-    def test_private_legacy_approval_requires_current_label_and_writer(self) -> None:
+    def test_private_label_approval_requires_current_label_and_writer(self) -> None:
         scope = PromotionScope(UV_SECURITY_REPOSITORY, 101)
         source = pull_request(scope, labels=("bot:promote",))
         reader = planner_reader(source)
+        self.assertIsInstance(
+            plan_promotion(reader, PromotionRequest(scope, HEAD)), Rejected
+        )
+        label = LabelAddedEvent(READY.identifier + 1, HUMAN, LATER, "bot:promote")
+        reader.events[scope] = (label,)
         self.assertIsInstance(
             plan_promotion(reader, PromotionRequest(scope, HEAD)), Publish
         )
@@ -1282,6 +1287,38 @@ class PromotionPlanTests(unittest.TestCase):
         self.assertIsInstance(
             plan_promotion(reader, PromotionRequest(scope, HEAD)), Rejected
         )
+
+    def test_draft_label_approval_is_bound_to_its_latest_event(self) -> None:
+        label = LabelAddedEvent(READY.identifier + 1, HUMAN, LATER, "bot:promote")
+        for repository in (UV_DEV_REPOSITORY, UV_SECURITY_REPOSITORY):
+            scope = PromotionScope(repository, 101)
+            source = pull_request(scope, draft=True, labels=("bot:promote",))
+            reader = planner_reader(source)
+            reader.events[scope] = (label,)
+            request = PromotionRequest(scope, HEAD, label.identifier)
+            with self.subTest(repository=repository):
+                result = plan_promotion(reader, request)
+                if not isinstance(result, Publish):
+                    self.fail("Expected publication authorized by the label event")
+                self.assertEqual(result.approval.kind, PromotionApprovalKind.LABELED)
+                self.assertIsNone(result.approval.ready_event_id)
+                self.assertEqual(
+                    PromotionApprovalClaim.from_json(result.approval.to_json()),
+                    result.approval.claim,
+                )
+                reader.events[scope] = (
+                    label,
+                    LabelRemovedEvent(
+                        label.identifier + 1, HUMAN, LATER, "bot:promote"
+                    ),
+                )
+                self.assertIsInstance(plan_promotion(reader, request), Stale)
+                reader.events[scope] += (
+                    LabelAddedEvent(label.identifier + 2, HUMAN, LATER, "bot:promote"),
+                )
+                self.assertIsInstance(plan_promotion(reader, request), Stale)
+                reader.events[scope] = (replace(label, actor=BOT),)
+                self.assertIsInstance(plan_promotion(reader, request), Stale)
 
     def test_private_label_approval_checks_latest_transition_and_readiness(
         self,

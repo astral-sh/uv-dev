@@ -20,8 +20,7 @@ from uv_automations.promotion_models import (
     MergedPromotedParent,
     PromotionScope,
     UnrecordedMergedParent,
-    current_ready_approval,
-    ready_approval,
+    current_promotion_approval,
 )
 from uv_automations.workflows.promotion import (
     AlreadyPublished,
@@ -77,6 +76,7 @@ class PreparePromotion:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ReadPromotionApproval:
     request: PromotionRequest
+    recovered_draft: bool = False
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -170,6 +170,7 @@ def add_commands(parser: argparse.ArgumentParser) -> None:
     _add_source(approval)
     approval.add_argument("--expected-head", type=CommitSha, required=True)
     approval.add_argument("--approval-id", type=_optional_number)
+    approval.add_argument("--recovered-draft", action="store_true")
 
     record = commands.add_parser("record-queue")
     record.set_defaults(command=PromotionCommandKind.RECORD_QUEUE)
@@ -222,6 +223,7 @@ def parse_command(parsed: argparse.Namespace) -> PromotionCommand:
                 request=PromotionRequest(
                     _scope(parsed), parsed.expected_head, parsed.approval_id
                 ),
+                recovered_draft=parsed.recovered_draft,
             )
         case PromotionCommandKind.RECORD_QUEUE:
             return RecordPromotionQueue(
@@ -286,6 +288,7 @@ def _write_plan(plan: PromotionPlan, output: Path, summary: Path) -> None:
         write_output(output, name, value)
     if plan.approval is not None:
         write_output(output, "approval_id", str(plan.approval.event_id))
+        write_output(output, "approval_event", plan.approval.kind.value)
         write_output(output, "promoter", plan.approval.actor.login)
 
     match plan:
@@ -406,13 +409,15 @@ def run(command: PromotionCommand) -> None:
                 command.summary,
             )
             return
-        case ReadPromotionApproval(request=request):
-            events = PromotionGitHub().list_promotion_events(request.source)
-            approval = (
-                current_ready_approval(request.source, request.head, events)
-                if request.source.repository == UV_DEV_REPOSITORY
-                and request.approval_id is not None
-                else ready_approval(request.source, request.head, events)
+        case ReadPromotionApproval(request=request, recovered_draft=recovered_draft):
+            reader = PromotionGitHub()
+            source = reader.get_promotion_pull_request(request.source)
+            approval = current_promotion_approval(
+                source,
+                request.head,
+                reader.list_promotion_events(request.source),
+                exact_readiness=request.approval_id is not None,
+                recovered_draft=recovered_draft,
             )
             if approval is not None and (
                 request.approval_id is None or request.approval_id == approval.event_id

@@ -27,6 +27,7 @@ from uv_automations.models import (
 MAX_PROMOTION_PAGE_SIZE = 100
 MAX_PROMOTION_PAGES = 10
 MAX_PROMOTION_COMMENT_LENGTH = 65_536
+PROMOTION_LABEL = "bot:promote"
 
 UV_REPOSITORY = RepositoryIdentity(
     RepositoryName(ManagedRepository.UV.value), 699532645
@@ -265,11 +266,12 @@ class PromotionApproval:
     source: PromotionScope
     head: CommitSha
     event: ReadyForReviewEvent | LabelAddedEvent
-    ready_event_id: int
+    ready_event_id: int | None
 
     def __post_init__(self) -> None:
         require_promotion_source(self.source.repository)
-        as_positive_integer(self.ready_event_id)
+        if self.ready_event_id is not None:
+            as_positive_integer(self.ready_event_id)
         if self.event.actor is None or not self.event.actor.is_human:
             raise ValueError("Promotion approval requires a human actor")
         match self.event:
@@ -278,7 +280,10 @@ class PromotionApproval:
                     raise ValueError("Readiness approval has a different event ID")
                 return
             case LabelAddedEvent(identifier=identifier):
-                if self.ready_event_id >= identifier:
+                if (
+                    self.ready_event_id is not None
+                    and self.ready_event_id >= identifier
+                ):
                     raise ValueError("Label approval must follow the readiness event")
                 return
         assert_never(self.event)
@@ -327,13 +332,14 @@ class PromotionApprovalClaim:
     head: CommitSha
     kind: PromotionApprovalKind
     event_id: int
-    ready_event_id: int
+    ready_event_id: int | None
     actor_id: int
 
     def __post_init__(self) -> None:
         require_promotion_source(self.source.repository)
         as_positive_integer(self.event_id)
-        as_positive_integer(self.ready_event_id)
+        if self.ready_event_id is not None:
+            as_positive_integer(self.ready_event_id)
         as_positive_integer(self.actor_id)
         match self.kind:
             case PromotionApprovalKind.READY_FOR_REVIEW:
@@ -341,7 +347,10 @@ class PromotionApprovalClaim:
                     raise ValueError("Readiness claim has a different event ID")
                 return
             case PromotionApprovalKind.LABELED:
-                if self.ready_event_id >= self.event_id:
+                if (
+                    self.ready_event_id is not None
+                    and self.ready_event_id >= self.event_id
+                ):
                     raise ValueError("Label claim must follow the readiness event")
                 return
         assert_never(self.kind)
@@ -371,7 +380,9 @@ class PromotionApprovalClaim:
             CommitSha(as_string(data["head"])),
             PromotionApprovalKind(as_string(data["kind"])),
             as_positive_integer(data["event_id"]),
-            as_positive_integer(data["ready_event_id"]),
+            as_positive_integer(data["ready_event_id"])
+            if data["ready_event_id"] is not None
+            else None,
             as_positive_integer(data["actor_id"]),
         )
 
@@ -435,6 +446,83 @@ def current_ready_approval(
         case ReadyForReviewEvent() | ConvertedToDraftEvent() | None:
             return None
     assert_never(latest)
+
+
+def recovered_ready_approval(
+    scope: PromotionScope, head: CommitSha, events: tuple[PromotionEvent, ...]
+) -> PromotionApproval | None:
+    """Recognize the readiness immediately before the automation returned a PR to draft."""
+    transitions = tuple(
+        event
+        for event in events
+        if isinstance(event, (ReadyForReviewEvent, ConvertedToDraftEvent))
+    )
+    if not transitions:
+        return None
+    latest = max(transitions, key=lambda event: event.identifier)
+    if (
+        isinstance(latest, ConvertedToDraftEvent)
+        and latest.actor is not None
+        and latest.actor.kind == ActorKind.BOT
+        and latest.actor.database_id == AUTOMATIONS_BOT_ID
+    ):
+        return current_ready_approval(
+            scope, head, tuple(event for event in events if event != latest)
+        )
+    return None
+
+
+def promotion_is_eligible(
+    source: PromotionPullRequest, kind: PromotionApprovalKind
+) -> bool:
+    return (
+        source.is_open
+        and (not source.draft or kind == PromotionApprovalKind.LABELED)
+        and (
+            kind != PromotionApprovalKind.LABELED
+            or PROMOTION_LABEL in source.details.labels
+        )
+    )
+
+
+def current_promotion_approval(
+    source: PromotionPullRequest,
+    head: CommitSha,
+    events: tuple[PromotionEvent, ...],
+    *,
+    exact_readiness: bool = False,
+    recovered_draft: bool = False,
+    ready_event_id: int | None = None,
+) -> PromotionApproval | None:
+    """Select the latest current human promotion event for either source repository."""
+    approval = None
+    if source.scope.repository == UV_DEV_REPOSITORY and not source.draft:
+        approval = (
+            current_ready_approval(source.scope, head, events)
+            if exact_readiness
+            else ready_approval(source.scope, head, events)
+        )
+    elif source.scope.repository == UV_DEV_REPOSITORY and recovered_draft:
+        approval = recovered_ready_approval(source.scope, head, events)
+    label = latest_label_event(events, PROMOTION_LABEL)
+    if (
+        PROMOTION_LABEL in source.details.labels
+        and isinstance(label, LabelAddedEvent)
+        and label.actor is not None
+        and label.actor.is_human
+        and (approval is None or label.identifier > approval.event_id)
+    ):
+        if ready_event_id is not None:
+            readiness = latest_ready_event(events)
+            if (
+                source.draft
+                or readiness is None
+                or readiness.identifier != ready_event_id
+                or label.identifier <= ready_event_id
+            ):
+                return None
+        approval = PromotionApproval(source.scope, head, label, ready_event_id)
+    return approval
 
 
 @dataclass(frozen=True, slots=True)

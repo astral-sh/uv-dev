@@ -25,6 +25,8 @@ from uv_automations.promotion_models import (
     ConvertedToDraftEvent,
     GitHubAppIdentity,
     HeadForcePush,
+    LabelAddedEvent,
+    LabelRemovedEvent,
     MergedPromotedParent,
     PromotionActor,
     PromotionApproval,
@@ -39,6 +41,7 @@ from uv_automations.promotion_models import (
     ReadyForReviewEvent,
     UneditedPromotionComment,
 )
+from uv_automations.workflows.promotion import PromotionRequest, Rebase, Stale
 from uv_automations.workflows.promotion_queue import (
     QUEUE_MARKER,
     DispatchedReplay,
@@ -54,6 +57,7 @@ from uv_automations.workflows.promotion_queue import (
     replay_one,
     replay_queued_promotions,
 )
+from uv_automations.workflows.promotion_replay import plan_queued_promotion
 
 HEAD = CommitSha("a" * 40)
 BASE = CommitSha("b" * 40)
@@ -284,6 +288,37 @@ MAIN_REVISION = BranchRevision(UV_DEV_REPOSITORY, "main", MAIN)
 
 
 class QueueSerializationTests(unittest.TestCase):
+    def test_draft_label_approval_replays_only_its_recorded_event(self) -> None:
+        label = LabelAddedEvent(2001, HUMAN, TIME, "bot:promote")
+        source = child()
+        source = replace(
+            source, draft=True, details=replace(source.details, labels=("bot:promote",))
+        )
+        approval = PromotionApproval(CHILD_SCOPE, HEAD, label, None)
+        queued = QueuedPromotion.waiting_for_parent(
+            source, approval, source_parent(open=True)
+        )
+        reader = FakeGitHub()
+        reader.pull_requests[CHILD_SCOPE] = source
+        reader.events[CHILD_SCOPE] = (label,)
+        self.assertEqual(
+            record_queue(reader, reader, queued), QueueRecordOutcome.RECORDED
+        )
+        self.assertEqual(QueuedPromotion.from_json(queued.to_json()), queued)
+        request = PromotionRequest(CHILD_SCOPE, HEAD, label.identifier)
+        self.assertIsInstance(plan_queued_promotion(reader, request), Rebase)
+        result = replay_queued_promotions(reader, reader, reader, MAIN_REVISION)
+        self.assertEqual(len(result), 1)
+        self.assertIsInstance(result[0], DispatchedReplay)
+        self.assertEqual(reader.dispatched, [approval.claim])
+        for event in (
+            LabelRemovedEvent(2002, HUMAN, TIME, "bot:promote"),
+            LabelAddedEvent(2003, HUMAN, TIME, "bot:promote"),
+        ):
+            with self.subTest(event=event):
+                reader.events[CHILD_SCOPE] = (label, event)
+                self.assertIsInstance(plan_queued_promotion(reader, request), Stale)
+
     def test_both_waiting_states_round_trip(self) -> None:
         for queued in (source_queue(), sync_queue()):
             with self.subTest(parent=queued.parent):

@@ -10,7 +10,8 @@ from uv_automations.promotion_models import (
     PromotionPullRequest,
     SynchronizedParent,
     UnsynchronizedParent,
-    current_ready_approval,
+    current_promotion_approval,
+    promotion_is_eligible,
 )
 from uv_automations.workflows.promotion import (
     PromotionPlan,
@@ -30,12 +31,13 @@ from uv_automations.workflows.promotion_queue import (
 
 
 def _same_source_revision(
-    expected: PromotionPullRequest, current: PromotionPullRequest
+    expected: PromotionPullRequest,
+    current: PromotionPullRequest,
+    kind: PromotionApprovalKind,
 ) -> bool:
     return (
         current.scope == expected.scope
-        and current.is_open
-        and not current.draft
+        and promotion_is_eligible(current, kind)
         and current.same_repository
         and current.details.base == expected.details.base
         and current.details.head == expected.details.head
@@ -53,12 +55,8 @@ def plan_queued_promotion(
     A surviving or recreated upstream parent branch is not a replay destination.
     Manual promotion keeps its existing-branch behavior in ``plan_promotion``.
     """
-    if (
-        request.source.repository != UV_DEV_REPOSITORY
-        or request.kind != PromotionApprovalKind.READY_FOR_REVIEW
-        or request.approval_id is None
-    ):
-        raise ValueError("Queued promotion requires an exact public readiness event")
+    if request.source.repository != UV_DEV_REPOSITORY or request.approval_id is None:
+        raise ValueError("Queued promotion requires an exact public approval event")
 
     upstream_reader = upstream_reader or reader
     source = reader.get_promotion_pull_request(request.source)
@@ -74,7 +72,10 @@ def plan_queued_promotion(
             if (
                 queued.approval.head != request.head
                 or queued.approval.event_id != request.approval_id
-                or queued.approval.kind != request.kind
+                or (
+                    request.approval_kind is not None
+                    and queued.approval.kind != request.approval_kind
+                )
                 or (
                     request.ready_event_id is not None
                     and queued.approval.ready_event_id != request.ready_event_id
@@ -117,10 +118,13 @@ def plan_queued_promotion(
     current_source = reader.get_promotion_pull_request(request.source)
     if current_source.scope != request.source:
         raise ValueError("Promotion reader returned a different source pull request")
-    if not _same_source_revision(source, current_source):
+    if not _same_source_revision(source, current_source, queued.approval.kind):
         return Stale(current_source, request.head, "The queued source changed")
-    approval = current_ready_approval(
-        request.source, request.head, reader.list_promotion_events(request.source)
+    approval = current_promotion_approval(
+        current_source,
+        request.head,
+        reader.list_promotion_events(request.source),
+        exact_readiness=True,
     )
     if approval is None or not queued.approval.matches(approval):
         return Stale(current_source, request.head, "The queued approval changed")

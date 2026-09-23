@@ -1,17 +1,27 @@
 import io
 import unittest
 from contextlib import redirect_stdout
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
 from uv_automations import cli, promotions_cli
 from uv_automations.github_promotion import PromotionGitHub
-from uv_automations.models import ActorKind, CommitSha, Timestamp
+from uv_automations.models import (
+    ActorKind,
+    CommitSha,
+    PullRequestDetails,
+    PullRequestRevision,
+    PullRequestState,
+    Timestamp,
+)
 from uv_automations.promotion_models import (
     AUTOMATIONS_BOT_ID,
     UV_DEV_REPOSITORY,
     ConvertedToDraftEvent,
+    LabelAddedEvent,
     PromotionActor,
+    PromotionPullRequest,
     PromotionScope,
     ReadyForReviewEvent,
 )
@@ -23,6 +33,22 @@ TIME = Timestamp.parse("2026-09-09T12:00:00Z")
 HUMAN = PromotionActor("zanieb", 101, ActorKind.USER)
 BOT = PromotionActor("astral-automations-bot[bot]", AUTOMATIONS_BOT_ID, ActorKind.BOT)
 READY = ReadyForReviewEvent(1000, HUMAN, TIME)
+SOURCE_PR = PromotionPullRequest(
+    SOURCE,
+    PullRequestDetails(
+        SOURCE.reference,
+        PullRequestState.OPEN,
+        f"https://github.com/{SOURCE.repository.name}/pull/{SOURCE.number}",
+        PullRequestRevision(SOURCE.repository, "main", HEAD),
+        PullRequestRevision(SOURCE.repository, "feature", HEAD),
+        (),
+    ),
+    False,
+    HUMAN,
+    "Title",
+    "",
+    None,
+)
 REVOKED = (
     READY,
     ConvertedToDraftEvent(1001, HUMAN, TIME),
@@ -52,6 +78,53 @@ class PromotionCliTests(unittest.TestCase):
                 request=PromotionRequest(SOURCE, HEAD, 1000)
             ),
         )
+        self.assertEqual(
+            cli.parse_command(cli.create_parser(), [*arguments, "--recovered-draft"]),
+            promotions_cli.ReadPromotionApproval(
+                request=PromotionRequest(SOURCE, HEAD, 1000), recovered_draft=True
+            ),
+        )
+
+    def test_recovery_keeps_its_readiness_after_returning_to_draft(self) -> None:
+        source = replace(
+            SOURCE_PR,
+            draft=True,
+            details=replace(SOURCE_PR.details, labels=("bot:promote",)),
+        )
+        label = LabelAddedEvent(999, HUMAN, TIME, "bot:promote")
+        returned = ConvertedToDraftEvent(1001, BOT, TIME)
+        cases = (
+            ((label, READY, returned), False, ""),
+            ((label, READY, returned), True, "1000\n"),
+            ((label, READY, replace(returned, actor=HUMAN)), True, ""),
+            ((label, READY, replace(returned, actor=None)), True, ""),
+            ((label, READY, returned, replace(label, identifier=1002)), True, ""),
+            (
+                (label, READY, returned, ReadyForReviewEvent(1002, HUMAN, TIME)),
+                True,
+                "",
+            ),
+        )
+        for events, recovered_draft, expected in cases:
+            with self.subTest(events=events, recovered_draft=recovered_draft):
+                output = io.StringIO()
+                command = promotions_cli.ReadPromotionApproval(
+                    request=PromotionRequest(SOURCE, HEAD, 1000),
+                    recovered_draft=recovered_draft,
+                )
+                with (
+                    patch.object(
+                        PromotionGitHub,
+                        "get_promotion_pull_request",
+                        return_value=source,
+                    ),
+                    patch.object(
+                        PromotionGitHub, "list_promotion_events", return_value=events
+                    ),
+                    redirect_stdout(output),
+                ):
+                    cli.run(command)
+                self.assertEqual(output.getvalue(), expected)
 
     def test_explicit_replay_cannot_recover_a_withdrawn_approval(self) -> None:
         for approval_id, expected in ((None, "1000\n"), (1000, "")):
@@ -61,6 +134,11 @@ class PromotionCliTests(unittest.TestCase):
                     request=PromotionRequest(SOURCE, HEAD, approval_id)
                 )
                 with (
+                    patch.object(
+                        PromotionGitHub,
+                        "get_promotion_pull_request",
+                        return_value=SOURCE_PR,
+                    ),
                     patch.object(
                         PromotionGitHub, "list_promotion_events", return_value=REVOKED
                     ),
@@ -104,12 +182,23 @@ class PromotionCliTests(unittest.TestCase):
         with (
             patch.object(
                 PromotionGitHub,
+                "_command",
+                side_effect=AssertionError("Unexpected GitHub request"),
+            ),
+            patch.object(
+                PromotionGitHub,
+                "get_promotion_pull_request",
+                return_value=SOURCE_PR,
+            ) as get_pull_request,
+            patch.object(
+                PromotionGitHub,
                 "list_promotion_events",
                 return_value=(*REVOKED, ReadyForReviewEvent(1003, HUMAN, TIME)),
             ),
             redirect_stdout(output),
         ):
             cli.run(command)
+        get_pull_request.assert_called_once_with(SOURCE)
         self.assertEqual(output.getvalue(), "")
 
 
