@@ -90,6 +90,12 @@ fn reinstalls_missing_executable_with_matching_receipt() -> Result<()> {
     let repaired: serde_json::Value = serde_json::from_slice(&fs_err::read(receipt.path())?)?;
     assert_eq!(repaired["source"]["owner"], "example");
 
+    command.args(["--source-repository", "astral-sh/uv"]);
+    fs_err::remove_file(executable.path())?;
+    assert!(command.status()?.success());
+    let repaired: serde_json::Value = serde_json::from_slice(&fs_err::read(receipt.path())?)?;
+    assert_eq!(repaired["source"]["owner"], "astral-sh");
+
     let foreign = context.temp_dir.child("foreign");
     foreign.create_dir_all()?;
     data["install_prefix"] = serde_json::json!(foreign.path());
@@ -110,6 +116,7 @@ fn reinstalls_missing_executable_with_matching_receipt() -> Result<()> {
 fn unmanaged_install_has_no_receipt() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]);
     let bin = context.temp_dir.child("bin");
+    let github_path = context.temp_dir.child("github-path");
     assert!(
         context
             .command()
@@ -121,11 +128,13 @@ fn unmanaged_install_has_no_receipt() -> Result<()> {
                 "--unmanaged"
             ])
             .arg(bin.path())
+            .env("GITHUB_PATH", github_path.path())
             .status()?
             .success()
     );
     bin.child(".uv-receipt.json")
         .assert(predicates::path::missing());
+    github_path.assert(predicates::path::missing());
     Ok(())
 }
 
@@ -265,6 +274,23 @@ async fn uninstall_reads_receipt_after_waiting_for_installation() -> Result<()> 
 #[tokio::test]
 #[cfg(any(not(windows), feature = "windows-gui-bin"))]
 async fn uninstall_rechecks_global_receipt_after_waiting() -> Result<()> {
+    check_global_receipt_cleanup(false, true).await
+}
+
+#[tokio::test]
+#[cfg(any(not(windows), feature = "windows-gui-bin"))]
+async fn unmanaged_install_rechecks_global_receipt_after_waiting() -> Result<()> {
+    check_global_receipt_cleanup(true, true).await
+}
+
+#[tokio::test]
+#[cfg(any(not(windows), feature = "windows-gui-bin"))]
+async fn legacy_uninstall_rechecks_global_receipt_after_waiting() -> Result<()> {
+    check_global_receipt_cleanup(false, false).await
+}
+
+#[cfg(any(not(windows), feature = "windows-gui-bin"))]
+async fn check_global_receipt_cleanup(unmanaged: bool, native_receipt: bool) -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]);
     let first = context.temp_dir.child("first");
     let second = context.temp_dir.child("second");
@@ -290,6 +316,9 @@ async fn uninstall_rechecks_global_receipt_after_waiting() -> Result<()> {
     let receipt = legacy.child("uv-receipt.json");
     fs_err::copy(first.child(".uv-receipt.json"), receipt.path())?;
     let foreign = fs_err::read(second.child(".uv-receipt.json"))?;
+    if !native_receipt {
+        fs_err::remove_file(first.child(".uv-receipt.json"))?;
+    }
     let lock = LockedFile::acquire(
         receipt.path().with_extension("lock"),
         LockedFileMode::Exclusive,
@@ -297,15 +326,19 @@ async fn uninstall_rechecks_global_receipt_after_waiting() -> Result<()> {
     )
     .await?;
     let executable = first.child(format!("uv{}", std::env::consts::EXE_SUFFIX));
-    let mut child = context
-        .external_command(executable.path())
-        .args([
-            "self",
-            "uninstall",
-            "--preview-features",
-            "self-management",
-            "--verbose",
-        ])
+    let mut command = if unmanaged {
+        let mut command = context.command();
+        command
+            .args(["self", "install", "--unmanaged"])
+            .arg(first.path());
+        command
+    } else {
+        let mut command = context.external_command(executable.path());
+        command.args(["self", "uninstall"]);
+        command
+    };
+    let mut child = command
+        .args(["--preview-features", "self-management", "--verbose"])
         .env("AXOUPDATER_CONFIG_PATH", legacy.path())
         .env(uv_static::EnvVars::RUST_LOG, "uv_fs=info")
         .stderr(Stdio::piped())
@@ -313,7 +346,7 @@ async fn uninstall_rechecks_global_receipt_after_waiting() -> Result<()> {
     let stderr = child
         .stderr
         .take()
-        .context("Uninstall stderr was not captured")?;
+        .context("Self-management stderr was not captured")?;
     let (ready, waiting) = tokio::sync::oneshot::channel();
     let stderr = tokio::task::spawn_blocking(move || -> std::io::Result<String> {
         let mut ready = Some(ready);
@@ -336,8 +369,15 @@ async fn uninstall_rechecks_global_receipt_after_waiting() -> Result<()> {
     drop(lock);
     let status = tokio::task::spawn_blocking(move || child.wait()).await??;
     let stderr = stderr.await??;
-    waiting.with_context(|| format!("Uninstall did not wait for the global lock:\n{stderr}"))??;
-    assert!(status.success(), "{stderr}");
+    waiting.with_context(|| {
+        format!("Self-management did not wait for the global lock:\n{stderr}")
+    })??;
+    if native_receipt || unmanaged {
+        assert!(status.success(), "{stderr}");
+    } else {
+        assert_eq!(status.code(), Some(2), "{stderr}");
+        executable.assert(predicates::path::is_file());
+    }
     assert_eq!(fs_err::read(receipt.path())?, foreign);
     first
         .child(".uv-receipt.json")
@@ -345,5 +385,81 @@ async fn uninstall_rechecks_global_receipt_after_waiting() -> Result<()> {
     second
         .child(format!("uv{}", std::env::consts::EXE_SUFFIX))
         .assert(predicates::path::is_file());
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn native_install_configures_standalone_profiles() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let bin = context.temp_dir.child("bin");
+    let github_path = context.temp_dir.child("github-path");
+    let zsh = context.temp_dir.child("zsh");
+    zsh.create_dir_all()?;
+    zsh.child(".zshenv").write_str("# existing zsh\n")?;
+    context
+        .home_dir
+        .child(".bashrc")
+        .write_str("# existing bash\n")?;
+    let mut command = context.command();
+    command
+        .args([
+            "self",
+            "install",
+            "--preview-features",
+            "self-management",
+            "--install-dir",
+        ])
+        .arg(bin.path())
+        .env("GITHUB_PATH", github_path.path())
+        .env("ZDOTDIR", zsh.path())
+        .env(uv_static::EnvVars::UV_NO_MODIFY_PATH, "0")
+        .env("INSTALLER_NO_MODIFY_PATH", "1");
+    assert!(command.status()?.success());
+    assert_eq!(
+        fs_err::read_to_string(github_path.path())?,
+        format!("{}\n", bin.path().display())
+    );
+    let profile = fs_err::read_to_string(context.home_dir.child(".profile"))?;
+    assert!(profile.contains("/bin/env"));
+    assert!(fs_err::read_to_string(context.home_dir.child(".bashrc"))?.contains(&profile));
+    assert!(fs_err::read_to_string(zsh.child(".zshenv"))?.contains(&profile));
+    bin.child("env").assert(predicates::path::is_file());
+    bin.child("env.fish").assert(predicates::path::is_file());
+    context
+        .home_dir
+        .child(".config/fish/conf.d/uv.env.fish")
+        .assert(predicates::path::is_file());
+    assert!(command.status()?.success());
+    assert_eq!(
+        profile,
+        fs_err::read_to_string(context.home_dir.child(".profile"))?
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(any(not(windows), feature = "windows-gui-bin"))]
+fn disable_update_omits_receipt() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let bin = context.temp_dir.child("bin");
+    assert!(
+        context
+            .command()
+            .args([
+                "self",
+                "install",
+                "--preview-features",
+                "self-management",
+                "--install-dir"
+            ])
+            .arg(bin.path())
+            .env(uv_static::EnvVars::UV_DISABLE_UPDATE, "1")
+            .env(uv_static::EnvVars::UV_NO_MODIFY_PATH, "1")
+            .status()?
+            .success()
+    );
+    bin.child(".uv-receipt.json")
+        .assert(predicates::path::missing());
     Ok(())
 }
