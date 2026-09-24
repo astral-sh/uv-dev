@@ -12,7 +12,7 @@ pub struct ScratchAllocator<'a> {
     arena: &'a Arena,
 }
 
-const ARENA_LIMIT: usize = 1024;
+const ARENA_LIMIT: usize = 16 * 1024;
 
 impl<'a> ScratchAllocator<'a> {
     pub fn new(arena: &'a Arena) -> Self {
@@ -210,12 +210,12 @@ mod tests {
         let dropped = Cell::new(0);
         with_arena(|arena| {
             let mut values = Vec::new_in(ScratchAllocator::new(arena));
-            for _ in 0..512 {
+            for _ in 0..4096 {
                 values.push(CountDrop(&dropped));
             }
             values.truncate(2);
             values.shrink_to_fit();
         });
-        assert_eq!(dropped.get(), 512);
+        assert_eq!(dropped.get(), 4096);
     }
 }
