@@ -5,12 +5,84 @@ use uv_platform::{Arch, Os};
 use uv_static::EnvVars;
 
 use anyhow::Result;
+use assert_fs::prelude::{FileWriteStr, PathChild};
 use insta::allow_duplicates;
 use uv_test::uv_snapshot;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
 };
+
+#[test]
+fn python_list_versioned_catalog_artifacts() -> Result<()> {
+    // Listing catalog entries does not download or execute Python.
+    let context = uv_test::test_context_with_versions!(&[]);
+    let catalog = context.temp_dir.child("downloads.json");
+    let entry = serde_json::json!({
+        "name": "cpython", "arch": { "family": "x86_64", "variant": null },
+        "os": "linux", "libc": "gnu", "major": 3, "minor": 13, "patch": 7,
+        "build_name": "custom", "build_revision": "42",
+        "url": "https://example.com/python.tar.gz"
+    });
+    let list = || {
+        let mut command = context.python_list();
+        command
+            .args([
+                "--only-downloads",
+                "--all-platforms",
+                "--all-arches",
+                "--all-versions",
+                "--show-urls",
+            ])
+            .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, catalog.path());
+        command
+    };
+
+    // Identical records describe one unambiguous artifact.
+    catalog.write_str(&serde_json::to_string(&serde_json::json!({
+        "version": 1, "downloads": { "a": entry, "b": entry }
+    }))?)?;
+    uv_snapshot!(context.filters(), list(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.13.7+custom-linux-x86_64-gnu    https://example.com/python.tar.gz
+    ");
+
+    for (field, value) in [
+        ("url", serde_json::json!("https://example.com/other.tar.gz")),
+        ("sha256", serde_json::json!("0".repeat(64))),
+    ] {
+        let mut conflicting = entry.clone();
+        conflicting[field] = value;
+        // An omitted variant and an explicit empty variant have the same identity.
+        conflicting["variant"] = serde_json::json!("");
+        catalog.write_str(&serde_json::to_string(&serde_json::json!({
+            "version": 1, "downloads": { "a": entry, "b": conflicting }
+        }))?)?;
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), list(), @"
+            exit_code: 2 (failure)
+            ----- stderr -----
+            error: Unable to parse the JSON Python download list at [TEMP_DIR]/downloads.json
+              cause: Conflicting Python download records `a` and `b` for `cpython-3.13.7+custom-linux-x86_64-gnu` at build revision `42`
+            ");
+        }
+    }
+
+    let mut invalid = entry.clone();
+    invalid["build_revision"] = serde_json::json!("042");
+    catalog.write_str(&serde_json::to_string(&serde_json::json!({
+        "version": 1, "downloads": { "a": invalid }
+    }))?)?;
+    uv_snapshot!(context.filters(), list(), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Unable to parse the JSON Python download list at [TEMP_DIR]/downloads.json
+      cause: Python build revision `042` in `a` must be a non-empty string of ASCII digits without leading zeros
+    ");
+
+    Ok(())
+}
 
 #[test]
 fn python_list() {
@@ -763,7 +835,7 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Unable to parse the JSON Python download list at http://[LOCALHOST]/versioned-invalid-revision
-      cause: Python build revision `invalid` in `cpython-3.14.0-darwin-aarch64-none` must be a non-empty string of ASCII digits
+      cause: Python build revision `invalid` in `cpython-3.14.0-darwin-aarch64-none` must be a non-empty string of ASCII digits without leading zeros
     "#);
 
     uv_snapshot!(context.filters(), context
