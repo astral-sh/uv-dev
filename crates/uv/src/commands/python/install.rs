@@ -3,7 +3,6 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 
 use anyhow::{Context, Error, Result};
 use futures::{StreamExt, join};
@@ -436,7 +435,7 @@ async fn perform_install(
                 // TODO(zanieb): We should consider differentiating between a global Python version
                 // file here, allowing a request from there to enable `is_default_install`.
                 is_default_install = true;
-                if reinstall {
+                if reinstall && !existing_installations.is_empty() {
                     // On bare `--reinstall`, reinstall all Python versions
                     let mut requests = Vec::with_capacity(existing_installations.len());
                     for installation in &existing_installations {
@@ -491,10 +490,9 @@ async fn perform_install(
     let requested_minor_versions = requests
         .iter()
         .filter_map(|request| {
-            if let PythonRequest::Version(VersionRequest::MajorMinor(major, minor, ..)) =
-                request.python_request()
+            if let PythonRequest::Version(VersionRequest::MajorMinor(..)) = request.python_request()
             {
-                uv_pep440::Version::from_str(&format!("{major}.{minor}")).ok()
+                Some(PythonInstallationMinorVersionKey::ref_cast(request.download.key()).clone())
             } else {
                 None
             }
@@ -525,8 +523,14 @@ async fn perform_install(
 
         for request in &requests {
             if is_default_install {
-                // Bare reinstall requests already identify exact installed builds.
-                changelog.existing.insert(request.download.key().clone());
+                // A bare reinstall identifies existing builds exactly, or installs Python if
+                // the managed installation directory is empty.
+                if existing_installations
+                    .iter()
+                    .any(|installation| installation.key() == request.download.key())
+                {
+                    changelog.existing.insert(request.download.key().clone());
+                }
                 unsatisfied.push(Cow::Borrowed(request));
                 continue;
             }
@@ -775,7 +779,7 @@ async fn perform_install(
 
     for installation in &installations {
         let upgradeable = (default || is_default_install)
-            || requested_minor_versions.contains(&installation.key().version().python_version());
+            || requested_minor_versions.contains(installation.minor_version_key());
 
         if let Some(bin_dir) = bin_dir.as_ref() {
             create_bin_links(
