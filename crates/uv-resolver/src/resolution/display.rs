@@ -1,4 +1,4 @@
-use std::alloc::Allocator;
+use std::alloc::{Allocator, Global};
 use std::collections::BTreeSet;
 
 use owo_colors::OwoColorize;
@@ -6,7 +6,6 @@ use petgraph::visit::EdgeRef;
 use petgraph::{Directed, Direction, Graph};
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
-use uv_allocator::with_arena;
 use uv_configuration::AnnotationStyle;
 use uv_distribution_types::{DistributionMetadata, Name, SourceAnnotation, SourceAnnotations};
 use uv_normalize::PackageName;
@@ -89,7 +88,7 @@ impl<'a> DisplayResolutionGraph<'a> {
 /// Write the graph in the `{name}=={version}` format of requirements.txt that pip uses.
 impl std::fmt::Display for DisplayResolutionGraph<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        with_arena(|allocator| self.fmt_in(f, allocator))
+        self.fmt_in(f, Global)
     }
 }
 
