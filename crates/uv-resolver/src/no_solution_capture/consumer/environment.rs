@@ -334,8 +334,8 @@ impl<'a> MarkerGraph<'a> {
                 return Err(unsupported("invalid marker root"));
             };
             match (left, right) {
-                (Decision::Terminal(value), _) if *value == negate_left => continue,
-                (_, Decision::Terminal(value)) if *value == negate_right => continue,
+                (Decision::Terminal(value), _) if *value == negate_left => {}
+                (_, Decision::Terminal(value)) if *value == negate_right => {}
                 (Decision::Terminal(_), Decision::Terminal(_)) => return Ok(true),
                 (Decision::Version(left_key, left), Decision::Version(right_key, right))
                     if left_key == right_key =>
