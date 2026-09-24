@@ -45,7 +45,7 @@
 //! or a terminal `true`/`false` node. Interning allows the reduction rule that isomorphic nodes are
 //! merged to be applied globally.
 
-use std::alloc::Allocator;
+use std::alloc::{Allocator, Global};
 use std::cmp::Ordering;
 use std::fmt;
 use std::ops::Bound;
@@ -57,7 +57,6 @@ use itertools::{Either, Itertools};
 use rustc_hash::{FxBuildHasher, FxHashMap};
 use version_ranges::Ranges;
 
-use uv_allocator::with_arena;
 use uv_pep440::{Operator, Version, VersionPattern, VersionSpecifier, release_specifier_to_range};
 
 use crate::marker::MarkerValueExtra;
@@ -579,7 +578,7 @@ impl InternerGuard<'_> {
     /// outside of `assumption` is unspecified, which lets us eliminate decisions that are only
     /// needed to restate the assumption.
     pub(crate) fn restrict(&mut self, value: NodeId, assumption: NodeId) -> NodeId {
-        with_arena(|allocator| self.restrict_in(value, assumption, allocator))
+        self.restrict_in(value, assumption, Global)
     }
 
     fn restrict_in<A: Allocator>(
