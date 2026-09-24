@@ -111,9 +111,9 @@ impl Conflicts {
             // Large inclusion graphs can keep many propagation tables live at once.
             // Give those tables independent allocations so their storage can be freed early.
             if groups.keys().count() <= 24 {
-                self.expand_transitive_group_includes_in(package, groups, allocator, allocator);
+                self.expand_transitive_group_includes_in(package, groups, Global, allocator);
             } else {
-                self.expand_transitive_group_includes_in(package, groups, allocator, Global);
+                self.expand_transitive_group_includes_in(package, groups, Global, Global);
             }
         });
     }
